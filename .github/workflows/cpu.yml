@@ -28,7 +28,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            gcc g++ gfortran cmake binutils libclang1-18 f2c libf2c2-dev
+            gcc g++ gfortran cmake binutils libclang1-18 clang-format-18
           python -m pip install build
       - name: Build and install wheel
         run: |
@@ -37,13 +37,15 @@ jobs:
           python -m venv "$RUNNER_TEMP/scar-verify"
           verify="$RUNNER_TEMP/scar-verify/bin/python"
           wheel=("$packages"/*.whl)
-          "$verify" -m pip install "${wheel[0]}[fortran,test]"
+          "$verify" -m pip install "${wheel[0]}[cpu,test]"
+      - name: Verify source format
+        run: |
+          "$RUNNER_TEMP/scar-verify/bin/python" -m black --check scar tests tools
       - name: Verify isolated stages from installed wheel
         run: |
           verify="$RUNNER_TEMP/scar-verify/bin/python"
           cd "$RUNNER_TEMP"
           "$verify" -m scar --help
-          "$verify" -c 'from importlib.resources import files; assert files("scar.backend").joinpath("gnu_cfi.cpp").is_file()'
           "$verify" -m pytest --import-mode=importlib -q "$GITHUB_WORKSPACE/tests/stages" \
             --basetemp="$RUNNER_TEMP/scar-stages" \
             --junitxml="$RUNNER_TEMP/scar-gates.xml"
@@ -55,6 +57,8 @@ jobs:
           if any(int(suite.get("skipped", 0)) for suite in report.iter("testsuite")):
               raise SystemExit("CPU stage gates require the complete toolchain")
           PY
+          find "$RUNNER_TEMP/scar-stages" -type f \( -name '*.cpp' -o -name '*.hpp' \) \
+            -path '*/delivery/project/*' -exec clang-format-18 --dry-run --Werror --style=file {} +
           tar -czf "$RUNNER_TEMP/scar-mixed-stages.tar.gz" \
             -C "$RUNNER_TEMP/scar-stages/test_locked_mixed_target_three0" \
             hidden-frontend relocated-plan delivery

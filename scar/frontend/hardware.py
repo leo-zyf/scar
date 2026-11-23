@@ -157,9 +157,16 @@ def snapshot(path):
                 {"capacity_unit": "bytes"},
             )
         )
+    physical_cores = {}
     for cpu in sorted(allowed):
         topology = cpu_root / f"cpu{cpu}" / "topology"
         number = by_cpu.get(cpu)
+        package = _integer(topology / "physical_package_id")
+        core = _integer(topology / "core_id")
+        if package is not None and core is not None:
+            identity = f"core:{package}:{core}"
+            physical_cores.setdefault(identity, []).append(cpu)
+            edges.append(Edge(f"cpu:{cpu}", identity, "RESOURCE", "THREAD_ON_CORE"))
         resources.append(
             Resource(
                 f"cpu:{cpu}",
@@ -167,8 +174,8 @@ def snapshot(path):
                 1,
                 {
                     "logical_cpu": cpu,
-                    "package_id": _integer(topology / "physical_package_id"),
-                    "core_id": _integer(topology / "core_id"),
+                    "package_id": package,
+                    "core_id": core,
                     "numa_node": number,
                     "architecture": architecture,
                     "isa_profile": isa_by_cpu.get(cpu),
@@ -182,6 +189,15 @@ def snapshot(path):
         memory = f"dram:numa:{number}" if number is not None else "dram:host"
         if number is not None or not by_cpu:
             edges.append(Edge(f"cpu:{cpu}", memory, "RESOURCE", "HOST_MEMORY_ACCESS"))
+    for identity, cpus in physical_cores.items():
+        resources.append(
+            Resource(
+                identity,
+                "CPU_CORE",
+                1,
+                {"logical_cpus": cpus, "capacity_unit": "physical_core"},
+            )
+        )
     caches, cache_edges = _caches(cpu_root, allowed)
     resources.extend(caches)
     edges.extend(cache_edges)

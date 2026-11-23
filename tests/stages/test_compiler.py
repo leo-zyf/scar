@@ -14,7 +14,6 @@ import pytest
 
 import scar
 
-
 _PHASE_COMMAND = """
 import sys
 class BlockOtherStages:
@@ -31,32 +30,39 @@ raise SystemExit(main(sys.argv[2:]))
 
 
 def _run(command, folder, *, input=None):
-    env = dict(os.environ, PYTHONPATH=str(Path(scar.__file__).resolve().parents[1]), PYTHONDONTWRITEBYTECODE="1")
-    completed = subprocess.run(command, cwd=folder, env=env, input=input, capture_output=True, timeout=120)
+    env = dict(
+        os.environ,
+        PYTHONPATH=str(Path(scar.__file__).resolve().parents[1]),
+        PYTHONDONTWRITEBYTECODE="1",
+    )
+    completed = subprocess.run(
+        command, cwd=folder, env=env, input=input, capture_output=True, timeout=120
+    )
     assert completed.returncode == 0, completed.stderr.decode(errors="replace")
     return completed.stdout
 
 
 def _stage(folder, phase, *arguments):
-    return json.loads(_run([sys.executable, "-B", "-c", _PHASE_COMMAND, phase, *map(str, arguments)], folder))
+    return json.loads(
+        _run(
+            [sys.executable, "-B", "-c", _PHASE_COMMAND, phase, *map(str, arguments)],
+            folder,
+        )
+    )
 
 
-def _f2c_toolchain(folder):
-    if any(shutil.which(name) is None for name in ("gcc", "g++", "gfortran", "cmake", "nm", "readelf")):
-        pytest.skip("native C++20 build tools unavailable")
-    prefix = Path(os.environ.get("SCAR_CI_F2C_PREFIX", "/usr"))
-    arch = _run(["gcc", "-print-multiarch"], folder).decode().strip()
-    paths = {"f2c": prefix / "bin/f2c", "f2c_header": prefix / "include/f2c.h",
-             "f2c_archive": prefix / "lib" / arch / "libf2c.a"}
-    if not all(path.is_file() for path in paths.values()):
-        pytest.skip("native build requires f2c and libf2c2-dev")
-    return paths
+def _payloads(graph, document):
+    return [
+        json.loads((graph / unit["graph"]["path"]).read_bytes())
+        for unit in document["units"]
+    ]
 
 
 def test_python_array_three_stages_and_independent_output(tmp_path):
     np = pytest.importorskip("numpy")
     source = tmp_path / "simulation.py"
-    source.write_text("""
+    source.write_text(
+        """
 def prepare(initial, fixed):
     return initial + fixed * fixed
 
@@ -64,60 +70,146 @@ def run(initial, fixed, count):
     for unused in range(count):
         initial = prepare(initial, fixed)
     return initial
-""", encoding="utf-8")
+""",
+        encoding="utf-8",
+    )
     graph, plan, delivery = (tmp_path / name for name in ("graph", "plan", "delivery"))
     initial = np.arange(15, dtype="<f8").reshape(3, 5) / 8
     fixed = (np.arange(15, dtype="<f8").reshape(3, 5) + 1) / 16
     np.save(tmp_path / "initial.npy", initial)
     np.save(tmp_path / "fixed.npy", fixed)
     request = tmp_path / "request.json"
-    request.write_text(json.dumps(dict(schema="scar.python-entry", schema_version=1, source=source.name,
-        entry="run", observe=dict(arguments=[{"npy": "initial.npy"}, {"npy": "fixed.npy"}, {"scalar": 4}]))))
+    request.write_text(
+        json.dumps(
+            dict(
+                schema="scar.python-entry",
+                schema_version=1,
+                source=source.name,
+                entry="run",
+                observe=dict(
+                    arguments=[
+                        {"npy": "initial.npy"},
+                        {"npy": "fixed.npy"},
+                        {"scalar": 4},
+                    ]
+                ),
+            )
+        )
+    )
     _stage(tmp_path, "frontend", "build", "--manifest", request, "--out", graph)
     document = json.loads((graph / "graph.json").read_bytes())
-    assert any(region["kind"].lower() == "loop" for region in document["regions"])
+    functions = [fn for unit in _payloads(graph, document) for fn in unit["functions"]]
+    assert any(node["op"] == "for" for fn in functions for node in fn["nodes"])
     assert any(resource["kind"] == "CPU" for resource in document["resources"])
-    assert any(edge["kind"] == "OBSERVED_CALL" for edge in document["edges"])
-    assert document["program"]["elementwise"]["entry"] == "run"
+    assert any(
+        event["callee"] == "prepare" for event in document["observation"]["events"]
+    )
+    assert document["entry_abi"]["entry"] == "run"
 
     shape = tmp_path / "shape.json"
     shape.write_text("[3, 5]\n")
     graph = graph.rename(tmp_path / "relocated-graph")
-    _stage(tmp_path, "middle", "plan", "--graph", graph, "--out", plan, "--input-shapes", shape, "--trip-count", 4)
+    _stage(
+        tmp_path,
+        "middle",
+        "plan",
+        "--graph",
+        graph,
+        "--out",
+        plan,
+        "--input-shapes",
+        shape,
+        "--trip-count",
+        4,
+    )
     graph.rename(tmp_path / "hidden-frontend")
     plan = plan.rename(tmp_path / "relocated-plan")
     result = _stage(tmp_path, "backend", "compile", "--plan", plan, "--out", delivery)
-    assert result["status"] == "TRIAL_COMPILED"
-    assert result["deployment_authorized"] is False
+    assert result["status"] == "COMPILED"
 
     inputs, output = tmp_path / "input.bin", tmp_path / "output.bin"
     inputs.write_bytes(initial.tobytes() + fixed.tobytes())
-    _run([result["executable"]["path"], inputs, output], tmp_path)
-    assert output.read_bytes() == runpy.run_path(str(source))["run"](initial, fixed, 4).tobytes()
+    _run([result["executable"], inputs, output], tmp_path)
+    assert (
+        output.read_bytes()
+        == runpy.run_path(str(source))["run"](initial, fixed, 4).tobytes()
+    )
 
 
 @pytest.mark.parametrize("python_binding", (False, True))
 def test_locked_mixed_target_three_stages(tmp_path, python_binding):
-    f2c = _f2c_toolchain(tmp_path)
     sources = tmp_path / "source"
     sources.mkdir()
     units = [
-        ("old.c", "c", "c89", "int old(x)\nint x;\n"
-         "{ void *opaque = &x; const int *value = opaque; return *value + 1; }\n"),
-        ("new.c", "c", "c17", "int modern(int x) { return x * 2; }\n"
-         "double scale_value(double x) { return 2.0 * x; }\n"
-         "void initialize(double *a, double *b, int n) {\n"
-         "    int i;\n"
-         "    for (i = 0; i < n; ++i) a[i] = 1.0 + (double)i / n;\n"
-         "    for (i = 0; i < n; ++i) b[i] = a[i];\n"
-         "}\n"),
-        ("cpp.cpp", "c++", "c++17", 'extern "C" int newest(int x) { return x - 3; }\n'),
-        ("main.cpp", "c++", "c++98", '''
+        (
+            "old.c",
+            "c",
+            "c89",
+            "int old(x)\nint x;\n"
+            "{ void *opaque = &x; const int *value = opaque; return *value + 1; }\n",
+        ),
+        (
+            "new.c",
+            "c",
+            "c17",
+            "int modern(int x) { return x * 2; }\n"
+            "double scale_value(double x) { return 2.0 * x; }\n"
+            "void initialize(double *a, double *b, int n) {\n"
+            "    int i;\n"
+            "    for (i = 0; i < n; ++i) a[i] = 1.0 + (double)i / n;\n"
+            "    for (i = 0; i < n; ++i) b[i] = a[i];\n"
+            "}\n",
+        ),
+        (
+            "cpp.cpp",
+            "c++",
+            "c++17",
+            """
+extern "C" int newest(int x) { return x - 3; }
+int destroyed = 0;
+struct Member {
+    int value;
+    Member() : value(42) {}
+};
+struct Holder { Member member; };
+Holder holder;
+struct Base {
+    int initial;
+    Base(int x) : initial(x) {}
+    virtual int read() const { return initial; }
+    virtual ~Base() { destroyed += initial; }
+};
+struct Derived : Base {
+    int& current;
+    Derived(int& x) : Base(x), current(x) {}
+    int read() const { return initial + current; }
+    ~Derived() { destroyed += current; }
+};
+extern "C" int object_protocol() {
+    if (holder.member.value != 42) return 2;
+    int x = 3;
+    {
+        Derived local(x);
+        Base* heap = new Derived(x);
+        x = 7;
+        if (local.read() != 10 || heap->read() != 10) return 1;
+        delete heap;
+    }
+    return destroyed != 20;
+}
+""",
+        ),
+        (
+            "main.cpp",
+            "c++",
+            "c++98",
+            """
 #include <cstdio>
 extern "C" int old(int);
 extern "C" int modern(int);
 extern "C" int newest(int);
-extern "C" int formula_(int*);
+extern "C" int object_protocol();
+extern "C" int formula_(int&);
 extern "C" int extra(int*);
 extern "C" void initialize(double*, double*, int);
 extern "C" void initialize_fortran(int, double*, double*);
@@ -128,6 +220,7 @@ extern "C" void legacy_text__(char*, __SIZE_TYPE__);
 extern "C" double python_adjust(double);
 #endif
 int main() {
+    if (object_protocol()) return 7;
     int n;
     if (std::scanf("%d", &n) != 1) return 1;
     double first[5], second[5], overlapping[6];
@@ -152,16 +245,26 @@ int main() {
     char message[6] = {};
     legacy_text__(message, sizeof(message));
     if (message[0] != 'S' || message[3] != 'R' || message[4] != ' ') return 6;
-    std::printf("%d\\n", old(n) + modern(n) + newest(n) + formula_(&n) + extra(&n));
+    std::printf("%d\\n", old(n) + modern(n) + newest(n) + formula_(n) + extra(&n));
 #ifdef SCAR_PYTHON_ABI
     std::printf("%.1f\\n", python_adjust(n));
 #endif
     return 0;
 }
-'''),
-        ("formula.f", "fortran", "legacy", "      INTEGER FUNCTION FORMULA(N)\n"
-         "      INTEGER N\n      FORMULA = N * N + 2\n      END\n"),
-        ("extra.f90", "fortran", "f2008", '''
+""",
+        ),
+        (
+            "formula.f",
+            "fortran",
+            "legacy",
+            "      INTEGER FUNCTION FORMULA(N)\n"
+            "      INTEGER N\n      FORMULA = N * N + 2\n      END\n",
+        ),
+        (
+            "extra.f90",
+            "fortran",
+            "f2008",
+            """
 #if 1
 function extra(n) result(value) bind(C)
   use, intrinsic :: iso_c_binding, only: c_int
@@ -192,8 +295,13 @@ subroutine fill_pair(n,left,right) bind(C, name="initialize_fortran")
     right(i) = left(i)
   end do
 end subroutine fill_pair
-'''),
-        ("legacy.f90", "fortran", "gnu", '''
+""",
+        ),
+        (
+            "legacy.f90",
+            "fortran",
+            "gnu",
+            """
 subroutine legacy_update(extent, values, factor)
   implicit none
   integer, intent(in) :: extent(2)
@@ -218,7 +326,8 @@ subroutine legacy_text(message)
   character(len=*), intent(out) :: message
   message = "SCAR"
 end subroutine legacy_text
-'''),
+""",
+        ),
     ]
     files, profiles, objects = {}, [], []
     for index, (name, language, standard, text) in enumerate(units):
@@ -231,7 +340,11 @@ end subroutine legacy_text
             options.append("-cpp")
         if name == "legacy.f90":
             options.append("-fsecond-underscore")
-        unit_flags = [*options, "-DSCAR_PYTHON_ABI"] if python_binding and name == "main.cpp" else options
+        unit_flags = (
+            [*options, "-DSCAR_PYTHON_ABI"]
+            if python_binding and name == "main.cpp"
+            else options
+        )
         profiles.append(dict(path=name, language=language, flags=unit_flags))
         compiler = {"c": "gcc", "c++": "g++", "fortran": "gfortran"}[language]
         object_file = tmp_path / f"baseline-{index}.o"
@@ -247,104 +360,133 @@ end subroutine legacy_text
         raw = b"def adjust(value):\n    return native_scale(value) + 0.5\n"
         source.write_bytes(raw)
         files[source.name] = {"sha256": sha256(raw).hexdigest(), "size_bytes": len(raw)}
-        profiles.append(dict(path=source.name, language="python", flags=[],
-                             abi=dict(exports={"adjust": "python_adjust"}, imports={"native_scale": "scale_value"})))
+        profiles.append(
+            dict(
+                path=source.name,
+                language="python",
+                flags=[],
+                abi=dict(
+                    exports={"adjust": "python_adjust"},
+                    imports={"native_scale": "scale_value"},
+                ),
+            )
+        )
         provider = tmp_path / "original-provider.so"
         _run(["gcc", "-shared", "-fPIC", sources / "new.c", "-o", provider], tmp_path)
         scale = CDLL(provider).scale_value
         scale.argtypes, scale.restype = [c_double], c_double
-        result = runpy.run_path(str(source), init_globals={"native_scale": scale})["adjust"](7.0)
+        result = runpy.run_path(str(source), init_globals={"native_scale": scale})[
+            "adjust"
+        ](7.0)
         expected += f"{result:.1f}\n".encode()
-    translator = tmp_path / "frontend-f2c"
-    translator.symlink_to(f2c["f2c"].resolve())
-    header = tmp_path / "input-f2c.h"
-    shutil.copyfile(f2c["f2c_header"], header)
-    toolchain = dict(f2c=str(translator), f2c_header=str(header), f2c_archive=str(f2c["f2c_archive"].resolve()))
     manifest = tmp_path / "request.json"
-    manifest.write_text(json.dumps(dict(schema="scar.native-entry", schema_version=1, language="mixed",
-        source_root=str(sources), entry="main", units=profiles, source_lock={"files": files},
-        fortran=toolchain,
-        baseline=dict(argv=[str(baseline)], cwd=str(tmp_path)),
-        cases=[] if python_binding else [dict(id="mixed", stdin=str(case), comparison="exact")])))
+    manifest.write_text(
+        json.dumps(
+            dict(
+                schema="scar.native-entry",
+                schema_version=1,
+                language="mixed",
+                source_root=str(sources),
+                entry="main",
+                units=profiles,
+                source_lock={"files": files},
+                baseline=dict(argv=[str(baseline)], cwd=str(tmp_path)),
+                cases=(
+                    []
+                    if python_binding
+                    else [dict(id="mixed", stdin=str(case), comparison="exact")]
+                ),
+            )
+        )
+    )
     graph, plan, delivery = (tmp_path / name for name in ("graph", "plan", "delivery"))
-    _stage(tmp_path, "frontend", "build", "--manifest", manifest, "--jobs", 3, "--out", graph)
+    _stage(
+        tmp_path,
+        "frontend",
+        "build",
+        "--manifest",
+        manifest,
+        "--jobs",
+        3,
+        "--out",
+        graph,
+    )
     graph_path = graph / "graph.json"
     document = json.loads(graph_path.read_bytes())
-    material_path = Path(document["program"]["native"]["module"]["path"])
-    assert not material_path.is_absolute()
-    material = json.loads((graph / material_path).read_bytes())
-    wrapper = "src/fortran-abi/scar_c_abi.cpp"
-    translated = {name for name in material["fragments"] if name.startswith("src/fortran-abi/")}
-    assert len(translated) == 6
-    assert "fortran_transport" not in material and str(translator) not in json.dumps(material)
-    assert "include/scar_generated/f2c.h" in material["fragments"]
-    translator.unlink()
-    header.rename(tmp_path / "hidden-f2c.h")
-    exports = {row["symbol"]: row for row in material["abi_units"][wrapper]}
-    assert exports.keys() == {"extra", "initialize_fortran", "legacy_update__", "legacy_bias__", "legacy_text__"}
-    assert exports["legacy_bias__"]["result"] == {
-        "c_type": "float", "transport_type": "doublereal",
+    units = _payloads(graph, document)
+    bodies = {
+        f["signature"]["name"]: f
+        for unit in units
+        for f in unit["functions"]
+        if f["defined"]
     }
-    legacy_evidence = next(row for row in document["evidence"]["units"] if row["unit"] == "legacy.f90")
-    assert legacy_evidence["normalization_object_sha256"]
-    assert wrapper not in material["fragments"]
-    assert "include/scar_generated/scar_f2c_call.hpp" not in material["fragments"]
-    old_c = "src/c-abi/old.cpp"
-    fragment = (graph / material_path.parent / material["fragments"][old_c]["path"]).read_bytes()
-    assert b'extern "C" { int old(int x)' in fragment
-    assert b"static_cast<const int *>" in fragment
-    assert "c_adaptations" not in material
+    assert {
+        "extra",
+        "initialize_fortran",
+        "legacy_update__",
+        "legacy_bias__",
+        "legacy_text__",
+    } <= bodies.keys()
+    assert bodies["legacy_bias__"]["signature"]["result"] == "f32"
+    assert not any("fragments" in u for u in units)
     if python_binding:
-        links = {row["value"] for row in document["edges"] if row["kind"] == "CALL"}
-        assert {"python_adjust", "scale_value"} <= links
-    document["evidence"] = {}
-    graph_path.write_text(json.dumps(document))
+        assert "scale_value" in bodies["python_adjust"]["calls"]
     original = baseline.rename(tmp_path / "hidden-original")
-    case.rename(tmp_path / "hidden-case")
     sources.rename(tmp_path / "hidden-sources")
     graph = graph.rename(tmp_path / "relocated-graph")
     _stage(tmp_path, "middle", "plan", "--graph", graph, "--out", plan)
-    logical = json.loads((plan / "plan.json").read_bytes())
-    assert all(row["resource"] is None and row["start_ns"] is None for row in logical["schedule"])
-    rewrites = {row["region"] for row in logical["rewrites"] if row["rule"] == "FUSE_ADJACENT_COUNTED_PRODUCER_COPY"}
-    regions = logical["lowering"]["bodies"][0]["regions"]
-    typed = {row["symbol"]: row for row in regions if row["region"] in rewrites}
-    assert {"initialize", "initialize_fortran"} <= typed.keys()
-    assert typed["initialize_fortran"]["fragment"]["authority"] == "TYPED_ABI_EXPORT"
     graph.rename(tmp_path / "hidden-frontend")
     plan = plan.rename(tmp_path / "relocated-plan")
-    result = _stage(tmp_path, "backend", "compile", "--plan", plan, "--out", delivery)
-    assert result["status"] == ("BUILT" if python_binding else "VALIDATED")
-    lowered_c = (delivery / "project" / old_c).read_bytes()
-    assert b'extern "C" { int old(int x)' in lowered_c
-    assert b"static_cast<const int *>" in lowered_c
-    assert (delivery / "project" / wrapper).is_file()
-    assert all((delivery / "project" / name).is_file() for name in translated)
-    assert (delivery / "project/include/scar_generated/scar_f2c_call.hpp").is_file()
-    generated = json.loads((delivery / "project/native-region-lowering.json").read_bytes())
-    emitted = {row["region"] for row in generated["regions"] if row["status"] == "GUARDED_REGION"}
-    assert {typed[name]["region"] for name in ("initialize", "initialize_fortran")} <= emitted
-    executable = Path(result["executable"]["path"])
+    (plan / "plan.json").rename(tmp_path / "hidden-logical-report")
+    result = _stage(
+        tmp_path,
+        "backend",
+        "compile",
+        "--ir",
+        plan / "exec-ir.json",
+        "--physical",
+        "serial",
+        "--out",
+        delivery,
+    )
+    assert result["status"] == "COMPILED"
+    assert (delivery / "project/src/program.cpp").is_file()
+    executable = Path(result["executable"])
     assert _run([original], tmp_path, input=b"7\n") == b"91\n"
     assert _run([executable], tmp_path, input=b"7\n") == expected
 
 
-def test_fixed_form_transport_bootstraps_cpp_project(tmp_path):
-    toolchain = {name: str(path.resolve()) for name, path in _f2c_toolchain(tmp_path).items()}
+def test_fixed_form_program_emits_cpp20(tmp_path):
     data = b"      PROGRAM LEGACY\n      WRITE (*,'(I4)') 8\n      END\n"
     source = tmp_path / "legacy.f"
     source.write_bytes(data)
     baseline = tmp_path / "original"
     _run(["gfortran", str(source), "-o", str(baseline)], tmp_path)
     request = tmp_path / "request.json"
-    request.write_text(json.dumps(dict(schema="scar.native-entry", schema_version=1, language="fortran",
-        source_root=str(tmp_path), entry="main", units=[dict(path=source.name, flags=["-std=legacy"])],
-        source_lock=dict(files={source.name: dict(sha256=sha256(data).hexdigest(), size_bytes=len(data))}),
-        fortran=toolchain, baseline=dict(argv=[str(baseline)], cwd=str(tmp_path)),
-        cases=[dict(id="fixed", comparison="exact")])))
+    request.write_text(
+        json.dumps(
+            dict(
+                schema="scar.native-entry",
+                schema_version=1,
+                language="fortran",
+                source_root=str(tmp_path),
+                entry="main",
+                units=[dict(path=source.name, flags=["-std=legacy"])],
+                source_lock=dict(
+                    files={
+                        source.name: dict(
+                            sha256=sha256(data).hexdigest(), size_bytes=len(data)
+                        )
+                    }
+                ),
+                baseline=dict(argv=[str(baseline)], cwd=str(tmp_path)),
+                cases=[dict(id="fixed", comparison="exact")],
+            )
+        )
+    )
     graph, plan, delivery = (tmp_path / name for name in ("graph", "plan", "delivery"))
     _stage(tmp_path, "frontend", "build", "--manifest", request, "--out", graph)
     _stage(tmp_path, "middle", "plan", "--graph", graph, "--out", plan)
     result = _stage(tmp_path, "backend", "compile", "--plan", plan, "--out", delivery)
-    assert result["status"] == "VALIDATED"
-    assert (delivery / "project/src/fortran-0.cpp").is_file()
+    assert result["status"] == "COMPILED"
+    assert _run([result["executable"]], tmp_path) == _run([baseline], tmp_path)

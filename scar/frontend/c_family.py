@@ -1,0 +1,1902 @@
+"""Map Clang's typed declarations and expressions into SCAR operation regions."""
+
+import ast
+import ctypes
+from ctypes.util import find_library
+from functools import lru_cache
+import hashlib
+import math
+import os
+from pathlib import Path
+
+from . import cxx_library, cxx_objects
+
+
+@lru_cache(maxsize=1)
+def _clang():
+    from clang import cindex
+
+    if not cindex.Config.loaded:
+        library = os.environ.get("SCAR_LIBCLANG") or find_library("clang-18")
+        if library:
+            cindex.Config.set_library_file(library)
+    lib = cindex.conf.lib
+    # These semantic queries are in libclang 18 but absent from its Python wrapper.
+    extensions = {
+        "clang_Cursor_getVarDeclInitializer": (cindex.Cursor, [cindex.Cursor]),
+        "clang_getCursorBinaryOperatorKind": (ctypes.c_int, [cindex.Cursor]),
+        "clang_getCursorUnaryOperatorKind": (ctypes.c_int, [cindex.Cursor]),
+        "clang_getBinaryOperatorKindSpelling": (cindex._CXString, [ctypes.c_int]),
+        "clang_Cursor_Evaluate": (ctypes.c_void_p, [cindex.Cursor]),
+        "clang_EvalResult_getKind": (ctypes.c_int, [ctypes.c_void_p]),
+        "clang_EvalResult_isUnsignedInt": (ctypes.c_uint, [ctypes.c_void_p]),
+        "clang_EvalResult_getAsUnsigned": (ctypes.c_ulonglong, [ctypes.c_void_p]),
+        "clang_EvalResult_getAsLongLong": (ctypes.c_longlong, [ctypes.c_void_p]),
+        "clang_EvalResult_getAsDouble": (ctypes.c_double, [ctypes.c_void_p]),
+        "clang_EvalResult_dispose": (None, [ctypes.c_void_p]),
+        "clang_getPresumedLocation": (
+            None,
+            [
+                cindex.SourceLocation,
+                ctypes.POINTER(cindex._CXString),
+                ctypes.POINTER(ctypes.c_uint),
+                ctypes.POINTER(ctypes.c_uint),
+            ],
+        ),
+    }
+    for name, (result, args) in extensions.items():
+        function = getattr(lib, name)
+        function.argtypes = args
+        function.restype = result
+    lib.clang_Cursor_getVarDeclInitializer.errcheck = cindex.Cursor.from_result
+    lib.clang_getBinaryOperatorKindSpelling.errcheck = cindex._CXString.from_result
+    return cindex
+
+
+class _Unsupported(Exception):
+    def __init__(self, cursor, code, detail):
+        super().__init__(detail)
+        self.cursor = cursor
+        self.code = code
+
+
+def _object(rule, *args):
+    try:
+        return rule(*args)
+    except cxx_objects.BindingError as error:
+        raise _Unsupported(error.cursor, "object.protocol", str(error)) from error
+
+
+_BINARY = {
+    "+": "add",
+    "-": "sub",
+    "*": "mul",
+    "/": "div",
+    "%": "mod",
+    "<<": "shl",
+    ">>": "shr",
+    "<": "lt",
+    "<=": "le",
+    ">": "gt",
+    ">=": "ge",
+    "==": "eq",
+    "!=": "ne",
+    "&": "band",
+    "|": "bor",
+    "^": "bxor",
+    "&&": "land",
+    "||": "lor",
+    ",": "comma",
+}
+_UNARY = {
+    1: "postinc",
+    2: "postdec",
+    3: "preinc",
+    4: "predec",
+    5: "addr",
+    6: "deref",
+    7: "pos",
+    8: "neg",
+    9: "bnot",
+    10: "not",
+}
+_SIGNED = {"SCHAR", "SHORT", "INT", "LONG", "LONGLONG"}
+_UNSIGNED = {"UCHAR", "USHORT", "UINT", "ULONG", "ULONGLONG"}
+_PRIMITIVES = {
+    "VOID": "void",
+    "BOOL": "bool",
+    "CHAR_S": "char",
+    "CHAR_U": "char",
+    "FLOAT": "f32",
+    "DOUBLE": "f64",
+}
+_FUNCTIONS = {
+    "FUNCTION_DECL",
+    "CXX_METHOD",
+    "CONSTRUCTOR",
+    "DESTRUCTOR",
+    "CONVERSION_FUNCTION",
+}
+_RECORDS = {"STRUCT_DECL", "CLASS_DECL", "UNION_DECL"}
+_SCOPES = {"NAMESPACE", "LINKAGE_SPEC", "UNEXPOSED_DECL"}
+_LIBC_HEADERS = {
+    "stdio.h",
+    "stdlib.h",
+    "string.h",
+    "strings.h",
+    "time.h",
+    "ctype.h",
+    "unistd.h",
+    "signal.h",
+    "assert.h",
+    "errno.h",
+    "wchar.h",
+    "locale.h",
+    "setjmp.h",
+    "inttypes.h",
+    "fcntl.h",
+    "pthread.h",
+    "malloc.h",
+    "stdio2.h",
+    "string_fortified.h",
+}
+_SDK_RECORDS = {
+    ("struct_timeval.h", "timeval"): ("timeval", "sys/time.h"),
+    ("time.h", "itimerval"): ("itimerval", "sys/time.h"),
+    ("struct_rusage.h", "rusage"): ("rusage", "sys/resource.h"),
+    ("sigaction.h", "sigaction"): ("sigaction", "signal.h"),
+    ("select.h", "fd_set"): ("fd_set", "sys/select.h"),
+    ("__sigset_t.h", "__sigset_t"): ("sigset_t", "signal.h"),
+    ("struct_tm.h", "tm"): ("tm", "time.h"),
+}
+_SDK_FORWARD_HEADERS = {
+    "stdlib-float.h": "stdlib.h",
+    "stdlib-bsearch.h": "stdlib.h",
+    "stdlib.h": "stdlib.h",
+    "stdio2.h": "stdio.h",
+    "string_fortified.h": "string.h",
+}
+
+
+def _kind(cursor):
+    try:
+        return cursor.kind.name
+    except ValueError:
+        return f"CURSOR_{cursor._kind_id}"
+
+
+@lru_cache(maxsize=8192)
+def _source(root, filename):
+    return (root / filename).resolve()
+
+
+def _provider(cursor):
+    loc = cursor.location
+    if not loc.file:
+        return None
+    path = Path(loc.file.name)
+    if path.name in {"mpi.h", "mpio.h"} and (
+        loc.is_in_system_header or "openmpi" in path.parts
+    ):
+        return "mpi"
+    if not loc.is_in_system_header:
+        return None
+    if path.name in _LIBC_HEADERS | _SDK_FORWARD_HEADERS.keys() or (
+        path.parent.name == "sys"
+        and path.name in {"time.h", "select.h", "resource.h", "types.h", "stat.h"}
+    ):
+        return "libc"
+    if path.name in {
+        "math.h",
+        "mathcalls.h",
+        "mathcalls-helper-functions.h",
+        "math-finite.h",
+        "cmath",
+    }:
+        return "libm"
+    return None
+
+
+def _public_header(cursor):
+    name = Path(cursor.location.file.name)
+    if name.name in _SDK_FORWARD_HEADERS:
+        return _SDK_FORWARD_HEADERS[name.name]
+    if name.parent.name == "sys":
+        return "sys/" + name.name
+    if name.name in _LIBC_HEADERS or name.name in {"math.h", "mpi.h", "mpio.h"}:
+        return name.name
+    return None
+
+
+def _va_list(t):
+    kind = t.kind.name
+    if kind not in {"CONSTANTARRAY", "POINTER"}:
+        return False
+    element = t.get_array_element_type() if kind == "CONSTANTARRAY" else t.get_pointee()
+    declaration = element.get_canonical().get_declaration()
+    return (
+        declaration.get_usr() == "c:@S@__va_list_tag" and not declaration.location.file
+    )
+
+
+def _va_interface():
+    return {"kind": "library", "provider": "c_abi", "name": "va_list", "args": []}
+
+
+def _writable_string(value, target, location):
+    if target != {"kind": "ptr", "to": "char"}:
+        return None
+    literal = value
+    while literal["op"] == "cast" and literal.get("conversion") in {
+        "implicit",
+        "array_decay",
+        "adjusted_array_parameter",
+    }:
+        literal = literal["value"]
+    if literal["op"] != "string":
+        return None
+    return {
+        "op": "cast",
+        "mode": "qualification",
+        "conversion": "legacy_string_pointer",
+        "source_type": {
+            "kind": "array",
+            "of": {"kind": "const", "of": "char"},
+            "shape": [len(literal["value"].encode("utf-8")) + 1],
+        },
+        "type": target,
+        "value": literal,
+        "location": location,
+        "write_contract": "mutating_string_literal_is_undefined",
+    }
+
+
+def _symbol(cursor, unit_tag):
+    name = cursor.mangled_name or cursor.spelling
+    if cursor.linkage.name in {"INTERNAL", "UNIQUE_EXTERNAL"}:
+        return f"scar_local_{unit_tag}_{name}"
+    return name
+
+
+def _qualified_name(cursor):
+    def part(decl):
+        name = decl.spelling
+        if _kind(decl) in _RECORDS and decl.type.get_num_template_arguments() >= 0:
+            name += "__" + hashlib.sha256(decl.get_usr().encode()).hexdigest()[:16]
+        return name
+
+    parts = [part(cursor)] if cursor.spelling else []
+    parent = cursor.semantic_parent
+    while parent and _kind(parent) in _RECORDS | {"NAMESPACE"}:
+        if parent.spelling:
+            parts.append(part(parent))
+        parent = parent.semantic_parent
+    if parts and cursor.spelling:
+        result = "::".join(reversed(parts))
+        if parent and _kind(parent) in _FUNCTIONS:
+            result += "__" + hashlib.sha256(cursor.get_usr().encode()).hexdigest()[:16]
+        return result
+    # Clang's USR disambiguates unnamed records/typedefs without quoting source.
+    return "scar_record_" + hashlib.sha256(cursor.get_usr().encode()).hexdigest()[:20]
+
+
+def _template_id(cursor):
+    return "template:" + hashlib.sha256(cursor.get_usr().encode()).hexdigest()[:24]
+
+
+class _RecordIndex(dict):
+    def __init__(self):
+        super().__init__()
+        self.specializations = {}
+
+    def observe(self, cursor):
+        if (
+            cursor.type.get_num_template_arguments() >= 0
+            and cursor.location.file
+            and not cursor.location.is_in_system_header
+        ):
+            self.specializations.setdefault(_qualified_name(cursor), cursor)
+
+
+def _type(original, cursor, records):
+    source = original.get_canonical()
+    kind = source.kind.name
+    if kind == "CONSTANTARRAY" and _va_list(source):
+        return _va_interface()
+    if source.is_volatile_qualified():
+        raise _Unsupported(
+            cursor,
+            "type.volatile",
+            "volatile-qualified access requires an ordered memory operation",
+        )
+    library = None
+    if kind in {"RECORD", "ENUM"}:
+        try:
+            library = cxx_library.wire_type(source, lambda t: _type(t, cursor, records))
+        except cxx_library.BindingError as error:
+            raise _Unsupported(cursor, "library.type", str(error)) from error
+    if library:
+        result = library
+    elif kind in _PRIMITIVES:
+        result = _PRIMITIVES[kind]
+    elif kind in _SIGNED | _UNSIGNED:
+        result = ("i" if kind in _SIGNED else "u") + str(8 * source.get_size())
+    elif kind == "LONGDOUBLE":
+        result = "f80"
+    elif kind == "COMPLEX" and source.element_type.kind.name in {"FLOAT", "DOUBLE"}:
+        result = "c64" if source.element_type.kind.name == "FLOAT" else "c128"
+    elif kind == "ENUM":
+        result = _type(source.get_declaration().enum_type, cursor, records)
+    elif kind in {"POINTER", "LVALUEREFERENCE"}:
+        result = {
+            "kind": "ptr" if kind == "POINTER" else "ref",
+            "to": _type(source.get_pointee(), cursor, records),
+        }
+    elif kind == "CONSTANTARRAY":
+        shape = []
+        element = source
+        const_element = False
+        while element.kind.name == "CONSTANTARRAY":
+            const_element |= element.is_const_qualified()
+            shape.append(element.get_array_size())
+            element = element.get_array_element_type().get_canonical()
+        element_type = _type(element, cursor, records)
+        if const_element and not element.is_const_qualified():
+            element_type = {"kind": "const", "of": element_type}
+        return {"kind": "array", "of": element_type, "shape": shape}
+    elif kind == "INCOMPLETEARRAY" and _kind(cursor) == "PARM_DECL":
+        result = {
+            "kind": "ptr",
+            "to": _type(source.get_array_element_type(), cursor, records),
+        }
+    elif kind == "FUNCTIONPROTO":
+        return {
+            "kind": "function",
+            "result": _type(source.get_result(), cursor, records),
+            "params": [_type(a, cursor, records) for a in source.argument_types()],
+            "variadic": source.is_function_variadic(),
+        }
+    elif kind == "RECORD":
+        record = source.get_declaration()
+        if isinstance(records, _RecordIndex):
+            records.observe(record)
+        name = _qualified_name(record)
+        result = {"kind": "record", "name": name}
+        opaque = {"name": name, "opaque": True}
+        where = record.location
+        if where.file:
+            header = Path(where.file.name)
+            if (
+                where.is_in_system_header
+                and header.name in {"struct_FILE.h", "FILE.h", "__FILE.h", "stdio.h"}
+                and record.spelling == "_IO_FILE"
+            ):
+                opaque.update(provider="libc", symbol="FILE")
+            if (
+                where.is_in_system_header
+                and header.name in {"struct_tm.h", "time.h"}
+                and record.spelling == "tm"
+            ):
+                opaque.update(provider="libc", symbol="tm", complete=True)
+            if _provider(record) == "mpi":
+                opaque.update(
+                    provider="mpi",
+                    symbol=(
+                        "MPI_Status"
+                        if record.spelling == "ompi_status_public_t"
+                        else record.spelling
+                    ),
+                )
+                if record.spelling == "ompi_status_public_t":
+                    opaque.update(header="mpi.h", complete=True)
+            if (
+                where.is_in_system_header
+                and (header.name, record.spelling) in _SDK_RECORDS
+            ):
+                symbol, public_header = _SDK_RECORDS[header.name, record.spelling]
+                opaque.update(
+                    provider="libc", symbol=symbol, header=public_header, complete=True
+                )
+        records.setdefault(name, opaque)
+    else:
+        raise _Unsupported(
+            cursor, f"type.{kind.lower()}", f"unsupported ABI type {source.spelling}"
+        )
+    return {"kind": "const", "of": result} if source.is_const_qualified() else result
+
+
+def _param_type(cursor, records):
+    t = cursor.type.get_canonical()
+    if _va_list(t):
+        return _va_interface()
+    if t.kind.name in {"CONSTANTARRAY", "INCOMPLETEARRAY", "VARIABLEARRAY"}:
+        return {"kind": "ptr", "to": _type(t.get_array_element_type(), cursor, records)}
+    return _type(t, cursor, records)
+
+
+def _number(cursor):
+    lib = _clang().conf.lib
+    evaluated = lib.clang_Cursor_Evaluate(cursor)
+    if evaluated:
+        try:
+            kind = lib.clang_EvalResult_getKind(evaluated)
+            if kind == 1:
+                if lib.clang_EvalResult_isUnsignedInt(evaluated):
+                    return lib.clang_EvalResult_getAsUnsigned(evaluated)
+                return lib.clang_EvalResult_getAsLongLong(evaluated)
+            if kind == 2 and cursor.type.get_canonical().kind.name in {
+                "FLOAT",
+                "DOUBLE",
+            }:
+                value = lib.clang_EvalResult_getAsDouble(evaluated)
+                if math.isfinite(value):
+                    return value
+        finally:
+            lib.clang_EvalResult_dispose(evaluated)
+    raise _Unsupported(
+        cursor,
+        "literal.representation",
+        f"no exact constant representation for {_kind(cursor)}",
+    )
+
+
+def _string(cursor):
+    spelling = cursor.spelling
+    if spelling.startswith('"'):
+        try:
+            raw = ast.literal_eval("b" + spelling.replace(r"\?", "?"))
+            if isinstance(raw, bytes) and len(raw) + 1 <= cursor.type.get_array_size():
+                return raw.decode("utf-8")
+        except (ValueError, SyntaxError, UnicodeError):
+            pass
+    raise _Unsupported(
+        cursor,
+        "literal.string_encoding",
+        "string literal requires an explicit byte or wide-character representation",
+    )
+
+
+class _Unit:
+    def __init__(self, path, root, flags):
+        self.path = path
+        self.root = root
+        relative = path.relative_to(root).as_posix()
+        self.unit_tag = hashlib.sha256(
+            "\0".join((relative, *flags)).encode()
+        ).hexdigest()[:16]
+        self.functions = {}
+        self.externs = {}
+        self.globals = {}
+        self.records = _RecordIndex()
+        self.templates = {}
+        self.enums = {}
+        self.pending_functions = {}
+        self.expanded_records = set()
+        self.methods = {}
+        self.macros = {}
+        self.flags = flags
+        self.diagnostics = []
+
+    def macro(self, cursor):
+        if cursor.spelling not in {"va_arg", "assert"} or not cursor.location.file:
+            return
+        decl = cursor.referenced
+        if not decl or not decl.location.file or not decl.location.is_in_system_header:
+            return
+        public_header = Path(decl.location.file.name).name
+        if cursor.spelling == "va_arg" and public_header in {
+            "stdarg.h",
+            "__stdarg_va_arg.h",
+        }:
+            if "__builtin_va_arg" in {t.spelling for t in decl.get_tokens()}:
+                self.macros[(cursor.location.file.name, cursor.location.offset)] = (
+                    "va_arg"
+                )
+        elif cursor.spelling == "assert" and public_header == "assert.h":
+            self.macros[(cursor.location.file.name, cursor.location.offset)] = "assert"
+
+    def macro_at(self, cursor):
+        loc = cursor.location
+        return self.macros.get((loc.file.name, loc.offset)) if loc.file else None
+
+    def assertion_file(self, cursor):
+        if any(
+            f.startswith(("-fmacro-prefix-map=", "-ffile-prefix-map="))
+            for f in self.flags
+        ):
+            raise _Unsupported(
+                cursor,
+                "literal.file_remap",
+                "assertion file requires the compiler's remapped path",
+            )
+        clang = _clang()
+        file = clang._CXString()
+        line, column = ctypes.c_uint(), ctypes.c_uint()
+        clang.conf.lib.clang_getPresumedLocation(
+            cursor.location,
+            ctypes.byref(file),
+            ctypes.byref(line),
+            ctypes.byref(column),
+        )
+        return {"op": "string", "value": clang.conf.lib.clang_getCString(file)}
+
+    def type_info(self, t, cursor):
+        return _type(t, cursor, self.records)
+
+    def symbol(self, cursor):
+        return _symbol(cursor, self.unit_tag)
+
+    def record_name(self, cursor):
+        return _qualified_name(cursor)
+
+    def param_info(self, cursor):
+        return {"name": cursor.spelling, "type": _param_type(cursor, self.records)}
+
+    def require(self, cursor):
+        if not cursor.location.file or not _source(
+            self.root, cursor.location.file.name
+        ).is_relative_to(self.root):
+            return
+        definition = cursor.get_definition()
+        if definition:
+            symbol = self.symbol(definition)
+            if symbol not in self.functions:
+                self.pending_functions.setdefault(symbol, definition)
+
+    def template(self, cursor):
+        identity = _template_id(cursor)
+        self.templates.setdefault(
+            identity,
+            {
+                "id": identity,
+                "name": cursor.spelling,
+                "kind": _kind(cursor).lower(),
+                "location": self.location(cursor.location),
+                "parameters": [
+                    {"name": p.spelling, "kind": _kind(p).lower()}
+                    for p in cursor.get_children()
+                    if _kind(p)
+                    in {
+                        "TEMPLATE_TYPE_PARAMETER",
+                        "TEMPLATE_NON_TYPE_PARAMETER",
+                        "TEMPLATE_TEMPLATE_PARAMETER",
+                    }
+                ],
+            },
+        )
+        return identity
+
+    def enumeration(self, cursor):
+        if cursor.is_definition():
+            name = self.record_name(cursor)
+            self.enums[name] = {
+                "name": name,
+                "type": self.type_info(cursor.enum_type, cursor),
+                "scoped": cursor.is_scoped_enum(),
+                "location": self.location(cursor.location),
+                "values": {
+                    n.spelling: n.enum_value
+                    for n in cursor.get_children()
+                    if _kind(n) == "ENUM_CONSTANT_DECL"
+                },
+            }
+
+    def expand(self):
+        while self.pending_functions or self.records.specializations:
+            while self.pending_functions:
+                name, cursor = self.pending_functions.popitem()
+                if name not in self.functions:
+                    self.function(cursor)
+            while self.records.specializations:
+                name, cursor = self.records.specializations.popitem()
+                if name not in self.expanded_records:
+                    self.expanded_records.add(name)
+                    self.record(cursor)
+        for name, methods in self.methods.items():
+            record = self.records.get(name)
+            if record and not record.get("opaque"):
+                declared = {m["symbol"]: m for m in record.get("methods", [])}
+                declared.update(
+                    {sym: info for sym, info in methods.items() if sym not in declared}
+                )
+                record["methods"] = list(declared.values())
+
+    def location(self, location):
+        filename = location.file.name if location.file else str(self.path)
+        path = _source(self.root, filename)
+        return {
+            "file": (
+                str(path.relative_to(self.root))
+                if path.is_relative_to(self.root)
+                else filename
+            ),
+            "line": location.line,
+            "column": location.column,
+        }
+
+    def diagnostic(self, error, symbol=None):
+        self.diagnostics.append(
+            {
+                **self.location(error.cursor.location),
+                "code": "c_family." + error.code,
+                "detail": str(error),
+                **({"symbol": symbol} if symbol else {}),
+            }
+        )
+
+    def signature(self, cursor):
+        name = _symbol(cursor, self.unit_tag)
+        params = [
+            {"name": arg.spelling or f"arg{i}", "type": _param_type(arg, self.records)}
+            for i, arg in enumerate(cursor.get_arguments())
+        ]
+        kind = _kind(cursor)
+        result = (
+            "void"
+            if kind in {"CONSTRUCTOR", "DESTRUCTOR"}
+            else _type(cursor.result_type, cursor, self.records)
+        )
+        if kind in {"CONSTRUCTOR", "DESTRUCTOR"} or (
+            kind == "CXX_METHOD" and not cursor.is_static_method()
+        ):
+            owner = _type(cursor.semantic_parent.type, cursor, self.records)
+            if cursor.is_const_method():
+                owner = {"kind": "const", "of": owner}
+            params.insert(0, {"name": "this", "type": {"kind": "ptr", "to": owner}})
+        t = cursor.type.get_canonical()
+        sig = {
+            "name": name,
+            "params": params,
+            "result": result,
+            "location": self.location(cursor.location),
+        }
+        method = _object(cxx_objects.method, cursor, self)
+        if method:
+            sig["method"] = method
+            self.methods.setdefault(method["owner"], {})[method["symbol"]] = method
+        if t.kind.name == "FUNCTIONPROTO" and t.is_function_variadic():
+            sig["variadic"] = True
+        return sig
+
+    def declare_call(self, cursor):
+        name = _symbol(cursor, self.unit_tag)
+        self.require(cursor)
+        if name not in self.externs:
+            signature = self.signature(cursor)
+            provider = _provider(cursor)
+            if provider:
+                signature["provider"] = provider
+                header = _public_header(cursor)
+                if header:
+                    signature["header"] = header
+            self.externs[name] = signature
+        return name
+
+    def call(self, cursor, args):
+        name = self.declare_call(cursor)
+        return {
+            "op": "call",
+            "callee": name,
+            "args": args,
+            "parameter_types": [p["type"] for p in self.externs[name]["params"]],
+        }
+
+    def function(self, cursor):
+        name = _symbol(cursor, self.unit_tag)
+        if not cursor.is_definition():
+            return
+        parent = cursor.semantic_parent
+        if (
+            parent
+            and _kind(parent)
+            in {"CLASS_TEMPLATE", "CLASS_TEMPLATE_PARTIAL_SPECIALIZATION"}
+            and not cursor.mangled_name
+        ):
+            self.template(parent)
+            return
+        reader = _Body(self, cursor)
+        try:
+            declaration = self.signature(cursor)
+        except _Unsupported as error:
+            declaration = {
+                "name": name,
+                "location": self.location(cursor.location),
+                "result": None,
+                "params": [
+                    {"name": a.spelling, "type": None} for a in cursor.get_arguments()
+                ],
+                "signature_complete": False,
+            }
+            reader.errors.append(error)
+        if _kind(cursor) == "CONVERSION_FUNCTION":
+            reader.errors.append(
+                _Unsupported(
+                    cursor,
+                    "object." + _kind(cursor).lower(),
+                    f"lifetime or conversion protocol for {cursor.spelling}",
+                )
+            )
+        children = list(cursor.get_children())
+        for child in children:
+            if child.kind.is_attribute() and any(
+                t.spelling in {"constructor", "destructor"} for t in child.get_tokens()
+            ):
+                self.diagnostic(
+                    _Unsupported(
+                        child,
+                        "state.lifecycle_hook",
+                        f"process-start or exit hook for {name}",
+                    )
+                )
+        blocks = [c for c in children if _kind(c) == "COMPOUND_STMT"]
+        if len(blocks) == 1:
+            for parameter in cursor.get_arguments():
+                reader.local(parameter)
+            declaration["body"] = reader.statements(blocks[0])
+            try:
+                _object(cxx_objects.prepare, declaration, cursor, reader)
+            except _Unsupported as error:
+                reader.errors.append(error)
+            if name == "main" and (
+                not declaration["body"] or declaration["body"][-1]["op"] != "return"
+            ):
+                declaration["body"].append(
+                    {
+                        "op": "return",
+                        "value": {"op": "literal", "type": "i32", "value": 0},
+                    }
+                )
+        elif (
+            declaration.get("method", {}).get("defaulted")
+            and not declaration["method"]["deleted"]
+        ):
+            declaration["body"] = []
+        else:
+            reader.errors.append(
+                _Unsupported(
+                    cursor, "function.body", "expected a compound function body"
+                )
+            )
+        if reader.errors:
+            declaration["partial_body"] = declaration.pop("body", [])
+            for error in reader.errors:
+                self.diagnostic(error, name)
+            reader.collect_calls(cursor)
+        declaration["calls"] = sorted(reader.calls)
+        pattern = _clang().conf.lib.clang_getSpecializedCursorTemplate(cursor)
+        if pattern:
+            declaration["specializes"] = self.template(pattern)
+        self.functions[name] = declaration
+
+    def record(self, cursor):
+        if not cursor.is_definition():
+            return
+        name = _qualified_name(cursor)
+        children = list(cursor.get_children())
+        fields = []
+        try:
+            if _kind(cursor) == "UNION_DECL" or any(
+                _kind(c) in {"PACKED_ATTR", "ALIGNED_ATTR"} for c in children
+            ):
+                raise _Unsupported(
+                    cursor, "record.layout", f"nontrivial record layout for {name}"
+                )
+            for field in cursor.type.get_fields():
+                if not field.spelling or field.is_bitfield():
+                    raise _Unsupported(
+                        field,
+                        "record.field_layout",
+                        "record contains an anonymous or bit-packed field",
+                    )
+                fields.append(
+                    {
+                        "name": field.spelling,
+                        "type": _type(field.type, field, self.records),
+                        "offset_bits": field.get_field_offsetof(),
+                    }
+                )
+                tokens = list(field.get_tokens())
+                # Keep aggregate/array bounds separate from the default initializer.
+                following = [
+                    t.spelling
+                    for t in tokens
+                    if t.location.offset > field.location.offset
+                ]
+                depth = 0
+                for token in following:
+                    if depth == 0 and token in {"=", "{"}:
+                        operands = [
+                            c for c in field.get_children() if c.kind.is_expression()
+                        ]
+                        if not operands:
+                            raise _Unsupported(
+                                field,
+                                "record.field_initializer",
+                                "field default lacks a resolved initializer",
+                            )
+                        reader = _Body(self)
+                        fields[-1]["init"] = reader.expression(operands[-1])
+                        if reader.calls:
+                            fields[-1]["calls"] = sorted(reader.calls)
+                        break
+                    depth += int(token in {"[", "("}) - int(token in {"]", ")"})
+            self.records[name] = {
+                "name": name,
+                "fields": fields,
+                "size_bytes": cursor.type.get_size(),
+                "align_bytes": cursor.type.get_align(),
+                "standard_layout": True if cursor.type.is_pod() else None,
+            }
+            metadata = _object(cxx_objects.record, cursor, self)
+            if (
+                metadata["bases"]
+                or any(m["virtual"] for m in metadata["methods"])
+                or any(
+                    isinstance(f["type"], dict) and f["type"].get("kind") == "ref"
+                    for f in fields
+                )
+            ):
+                self.records[name]["standard_layout"] = False
+            self.records[name].update({k: v for k, v in metadata.items() if v})
+        except _Unsupported as error:
+            self.diagnostic(error, name)
+        for child in children:
+            if _kind(child) in _FUNCTIONS | _RECORDS:
+                self.declaration(child)
+            elif (
+                _kind(child) == "VAR_DECL"
+                and _clang().conf.lib.clang_Cursor_getVarDeclInitializer(child)
+                is not None
+            ):
+                # An in-class static/constexpr initializer is a definition for
+                # value use. Preserve its identity across translation units.
+                self.declaration(child)
+
+    def declaration(self, cursor):
+        kind = _kind(cursor)
+        loc = cursor.location
+        if loc.file and not _source(self.root, loc.file.name).is_relative_to(self.root):
+            return
+        if kind in _SCOPES:
+            for child in cursor.get_children():
+                self.declaration(child)
+        elif kind in _FUNCTIONS:
+            self.function(cursor)
+        elif kind in _RECORDS:
+            self.record(cursor)
+        elif kind == "ENUM_DECL":
+            self.enumeration(cursor)
+        elif kind in {
+            "FUNCTION_TEMPLATE",
+            "CLASS_TEMPLATE",
+            "CLASS_TEMPLATE_PARTIAL_SPECIALIZATION",
+        }:
+            self.template(cursor)
+        elif kind == "VAR_DECL" and (
+            cursor.is_definition() or cursor.storage_class.name != "EXTERN"
+        ):
+            symbol = _symbol(cursor, self.unit_tag)
+            try:
+                self.globals[symbol] = _Body(self).variable(cursor, symbol)
+            except _Unsupported as error:
+                # The translation unit can run static initialization/destruction
+                # before/after entry even when no function reads this variable.
+                self.diagnostic(error)
+
+
+class _Body:
+    def __init__(self, unit, owner=None):
+        self.unit = unit
+        self.owner = owner
+        self.names = {}
+        self.taken_names = set()
+        self.calls = set()
+        self.errors = []
+
+    def local(self, cursor):
+        identity = cursor.hash
+        if identity not in self.names:
+            base = cursor.spelling or "local"
+            name = base
+            if name in self.taken_names:
+                name = f"{base}_{cursor.location.offset}"
+            self.names[identity] = name
+            self.taken_names.add(name)
+        return self.names[identity]
+
+    def collect_calls(self, cursor):
+        for node in cursor.walk_preorder():
+            if (
+                _kind(node) == "CALL_EXPR"
+                and node.referenced
+                and _kind(node.referenced) in _FUNCTIONS
+                and not cxx_library.is_standard(node.referenced)
+            ):
+                self.calls.add(_symbol(node.referenced, self.unit.unit_tag))
+
+    def variable(self, cursor, name=None):
+        if cursor.type.get_canonical().kind.name == "VARIABLEARRAY" and name is None:
+            element = cursor.type.get_canonical().get_array_element_type()
+            extents = [c for c in cursor.get_children() if c.kind.is_expression()]
+            if (
+                element.get_canonical().kind.name
+                in _SIGNED | _UNSIGNED | _PRIMITIVES.keys()
+                and len(extents) == 1
+            ):
+                return {
+                    "op": "runtime_array",
+                    "name": self.local(cursor),
+                    "element": self.unit.type_info(element, cursor),
+                    "extent": self.expression(extents[0]),
+                    "storage": "scoped",
+                    "initialization": "uninitialized",
+                }
+            raise _Unsupported(
+                cursor,
+                "array.dynamic_extent",
+                "dynamic local array needs a single extent and a trivial element",
+            )
+        ty = _type(cursor.type, cursor, self.unit.records)
+        row = {"op": "decl", "name": name or self.local(cursor), "type": ty}
+        if cursor.tls_kind.name != "NONE":
+            raise _Unsupported(
+                cursor,
+                "state.thread_local",
+                "thread-local allocation and initialization",
+            )
+        element = cursor.type.get_canonical()
+        while element.kind.name == "CONSTANTARRAY":
+            element = element.get_array_element_type()
+        if element.kind.name == "RECORD" and not element.is_pod():
+            element_type = _type(element, cursor, self.unit.records)
+            if element_type.get("kind") == "const":
+                element_type = element_type["of"]
+            if element_type.get("kind") != "library":
+                lifetime = _object(cxx_objects.lifetime, element, self)
+                if not lifetime:
+                    raise _Unsupported(
+                        cursor,
+                        "state.object_lifetime",
+                        f"construction, destruction and cleanup of {element.spelling}",
+                    )
+                row["object_lifetime"] = lifetime
+            row["lifetime"] = (
+                "program" if name or cursor.storage_class.name == "STATIC" else "scope"
+            )
+        if cursor.storage_class.name == "STATIC" and name is None:
+            row["storage"] = "static"
+        initializer = _clang().conf.lib.clang_Cursor_getVarDeclInitializer(cursor)
+        if initializer is not None:
+            if (
+                ty == _va_interface()
+                and _kind(initializer) == "CALL_EXPR"
+                and not list(initializer.get_arguments())
+            ):
+                return row
+            if (
+                _kind(initializer) == "CALL_EXPR"
+                and initializer.referenced
+                and _kind(initializer.referenced) == "CONSTRUCTOR"
+                and not any(a.location.file for a in initializer.get_arguments())
+                and initializer.location.offset == cursor.location.offset
+                and not any(
+                    t.spelling in {"(", "{", "="}
+                    for t in cursor.get_tokens()
+                    if t.location.offset > cursor.location.offset
+                )
+            ):
+                # A bare declaration default-initializes each element. Its
+                # scoped storage and declared type reproduce this C++ operation.
+                # The selected project constructor remains a reachability edge.
+                if (
+                    element.kind.name == "RECORD"
+                    and not element.is_pod()
+                    and row.get("object_lifetime")
+                ):
+                    row["object_lifetime"]["constructor"] = self.unit.declare_call(
+                        initializer.referenced
+                    )
+                    self.calls.add(row["object_lifetime"]["constructor"])
+                return row
+            row["init"] = self.expression(initializer)
+        return row
+
+    def reference(self, cursor):
+        declaration = cursor.referenced
+        kind = _kind(declaration) if declaration else ""
+        public = cxx_library.reference(
+            declaration, lambda t: self.unit.type_info(t, cursor)
+        )
+        if public:
+            return public
+        if kind == "ENUM_CONSTANT_DECL":
+            return {
+                "op": "literal",
+                "type": _type(cursor.type, cursor, self.unit.records),
+                "value": declaration.enum_value,
+            }
+        if kind in _FUNCTIONS:
+            name = self.unit.declare_call(declaration)
+            self.calls.add(name)
+            return {"op": "function_ref", "name": name}
+        if kind not in {"VAR_DECL", "PARM_DECL", "BINDING_DECL"}:
+            raise _Unsupported(
+                cursor,
+                "binding.reference",
+                f"unresolved reference to {cursor.spelling} ({kind})",
+            )
+        if declaration.linkage.name in {"INTERNAL", "EXTERNAL", "UNIQUE_EXTERNAL"}:
+            name = _symbol(declaration, self.unit.unit_tag)
+            header_provider = _provider(declaration)
+            if header_provider or (
+                not declaration.is_definition() and not declaration.get_definition()
+            ):
+                external = {
+                    "op": "decl",
+                    "name": name,
+                    "type": _type(declaration.type, declaration, self.unit.records),
+                    "external": True,
+                }
+                if header_provider:
+                    external["provider"] = header_provider
+                self.unit.globals.setdefault(name, external)
+        else:
+            name = self.local(declaration)
+        return {"op": "var", "name": name}
+
+    def arguments(self, cursor, declaration):
+        arguments = list(cursor.get_arguments())
+        if not declaration:
+            return [self.expression(arg) for arg in arguments]
+        parameters = list(declaration.get_arguments())
+        values = []
+        offset = (
+            1
+            if (
+                _kind(declaration) == "CXX_METHOD"
+                and declaration.spelling.startswith("operator")
+                and not declaration.is_static_method()
+                and len(arguments) == len(parameters) + 1
+            )
+            else 0
+        )
+        for i, arg in enumerate(arguments):
+            if (
+                i == 1
+                and declaration.spelling == "__assert_fail"
+                and _provider(declaration) == "libc"
+                and self.unit.macro_at(cursor) == "assert"
+                and not list(arg.get_children())
+                and _kind(arg) == "UNEXPOSED_EXPR"
+            ):
+                values.append(self.unit.assertion_file(cursor))
+                continue
+            if (
+                not arg.location.file
+                and _kind(arg) == "UNEXPOSED_EXPR"
+                and 0 <= i - offset < len(parameters)
+            ):
+                parameter = parameters[i - offset]
+                defaults = [
+                    n for n in parameter.get_children() if n.kind.is_expression()
+                ]
+                if len(defaults) != 1:
+                    raise _Unsupported(
+                        cursor,
+                        "call.default_argument",
+                        f"no resolved default initializer for parameter {i - offset + 1}",
+                    )
+                arg = defaults[0]
+            value = self.expression(arg)
+            if 0 <= i - offset < len(parameters) and parameters[
+                i - offset
+            ].type.get_canonical().kind.name in {
+                "POINTER",
+                "INCOMPLETEARRAY",
+                "CONSTANTARRAY",
+            }:
+                value = (
+                    _writable_string(
+                        value,
+                        _param_type(parameters[i - offset], self.unit.records),
+                        self.unit.location(arg.location),
+                    )
+                    or value
+                )
+            if (
+                0 <= i - offset < len(parameters)
+                and parameters[i - offset].type.get_canonical().kind.name
+                == "LVALUEREFERENCE"
+            ):
+                value = {
+                    "op": "cast",
+                    "mode": "static",
+                    "conversion": "reference_binding",
+                    "source_type": self.unit.type_info(arg.type, arg),
+                    "type": _param_type(parameters[i - offset], self.unit.records),
+                    "value": value,
+                }
+            values.append(value)
+        return values
+
+    def expression(self, cursor):
+        kind = _kind(cursor)
+        children = list(cursor.get_children())
+        if kind in {"UNARY_EXPR", "CXX_UNARY_EXPR"} and children:
+            value = children[0]
+            while (
+                _kind(value) in {"PAREN_EXPR", "UNEXPOSED_EXPR"}
+                and len(list(value.get_children())) == 1
+            ):
+                value = next(value.get_children())
+            if (
+                value.type.get_canonical().kind.name == "VARIABLEARRAY"
+                and _kind(value) == "DECL_REF_EXPR"
+                and value.referenced
+                and next((t.spelling for t in cursor.get_tokens()), None) == "sizeof"
+            ):
+                return {
+                    "op": "runtime_array_size",
+                    "name": self.local(value.referenced),
+                }
+        if kind in {
+            "INTEGER_LITERAL",
+            "FLOATING_LITERAL",
+            "CHARACTER_LITERAL",
+            "CXX_BOOL_LITERAL_EXPR",
+            "UNARY_EXPR",
+            "CXX_UNARY_EXPR",
+        }:
+            return {
+                "op": "literal",
+                "type": _type(cursor.type, cursor, self.unit.records),
+                "value": _number(cursor),
+            }
+        if kind == "STRING_LITERAL":
+            return {"op": "string", "value": _string(cursor)}
+        if kind in {"CXX_NULL_PTR_LITERAL_EXPR", "GNU_NULL_EXPR"}:
+            return {"op": "literal", "type": "i32", "value": 0}
+        if kind == "DECL_REF_EXPR":
+            return self.reference(cursor)
+        if kind == "CXX_THIS_EXPR":
+            return {"op": "var", "name": "this"}
+        if kind == "CXX_NEW_EXPR":
+            allocation = _object(cxx_objects.allocation, cursor, self)
+            if allocation:
+                return allocation
+            pointee = cursor.type.get_pointee().get_canonical()
+            tokens = [t.spelling for t in cursor.get_tokens()]
+            if (
+                pointee.kind.name in {"RECORD", "CONSTANTARRAY"}
+                or "new" not in tokens
+                or tokens[tokens.index("new") + 1 :][:1] == ["("]
+            ):
+                raise _Unsupported(
+                    cursor,
+                    "allocation.construction",
+                    "allocation requires an object or placement construction protocol",
+                )
+            operands = [c for c in children if c.kind.is_expression()]
+            out = {"op": "allocate", "type": _type(pointee, cursor, self.unit.records)}
+            end_type = min(
+                (i for i, t in enumerate(tokens) if t in {"(", "{"}),
+                default=len(tokens),
+            )
+            if "[" in tokens[:end_type]:
+                if not operands:
+                    raise _Unsupported(
+                        cursor,
+                        "allocation.extent",
+                        "array allocation has no captured extent",
+                    )
+                size = operands.pop(0)
+                inner = list(size.get_children())
+                if (
+                    _kind(size) == "UNEXPOSED_EXPR"
+                    and len(inner) == 1
+                    and inner[0].type.get_canonical().kind.name in _SIGNED
+                ):
+                    size = inner[0]
+                out["count"] = self.expression(size)
+            if len(operands) > 1:
+                raise _Unsupported(
+                    cursor,
+                    "allocation.arguments",
+                    "allocation has additional placement or initialization arguments",
+                )
+            if operands:
+                init = operands[0]
+                out["init"] = (
+                    {"op": "init_list", "items": []}
+                    if _kind(init) == "UNEXPOSED_EXPR" and not list(init.get_children())
+                    else self.expression(init)
+                )
+            return out
+        if kind == "CXX_DELETE_EXPR" and len(children) == 1:
+            destruction = _object(cxx_objects.deletion, cursor, self)
+            if destruction:
+                return destruction
+            pointer = children[0].type.get_canonical()
+            if (
+                pointer.kind.name != "POINTER"
+                or pointer.get_pointee().get_canonical().kind.name == "RECORD"
+            ):
+                raise _Unsupported(
+                    cursor,
+                    "allocation.destruction",
+                    "destruction requires a resolved destructor before releasing storage",
+                )
+            tokens = [t.spelling for t in cursor.get_tokens()]
+            array = "delete" in tokens and tokens[tokens.index("delete") + 1 :][:2] == [
+                "[",
+                "]",
+            ]
+            return {
+                "op": "release",
+                "target": self.expression(children[0]),
+                "array": array,
+            }
+        if kind in {
+            "PAREN_EXPR",
+            "UNEXPOSED_EXPR",
+            "CSTYLE_CAST_EXPR",
+            "CXX_STATIC_CAST_EXPR",
+            "CXX_REINTERPRET_CAST_EXPR",
+            "CXX_CONST_CAST_EXPR",
+            "CXX_FUNCTIONAL_CAST_EXPR",
+        }:
+            operands = [c for c in children if c.kind.is_expression()]
+            if (
+                kind == "UNEXPOSED_EXPR"
+                and len(operands) == 1
+                and self.unit.macro_at(cursor) == "va_arg"
+                and _va_list(operands[0].type.get_canonical())
+                and not _va_list(cursor.type.get_canonical())
+            ):
+                return {
+                    "op": "variadic",
+                    "name": "arg",
+                    "list": self.expression(operands[0]),
+                    "type": self.unit.type_info(cursor.type, cursor),
+                }
+            if (
+                not operands
+                and kind == "UNEXPOSED_EXPR"
+                and cursor.type.get_canonical().kind.name
+                in _SIGNED | _UNSIGNED | {"FLOAT", "DOUBLE", "BOOL"}
+            ):
+                return {
+                    "op": "literal",
+                    "type": _type(cursor.type, cursor, self.unit.records),
+                    "value": _number(cursor),
+                }
+            if len(operands) != 1:
+                raise _Unsupported(
+                    cursor,
+                    "expression.wrapper",
+                    f"{kind} with {len(operands)} value operands",
+                )
+            source, target = (
+                operands[0].type.get_canonical(),
+                cursor.type.get_canonical(),
+            )
+            value = self.expression(operands[0])
+            if kind == "PAREN_EXPR" or source == target:
+                return value
+            if (
+                kind == "UNEXPOSED_EXPR"
+                and source.kind.name == target.kind.name == "RECORD"
+            ):
+                if source.get_declaration() == target.get_declaration():
+                    source_type = self.unit.type_info(source, cursor)
+                    library = source_type.get("of", source_type)
+                    if library.get("kind") == "library":
+                        return {
+                            "op": "library_value",
+                            "provider": "cxx_standard",
+                            "mode": "qualify",
+                            "source_type": source_type,
+                            "type": self.unit.type_info(target, cursor),
+                            "value": value,
+                        }
+                    # Qualification changes on a record preserve its glvalue.
+                    return {
+                        "op": "cast",
+                        "mode": "static",
+                        "conversion": "qualification",
+                        "source_type": self.unit.type_info(source, cursor),
+                        "type": {
+                            "kind": "ref",
+                            "to": self.unit.type_info(target, cursor),
+                        },
+                        "value": value,
+                    }
+                if cxx_library.is_standard(
+                    source.get_declaration()
+                ) and cxx_library.is_standard(target.get_declaration()):
+                    return value
+                # Implicit derived-to-base subobject conversion preserves the lvalue.
+                # Base copying or user-defined conversion appears as a constructor or call.
+                ty = {"kind": "ref", "to": _type(target, cursor, self.unit.records)}
+                return {
+                    "op": "cast",
+                    "mode": "static",
+                    "conversion": "base_subobject",
+                    "source_type": self.unit.type_info(source, cursor),
+                    "type": ty,
+                    "value": value,
+                }
+            if target.kind.name == "POINTER" and source.kind.name in {
+                "CONSTANTARRAY",
+                "INCOMPLETEARRAY",
+                "VARIABLEARRAY",
+                "FUNCTIONPROTO",
+                "FUNCTIONNOPROTO",
+            }:
+                if _va_list(source):
+                    return value
+                target_type = self.unit.type_info(target, cursor)
+                if source.kind.name in {"INCOMPLETEARRAY", "VARIABLEARRAY"}:
+                    original_type = {
+                        "kind": "array",
+                        "of": self.unit.type_info(
+                            source.get_array_element_type(), cursor
+                        ),
+                        "shape": [None],
+                    }
+                elif source.kind.name == "FUNCTIONNOPROTO":
+                    original_type = target_type["to"]
+                else:
+                    original_type = self.unit.type_info(source, cursor)
+                mode = (
+                    "qualification"
+                    if value["op"] == "string"
+                    and not target.get_pointee().is_const_qualified()
+                    else "static"
+                )
+                return {
+                    "op": "cast",
+                    "mode": mode,
+                    "conversion": (
+                        "function_decay"
+                        if source.kind.name.startswith("FUNCTION")
+                        else "array_decay"
+                    ),
+                    "source_type": original_type,
+                    "type": target_type,
+                    "value": value,
+                }
+            if (
+                kind == "UNEXPOSED_EXPR"
+                and target.kind.name == "INCOMPLETEARRAY"
+                and source.kind.name == "POINTER"
+            ):
+                # Clang exposes the parameter's written array type on this
+                # implicit argument conversion. Its adjusted ABI is a pointer.
+                adjusted = {
+                    "kind": "ptr",
+                    "to": self.unit.type_info(target.get_array_element_type(), cursor),
+                }
+                return _writable_string(
+                    value, adjusted, self.unit.location(cursor.location)
+                ) or {
+                    "op": "cast",
+                    "mode": "static",
+                    "conversion": "adjusted_array_parameter",
+                    "source_type": self.unit.type_info(source, cursor),
+                    "type": {
+                        "kind": "ptr",
+                        "to": self.unit.type_info(
+                            target.get_array_element_type(), cursor
+                        ),
+                    },
+                    "value": value,
+                }
+            if target.kind.name == "POINTER" and (
+                source.kind.name == "NULLPTR"
+                or (
+                    isinstance(value, dict)
+                    and value.get("op") == "literal"
+                    and value.get("value") == 0
+                )
+            ):
+                return {
+                    "op": "literal",
+                    "type": _type(target, cursor, self.unit.records),
+                    "value": None,
+                }
+            mode = "static"
+            if kind == "CXX_CONST_CAST_EXPR":
+                mode = "qualification"
+            elif kind == "CXX_REINTERPRET_CAST_EXPR":
+                mode = "reinterpret"
+            elif kind == "CSTYLE_CAST_EXPR" and (
+                source.kind.name == "POINTER" or target.kind.name == "POINTER"
+            ):
+                mode = "explicit_pointer"
+            target_type = self.unit.type_info(target, cursor)
+            if kind == "UNEXPOSED_EXPR":
+                legacy = _writable_string(
+                    value, target_type, self.unit.location(cursor.location)
+                )
+                if legacy:
+                    return legacy
+            emitted_type = target_type
+            if isinstance(target_type, dict) and target_type.get("kind") == "const":
+                emitted_type = target_type["of"]
+            return {
+                "op": "cast",
+                "mode": mode,
+                "conversion": "implicit" if kind == "UNEXPOSED_EXPR" else "explicit",
+                "source_type": self.unit.type_info(source, cursor),
+                "target_type": target_type,
+                "type": emitted_type,
+                "value": value,
+            }
+        if kind == "ARRAY_SUBSCRIPT_EXPR":
+            return {
+                "op": "index",
+                "base": self.expression(children[0]),
+                "indices": [self.expression(children[1])],
+            }
+        if (
+            kind == "MEMBER_REF_EXPR"
+            and len(children) <= 1
+            and cursor.referenced
+            and _kind(cursor.referenced) == "FIELD_DECL"
+        ):
+            base = (
+                self.expression(children[0])
+                if children
+                else {"op": "var", "name": "this"}
+            )
+            if not children or children[0].type.get_canonical().kind.name == "POINTER":
+                base = {"op": "unary", "operator": "deref", "value": base}
+            if cxx_library.public_field(cursor.referenced):
+                return {
+                    "op": "library_member",
+                    "provider": "cxx_standard",
+                    "receiver": base,
+                    "name": cursor.spelling,
+                }
+            if (
+                base.get("op") == "member"
+                and base.get("record") == "sigaction"
+                and base["field"] == "__sigaction_handler"
+                and cursor.spelling in {"sa_handler", "sa_sigaction"}
+            ):
+                return {**base, "field": cursor.spelling}
+            record = cursor.referenced.semantic_parent
+            while record and _kind(record) in _RECORDS:
+                self.unit.type_info(record.type, cursor)
+                binding = self.unit.records.get(self.unit.record_name(record), {})
+                if binding.get("provider") in {"libc", "mpi"}:
+                    return {
+                        "op": "member",
+                        "base": base,
+                        "field": cursor.spelling,
+                        "provider": binding["provider"],
+                        "record": binding["symbol"],
+                    }
+                if not record.is_anonymous():
+                    break
+                record = record.semantic_parent
+            return {"op": "member", "base": base, "field": cursor.spelling}
+        if kind in {"BINARY_OPERATOR", "COMPOUND_ASSIGNMENT_OPERATOR"}:
+            lib = _clang().conf.lib
+            symbol = lib.clang_getBinaryOperatorKindSpelling(
+                lib.clang_getCursorBinaryOperatorKind(cursor)
+            )
+            left, right = (self.expression(c) for c in children)
+            if symbol in _BINARY:
+                return {
+                    "op": "binary",
+                    "operator": _BINARY[symbol],
+                    "left": left,
+                    "right": right,
+                }
+            if symbol == "=" or (symbol.endswith("=") and symbol[:-1] in _BINARY):
+                return {
+                    "op": "update",
+                    "operator": "set" if symbol == "=" else _BINARY[symbol[:-1]],
+                    "target": left,
+                    "value": right,
+                }
+            raise _Unsupported(
+                cursor, "expression.binary_operator", f"operator {symbol}"
+            )
+        if kind == "UNARY_OPERATOR":
+            opcode = _clang().conf.lib.clang_getCursorUnaryOperatorKind(cursor)
+            if opcode == 13 and len(children) == 1:  # GCC __extension__ marker.
+                return self.expression(children[0])
+            operator = _UNARY.get(opcode)
+            if operator and len(children) == 1:
+                return {
+                    "op": "unary",
+                    "operator": operator,
+                    "value": self.expression(children[0]),
+                }
+        if kind == "CALL_EXPR":
+            declaration = cursor.referenced
+            if (
+                declaration
+                and _kind(declaration) == "CXX_METHOD"
+                and declaration.spelling == "operator="
+                and declaration.is_default_method()
+                and declaration.semantic_parent.type.is_pod()
+            ):
+                operands = list(cursor.get_arguments())
+                if len(operands) == 2:
+                    return {
+                        "op": "update",
+                        "operator": "set",
+                        "target": self.expression(operands[0]),
+                        "value": self.expression(operands[1]),
+                    }
+            va_builtins = {
+                "c:@F@__builtin_va_start": "start",
+                "c:@F@__builtin_va_end": "end",
+                "c:@F@__builtin_va_copy": "copy",
+            }
+            variadic = va_builtins.get(declaration.get_usr()) if declaration else None
+            if variadic:
+                args = list(cursor.get_arguments())
+                if not args or not _va_list(args[0].type.get_canonical()):
+                    raise _Unsupported(
+                        cursor,
+                        "variadic.abi",
+                        "variadic list needs a verified target ABI",
+                    )
+                result = {
+                    "op": "variadic",
+                    "name": variadic,
+                    "list": self.expression(args[0]),
+                }
+                if len(args) > 1:
+                    result["source" if variadic == "copy" else "last"] = (
+                        self.expression(args[1])
+                    )
+                return result
+            try:
+                library = cxx_library.bind_call(
+                    cursor,
+                    declaration,
+                    self.expression,
+                    lambda t: _type(t, cursor, self.unit.records),
+                )
+            except cxx_library.BindingError as error:
+                raise _Unsupported(cursor, "library.call", str(error)) from error
+            if library:
+                return library
+            method = _object(cxx_objects.invoke, cursor, self)
+            if method:
+                return method
+            args = self.arguments(cursor, declaration)
+            if declaration and _kind(declaration) == "FUNCTION_DECL":
+                call = self.unit.call(declaration, args)
+                self.calls.add(call["callee"])
+                return call
+            if declaration and _kind(declaration) == "CXX_METHOD":
+                if declaration.is_virtual_method():
+                    raise _Unsupported(
+                        cursor,
+                        "call.virtual",
+                        f"virtual dispatch slot for {declaration.spelling}",
+                    )
+                if not declaration.location.file or not _source(
+                    self.unit.root, declaration.location.file.name
+                ).is_relative_to(self.unit.root):
+                    raise _Unsupported(
+                        cursor,
+                        "call.library_method",
+                        f"operator provider for {declaration.displayname}",
+                    )
+                if not declaration.is_static_method():
+                    if (
+                        children
+                        and _kind(children[0]) == "MEMBER_REF_EXPR"
+                        and children[0].referenced == declaration
+                    ):
+                        receiver = [
+                            c
+                            for c in children[0].get_children()
+                            if c.kind.is_expression()
+                        ]
+                    elif (
+                        declaration.spelling.startswith("operator")
+                        and len(args) == len(list(declaration.get_arguments())) + 1
+                    ):
+                        receiver = [next(cursor.get_arguments())]
+                        args.pop(0)
+                    else:
+                        raise _Unsupported(
+                            cursor,
+                            "call.operator_receiver",
+                            f"receiver for {declaration.displayname}",
+                        )
+                    this = {"op": "var", "name": "this"}
+                    if receiver:
+                        this = self.expression(receiver[0])
+                        if receiver[0].type.get_canonical().kind.name != "POINTER":
+                            this = {"op": "unary", "operator": "addr", "value": this}
+                    args.insert(0, this)
+                call = self.unit.call(declaration, args)
+                self.calls.add(call["callee"])
+                if (
+                    declaration.is_static_method()
+                    and children
+                    and _kind(children[0]) == "MEMBER_REF_EXPR"
+                ):
+                    bases = [
+                        c for c in children[0].get_children() if c.kind.is_expression()
+                    ]
+                    if bases:
+                        return {
+                            "op": "binary",
+                            "operator": "comma",
+                            "left": self.expression(bases[0]),
+                            "right": call,
+                        }
+                return call
+            if (
+                declaration
+                and _kind(declaration) in {"PARM_DECL", "VAR_DECL", "FIELD_DECL"}
+                and children
+            ):
+                pointer = children[0].type.get_canonical()
+                target_type = (
+                    pointer.get_pointee() if pointer.kind.name == "POINTER" else pointer
+                )
+                return {
+                    "op": "indirect_call",
+                    "target": self.expression(children[0]),
+                    "args": args,
+                    "signature": _type(target_type, cursor, self.unit.records),
+                    "location": self.unit.location(cursor.location),
+                }
+            raise _Unsupported(
+                cursor,
+                "call.dispatch",
+                f"call requires receiver or indirect target for {cursor.spelling}",
+            )
+        if kind == "INIT_LIST_EXPR":
+            return {"op": "init_list", "items": [self.expression(c) for c in children]}
+        if kind == "CONDITIONAL_OPERATOR" and len(children) == 3:
+            return {
+                "op": "select",
+                "condition": self.expression(children[0]),
+                "then": self.expression(children[1]),
+                "else": self.expression(children[2]),
+            }
+        raise _Unsupported(
+            cursor,
+            "expression." + kind.lower(),
+            f"expression {kind} requires an operation rule",
+        )
+
+    def statements(self, cursor):
+        body = []
+        for child in (
+            cursor.get_children() if _kind(cursor) == "COMPOUND_STMT" else (cursor,)
+        ):
+            try:
+                body.extend(self.statement(child))
+            except _Unsupported as error:
+                self.errors.append(error)
+                body.append(
+                    {
+                        "op": "unsupported",
+                        "construct": _kind(error.cursor),
+                        "diagnostic": "c_family." + error.code,
+                        "location": self.unit.location(error.cursor.location),
+                        "effects": "unknown",
+                    }
+                )
+        return body
+
+    def for_parts(self, cursor, children):
+        if len(children) == 4:
+            return children
+        # libclang omits empty clauses; use only the punctuation boundaries to assign roles.
+        separators = []
+        depth = 0
+        for token in cursor.get_tokens():
+            spelling = token.spelling
+            if spelling == "(":
+                depth += 1
+            elif spelling == ")":
+                depth -= 1
+                if depth == 0:
+                    break
+            elif spelling == ";" and depth == 1:
+                separators.append(token.location.offset)
+        if len(separators) != 2 or not children:
+            raise _Unsupported(
+                cursor, "control.for", "cannot bind the three clauses of this for loop"
+            )
+        clauses = [None, None, None]
+        for child in children[:-1]:
+            slot = sum(
+                child.extent.start.offset > separator for separator in separators
+            )
+            if clauses[slot] is not None:
+                raise _Unsupported(cursor, "control.for", "ambiguous for clause")
+            clauses[slot] = child
+        return [*clauses, children[-1]]
+
+    def statement(self, cursor):
+        rows = self._statement(cursor)
+        location = self.unit.location(cursor.location)
+        for row in rows:
+            row.setdefault("location", location)
+        return rows
+
+    def _statement(self, cursor):
+        kind = _kind(cursor)
+        children = list(cursor.get_children())
+        if kind == "NULL_STMT":
+            return []
+        if kind == "COMPOUND_STMT":
+            return [{"op": "block", "body": self.statements(cursor)}]
+        if kind == "DECL_STMT":
+            result = []
+            for child in children:
+                if _kind(child) == "VAR_DECL":
+                    result.append(self.variable(child))
+                elif _kind(child) in _RECORDS:
+                    self.unit.record(child)
+                elif _kind(child) == "ENUM_DECL":
+                    self.unit.enumeration(child)
+                elif _kind(child) not in {
+                    "TYPEDEF_DECL",
+                    "TYPE_ALIAS_DECL",
+                    "USING_DECLARATION",
+                }:
+                    raise _Unsupported(
+                        child,
+                        "declaration." + _kind(child).lower(),
+                        "requires a scoped declaration rule",
+                    )
+            return result
+        if kind == "RETURN_STMT":
+            return [
+                {
+                    "op": "return",
+                    **({"value": self.expression(children[0])} if children else {}),
+                }
+            ]
+        if kind == "FOR_STMT":
+            init, cond, step, body = self.for_parts(cursor, children)
+            return [
+                {
+                    "op": "for",
+                    "init": self.statement(init) if init else [],
+                    "condition": (
+                        self.expression(cond)
+                        if cond
+                        else {"op": "literal", "type": "bool", "value": True}
+                    ),
+                    "step": (
+                        self.expression(step)
+                        if step
+                        else {"op": "literal", "type": "i32", "value": 0}
+                    ),
+                    "body": self.statements(body),
+                }
+            ]
+        if (
+            kind == "CXX_FOR_RANGE_STMT"
+            and len(children) == 3
+            and _kind(children[0]) == "VAR_DECL"
+        ):
+            variable, iterable, body = children
+            if iterable.type.get_canonical().kind.name != "CONSTANTARRAY":
+                raise _Unsupported(
+                    cursor,
+                    "control.range_protocol",
+                    "user-defined begin/end require explicit calls",
+                )
+            return [
+                {
+                    "op": "each",
+                    "name": self.local(variable),
+                    "type": _type(variable.type, variable, self.unit.records),
+                    "range": self.expression(iterable),
+                    "body": self.statements(body),
+                }
+            ]
+        if kind == "IF_STMT" and len(children) in {2, 3}:
+            return [
+                {
+                    "op": "if",
+                    "condition": self.expression(children[0]),
+                    "then": self.statements(children[1]),
+                    "else": self.statements(children[2]) if len(children) == 3 else [],
+                }
+            ]
+        if kind in {"WHILE_STMT", "DO_STMT"} and len(children) == 2:
+            cond, body = children if kind == "WHILE_STMT" else reversed(children)
+            return [
+                {
+                    "op": "while" if kind == "WHILE_STMT" else "do_while",
+                    "condition": self.expression(cond),
+                    "body": self.statements(body),
+                }
+            ]
+        if kind in {"BREAK_STMT", "CONTINUE_STMT"}:
+            return [{"op": "break" if kind == "BREAK_STMT" else "continue"}]
+        if kind == "SWITCH_STMT" and len(children) == 2:
+            return [
+                {
+                    "op": "switch",
+                    "condition": self.expression(children[0]),
+                    "body": self.statements(children[1]),
+                }
+            ]
+        if kind == "CASE_STMT" and len(children) == 2:
+            return [
+                {"op": "case", "value": self.expression(children[0])},
+                *self.statement(children[1]),
+            ]
+        if kind == "DEFAULT_STMT" and len(children) == 1:
+            return [{"op": "default"}, *self.statement(children[0])]
+        if kind == "GOTO_STMT" and cursor.referenced:
+            return [{"op": "goto", "name": cursor.referenced.spelling}]
+        if kind == "LABEL_STMT" and len(children) == 1:
+            return [
+                {"op": "label", "name": cursor.spelling},
+                *self.statement(children[0]),
+            ]
+        if cursor.kind.is_expression():
+            expr = self.expression(cursor)
+            if expr["op"] == "update" and expr["operator"] == "set":
+                return [
+                    {"op": "assign", "target": expr["target"], "value": expr["value"]}
+                ]
+            return [{"op": "expr", "value": expr}]
+        raise _Unsupported(
+            cursor,
+            "statement." + kind.lower(),
+            f"statement {kind} requires a control/effect rule",
+        )
+
+
+def translate(path: Path, flags: list[str], *, root: Path, language=None) -> dict:
+    """Read one compiler invocation and return graph declarations plus coverage gaps."""
+    path, root = Path(path).resolve(), Path(root).resolve()
+    if language is not None and not any(s.startswith("-x") for s in flags):
+        dialect = {"c": "c", "c++": "c++", "cpp": "c++", "cxx": "c++"}[language.lower()]
+        flags = ["-x", dialect, *flags]
+    unit = _Unit(path, root, flags)
+    clang = _clang()
+    parsed = clang.Index.create().parse(
+        str(path.relative_to(root)),
+        args=["-working-directory", str(root), *flags],
+        options=clang.TranslationUnit.PARSE_DETAILED_PROCESSING_RECORD,
+    )
+    for diagnostic in parsed.diagnostics:
+        if diagnostic.severity >= clang.Diagnostic.Error:
+            unit.diagnostics.append(
+                {
+                    **unit.location(diagnostic.location),
+                    "code": "c_family.parse",
+                    "detail": diagnostic.spelling,
+                }
+            )
+    for declaration in parsed.cursor.get_children():
+        if _kind(declaration) == "MACRO_INSTANTIATION":
+            unit.macro(declaration)
+        elif _kind(declaration) not in {"INCLUSION_DIRECTIVE", "MACRO_DEFINITION"}:
+            unit.declaration(declaration)
+    unit.expand()
+    return {
+        "functions": list(unit.functions.values()),
+        "externs": [
+            row for name, row in unit.externs.items() if name not in unit.functions
+        ],
+        "globals": list(unit.globals.values()),
+        "records": list(unit.records.values()),
+        "templates": list(unit.templates.values()),
+        "enums": list(unit.enums.values()),
+        "diagnostics": unit.diagnostics,
+    }

@@ -10,8 +10,9 @@ requires-python = ">=3.10"
 dependencies = []
 
 [project.optional-dependencies]
+cpu = ["clang==18.1.8", "fparser==0.2.3"]
 fortran = ["fparser==0.2.3"]
-test = ["pytest>=8", "numpy>=1.24"]
+test = ["pytest>=8", "numpy>=1.24", "black==26.10.1"]
 
 [project.scripts]
 scar = "scar.cli:main"
@@ -20,8 +21,9 @@ scar = "scar.cli:main"
 include = ["scar", "scar.*"]
 namespaces = false
 
-[tool.setuptools.package-data]
-"scar.backend" = ["*.cpp"]
-
 [tool.pytest.ini_options]
 testpaths = ["tests/stages"]
+
+[tool.black]
+line-length = 88
+target-version = ["py310"]

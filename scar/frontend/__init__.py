@@ -1,176 +1,206 @@
-"""Build a source-backed program graph from an explicitly selected input."""
+"""Build an indexed, source-independent program graph from compilation units."""
 
-from dataclasses import asdict, replace
+from collections import Counter
+from concurrent.futures import ProcessPoolExecutor
+from dataclasses import asdict
 import json
 from pathlib import Path
 
-from scar.contract import (
-    Edge,
-    Graph,
-    artifact,
-    read_artifact,
-    verify_artifact,
-    write_graph,
-)
-
+from scar.contract import GRAPH, digest, document, json_bytes, member, write_json
+from .graph import function_graph
 from .hardware import snapshot
 
 
-def _mixed_graph(target, request, out, jobs, bundle):
-    from .clang import scalar_declarations
-    from .compiled_graph import build_compiled_graph
-    from .python_graph import build_python
-
-    python = [row for row in target["units"] if row.get("language") == "python"]
-    names = {row["path"] for row in python}
-    files = target["source_lock"]["files"]
-    compiled_target = dict(
-        target,
-        units=[row for row in target["units"] if row.get("language") != "python"],
-        source_lock={
-            "files": {path: entry for path, entry in files.items() if path not in names}
-        },
-    )
-    folder = out / "native"
-    folder.mkdir()
-    graph = build_compiled_graph(
-        compiled_target, request, folder, jobs=jobs, bundle=bundle
-    )
-    compiled_target, evidence = graph.target, graph.evidence
-    regions, operations, edges = graph.regions, graph.operations, graph.edges
-    region_kinds = {region.id: region.kind for region in regions}
-    parents = {child: region.id for region in regions for child in region.children}
-    compiled_definitions = {}
-    for op in operations:
-        symbol = op.attributes.get("symbol")
-        if symbol is not None:
-            region = op.region
-            while region_kinds[region] != "FUNCTION":
-                region = parents[region]
-            compiled_definitions.setdefault(symbol, set()).add(region)
-
-    symbols = {
-        symbol
-        for unit in python
-        for role in ("exports", "imports")
-        for symbol in unit["abi"].get(role, {}).values()
-    }
-    declarations = scalar_declarations(
-        compiled_target, evidence["compiler_types"], symbols
-    )
-    exported, functions = {}, []
-    regions, operations, edges = list(regions), list(operations), list(edges)
-    for index, unit in enumerate(python):
-        name = unit["path"]
-        folder = out / f"python-{index}"
-        folder.mkdir()
-        spec = dict(
-            schema_version=1,
-            source_root=compiled_target["source_root"],
-            source=name,
-            source_lock={"files": {name: files[name]}},
-            scalar_abi=unit["abi"],
-        )
-        unit_graph = build_python(
-            Path(request.path), folder, target=spec, declarations=declarations
-        )
-        regions.extend(unit_graph.regions)
-        operations.extend(unit_graph.operations)
-        edges.extend(unit_graph.edges)
-        proof = unit_graph.evidence
-        evidence["locked_sources"].update(proof["locked_sources"])
-        evidence.setdefault("python_materials", {})[name] = proof["source_material"]
-        for function in unit_graph.program.scalars:
-            symbol = function["name"]
-            if symbol in exported or symbol in compiled_definitions:
-                raise ValueError(
-                    f"multiple definitions for mixed-language symbol {symbol}"
-                )
-            exported[symbol] = function["region"]
-            functions.append(function)
-        imports = unit["abi"].get("imports", {})
-        for op in unit_graph.operations:
-            name = op.attributes.get("callee_syntax")
-            if op.kind == "CALL" and name in imports:
-                symbol = imports[name]
-                destinations = compiled_definitions.get(symbol, ())
-                if len(destinations) != 1:
-                    raise ValueError(f"import {symbol} requires one compiled provider")
-                edges.append(Edge(op.id, next(iter(destinations)), "CALL", symbol))
-
-    for row in evidence["native_calls"]:
-        if row["resolution"] == "EXTERNAL" and row["symbol"] in exported:
-            row["target"] = exported[row["symbol"]]
-            row["resolution"] = "MIXED_ABI_DEFINITION"
-            edges.append(Edge(row["operation"], row["target"], "CALL", row["symbol"]))
-    compiled_target.update(units=target["units"], source_lock=target["source_lock"])
-    return replace(
-        graph,
-        regions=tuple(regions),
-        operations=tuple(operations),
-        edges=tuple(edges),
-        program=replace(graph.program, scalars=tuple(functions)),
-    )
-
-
-def _observe(graph, out):
-    from .python_observation import observe_python
-
-    target = graph.target
-    path = Path(target["source_root"]) / target["units"][0]["path"]
-    observation, links = observe_python(
-        path, target["entry"], target["observe"], out, graph.regions, graph.operations
-    )
-    source = graph.evidence["locked_sources"][target["units"][0]["path"]]
-    verify_artifact(source)
-    if graph.evidence["input"] != source:
-        verify_artifact(graph.evidence["input"])
-    coverage = dict(graph.evidence["coverage"], runtime="BOUNDED_CALLS")
-    return replace(
-        graph,
-        edges=(*graph.edges, *links),
-        evidence=dict(
-            graph.evidence, coverage=coverage, observation=asdict(observation)
-        ),
-    )
-
-
-def build(source: Path, out: Path, *, jobs: int = 1) -> Graph:
-    if type(jobs) is not int or jobs < 1:
-        raise ValueError("frontend jobs must be a positive integer")
-    source = Path(source).resolve(strict=True)
-    out = Path(out).resolve()
-    out.mkdir(parents=True, exist_ok=True)
-    if (out / "graph.json").exists():
-        raise FileExistsError(out / "graph.json")
-    evidence_dir = out / "frontend"
-    evidence_dir.mkdir()
-    request = target = None
-    if source.suffix != ".py":
-        request = artifact(source)
-        target = json.loads(read_artifact(request))
-        if not isinstance(target, dict):
-            raise ValueError("frontend request must be a JSON object")
-    if target is None or target.get("schema") == "scar.python-entry":
-        from .python_graph import build_python
-
-        graph = build_python(source, evidence_dir, target=target, manifest=request)
-        if "observe" in graph.target:
-            graph = _observe(graph, evidence_dir)
-    elif any(unit.get("language") == "python" for unit in target.get("units", ())):
-        graph = _mixed_graph(target, request, evidence_dir, jobs, out)
+def _unit(job):
+    root, profile, revision, out = job
+    path = root / profile["path"]
+    language = profile["language"].lower()
+    flags = profile.get("flags", [])
+    if language in {"c", "c++", "cpp", "cxx"}:
+        from .c_family import translate
+    elif language in {"fortran", "f77", "f90"}:
+        from .fortran import translate
+    elif language == "python":
+        from .python import translate
     else:
-        from .compiled_graph import build_compiled_graph
-
-        graph = build_compiled_graph(
-            target, request, evidence_dir, jobs=jobs, bundle=out
+        raise ValueError(f"unsupported source language {language}")
+    try:
+        if language == "python":
+            unit = translate(path, flags, root=root, abi=profile.get("abi", {}))
+        elif language in {"c", "c++", "cpp", "cxx"}:
+            unit = translate(
+                path, flags, root=root, language="c" if language == "c" else "c++"
+            )
+        else:
+            unit = translate(path, flags, root=root)
+    except ValueError as error:
+        unit = dict(
+            functions=[],
+            diagnostics=[
+                dict(
+                    code="unit_analysis",
+                    file=profile["path"],
+                    line=None,
+                    detail=str(error),
+                )
+            ],
         )
-    resources, resource_edges, hardware = snapshot(Path(graph.target["source_root"]))
-    graph = replace(
-        graph,
-        edges=(*graph.edges, *resource_edges),
-        resources=resources,
-        evidence=dict(graph.evidence, hardware=hardware),
+    functions = [function_graph(f, revision) for f in unit.get("functions", [])]
+    initializers = function_graph(
+        dict(
+            name="@initializers",
+            params=[],
+            result="void",
+            body=[{"op": "decl", **g} for g in unit.get("globals", [])],
+        ),
+        revision,
     )
-    write_graph(out / "graph.json", graph)
-    return graph
+    payload = {k: unit.get(k, []) for k in ("externs", "records", "templates", "enums")}
+    for record in payload["records"]:
+        fields = [f for f in record.get("fields", ()) if "init" in f]
+        if fields:
+            record["initializer_graph"] = function_graph(
+                dict(
+                    name="@field_initializers/" + record["name"],
+                    result="void",
+                    params=[
+                        dict(
+                            name="this",
+                            type=dict(
+                                kind="ptr", to=dict(kind="record", name=record["name"])
+                            ),
+                        )
+                    ],
+                    body=[
+                        dict(
+                            op="decl",
+                            name=f["name"],
+                            type=f["type"],
+                            init=f.pop("init"),
+                        )
+                        for f in fields
+                    ],
+                ),
+                revision,
+            )
+    payload["global_graph"] = initializers
+    payload["functions"] = functions
+    receipt = member(out, "units", payload)
+    return dict(
+        path=profile["path"],
+        language=language,
+        flags=flags,
+        revision=revision,
+        graph=receipt,
+        initializer_calls=initializers["calls"],
+        initializer_objects=initializers["objects"],
+        record_initializers={
+            r["name"]: r["initializer_graph"]["calls"]
+            for r in payload["records"]
+            if "initializer_graph" in r
+        },
+        functions=[
+            dict(
+                id=f["id"],
+                name=f["signature"]["name"],
+                defined=f["defined"],
+                calls=f["calls"],
+                objects=f["objects"],
+                dispatch=f["dispatch"],
+                nodes=len(f["nodes"]),
+            )
+            for f in functions
+        ],
+        diagnostics=unit.get("diagnostics", []),
+    )
+
+
+def _input(manifest):
+    if manifest.suffix.lower() == ".py":
+        from .python import project_units
+
+        return manifest.parent, {
+            "entry": "__main__",
+            "units": project_units(manifest, manifest.parent),
+        }
+    spec = json.loads(manifest.read_bytes())
+    root = (manifest.parent / spec.get("source_root", ".")).resolve(strict=True)
+    if "source" in spec and "units" not in spec:
+        spec["units"] = [
+            dict(path=spec["source"], language="python", abi=spec.get("abi", {}))
+        ]
+    return root, spec
+
+
+def build(manifest, out, *, jobs=1):
+    manifest, out = Path(manifest).resolve(strict=True), Path(out).resolve()
+    root, spec = _input(manifest)
+    locks = spec.get("source_lock", {}).get("files", {})
+    sources = {}
+    for relative in dict.fromkeys([*locks, *(u["path"] for u in spec["units"])]):
+        path = (root / relative).resolve(strict=True)
+        if not path.is_relative_to(root) or Path(relative).is_absolute():
+            raise ValueError(f"input must be inside source_root: {relative}")
+        raw = path.read_bytes()
+        sources[relative] = digest(raw)
+        if relative in locks:
+            lock = locks[relative]
+            if sources[relative] != lock["sha256"] or len(raw) != lock["size_bytes"]:
+                raise ValueError(f"source lock changed: {relative}")
+    snapshot_id = digest(json_bytes(sources))
+    profiles = [{"language": spec.get("language"), **p} for p in spec["units"]]
+    if (
+        not profiles
+        or jobs < 1
+        or len({json_bytes(p) for p in profiles}) != len(profiles)
+    ):
+        raise ValueError(
+            "expected distinct compilation profiles and a positive worker count"
+        )
+    if any(not p["language"] or p["language"] == "mixed" for p in profiles):
+        raise ValueError("each compilation unit needs its source language")
+    evidence = None
+    entry_abi = spec.get("entry_abi")
+    if "observe" in spec:
+        from .observation import array_abi, observe
+
+        evidence = observe(manifest, root, spec)
+        entry_abi = array_abi(spec["entry"], evidence)
+    if entry_abi and entry_abi["kind"] == "binary_f64_arrays":
+        for p in profiles:
+            if p["language"] == "python":
+                p["abi"] = {**p.get("abi", {}), **entry_abi}
+    out.mkdir(parents=True, exist_ok=True)
+    work = [(root, p, digest(json_bytes([snapshot_id, p])), out) for p in profiles]
+    if jobs == 1 or len(work) == 1:
+        units = list(map(_unit, work))
+    else:
+        with ProcessPoolExecutor(max_workers=min(jobs, len(work))) as pool:
+            units = list(pool.map(_unit, work, chunksize=1))
+    resources, topology, platform = snapshot(root)
+    diagnostics = [issue for unit in units for issue in unit["diagnostics"]]
+    counts = Counter(d["code"] for d in diagnostics)
+    totals = dict(
+        units=len(units),
+        definitions=sum(f["defined"] for u in units for f in u["functions"]),
+        operations=sum(f["nodes"] for u in units for f in u["functions"]),
+        diagnostic_sites=len(diagnostics),
+        resources=len(resources),
+    )
+    graph = document(
+        GRAPH,
+        entry=spec["entry"],
+        entry_abi=entry_abi,
+        observation=evidence,
+        units=units,
+        source_revision=snapshot_id,
+        resources=[asdict(r) for r in resources],
+        platform=platform,
+        topology=[
+            dict(source=e.source, target=e.target, kind=e.value) for e in topology
+        ],
+        contract={"arithmetic": "preserve", "externally_visible_effects": "preserve"},
+        coverage=dict(totals=totals, diagnostic_categories=dict(counts.most_common())),
+    )
+    write_json(out / "graph.json", graph)
+    return dict(graph=str(out / "graph.json"), **totals)

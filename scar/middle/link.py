@@ -1,0 +1,700 @@
+"""Resolve program entries and reconstruct executable operations from graph ports."""
+
+from collections import defaultdict
+from scar.contract import json_bytes, read_member
+
+
+def _definition(graph):
+    nodes = graph["nodes"]
+    active = set()
+
+    def read(value):
+        if isinstance(value, list):
+            return [read(v) for v in value]
+        if not isinstance(value, dict):
+            return value
+        if set(value) == {"port"}:
+            port = value["port"]
+            if type(port) is not int or not 0 <= port < len(nodes) or port in active:
+                raise ValueError(f"invalid operand port {port} in {graph['id']}")
+            active.add(port)
+            result = read(nodes[port])
+            if result["op"] in {"map", "for", "assign", "binary", "if"}:
+                result["site"] = f"{graph['id']}/{port}"
+            active.remove(port)
+            return result
+        return {key: read(field) for key, field in value.items()}
+
+    return {**read(graph["signature"]), "body": read(graph["entry"])}
+
+
+def _abi_type(t):
+    if not isinstance(t, dict):
+        return t
+    if t["kind"] in {"const", "volatile"}:
+        return _abi_type(t["of"])
+    if t["kind"] in {"ptr", "ref"}:
+        return {"ptr": _abi_type(t["to"])}
+    return t
+
+
+def _abi(fn):
+    return [
+        _abi_type(fn["result"]),
+        [_abi_type(p["type"]) for p in fn["params"]],
+        bool(fn.get("variadic")),
+    ]
+
+
+def semantics(value):
+    if isinstance(value, dict):
+        return {
+            k: semantics(v) for k, v in value.items() if k not in {"location", "site"}
+        }
+    if isinstance(value, list):
+        return [semantics(v) for v in value]
+    return value
+
+
+def _global_definition(previous, current):
+    """Resolve declarations and common storage before checking global ODR."""
+    if previous.get("external") or current.get("external"):
+        if semantics(previous["type"]) != semantics(current["type"]):
+            raise ValueError("global declaration and definition have different types")
+        return current if previous.get("external") else previous
+    if previous.get("linkage") == current.get("linkage") == "common":
+        a, b = previous["type"], current["type"]
+        if (
+            not isinstance(a, dict)
+            or not isinstance(b, dict)
+            or a.get("kind") != b.get("kind")
+            or a.get("kind") != "array"
+            or a.get("of") != b.get("of")
+            or a.get("of") != "u8"
+            or len(a.get("shape", ())) != 1
+            or len(b.get("shape", ())) != 1
+        ):
+            raise ValueError(
+                "common storage requires a declared one-dimensional byte extent"
+            )
+        x, y = a["shape"][0], b["shape"][0]
+        if type(x) is not int or type(y) is not int or min(x, y) < 0:
+            raise ValueError("common storage extent must be a nonnegative byte count")
+        exact_a = previous.get("common_extent") == "exact"
+        exact_b = current.get("common_extent") == "exact"
+        if exact_a and x < y or exact_b and y < x:
+            raise ValueError("common storage declarations have incompatible extents")
+        if (
+            "init" in previous
+            and "init" in current
+            and semantics(previous["init"]) != semantics(current["init"])
+        ):
+            raise ValueError("common storage has conflicting initializers")
+        result = {
+            **previous,
+            "type": {**a, "shape": [max(x, y)]},
+            "align_bytes": max(
+                previous.get("align_bytes", 1), current.get("align_bytes", 1)
+            ),
+            "common_extent": "exact" if exact_a or exact_b else "minimum",
+        }
+        if "init" in current:
+            result["init"] = current["init"]
+        return result
+    if semantics(previous) != semantics(current):
+        raise ValueError("global definitions disagree")
+    return previous
+
+
+def _record_definition(previous, current):
+    if previous.get("opaque"):
+        return current
+    if current.get("opaque"):
+        return previous
+    a = {k: v for k, v in previous.items() if k != "methods"}
+    b = {k: v for k, v in current.items() if k != "methods"}
+    if semantics(a) != semantics(b):
+        raise ValueError("record layouts disagree across compilation units")
+    methods = {m["symbol"]: m for m in previous.get("methods", ())}
+    for method in current.get("methods", ()):
+        name = method["symbol"]
+        if name in methods:
+
+            def signature(m):
+                return {
+                    **{k: v for k, v in m.items() if k not in {"params", "order"}},
+                    "params": [_abi_type(p["type"]) for p in m["params"]],
+                }
+
+            if signature(methods[name]) != signature(method):
+                raise ValueError(f"method contracts disagree for {name}")
+        else:
+            methods[name] = method
+    return {
+        **previous,
+        "methods": sorted(
+            methods.values(), key=lambda m: (m.get("order", 0), m["symbol"])
+        ),
+    }
+
+
+def _operations(value):
+    pending = [value]
+    while pending:
+        item = pending.pop()
+        if isinstance(item, list):
+            pending.extend(item)
+        elif isinstance(item, dict):
+            if "op" in item:
+                yield item
+            pending.extend(item.values())
+
+
+def _function_pointer(spec):
+    while isinstance(spec, dict) and spec["kind"] == "const":
+        spec = spec["of"]
+    if isinstance(spec, dict) and spec["kind"] == "ptr":
+        pointee = spec["to"]
+        if isinstance(pointee, dict) and pointee["kind"] == "function":
+            return pointee
+    return None
+
+
+def _discarded_scalar_result(
+    symbol, declarations, definition, functions, globals_, architecture
+):
+    if architecture != "x86_64" or definition["result"] != "void":
+        return None
+    integers = {prefix + str(bits) for prefix in ("i", "u") for bits in (8, 16, 32, 64)}
+    expected = _abi(definition)
+    for signature in declarations:
+        actual = _abi(signature)
+        if (
+            not isinstance(signature["result"], str)
+            or signature["result"] not in integers | {"void"}
+            or actual[1:] != expected[1:]
+        ):
+            return None
+    calls = 0
+    invalid = False
+
+    def visit(value, parent=None, field=None):
+        nonlocal calls, invalid
+        if isinstance(value, list):
+            for child in value:
+                visit(child)
+        elif isinstance(value, dict):
+            if value.get("op") == "function_ref" and value["name"] == symbol:
+                invalid = True
+            if value.get("op") == "call" and value["callee"] == symbol:
+                calls += 1
+                if not parent or parent.get("op") != "expr" or field != "value":
+                    invalid = True
+            for key, child in value.items():
+                visit(child, value, key)
+
+    visit([list(functions.values()), list(globals_.values())])
+    if invalid or not calls:
+        return None
+    return dict(
+        code="discarded_scalar_result_abi",
+        symbol=symbol,
+        classification="baseline_defect",
+        calls=calls,
+        proof="direct calls discard every result; no address escape; parameter ABI agrees; target x86_64 scalar return has no hidden result argument",
+        lowering="use the defined void result and preserve arguments and effects",
+    )
+
+
+def _bind_call_arguments(functions, externs, globals_, records):
+    """Make per-call reference/pointer ABI bindings explicit in executable IR."""
+    declarations = {**externs, **functions}
+    changes = []
+    for node in _operations(
+        [list(functions.values()), list(globals_.values()), records]
+    ):
+        if node["op"] == "cast" and node.get("conversion") == "legacy_string_pointer":
+            changes.append(
+                dict(
+                    code="explicit_legacy_string_binding",
+                    source_type=node["source_type"],
+                    target_type=node["type"],
+                    location=node.get("location"),
+                    proof="compiler-admitted literal binding; preserve static read-only storage with an explicit qualification conversion",
+                )
+            )
+        if node["op"] != "call" or "parameter_types" not in node:
+            continue
+        target = declarations.get(node["callee"])
+        if target is None:
+            continue
+        for index, (source, param) in enumerate(
+            zip(node["parameter_types"], target["params"])
+        ):
+            dest = param["type"]
+            if not isinstance(source, dict) or not isinstance(dest, dict):
+                continue
+            if source.get("kind") == "ref" and dest.get("kind") == "ptr":
+                node["args"][index] = dict(
+                    op="unary", operator="addr", value=node["args"][index]
+                )
+            elif source.get("kind") == "ptr" and dest.get("kind") == "ref":
+                node["args"][index] = dict(
+                    op="unary", operator="deref", value=node["args"][index]
+                )
+            else:
+                continue
+            changes.append(
+                dict(
+                    code="explicit_argument_binding",
+                    symbol=node["callee"],
+                    parameter=index,
+                    source_type=source,
+                    target_type=dest,
+                    proof="the callsite and definition share an ABI address; preserve the referred storage",
+                )
+            )
+    return changes
+
+
+def _close_callbacks(functions, externs, globals_, entry):
+    """Prove closed, ABI-compatible target sets for calls through incoming values."""
+    nodes = {name: list(_operations(fn["body"])) for name, fn in functions.items()}
+    nodes[None] = list(_operations(list(globals_.values())))
+    sites = [
+        (caller, n)
+        for caller, rows in nodes.items()
+        for n in rows
+        if n["op"] == "indirect_call"
+    ]
+    if not sites:
+        return []
+    incoming = defaultdict(list)
+    addressed = set()
+    for caller, rows in nodes.items():
+        for node in rows:
+            if node["op"] == "call":
+                incoming[node["callee"]].append((caller, node["args"]))
+            elif node["op"] == "function_ref":
+                addressed.add(node["name"])
+    declarations = {**externs, **functions}
+
+    def compatible(actual, expected):
+        # Top-level parameter qualifiers do not affect the passed value;
+        # qualifiers inside pointers and the distinction between ref/ptr do.
+        def by_value(t):
+            while isinstance(t, dict) and t["kind"] in {"const", "volatile"}:
+                t = t["of"]
+            return t
+
+        return (
+            actual["result"] == expected["result"]
+            and list(map(by_value, actual["params"]))
+            == list(map(by_value, expected["params"]))
+            and bool(actual.get("variadic")) == bool(expected.get("variadic"))
+        )
+
+    stable = {}
+
+    def stable_parameter(owner, index):
+        key = (owner, index)
+        if key not in stable:
+            param = functions[owner]["params"][index]["name"]
+            var = {"op": "var", "name": param}
+            count, permitted = 0, 0
+            for n in nodes[owner]:
+                op = n["op"]
+                count += op == "var" and n["name"] == param
+                if (op == "decl" or op == "each") and n["name"] == param:
+                    stable[key] = False
+                    return False
+                if op == "indirect_call":
+                    permitted += n["target"] == var
+                elif op == "call" and n["callee"] in functions:
+                    for arg, formal in zip(n["args"], functions[n["callee"]]["params"]):
+                        permitted += (
+                            arg == var and _function_pointer(formal["type"]) is not None
+                        )
+                elif op == "unary" and n["operator"] == "not":
+                    permitted += n["value"] == var
+                elif op == "binary" and n["operator"] in {"ne", "eq"}:
+                    permitted += (n["left"] == var) + (n["right"] == var)
+                elif op in {"if", "while", "for", "select"}:
+                    permitted += n["condition"] == var
+                elif op == "cast" and n["type"] == "bool":
+                    permitted += n["value"] == var
+            stable[key] = count == permitted
+        return stable[key]
+
+    issues = []
+    for caller, site in sites:
+        signature = site.get("signature")
+        pending = [(caller, site["target"])]
+        targets, visited = set(), set()
+        try:
+            if not isinstance(signature, dict) or signature.get("kind") != "function":
+                raise ValueError("missing callback signature")
+            while pending:
+                owner, value = pending.pop()
+                if (
+                    value["op"] == "unary"
+                    and value["operator"] == "addr"
+                    and value["value"]["op"] == "function_ref"
+                ):
+                    value = value["value"]
+                if (
+                    value["op"] == "cast"
+                    and value.get("conversion") == "function_decay"
+                ):
+                    value = value["value"]
+                if value["op"] == "select":
+                    pending.extend((owner, value[k]) for k in ("then", "else"))
+                elif value["op"] == "function_ref":
+                    name = value["name"]
+                    fn = declarations.get(name)
+                    if fn is None or not compatible(
+                        {**fn, "params": [p["type"] for p in fn["params"]]}, signature
+                    ):
+                        raise ValueError(
+                            f"incompatible or unresolved callback target {name}"
+                        )
+                    targets.add(name)
+                elif value["op"] == "var" and owner in functions:
+                    if owner == entry or owner in addressed:
+                        raise ValueError(
+                            f"{owner} can receive callbacks from an open caller"
+                        )
+                    params = functions[owner]["params"]
+                    index = next(
+                        (i for i, p in enumerate(params) if p["name"] == value["name"]),
+                        None,
+                    )
+                    if index is None or not stable_parameter(owner, index):
+                        raise ValueError(
+                            f"{owner}.{value['name']} has no immutable incoming binding"
+                        )
+                    pointee = _function_pointer(params[index]["type"])
+                    if pointee is None or not compatible(pointee, signature):
+                        raise ValueError("forwarded callback signature mismatch")
+                    if (owner, index) in visited:
+                        continue
+                    visited.add((owner, index))
+                    if not incoming[owner]:
+                        raise ValueError(f"{owner} has no closed incoming calls")
+                    for origin, args in incoming[owner]:
+                        if index >= len(args):
+                            raise ValueError(f"missing callback argument for {owner}")
+                        pending.append((origin, args[index]))
+                else:
+                    raise ValueError(f"callback target depends on {value['op']}")
+            if not targets:
+                raise ValueError("no concrete callback targets were found")
+            site["targets"] = sorted(targets)
+        except ValueError as error:
+            issues.append(
+                dict(
+                    code="open_indirect_call",
+                    symbol=caller,
+                    detail=str(error),
+                    **site.get("location", {}),
+                )
+            )
+    return issues
+
+
+def link(graph, folder):
+    definitions = defaultdict(list)
+    roots = {graph["entry"]}
+    all_issues, records = [], {}
+    layout_issues = []
+    active_objects = set()
+    field_calls = defaultdict(set)
+    constructor_initializers = {}
+    for index, unit in enumerate(graph["units"]):
+        roots.update(unit["initializer_calls"])
+        active_objects.update(unit.get("initializer_objects", ()))
+        for owner, calls in unit.get("record_initializers", {}).items():
+            field_calls[owner].update(calls)
+        for fn in unit["functions"]:
+            definitions[fn["name"]].append((index, fn))
+        all_issues += unit["diagnostics"]
+        payload = read_member(folder, unit["graph"])
+        for fn in payload["functions"]:
+            signature = fn["signature"]
+            if signature.get("method", {}).get("kind") == "constructor":
+                constructor_initializers[signature["name"]] = signature.get(
+                    "initializers", []
+                )
+        for record in payload["records"]:
+            name = record["name"]
+            if "initializer_graph" in record:
+                initializers = {
+                    n["name"]: n["init"]
+                    for n in _definition(record.pop("initializer_graph"))["body"]
+                }
+                for field in record.get("fields", ()):
+                    if field["name"] in initializers:
+                        field["init"] = initializers[field["name"]]
+            previous = records.get(name)
+            if previous is None:
+                records[name] = record
+            else:
+                try:
+                    records[name] = _record_definition(previous, record)
+                except ValueError as error:
+                    layout_issues.append(
+                        dict(
+                            code="conflicting_record_layout",
+                            symbol=name,
+                            detail=str(error),
+                        )
+                    )
+    reachable = set()
+    pending = list(roots)
+    constructor_owners = {
+        m["symbol"]: name
+        for name, record in records.items()
+        for m in record.get("methods", ())
+        if m["kind"] == "constructor"
+    }
+    default_objects = set()
+    while True:
+        previous = len(reachable), len(active_objects), len(default_objects)
+        while pending:
+            name = pending.pop()
+            if name in reachable:
+                continue
+            reachable.add(name)
+            if name in constructor_owners:
+                active_objects.add(constructor_owners[name])
+            for _, fn in definitions.get(name, ()):
+                pending.extend(fn["calls"])
+                active_objects.update(fn.get("objects", ()))
+        for owner in sorted(active_objects):
+            record = records.get(owner, {})
+            active_objects.update(b["name"] for b in record.get("bases", ()))
+            # Constructing a polymorphic object instantiates its concrete
+            # vtable and cleanup protocol, including inherited implementations.
+            for method in record.get("methods", ()):
+                if (method.get("virtual") or method["kind"] == "destructor") and not (
+                    method.get("pure")
+                    or method.get("deleted")
+                    or method.get("defaulted")
+                ):
+                    if method["symbol"] not in reachable:
+                        pending.append(method["symbol"])
+            constructors = [
+                m for m in record.get("methods", ()) if m["kind"] == "constructor"
+            ]
+            if owner in default_objects:
+                for method in constructors:
+                    if (
+                        not method["params"]
+                        and not method.get("deleted")
+                        and method["symbol"] not in reachable
+                    ):
+                        pending.append(method["symbol"])
+            contexts = [
+                constructor_initializers.get(m["symbol"], [])
+                for m in constructors
+                if m["symbol"] in reachable
+                or owner in default_objects
+                and not m["params"]
+            ]
+            if owner in default_objects and not constructors:
+                contexts.append([])
+            contexts = [
+                ctx for ctx in contexts if not any(i["kind"] == "delegate" for i in ctx)
+            ]
+            for base in record.get("bases", ()):
+                if any(
+                    not any(
+                        i["kind"] == "base" and i["name"] == base["name"] for i in ctx
+                    )
+                    for ctx in contexts
+                ):
+                    default_objects.add(base["name"])
+            for field in record.get("fields", ()):
+                implicit = any(
+                    not any(
+                        i["kind"] == "member" and i["name"] == field["name"]
+                        for i in ctx
+                    )
+                    for ctx in contexts
+                )
+                if implicit and "init" in field:
+                    pending.extend(
+                        c
+                        for c in field.get("calls", field_calls[owner])
+                        if c not in reachable
+                    )
+                spec = field["type"]
+                while isinstance(spec, dict) and spec.get("kind") in {
+                    "array",
+                    "const",
+                    "volatile",
+                }:
+                    spec = spec["of"]
+                if not isinstance(spec, dict) or spec.get("kind") != "record":
+                    continue
+                active_objects.add(spec["name"])
+                if implicit and "init" not in field:
+                    default_objects.add(spec["name"])
+        if not pending and previous == (
+            len(reachable),
+            len(active_objects),
+            len(default_objects),
+        ):
+            break
+    issues = [d for d in all_issues if not d.get("symbol") or d["symbol"] in reachable]
+
+    def issue(code, symbol, detail):
+        issues.append(dict(code=code, symbol=symbol, detail=detail))
+
+    signatures = defaultdict(list)
+    functions, globals_, externs = {}, {}, {}
+    for unit in graph["units"]:
+        payload = read_member(folder, unit["graph"])
+        for decl in payload["externs"]:
+            name = decl["name"]
+            if name in reachable:
+                signatures[name].append(decl)
+                if decl.get("provider"):
+                    externs[name] = decl
+        for decl in _definition(payload["global_graph"])["body"]:
+            name = decl["name"]
+            try:
+                globals_[name] = (
+                    _global_definition(globals_[name], decl)
+                    if name in globals_
+                    else decl
+                )
+            except ValueError as error:
+                issue("conflicting_global", name, str(error))
+        for fn in payload["functions"]:
+            name = fn["signature"]["name"]
+            if name not in reachable:
+                continue
+            if "result" in fn["signature"] and "params" in fn["signature"]:
+                signatures[name].append(fn["signature"])
+            if fn["defined"]:
+                body = _definition(fn)
+                if name in functions and semantics(functions[name]) != semantics(body):
+                    issue(
+                        "conflicting_definition",
+                        name,
+                        "multiple non-equivalent definitions",
+                    )
+                else:
+                    functions[name] = body
+    referenced_globals = {
+        n["name"]
+        for n in _operations(
+            [
+                list(functions.values()),
+                [g for g in globals_.values() if not g.get("external")],
+                [records[name] for name in active_objects if name in records],
+            ]
+        )
+        if n["op"] == "var"
+    }
+    globals_ = {
+        name: g
+        for name, g in globals_.items()
+        if not g.get("external") or name in referenced_globals
+    }
+    provided_methods = {
+        m["symbol"]
+        for r in records.values()
+        for m in r.get("methods", ())
+        if m.get("defaulted") or m.get("implicit")
+    }
+    baseline_defects = []
+    for name in sorted(reachable):
+        if name in functions:
+            externs.pop(name, None)
+        elif (
+            name not in externs
+            and name not in provided_methods
+            and not any(d.get("symbol") == name for d in issues)
+        ):
+            issue(
+                "unresolved_call",
+                name,
+                "reachable symbol requires a definition or external ABI",
+            )
+        signatures_for_name = {json_bytes(_abi(sig)) for sig in signatures[name]}
+        if len(signatures_for_name) > 1:
+            witness = (
+                _discarded_scalar_result(
+                    name,
+                    signatures[name],
+                    functions[name],
+                    functions,
+                    globals_,
+                    graph.get("platform", {}).get("architecture"),
+                )
+                if name in functions
+                else None
+            )
+            if witness:
+                baseline_defects.append(witness)
+            else:
+                issue(
+                    "incompatible_abi",
+                    name,
+                    "parameter or result types differ across declarations",
+                )
+    if graph["entry"] not in functions:
+        issue(
+            "missing_entry_body", graph["entry"], "no executable definition for entry"
+        )
+    used_records = set(active_objects)
+
+    def record_references(value):
+        if isinstance(value, list):
+            for item in value:
+                record_references(item)
+        elif isinstance(value, dict):
+            if value.get("kind") == "record":
+                used_records.add(value["name"])
+            for item in value.values():
+                record_references(item)
+
+    record_references(
+        [list(functions.values()), list(globals_.values()), list(externs.values())]
+    )
+    expanded = set()
+    while used_records - expanded:
+        for name in sorted(used_records - expanded):
+            expanded.add(name)
+            record = records.get(name)
+            if record is None:
+                issue(
+                    "missing_record", name, "referenced record needs a type declaration"
+                )
+                continue
+            record_references(record)
+            used_records.update(b["name"] for b in record.get("bases", ()))
+    issues.extend(d for d in layout_issues if d["symbol"] in used_records)
+    issues.extend(_close_callbacks(functions, externs, globals_, graph["entry"]))
+    normalizations = _bind_call_arguments(
+        functions,
+        externs,
+        globals_,
+        [r for name, r in records.items() if name in used_records],
+    )
+    issues = list({json_bytes(d): d for d in issues}.values())
+    return (
+        dict(
+            entry=graph["entry"],
+            functions=list(functions.values()),
+            globals=list(globals_.values()),
+            externs=list(externs.values()),
+            records=[r for name, r in records.items() if name in used_records],
+            baseline_defects=baseline_defects,
+            normalizations=normalizations,
+        ),
+        issues,
+        len(reachable),
+    )
