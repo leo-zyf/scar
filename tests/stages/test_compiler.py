@@ -59,6 +59,81 @@ def _payloads(graph, document):
     ]
 
 
+def test_python_protocol_qualification_preserves_order_and_control(tmp_path):
+    helpers = tmp_path / "helpers.c"
+    helpers.write_text(
+        "int trace = 0;\n"
+        "double first(double x) { trace = trace * 10 + 1; return x; }\n"
+        "double second(double x) { trace = trace * 10 + 2; return x + 1; }\n"
+        "double pair(double a, double b) { trace = trace * 10 + 3; return a + b; }\n"
+    )
+    main = tmp_path / "main.c"
+    main.write_text(
+        "#include <stdio.h>\nextern int trace;\nextern double run(double);\n"
+        'int main(void) { double x = run(3.0); printf("%.1f %d\\n", x, trace); return 0; }\n'
+    )
+    python = tmp_path / "calculation.py"
+    python.write_text("""def run(x):
+    total = first(x) + second(x)
+    scale = pair(first(x), second(x))
+    while total < 10.0:
+        total += 0.5
+        if total > 9.0:
+            break
+    if x > 0.0:
+        return total + scale + ((9007199254740992 + 1) - 9007199254740992) + (1e100 - 1e100)
+    return 0.0
+""")
+    library = tmp_path / "helpers.so"
+    _run(["gcc", "-shared", "-fPIC", helpers, "-o", library], tmp_path)
+    provider = CDLL(str(library))
+    bindings = {name: getattr(provider, name) for name in ("first", "second", "pair")}
+    for name, fn in bindings.items():
+        fn.argtypes, fn.restype = [c_double] * (2 if name == "pair" else 1), c_double
+    result = runpy.run_path(str(python), init_globals=bindings)["run"](3.0)
+    from ctypes import c_int
+
+    expected = f"{result:.1f} {c_int.in_dll(provider, 'trace').value}\n".encode()
+    assert expected == b"17.5 12123\n"
+    request = tmp_path / "request.json"
+    request.write_text(
+        json.dumps(
+            dict(
+                entry="main",
+                units=[
+                    dict(path=main.name, language="c", flags=["-std=c17"]),
+                    dict(path=helpers.name, language="c", flags=["-std=c17"]),
+                    dict(
+                        path=python.name,
+                        language="python",
+                        abi=dict(
+                            exports={"run": "run"},
+                            imports={name: name for name in bindings},
+                        ),
+                    ),
+                ],
+            )
+        )
+    )
+    graph, plan, delivery = (tmp_path / name for name in ("graph", "plan", "delivery"))
+    _stage(tmp_path, "frontend", "build", "--manifest", request, "--out", graph)
+    for source in (python, helpers, main):
+        source.unlink()
+    _stage(tmp_path, "middle", "plan", "--graph", graph, "--out", plan)
+    result = _stage(
+        tmp_path,
+        "backend",
+        "compile",
+        "--ir",
+        plan / "exec-ir.json",
+        "--out",
+        delivery,
+        "--physical",
+        "serial",
+    )
+    assert _run([result["executable"]], tmp_path) == expected
+
+
 def test_python_modules_preserve_structure_and_open_bindings(tmp_path):
     source = tmp_path / "entry.py"
     source.write_text("""import helper
@@ -83,6 +158,8 @@ outer()
     document = json.loads((graph / "graph.json").read_bytes())
     assert len(document["units"]) == 2
     functions = [f for unit in _payloads(graph, document) for f in unit["functions"]]
+    assert document["coverage"]["totals"]["definitions"] == len(functions)
+    assert document["coverage"]["totals"]["qualified_definitions"] == 0
     nodes = [n for f in functions for n in f["nodes"]]
     assert sum(n["op"] == "for" for n in nodes) == 1
     assert sum(n["op"] == "if" for n in nodes) == 1

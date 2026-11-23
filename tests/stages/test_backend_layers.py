@@ -6,6 +6,8 @@ import os
 import subprocess
 import sys
 
+import pytest
+
 import scar
 from scar.contract import IR, document, member, write_json
 
@@ -107,7 +109,38 @@ def test_backend_products_replay_and_reject_changed_bytes(tmp_path):
     run("B2b", b2a / "target-ir.json", b2b)
     target = json.loads((b2a / "target-ir.json").read_bytes())
     source_tree = b2a / target["units"][0]["tree"]["path"]
-    assert json.loads(source_tree.read_bytes())["node"] == "Unit"
+    from scar.backend.cpp20.model import (
+        Decl,
+        Expr,
+        Stmt,
+        Unit,
+        encode_unit,
+        named,
+        to_data,
+    )
+
+    wrong_arity = Expr("binary", operator="+", args=(Expr("literal", value=1),))
+    invalid = Unit(
+        declarations=(
+            Decl(
+                "function",
+                name="main",
+                type=named("int"),
+                body=(Stmt("return", value=wrong_arity),),
+            ),
+        )
+    )
+    expected = "Expr.binary.args: invalid arity"
+    with pytest.raises(ValueError, match=r"Expr\.binary\.args: invalid arity"):
+        encode_unit(invalid)
+    # A valid checksum must not allow malformed target syntax across the B2 boundary.
+    rejected = dict(
+        target["units"][0], tree=member(b2a, "target-units", to_data(invalid))
+    )
+    corrupt = b2a / "invalid-target.json"
+    write_json(corrupt, dict(target, units=[rejected, *target["units"][1:]]))
+    run("B2b", corrupt, tmp_path / "invalid-tree", expected)
+    assert not (tmp_path / "invalid-tree/project").exists()
     source_tree.write_bytes(source_tree.read_bytes() + b" ")
     run("B2b", b2a / "target-ir.json", tmp_path / "changed-tree", "checksum mismatch")
     assert not (tmp_path / "changed-tree/project").exists()

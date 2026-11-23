@@ -75,7 +75,7 @@ def _discarded_scalar_result(
 def _bind_call_arguments(functions, externs, globals_, records):
     """Make per-call reference/pointer ABI bindings explicit in executable IR."""
     declarations = {**externs, **functions}
-    changes = []
+    changes, issues = [], []
     for node in _operations(
         [list(functions.values()), list(globals_.values()), records]
     ):
@@ -89,10 +89,26 @@ def _bind_call_arguments(functions, externs, globals_, records):
                     proof="compiler-admitted literal binding; preserve static read-only storage with an explicit qualification conversion",
                 )
             )
-        if node["op"] != "call" or "parameter_types" not in node:
+        if node["op"] != "call":
             continue
         target = declarations.get(node["callee"])
         if target is None:
+            continue
+        expected, actual = len(target["params"]), len(node["args"])
+        if actual < expected or actual != expected and not target.get("variadic"):
+            issues.append(
+                dict(
+                    code="argument_count",
+                    symbol=node["callee"],
+                    detail="call arguments do not satisfy the closed parameter contract",
+                    expected=expected,
+                    actual=actual,
+                    variadic=bool(target.get("variadic")),
+                    location=node.get("location"),
+                )
+            )
+            continue
+        if "parameter_types" not in node:
             continue
         for index, (source, param) in enumerate(
             zip(node["parameter_types"], target["params"])
@@ -120,7 +136,7 @@ def _bind_call_arguments(functions, externs, globals_, records):
                     proof="the callsite and definition share an ABI address; preserve the referred storage",
                 )
             )
-    return changes
+    return changes, issues
 
 
 def _state_contract(function, evidence):
@@ -238,9 +254,10 @@ def normalize(bound):
                 )
             )
     module["baseline_defects"] = defects
-    module["normalizations"] = _bind_call_arguments(
+    module["normalizations"], call_issues = _bind_call_arguments(
         functions, externs, globals_, module["records"]
     )
+    issues.extend(call_issues)
     for function in module["functions"]:
         evidence = module.get("state_evidence", {}).get(function["name"], {})
         function["state_contract"] = _state_contract(function, evidence)

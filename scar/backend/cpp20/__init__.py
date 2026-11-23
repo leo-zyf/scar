@@ -130,7 +130,7 @@ def lower_scheduled(source, destination):
 
 def print_target(target, destination):
     """B2b prints the target-tree package and seals the standalone CMake project."""
-    from .model import unit_from_data
+    from .model import from_data
     from .printer import print_unit
 
     path, revision, product = open_product(
@@ -160,7 +160,7 @@ def print_target(target, destination):
             file = staging / output
             if file.exists():
                 raise ValueError(f"duplicate C++ translation unit {output!r}")
-            tree = unit_from_data(read_member(path.parent, part["tree"]))
+            tree = from_data(read_member(path.parent, part["tree"]))
             file.write_text(print_unit(tree), encoding="utf-8")
             if output != header:
                 sources.append(output)

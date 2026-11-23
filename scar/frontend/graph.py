@@ -131,21 +131,42 @@ def function_graph(function, revision):
         op = value["op"]
         row = {"op": op}
         nodes.append(row)
+        enclosing = scope
         if op in _CONTROL:
             scope = scope.copy()
         if op in {"decl", "buffer", "runtime_array"}:
             declare(scope, value["name"], f"local/{number}", value)
-            if "init" in value or op == "buffer":
-                accesses.append(
-                    dict(
-                        node=number,
-                        domain=scope[value["name"]],
-                        mode="bind" if _reference(value.get("type")) else "write",
-                    )
+            slot = scope[value["name"]]
+            mode = "declare"
+            if "init" in value or op in {"buffer", "runtime_array"}:
+                mode = "bind" if _reference(value.get("type")) else "write"
+            duration = value.get("storage") or "auto"
+            accesses.append(
+                dict(
+                    node=number,
+                    domain=slot,
+                    mode=mode,
+                    lexical=domains[slot]["kind"] == "local"
+                    and duration in {"auto", "register"},
                 )
+            )
         elif op in {"map", "each"}:
             variable = value["index"] if op == "map" else value["name"]
-            declare(scope, variable, f"iteration/{number}", value)
+            info = {**value, "type": "i64"} if op == "map" else value
+            declare(scope, variable, f"iteration/{number}", info)
+            reference = _reference(info.get("type"))
+            accesses.append(
+                dict(
+                    node=number,
+                    domain=scope[variable],
+                    mode="bind" if reference else "write",
+                    phase="iteration",
+                )
+            )
+            if op == "each" and not reference:
+                accesses.append(
+                    dict(node=number, domain="memory", mode="read", phase="iteration")
+                )
         if op == "call":
             calls.add(value["callee"])
             accesses.append(dict(node=number, domain="memory", mode="unknown"))
@@ -282,9 +303,15 @@ def function_graph(function, revision):
                     access = mode
                 if op == "library_call" and key == "receiver":
                     access = "address"
-                if key == "range" and op == "each" and _reference(value.get("type")):
+                if key == "range" and op == "each":
                     access = "address"
-                row[key] = encode(field, scope, access)
+                # The domain is evaluated once, before the iteration variable exists.
+                environment = (
+                    enclosing
+                    if (op, key) in {("map", "extent"), ("each", "range")}
+                    else scope
+                )
+                row[key] = encode(field, environment, access)
         return {"port": number}
 
     scope = {}
@@ -306,6 +333,9 @@ def function_graph(function, revision):
         id=identity,
         signature=signature,
         defined=isinstance(function.get("body"), list),
+        source_defined=any(
+            isinstance(function.get(field), list) for field in ("body", "partial_body")
+        ),
         entry=body,
         nodes=nodes,
         states=domains,

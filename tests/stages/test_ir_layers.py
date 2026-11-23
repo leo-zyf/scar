@@ -241,6 +241,16 @@ print(json.dumps({'path':str(path),'facts':facts}))
     product = json.loads(Path(sealed["path"]).read_bytes())
     assert product["status"] == "READY" and len(product["functions"]) == 3
 
+    missing_argument = deepcopy(bound)
+    missing_argument["functions"][0]["body"][1]["value"]["args"].clear()
+    issues = _layer(
+        "normalization",
+        "from scar.middle.normalization import normalize\nprint(json.dumps(normalize(data)[1]))",
+        missing_argument,
+    )
+    arity = next(issue for issue in issues if issue["code"] == "argument_count")
+    assert (arity["expected"], arity["actual"], arity["variadic"]) == (1, 0, False)
+
 
 def test_graph_construction_and_state_analysis_are_separate():
     fn = dict(
@@ -460,3 +470,141 @@ def test_reference_binding_and_opaque_call_use_the_referred_state():
     assert call["incoming"][target] == mutation["outgoing"][target]
     assert read["incoming"][target] == call["outgoing"][target]
     assert read["incoming"]["memory"] == later["outgoing"]["memory"]
+
+
+def test_iteration_bindings_and_reachable_loop_predecessors():
+    from scar.frontend.state_flow import state_flow
+
+    def var(name):
+        return dict(op="var", name=name)
+
+    def value(n):
+        return dict(op="literal", type="i64", value=n)
+
+    def write(site, rhs):
+        return dict(op="assign", site=site, target=var("x"), value=rhs)
+
+    def branch(condition, *body):
+        return {"op": "if", "condition": var(condition), "then": list(body), "else": []}
+
+    fn = dict(
+        name="advance",
+        result="i64",
+        params=[dict(name=n, type="bool") for n in ("again", "skip", "stop", "done")],
+        body=[
+            dict(op="decl", site="outer", type="i64", name="i", init=value(12)),
+            dict(op="decl", type="i64", name="x", init=value(0)),
+            dict(
+                op="map",
+                site="map",
+                index="i",
+                extent=var("i"),
+                body=[write("element", var("i"))],
+            ),
+            dict(
+                op="for",
+                site="loop",
+                init=[write("start", value(2))],
+                condition=var("again"),
+                step=dict(op="unary", operator="preinc", value=var("i")),
+                body=[
+                    dict(
+                        op="decl",
+                        site="scratch",
+                        name="scratch",
+                        type="i64",
+                        init=value(8),
+                    ),
+                    branch(
+                        "skip",
+                        write("skipped", value(4)),
+                        dict(op="continue"),
+                        write("unreachable", value(999)),
+                    ),
+                    branch("stop", write("stopped", value(6)), dict(op="break")),
+                    branch(
+                        "done",
+                        write("returned", value(7)),
+                        dict(op="return", value=var("x")),
+                    ),
+                    write("normal", var("scratch")),
+                ],
+            ),
+            dict(op="return", site="result", value=var("x")),
+        ],
+    )
+    graph = function_graph(fn, "audit")
+    flow = state_flow(graph["nodes"], graph["entry"], graph["accesses"])
+    assert flow["status"] == "structured"
+    nodes = {s["site"]: i for i, s in enumerate(graph["nodes"]) if "site" in s}
+
+    def slot(name, kind):
+        return next(
+            d
+            for d, s in graph["states"].items()
+            if s["name"] == name and s["kind"] == kind
+        )
+
+    records = flow["versions"]
+
+    def access(site):
+        return next(
+            r for r in records if r["kind"] == "ACCESS" and r["node"] == nodes[site]
+        )
+
+    outer, element, state = (
+        slot("i", "local"),
+        slot("i", "iteration"),
+        slot("x", "local"),
+    )
+    extent = graph["nodes"][nodes["map"]]["extent"]["port"]
+    assert next(r for r in records if r["node"] == extent)["incoming"] == {
+        outer: access("outer")["outgoing"][outer]
+    }
+    assert access("element")["incoming"][element] == access("map")["outgoing"][element]
+    assert access("map")["phase"] == "iteration"
+    assert not any(r["node"] == nodes["unreachable"] for r in records)
+
+    loop = nodes["loop"]
+    carry = next(
+        r
+        for r in records
+        if r["kind"] == "LOOP_CARRY" and r["node"] == loop and r["domain"] == state
+    )
+    joins = {
+        r["phase"]: r
+        for r in records
+        if r["kind"] == "MERGE" and r["node"] == loop and r["domain"] == state
+    }
+    assert carry["initial"] == access("start")["outgoing"][state]
+    assert carry["next"] == joins["latch"]["output"]
+    assert set(joins["latch"]["inputs"]) == {
+        access(n)["outgoing"][state] for n in ("skipped", "normal")
+    }
+    assert set(joins["exit"]["inputs"]) == {
+        carry["header"],
+        access("stopped")["outgoing"][state],
+    }
+    assert access("result")["incoming"][state] == joins["exit"]["output"]
+    scratch = slot("scratch", "local")
+    assert (
+        access("normal")["incoming"][scratch] == access("scratch")["outgoing"][scratch]
+    )
+    assert not any(
+        r["kind"] == "LOOP_CARRY" and r["domain"] == scratch for r in records
+    )
+    assert {
+        (graph["nodes"][t["node"]]["op"], t["phase"])
+        for t in flow["transfers"]
+        if t["target"] == loop
+    } == {("break", "exit"), ("continue", "step")}
+
+    # An open iterator can mutate arbitrary state in its unobserved next() call.
+    fn["body"] = [
+        dict(op="for", protocol="iterator", range=var("i"), target=var("x"), body=[])
+    ]
+    graph = function_graph(fn, "audit")
+    assert (
+        state_flow(graph["nodes"], graph["entry"], graph["accesses"])["status"]
+        == "conservative_iterator_protocol"
+    )

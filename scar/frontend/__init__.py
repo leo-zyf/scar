@@ -134,6 +134,7 @@ def _unit(job):
                 id=f["id"],
                 name=f["signature"]["name"],
                 defined=f["defined"],
+                source_defined=f["source_defined"],
                 calls=f["calls"],
                 objects=f["objects"],
                 dispatch=f["dispatch"],
@@ -214,7 +215,8 @@ def build(manifest, out, *, jobs=1):
     counts = Counter(d["code"] for d in diagnostics)
     totals = dict(
         units=len(units),
-        definitions=sum(f["defined"] for u in units for f in u["functions"]),
+        definitions=sum(f["source_defined"] for u in units for f in u["functions"]),
+        qualified_definitions=sum(f["defined"] for u in units for f in u["functions"]),
         operations=sum(f["nodes"] for u in units for f in u["functions"]),
         diagnostic_sites=len(diagnostics),
         resources=len(resources),

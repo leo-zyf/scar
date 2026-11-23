@@ -104,6 +104,85 @@ def test_python_project_locks_and_parses_each_imported_file_once(tmp_path, monke
     }
 
 
+def test_python_binding_time_loop_edges_and_class_frames(tmp_path, monkeypatch):
+    from scar.contract import walk_operations
+
+    entry = tmp_path / "entry.py"
+    source = """import subprocess
+command = "first"
+def issue():
+    subprocess.run(command)
+issue()
+command = "later"
+issue()
+def repeated(items):
+    command = "x"
+    for _ in items:
+        subprocess.run(command)
+        command = command + "y"
+repeated([1, 2, 3])
+def stable():
+    word = "bounded"
+    subprocess.run(word)
+stable()
+class Base: pass
+def nested():
+    x = "cell"
+    class Choice(Base):
+        x = "namespace"
+        def selected(self): return x
+    return Choice().selected()
+def selected(): return command
+"""
+    entry.write_text(source)
+    actual, namespace = [], {}
+    with monkeypatch.context() as patch:
+        patch.setattr(subprocess, "run", actual.append)
+        exec(compile(source, str(entry), "exec"), namespace)
+    assert actual == ["first", "later", "x", "xy", "xyy", "bounded"]
+    assert namespace["nested"]() == "cell" and namespace["selected"]() == "later"
+
+    (facts,) = python.capture_project(entry, tmp_path).units
+    assert facts.exports["command"] == {
+        "state": "py:entry:command",
+        "literal_sites": [{"line": 2, "value": "first"}, {"line": 6, "value": "later"}],
+    }
+    # The class forwards the free variable to its method even as it shadows x.
+    (nested,) = (s for (n, _), s in facts.scopes.children.items() if n == "nested")
+    assert nested.cell == {"x"}
+    functions = {f["name"]: f for f in python.normalize_unit(facts)["functions"]}
+
+    def nodes(fn, op):
+        return [
+            n for n in walk_operations(functions[fn]["partial_body"]) if n["op"] == op
+        ]
+
+    for name in ("issue", "repeated", "stable"):
+        (launch,) = nodes("py:entry:" + name, "process_launch")
+        assert launch["binding_guard"]["status"] == "conditional"
+        assert launch["binding_guard"]["on_failure"] == "runtime_lookup"
+        if name == "stable":
+            assert launch["command_values"]["values"] == ["bounded"]
+        else:
+            assert launch["command_values"]["status"] == "unresolved"
+            guards = [v["guard"] for v in launch["command_values"]["guarded_examples"]]
+            expected = ["first", "later"] if name == "issue" else ["x"]
+            assert guards == [
+                {"argument": 0, "equals": v, "type": "str"} for v in expected
+            ]
+    (definition,) = nodes("py:entry:nested", "python_define_class")
+    owner = definition["symbol"]
+    assert definition["bases"][0]["name"] == "py:entry:Base"
+    assert definition["class_protocol"]["status"] == "unresolved"
+    assert functions[definition["body_symbol"]]["owner_class"] == owner
+    assert functions[owner + ".selected"]["owner_class"] == owner
+    (method_return,) = nodes(owner + ".selected", "return")
+    assert method_return["value"]["cell"]["owner"] == "py:entry:nested"
+    assert (
+        nodes("py:entry:selected", "return")[0]["value"]["name"] == "py:entry:command"
+    )
+
+
 def test_fortran_capture_then_offline_normalization(tmp_path, monkeypatch):
     from fparser.two import utils
     from fparser.two.parser import ParserFactory

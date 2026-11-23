@@ -4,7 +4,56 @@ import ast
 from pathlib import Path
 import shlex
 
-from .facts import _function, _literal_fact, _relative, provider
+from .facts import (
+    _function,
+    _literal_fact,
+    _relative,
+    assigned_names,
+    provider,
+    scope_nodes,
+)
+
+
+def _declared(slot):
+    definitions = slot.get("definitions", ())
+    result = {"state": slot["state"]}
+    if len(definitions) == 1 and not definitions[0]["decorated"]:
+        result.update({k: definitions[0][k] for k in ("class", "symbol")})
+    elif definitions:
+        result["possible_symbols"] = [d["symbol"] for d in definitions]
+    if slot.get("literal_sites"):
+        result["examples"] = [s["value"] for s in slot["literal_sites"]]
+    return result
+
+
+def _examples(*facts):
+    """Bounded, nonexhaustive scalar examples, always subject to a value guard."""
+    examples = {}
+    for fact in facts:
+        for v in fact.get("values", fact.get("examples", ())):
+            if type(v) in {str, int, float, bool, type(None)}:
+                examples[type(v), v] = v
+                if len(examples) == 16:
+                    return list(examples.values())
+    return list(examples.values())
+
+
+def _guarded(fact, state):
+    """A late lookup may retain an identity candidate, never a captured literal."""
+    result = {"state": state}
+    expected = {k: fact[k] for k in ("module", "symbol", "external") if k in fact}
+    if expected:
+        guard = {"state": state, "expected": expected}
+        prior = fact.get("guards", [])
+        result.update(expected, guards=prior if guard in prior else [*prior, guard])
+        if "class" in fact:
+            result["class"] = fact["class"]
+    for key in ("possible_symbols", "maybe_unbound"):
+        if key in fact:
+            result[key] = fact[key]
+    if examples := _examples(fact):
+        result["examples"] = examples
+    return result
 
 
 def _py_type(name=None):
@@ -25,7 +74,7 @@ def _join_facts(*facts):
     common = {
         k: v
         for k, v in facts[0].items()
-        if k not in {"values", "maybe_unbound"}
+        if k not in {"values", "examples", "maybe_unbound"}
         and all(f.get(k) == v for f in facts[1:])
     }
     if all("values" in f for f in facts):
@@ -38,6 +87,28 @@ def _join_facts(*facts):
             common["values"] = values
     if unbound:
         common["maybe_unbound"] = True
+    if any(f.get("guards") for f in facts) and "guards" not in common:
+        # An identity proved under different guards is not unconditional at the join.
+        for key in (
+            "class",
+            "module",
+            "symbol",
+            "external",
+            "values",
+            "shape",
+            "dtype",
+        ):
+            common.pop(key, None)
+    if "values" not in common and (examples := _examples(*facts)):
+        common["examples"] = examples
+    if "symbol" not in common:
+        candidates = set()
+        for fact in facts:
+            candidates.update(fact.get("possible_symbols", ()))
+            if fact.get("class") == "function" and fact.get("symbol"):
+                candidates.add(fact["symbol"])
+        if candidates:
+            common["possible_symbols"] = sorted(candidates)
     return common
 
 
@@ -87,18 +158,23 @@ def _command_shapes(values, shell):
 
 
 def _static_values(operator, left, right):
-    if operator != "add" or "values" not in left or "values" not in right:
+    if operator != "add":
         return {}
+    known = "values" in left and "values" in right
     result = []
-    for a in left["values"]:
-        for b in right["values"]:
+    for a in left.get("values", left.get("examples", ())):
+        for b in right.get("values", right.get("examples", ())):
             if type(a) is not str or type(b) is not str or len(a) + len(b) > 4096:
                 return {}
             if a + b not in result:
                 result.append(a + b)
             if len(result) > 16:
                 return {}
-    return {"class": "str", "values": result}
+    return (
+        ({"class": "str", "values": result} if known else {"examples": result})
+        if result
+        else {}
+    )
 
 
 class _ModuleGraph:
@@ -167,29 +243,37 @@ class _ModuleGraph:
             for alias in node.names:
                 bound = alias.asname or alias.name.split(".")[0]
                 module = alias.name if alias.asname else bound
-                yield alias.name, bound, {"class": "module", "module": module}
+                yield alias.name, bound, _guarded(
+                    {"class": "module", "module": module}, "sys.modules." + module
+                )
             return
         base = _relative(node, self.module, self.package)
         for alias in node.names:
             name = alias.name
             sub = ".".join(x for x in (base, name) if x)
             if sub in self.project:
-                yield sub, alias.asname or name, {"class": "module", "module": sub}
+                yield sub, alias.asname or name, _guarded(
+                    {"class": "module", "module": sub}, "sys.modules." + sub
+                )
             elif base in self.project:
-                fact = self.project[base]["exports"].get(
-                    name, {"state": _function(base, name)}
+                state = _function(base, name)
+                fact = _guarded(
+                    _declared(
+                        self.project[base]["exports"].get(name, {"state": state})
+                    ),
+                    state,
                 )
                 yield base, alias.asname or name, fact
             else:
-                yield base, alias.asname or name, {"external": sub}
+                yield base, alias.asname or name, _guarded({"external": sub}, sub)
 
     def translate(self):
         # Function bodies may resolve imports from module state. Execution order
         # of a module initializer is maintained separately by its own graph.
-        self.initial = {**self.project[self.module]["exports"]}
-        self.initial.update(
-            {n: {"class": "function", "symbol": s} for n, s in self.aliases.items()}
-        )
+        self.initial = {
+            name: _declared(slot)
+            for name, slot in self.project[self.module]["exports"].items()
+        }
         for node in self.tree.body:
             if isinstance(node, (ast.Import, ast.ImportFrom)):
                 for _, name, fact in self.module_bindings(node):
@@ -205,11 +289,21 @@ class _ModuleGraph:
 
 
 class _Scope:
-    def __init__(self, unit, symbol, qualified, table, parent=None, globals_only=False):
+    def __init__(
+        self,
+        unit,
+        symbol,
+        qualified,
+        table,
+        parent=None,
+        globals_only=False,
+        class_scope=False,
+    ):
         self.unit = unit
         self.symbol = symbol
         self.qualified = qualified
         self.module_scope = globals_only
+        self.class_scope = class_scope
         self.table = table
         self.parent = parent
         self.env = {}
@@ -225,21 +319,32 @@ class _Scope:
     def record(self, node, op, **fields):
         return {"op": op, "location": self.unit.location(node), **fields}
 
-    def variable(self, name):
-        if not self.module_scope and (name in self.cells or name in self.nonlocals):
-            owner = self
-            while owner and name not in owner.locals:
+    def cell_owner(self, name):
+        if name in self.cells and not self.class_scope:
+            return self
+        if name in self.nonlocals:
+            owner = self.parent
+            while owner and not owner.module_scope:
+                if owner.class_scope:
+                    if name == "__class__":
+                        return owner
+                elif name in owner.locals:
+                    return owner
                 owner = owner.parent
-            if owner and not owner.module_scope:
-                return {
-                    "op": "var",
+        return None
+
+    def variable(self, name):
+        owner = self.cell_owner(name)
+        if owner:
+            return {
+                "op": "var",
+                "name": name,
+                "cell": {
+                    "owner": owner.symbol,
                     "name": name,
-                    "cell": {
-                        "owner": owner.symbol,
-                        "name": name,
-                        "identity": "lexical_activation",
-                    },
-                }
+                    "identity": "lexical_activation",
+                },
+            }
         if (
             self.module_scope
             or name in self.global_names
@@ -255,15 +360,41 @@ class _Scope:
     def fact(self, name):
         if name in self.env:
             return self.env[name]
-        if name in self.nonlocals and self.parent:
-            return self.parent.fact(name)
-        if name in self.locals:
-            return {}
+        if name in self.nonlocals:
+            binding = self.variable(name)
+            owner = self.cell_owner(name)
+            if owner and not (owner.class_scope and name == "__class__"):
+                return _guarded(owner.fact(name), binding["cell"])
+            return {"state": binding.get("cell", binding["name"])}
+        if name in self.locals and not (self.module_scope or self.class_scope):
+            return {"maybe_unbound": True}
+        if not self.module_scope and name in self.unit.aliases:
+            return {
+                "class": "function",
+                "symbol": self.unit.aliases[name],
+                "abi_binding": True,
+            }
         if not self.module_scope and name in self.unit.initial:
-            return self.unit.initial[name]
+            return _guarded(self.unit.initial[name], _function(self.unit.module, name))
         if name in self.unit.builtins:
-            return {"external": "builtins." + name}
-        return {}
+            return _guarded(
+                {"external": "builtins." + name}, _function(self.unit.module, name)
+            )
+        return {"maybe_unbound": True}
+
+    def invalidate_shared(self):
+        for name, fact in self.env.items():
+            binding = self.variable(name)
+            if (
+                binding.get("scope") == "global"
+                or "cell" in binding
+                or self.class_scope
+            ):
+                self.env[name] = _guarded(fact, binding.get("cell") or binding["name"])
+            elif fact.get("class") in {"dict", "set", "list", "numpy.ndarray"}:
+                self.env[name] = {
+                    k: v for k, v in fact.items() if k in {"class", "guards"}
+                }
 
     def definition(self, node, body, params, initial):
         # CPython's symbol table resolves lexical bindings across all branches.
@@ -280,7 +411,11 @@ class _Scope:
                     name=n,
                     type=_py_type(),
                     initial_binding="unbound",
-                    **({"cell": self.variable(n)["cell"]} if n in self.cells else {}),
+                    **(
+                        {"cell": self.variable(n)["cell"]}
+                        if n in self.cells and not self.class_scope
+                        else {}
+                    ),
                 )
                 for n in sorted(self.locals - {p["name"] for p in params})
             ]
@@ -302,8 +437,10 @@ class _Scope:
         )
 
     def _external_value(self, target, args, keywords):
-        if target == "builtins.str" and len(args) == 1 and "values" in args[0]:
-            return {"class": "str", "values": [str(v) for v in args[0]["values"]]}
+        if target == "builtins.str" and len(args) == 1:
+            if "values" in args[0]:
+                return {"class": "str", "values": [str(v) for v in args[0]["values"]]}
+            return {"examples": [str(v) for v in _examples(args[0])]}
         if target in {
             "builtins.print",
             "os.chdir",
@@ -399,6 +536,9 @@ class _Scope:
                     "dtype",
                     "declared_dtype",
                     "maybe_unbound",
+                    "possible_symbols",
+                    "state",
+                    "guards",
                 )
                 if k in f
             }
@@ -419,14 +559,21 @@ class _Scope:
                 if sub in self.unit.project:
                     f = {"class": "module", "module": sub}
                 elif module in self.unit.project:
-                    f = self.unit.project[module]["exports"].get(name, {})
                     member = _function(module, name)
+                    slot = self.unit.project[module]["exports"].get(
+                        name, {"state": member}
+                    )
+                    f = _guarded(_declared(slot), member)
                 else:
                     f = {"external": sub}
             elif "external" in b:
                 f = {"external": b["external"] + "." + name}
             elif b.get("class") in {"io.IOBase", "subprocess.Popen", "numpy.ndarray"}:
                 f = {"external": b["class"] + "." + name}
+            if b.get("guards"):
+                f["guards"] = [*b["guards"], *f.get("guards", [])]
+            if "external" in f:
+                f = _guarded(f, f["external"])
             fields = {"base": base, "field": name, "type": _py_type(f.get("class"))}
             if member:
                 fields["binding"] = self.variable_reference(member)
@@ -440,6 +587,14 @@ class _Scope:
             keys = [{"name": key, "value": v} for key, (v, _) in key_items]
             key_facts = {key: f for key, (_, f) in key_items}
             fields = dict(target=target, args=args, keywords=keys)
+            if t.get("guards") or t.get("maybe_unbound"):
+                fields["binding_guard"] = dict(
+                    status="conditional",
+                    conditions=t.get("guards", []),
+                    require_bound=bool(t.get("maybe_unbound")),
+                    on_failure="runtime_lookup",
+                )
+            self.invalidate_shared()
             if "symbol" in t and t.get("class") == "function":
                 self.calls.add(t["symbol"])
                 return (
@@ -447,7 +602,15 @@ class _Scope:
                         node,
                         "call",
                         callee=t["symbol"],
-                        binding="python_lexical",
+                        binding=(
+                            "python_guarded"
+                            if "binding_guard" in fields
+                            else (
+                                "python_abi"
+                                if t.get("abi_binding")
+                                else "python_lexical"
+                            )
+                        ),
                         **fields,
                     ),
                     {},
@@ -470,18 +633,19 @@ class _Scope:
                     effect = ["CTRL", "STATE", "IO", "ORDER"]
                     command = facts[0] if facts else key_facts.get("args", {})
                     fields["command_argument"] = 0 if facts else "args"
+                    options = key_facts.get("shell", {"values": [False]}).get(
+                        "values", []
+                    )
                     shell = (
                         True
                         if name == "os.system"
-                        else key_facts.get("shell", {"values": [False]}).get(
-                            "values", [None]
-                        )[0]
+                        else options[0] if len(options) == 1 else None
                     )
                     if "values" in command:
                         fields["command_values"] = {
                             "status": "inferred",
                             "values": command["values"],
-                            "basis": "literal assignments and module initial values",
+                            "basis": "reaching assignments on captured paths",
                             "maybe_unbound": command.get("maybe_unbound", False),
                         }
                         fields["launch_forms"] = _command_shapes(
@@ -493,6 +657,18 @@ class _Scope:
                             "process_command",
                             "executable command depends on runtime values",
                         )
+                        if examples := _examples(command):
+                            fields["command_values"]["guarded_examples"] = [
+                                {
+                                    "guard": {
+                                        "argument": fields["command_argument"],
+                                        "equals": v,
+                                        "type": type(v).__name__,
+                                    },
+                                    "launch_forms": _command_shapes([v], shell),
+                                }
+                                for v in examples
+                            ]
                     fields["cwd"] = next(
                         (k["value"] for k in keys if k["name"] == "cwd"),
                         self.variable_reference("process.cwd"),
@@ -518,6 +694,11 @@ class _Scope:
                 self.issue(
                     node, "provider_binding", "native target binding for " + name
                 )
+                if "binding_guard" in fields:
+                    if "values" in f:
+                        f["examples"] = _examples(f)
+                        del f["values"]
+                    f["guards"] = t.get("guards", [])
                 return (
                     R(
                         node,
@@ -530,6 +711,15 @@ class _Scope:
                     ),
                     f,
                 )
+            if t.get("possible_symbols"):
+                fields["candidate_callees"] = [
+                    {
+                        "symbol": symbol,
+                        "guard": {"operand": "target", "expected": {"symbol": symbol}},
+                    }
+                    for symbol in t["possible_symbols"]
+                ]
+                self.calls.update(t["possible_symbols"])
             return (
                 R(
                     node,
@@ -675,7 +865,11 @@ class _Scope:
             return self.record(
                 node, "unpack", items=[self.destination(n, {}) for n in node.elts]
             )
-        return self.expr(node)[0]
+        target = self.expr(node)[0]
+        if isinstance(node, (ast.Subscript, ast.Attribute)):
+            # Attribute/subscript writes may modify any alias of the receiver.
+            self.invalidate_shared()
+        return target
 
     def branch(self, body, env):
         previous = self.env
@@ -691,6 +885,21 @@ class _Scope:
             for n in set().union(*branches)
         }
 
+    def widen(self, statements):
+        """Invalidate bindings possibly written before this control-flow point."""
+        self.invalidate_shared()
+        bound = {
+            name for name, fact in self.env.items() if not fact.get("maybe_unbound")
+        }
+        examples = {name: _examples(fact) for name, fact in self.env.items()}
+        for part in scope_nodes(statements):
+            for name in assigned_names(part):
+                if isinstance(part, ast.Name) and isinstance(part.ctx, ast.Del):
+                    bound.discard(name)
+                self.env[name] = {} if name in bound else {"maybe_unbound": True}
+                if examples.get(name):
+                    self.env[name]["examples"] = examples[name]
+
     def statements(self, body):
         result = []
         for n in body:
@@ -702,6 +911,7 @@ class _Scope:
         if isinstance(node, (ast.Import, ast.ImportFrom)):
             steps = []
             for module, bound, fact in self.unit.module_bindings(node):
+                self.invalidate_shared()
                 deps = []
                 for i in range(1, len(module.split(".")) + 1):
                     path = ".".join(module.split(".")[:i])
@@ -734,13 +944,63 @@ class _Scope:
                 )
             return steps
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            qual = (self.qualified + ".<locals>." if self.qualified else "") + node.name
+            separator = "." if self.class_scope else ".<locals>."
+            qual = (self.qualified + separator if self.qualified else "") + node.name
             symbol = self.unit.aliases.get(qual, _function(self.unit.module, qual))
+            if self.table and sum(n == node.name for n, _ in self.table.children) > 1:
+                symbol += f"@{node.lineno}"
+            table = (
+                self.table.children.get((node.name, node.lineno))
+                if self.table
+                else None
+            )
+            if table is None:
+                self.issue(
+                    node, "scope_binding", "compiler scope unavailable for " + node.name
+                )
+            decorators = [self.expr(d)[0] for d in node.decorator_list]
             if isinstance(node, ast.ClassDef):
-                return [self.unhandled(node)]
+                bases = [self.expr(b)[0] for b in node.bases]
+                keywords = [
+                    {"name": k.arg, "value": self.expr(k.value)[0]}
+                    for k in node.keywords
+                ]
+                body_symbol = symbol + ".<class_body>"
+                nested = _Scope(
+                    self.unit, body_symbol, qual, table, parent=self, class_scope=True
+                )
+                body = nested.definition(node, node.body, [], {})
+                body.update(scope_kind="class", owner_class=symbol)
+                self.unit.functions.append(body)
+                self.calls.add(body_symbol)
+                self.invalidate_shared()
+                name = ast.copy_location(ast.Name(id=node.name, ctx=ast.Store()), node)
+                dest = self.destination(name, {})
+                return [
+                    R(
+                        node,
+                        "python_define_class",
+                        symbol=symbol,
+                        target=dest,
+                        body_symbol=body_symbol,
+                        bases=bases,
+                        keywords=keywords,
+                        decorators=decorators,
+                        effects=["CTRL", "STATE"],
+                        class_protocol=self.issue(
+                            node,
+                            "class_protocol",
+                            "runtime class namespace, metaclass and MRO",
+                        ),
+                    )
+                ]
             params = []
             facts = {}
             a = node.args
+            defaults = [self.expr(d)[0] for d in a.defaults]
+            keyword_defaults = [
+                self.expr(d)[0] if d is not None else None for d in a.kw_defaults
+            ]
             for category, group in (
                 ("posonly", a.posonlyargs),
                 ("positional", a.args),
@@ -758,24 +1018,18 @@ class _Scope:
                         )
                     )
                     facts[arg.arg] = {}
-            table = (
-                self.table.children.get((node.name, node.lineno))
-                if self.table
-                else None
-            )
-            if table is None:
-                self.issue(
-                    node, "scope_binding", "compiler scope unavailable for " + node.name
-                )
             nested = _Scope(self.unit, symbol, qual, table, parent=self)
-            self.unit.functions.append(
-                nested.definition(node, node.body, params, facts)
-            )
+            definition = nested.definition(node, node.body, params, facts)
+            if self.class_scope:
+                definition["owner_class"] = self.symbol.removesuffix(".<class_body>")
+            self.unit.functions.append(definition)
             fact = (
                 {"class": "function", "symbol": symbol}
                 if not node.decorator_list
                 else {}
             )
+            if decorators:
+                self.invalidate_shared()
             dest = self.destination(
                 ast.copy_location(ast.Name(id=node.name, ctx=ast.Store()), node), fact
             )
@@ -785,12 +1039,9 @@ class _Scope:
                     "python_define",
                     symbol=symbol,
                     target=dest,
-                    decorators=[self.expr(d)[0] for d in node.decorator_list],
-                    defaults=[self.expr(d)[0] for d in a.defaults],
-                    keyword_defaults=[
-                        self.expr(d)[0] if d is not None else None
-                        for d in a.kw_defaults
-                    ],
+                    decorators=decorators,
+                    defaults=defaults,
+                    keyword_defaults=keyword_defaults,
                 )
             ]
         if isinstance(node, ast.Expr):
@@ -801,7 +1052,11 @@ class _Scope:
                     R(
                         node,
                         "annotation",
-                        target=self.destination(node.target, {}),
+                        target=(
+                            self.variable(node.target.id)
+                            if isinstance(node.target, ast.Name)
+                            else self.expr(node.target)[0]
+                        ),
                         type_expression=self.expr(node.annotation)[0],
                     )
                 ]
@@ -843,12 +1098,16 @@ class _Scope:
             self.merge(left, right)
             return [R(node, "if", condition=condition, then=yes, **{"else": no})]
         if isinstance(node, (ast.For, ast.AsyncFor, ast.While)):
+            iterator = None if isinstance(node, ast.While) else self.expr(node.iter)[0]
             before = self.env.copy()
+            self.widen(
+                [node.test if isinstance(node, ast.While) else node.target, *node.body]
+            )
+            header = self.env.copy()
             if isinstance(node, ast.While):
                 op = "while"
                 fields = {"condition": self.expr(node.test)[0]}
             else:
-                iterator = self.expr(node.iter)[0]
                 target = self.destination(node.target, {})
                 op = "for"
                 fields = {
@@ -862,7 +1121,7 @@ class _Scope:
                     ),
                 }
             steps, after = self.branch(node.body, self.env)
-            self.merge(before, after)
+            self.merge(before, header, after)
             otherwise, after_else = self.branch(node.orelse, self.env)
             self.merge(self.env, after_else)
             return [R(node, op, body=steps, **fields, **{"else": otherwise})]
@@ -895,22 +1154,28 @@ class _Scope:
             otherwise, normal = self.branch(node.orelse, normal)
             arms = []
             states = [normal]
+            # Any prefix of the protected body may precede a handler.
+            self.widen(node.body)
+            exceptional = self.env.copy()
             for h in node.handlers:
-                scope = before.copy()
+                self.env = exceptional.copy()
+                test = self.expr(h.type)[0] if h.type else None
                 if h.name:
-                    scope[h.name] = {"class": "BaseException"}
-                handler, outgoing = self.branch(h.body, scope)
+                    self.env[h.name] = {}
+                handler, outgoing = self.branch(h.body, self.env)
+                if h.name:
+                    outgoing[h.name] = {"maybe_unbound": True}
                 states.append(outgoing)
                 arms.append(
                     R(
                         h,
                         "exception_handler",
-                        test=self.expr(h.type)[0] if h.type else None,
+                        test=test,
                         name=h.name,
                         body=handler,
                     )
                 )
-            self.merge(*states)
+            self.merge(*states, *([exceptional] if node.finalbody else []))
             final = self.statements(node.finalbody)
             return [
                 R(
@@ -937,7 +1202,10 @@ class _Scope:
                 R(
                     node,
                     "unbind",
-                    targets=[self.destination(t, {}) for t in node.targets],
+                    targets=[
+                        self.destination(t, {"maybe_unbound": True})
+                        for t in node.targets
+                    ],
                 )
             ]
         if isinstance(node, (ast.Break, ast.Continue, ast.Pass)):
