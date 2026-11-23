@@ -14,6 +14,8 @@ PLAN_SCHEMA = "scar.compiler-plan"
 LEGACY_WIRE_VERSION = 3
 GRAPH_WIRE_VERSION = 4
 PLAN_WIRE_VERSION = 4
+NATIVE_GRAPH_VERSION = 5
+NATIVE_PLAN_VERSION = 3
 
 
 @dataclass(frozen=True)
@@ -194,6 +196,31 @@ def read_artifact(reference):
     if _identity(path, data) != reference:
         raise ValueError(f"artifact changed: {path}")
     return data
+
+
+def read_native_material(reference, *, graph):
+    """Read a native module and normalize the supported graph and plan material versions."""
+    document = json.loads(read_artifact(reference))
+    if type(document) is not dict:
+        raise ValueError("native module material must be an object")
+    version = document.get("schema_version")
+    versions = range(1, NATIVE_GRAPH_VERSION + 1) if graph else range(1, NATIVE_PLAN_VERSION + 1)
+    if type(version) is not int or version not in versions or document.get("schema") != "scar.native-units-ir":
+        raise ValueError("unsupported native module material version")
+    fields = {"schema", "schema_version", "configuration", "fragments", "exports"}
+    first_abi, first_adaptation = (4, 5) if graph else (2, 3)
+    maps = {"abi_units": first_abi, "c_adaptations": first_adaptation}
+    fields.update(name for name, first in maps.items() if version >= first)
+    if graph and version >= 2:
+        fields.add("region_seals")
+    if (set(document) != fields or any(type(document[key]) is not dict
+            for key in fields & {"configuration", "fragments", "region_seals", *maps})):
+        raise ValueError("invalid native module material fields")
+    for key in maps:
+        document.setdefault(key, {})
+    if not document["c_adaptations"].keys() <= document["fragments"].keys():
+        raise ValueError("C compatibility declarations require an owned source fragment")
+    return document
 
 
 def verify_artifact(reference):

@@ -157,8 +157,8 @@ def _abi_span(row, declarations, spans):
     return spans[symbol]
 
 
-def render_regions(rows, material, name, data, declarations, abi_spans):
-    """Splice only verified body ranges, returning the guarded helper definitions."""
+def region_edits(rows, material, name, data, declarations, abi_spans):
+    """Return verified source replacements and their guarded helper definitions."""
     spans, definitions, decisions = [], [], []
     exports = {row["symbol"]: row for row in declarations}
     digest = sha256(data).hexdigest()
@@ -182,13 +182,7 @@ def render_regions(rows, material, name, data, declarations, abi_spans):
         spans.append((start, stop, replacement))
         definitions.append(definition)
         decisions.append(dict(region=row["region"], status="GUARDED_REGION", helper=symbol))
-    pieces, prior = [], 0
-    for start, stop, replacement in sorted(spans):
-        if start < prior:
-            raise ValueError(f"overlapping native region replacements: {name}:{start}")
-        pieces.extend((data[prior:start], replacement))
-        prior = stop
-    return b"".join((*pieces, data[prior:])), definitions, decisions
+    return spans, definitions, decisions
 
 
 def emit_region_helpers(project, configuration, definitions):

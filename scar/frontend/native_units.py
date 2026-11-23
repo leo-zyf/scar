@@ -1,5 +1,6 @@
-"""Normalize admitted native units into sealed executable source fragments."""
+"""Seal original native units and compiler-proved compatibility declarations."""
 
+from bisect import bisect_left, bisect_right
 from collections import defaultdict
 from dataclasses import asdict
 from hashlib import sha256
@@ -7,7 +8,8 @@ import json
 from pathlib import Path
 import re
 
-from ..contract import Artifact, artifact, json_digest, local_member, read_artifact, write_json
+from ..contract import NATIVE_GRAPH_VERSION, Artifact, artifact, json_digest, local_member, read_artifact, write_json
+from .fortran_bridge import prepare_fortran
 
 _GNU_CFI_HEADER = "ISO_Fortran_binding.h"
 _GNU_CFI_ROUTINES = {"CFI_establish", "CFI_is_contiguous", "CFI_section", "CFI_setpointer"}
@@ -97,8 +99,8 @@ def _c_spans(units, source_bytes, preserve_abi, captures):
                 raise ValueError(f'C definition has no locked source bytes: {path}')
             header = _c_identifier_definition(source_bytes[path], function, arguments, bodies[index])
             if header is not None:
-                span, replacement, types = header
-                if definitions[path].setdefault(span, (replacement, types)) != (replacement, types):
+                span, declarators = header
+                if definitions[path].setdefault(span, declarators) != declarators:
                     raise ValueError(f'ambiguous old-style C function definition. {path}:{function["line"]}')
     return declarations, conversions, definitions, cfi_headers
 
@@ -108,7 +110,7 @@ _C_IDENTIFIER = re.compile(rb'[A-Za-z_]\w*')
 
 
 def _c_identifier_definition(data, function, parameters, body):
-    """Normalize a C identifier-list definition when its call ABI is unchanged."""
+    """Record declarators for an identifier-list definition with unchanged call ABI."""
     token = _C_IDENTIFIER.match(data, function['offset'])
     if token is None:
         return None
@@ -152,20 +154,18 @@ def _c_identifier_definition(data, function, parameters, body):
         begin, stop = span
         spelling = parameter['name'].encode()
         if start < begin < stop < names_end and data[begin:stop] == spelling and parameter['type'] == 'int':
-            declared.append(b'int ' + spelling)
+            declared.append(dict(implicit_int=parameter['name']))
             continue
         name = _C_IDENTIFIER.match(data, parameter['offset'])
         end = _TRIVIA.match(data, stop).end()
         if (not name or name[0] != spelling or not cursor <= begin <= name.start() < name.end() <= stop <= end < body_start
                 or _TRIVIA.match(data, cursor).end() != begin or data[end:end + 1] != b';'):
             raise ValueError(f'old-style C parameters need independent ordered declaration ranges. {location}')
-        declared.append(data[begin:stop])
+        declared.append(dict(span=[begin, stop]))
         cursor = end + 1
     if _TRIVIA.match(data, cursor).end() != body_start or data[body_start:body_start + 1] != b'{':
         raise ValueError(f'old-style C definition has an unsupported parameter preamble. {location}')
-    replacement = b'(' + b', '.join(declared) + b')'
-    replacement += b'\n' * (data[start:body_start].count(b'\n') - replacement.count(b'\n'))
-    return (start, body_start), replacement, types
+    return (start, body_start), declared
 
 
 def _c_abi_spans(path, data, declarations):
@@ -195,63 +195,41 @@ def _c_abi_spans(path, data, declarations):
         yield start, stop
 
 
-def _lower_c(path, data, declarations, conversions, definitions, regions):
+def _c_adaptation(path, data, declarations, conversions, definitions):
     linkage = list(_c_abi_spans(path, data, declarations))
-    insertions = defaultdict(list)
     prior = 0
     for start, stop in linkage:
         if start < prior:
             raise ValueError(f'overlapping C linkage declarations in {path}')
-        insertions[start].append(b'extern "C" { ')
-        insertions[stop].append(b' }')
         prior = stop
     prior = 0
-    provenance = []
+    casts = []
     for (start, stop), target in sorted(conversions.items()):
         if not 0 <= start < stop <= len(data):
             continue
         if start < prior:
             raise ValueError(f'overlapping C pointer conversions in {path} at byte {start}')
-        insertions[start].append(f'static_cast<{target}>('.encode())
-        insertions[stop].insert(0, b')')
         prior = stop
-        provenance.append({'span': [start, stop], 'from': 'void *', 'to': target})
-    replacements = {start: (stop, text) for (start, stop), (text, _) in definitions.items()}
-    converted = _apply_spans(path, data, insertions, replacements)
-    return converted, provenance, linkage, _map_body_spans(data, converted, insertions, replacements, regions)
+        casts.append(dict(span=[start, stop], type=target))
+    headers = [dict(span=span, parameters=parameters) for span, parameters in sorted(definitions.items())]
+    return dict(linkage=linkage, pointer_conversions=casts, identifier_definitions=headers)
 
 
-def _map_body_spans(original, converted, insertions, replacements, regions):
-    result = {}
+def _c_region_anchors(adaptation, regions):
+    """Retain closed bodies whose interiors have no declaration or type edits."""
+    insertions = sorted({offset for span in adaptation['linkage'] for offset in span}
+                        | {offset for row in adaptation['pointer_conversions'] for offset in row['span']})
+    replacements = [tuple(row['span']) for row in adaptation['identifier_definitions']]
+    starts = [start for start, _ in replacements]
     for region in regions:
         start, stop = region['source']['span']
-        if any(start < offset < stop for offset in insertions):
+        cut = bisect_right(insertions, start)
+        header = bisect_left(starts, stop)
+        if cut < len(insertions) and insertions[cut] < stop:
             continue
-        if any(left < stop and start < right for left, (right, _) in replacements.items()):
+        if header and replacements[header - 1][1] > start:
             continue
-        delta = sum(len(data) - (right - left) for left, (right, data) in replacements.items() if right <= start)
-        begin = start + delta + sum(map(len, (data for offset, rows in insertions.items()
-                                            if offset <= start for data in rows)))
-        end = stop + delta + sum(map(len, (data for offset, rows in insertions.items()
-                                          if offset < stop for data in rows)))
-        if original[start:stop] == converted[begin:end]:
-            result[region['region']] = [begin, end]
-    return result
-
-
-def _apply_spans(path, data, insertions, replacements):
-    chunks = []
-    position = 0
-    for offset in sorted(insertions.keys() | replacements.keys()):
-        if offset < position:
-            raise ValueError(f'overlapping C source edits in {path} at byte {offset}')
-        chunks.extend((data[position:offset], *insertions.get(offset, ())))
-        position = offset
-        if offset in replacements:
-            position, replacement = replacements[offset]
-            chunks.append(replacement)
-    chunks.append(data[position:])
-    return b''.join(chunks)
+        yield region['region'], region['source']['span']
 
 
 def _locked_source(root, name, lock):
@@ -297,7 +275,7 @@ def _stage_gnu_cfi(header, project, headers):
 
 
 def _stage_native_sources(manifest, evidence, project, regions):
-    """Translate and stage pinned source inputs using captured type evidence."""
+    """Describe compatibility inputs from pinned source and compiler evidence."""
     profile = manifest['language']
     units = {unit['path']: unit for unit in manifest['units']}
     languages = {name: unit.get('language', profile) for name, unit in units.items()}
@@ -313,8 +291,6 @@ def _stage_native_sources(manifest, evidence, project, regions):
     captures = evidence.get('compiler_types', {})
     project.mkdir()
     if not mixed and fortran:
-        from .fortran_bridge import prepare_fortran
-
         build, wrapper, exports = prepare_fortran(manifest, project, source_bytes, captures=captures)
         if 'f2c-cfi-v1' in build['runtime_support']:
             _stage_gnu_cfi(evidence.get('gnu_cfi_header'), project, ())
@@ -322,7 +298,7 @@ def _stage_native_sources(manifest, evidence, project, regions):
         for key in ('link_options', 'runtime_dirs'):
             if manifest.get(key):
                 build[key] = manifest[key]
-        return build, {}, wrapper, exports
+        return build, {}, {}, wrapper, exports
     c_units = [units[name] for name, language in languages.items() if language == 'c']
     cxx_units = [units[name] for name, language in languages.items() if language == 'c++' and fortran]
     c_root = Path('src/c-abi') if mixed else Path('src')
@@ -334,7 +310,7 @@ def _stage_native_sources(manifest, evidence, project, regions):
     if (decls.keys() | casts.keys() | headers.keys()) - material.keys():
         raise ValueError('C translation referenced project files missing from the source lock')
 
-    settings, translation, anchors = {}, [], {}
+    settings, adaptations, anchors = {}, {}, {}
     for name, data in source_bytes.items():
         language = languages.get(name)
         unit_regions = regions.get(name, ())
@@ -343,16 +319,12 @@ def _stage_native_sources(manifest, evidence, project, regions):
             if language == 'c':
                 output = output.with_suffix('.cpp')
                 settings[output.as_posix()] = _compile_settings(units[name]['flags'], root, c_root)
-            converted, conversions, linkage, spans = _lower_c(
-                name, data, decls[name], casts[name], headers[name], unit_regions)
-            _stage(project, output, converted)
-            anchors.update({region: (output.as_posix(), span) for region, span in spans.items()})
-            if language == 'c' or conversions or linkage:
-                row = dict(source=name, output=str(output), c_pointer_conversions=conversions, c_linkage=linkage)
-                if headers[name]:
-                    row['c_identifier_definitions'] = [dict(span=span, parameter_types=types)
-                                                       for span, (_, types) in sorted(headers[name].items())]
-                translation.append(row)
+            adaptation = _c_adaptation(name, data, decls[name], casts[name], headers[name])
+            _stage(project, output, data)
+            anchors.update({region: (output.as_posix(), span)
+                            for region, span in _c_region_anchors(adaptation, unit_regions)})
+            if any(adaptation.values()):
+                adaptations[output.as_posix()] = adaptation
         if language in (None, 'c++'):
             output = cxx_root / name
             _stage(project, output, data)
@@ -360,15 +332,11 @@ def _stage_native_sources(manifest, evidence, project, regions):
             if language == 'c++':
                 settings[output.as_posix()] = _compile_settings(units[name]['flags'], root, cxx_root)
 
-    if translation:
-        (project / 'translation.json').write_text(json.dumps(translation, indent=2) + '\n')
     fortran_libraries = ()
     runtime_support = ()
     wrapper, exports = None, ()
     cfi_runtime = False
     if fortran:
-        from .fortran_bridge import prepare_fortran
-
         config = dict(manifest, units=fortran, language='fortran')
         bridge, wrapper, exports = prepare_fortran(config, project, source_bytes,
                                                   source_directory='src/fortran-abi', mixed=True,
@@ -393,7 +361,7 @@ def _stage_native_sources(manifest, evidence, project, regions):
                          source_settings=settings if len(common) > 1 else {}, **linkage)
     if runtime_support:
         configuration['runtime_support'] = runtime_support
-    return configuration, anchors, wrapper, exports
+    return configuration, anchors, adaptations, wrapper, exports
 
 
 def _abi_declaration(export):
@@ -445,7 +413,7 @@ def prepare_native_units(target, evidence, out, *, regions=()) -> tuple[Artifact
     by_unit = defaultdict(list)
     for region in regions:
         by_unit[region['source']['path']].append(region)
-    configuration, anchors, wrapper, exports = _stage_native_sources(target, evidence, pending, by_unit)
+    configuration, anchors, adaptations, wrapper, exports = _stage_native_sources(target, evidence, pending, by_unit)
     fragments = {}
     for directory in ('src', 'include'):
         for path in sorted((pending / directory).rglob('*')):
@@ -474,6 +442,7 @@ def prepare_native_units(target, evidence, out, *, regions=()) -> tuple[Artifact
                 retained.append(lowered)
     seals = {row['region']: json_digest(row) for row in retained}
     abi_units = {wrapper: declarations} if declarations else {}
-    return write_json(out / 'native-units.json', dict(schema='scar.native-units-ir', schema_version=4,
+    return write_json(out / 'native-units.json', dict(schema='scar.native-units-ir', schema_version=NATIVE_GRAPH_VERSION,
                        configuration=configuration, fragments=fragments, abi_units=abi_units,
+                       c_adaptations=adaptations,
                        exports=sorted(row['symbol'] for row in exports), region_seals=seals)), retained

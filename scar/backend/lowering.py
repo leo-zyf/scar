@@ -1,13 +1,15 @@
 """B2 renders the executable IR as C++20 project inputs."""
 
 from collections import defaultdict
-import json
 from pathlib import Path
 import sys
 
-from scar.contract import ElementwiseEntry, FragmentModule, Member, ScalarModule, read_artifact, write_json
+from scar.contract import (
+    ElementwiseEntry, FragmentModule, Member, ScalarModule, read_artifact, read_native_material, write_json,
+)
 
-from .abi import emit_scalar_module, f2c_support_header, render_abi_wrappers, render_expression
+from .abi import c_source_edits, emit_scalar_module, f2c_support_header, render_abi_wrappers, render_expression
+from .regions import emit_region_helpers, region_edits
 
 
 def _statements(rows, slots, symbols, indent, *, loop=False):
@@ -166,15 +168,30 @@ def _runtime_support(configuration, project):
     configuration["sources"] = [*configuration["sources"], name]
 
 
+def _apply_source_edits(name, data, insertions, replacements):
+    if not insertions and not replacements:
+        return data
+    edits = {start: (stop, replacement) for start, stop, replacement in replacements}
+    if len(edits) != len(replacements):
+        raise ValueError(f"duplicate native source replacement in {name}")
+    chunks, position = [], 0
+    for offset in sorted(insertions.keys() | edits.keys()):
+        if offset < position:
+            raise ValueError(f"overlapping native source edits in {name} at byte {offset}")
+        chunks.extend((data[position:offset], *insertions.get(offset, ())))
+        position = offset
+        if offset in edits:
+            position, replacement = edits[offset]
+            chunks.append(replacement)
+    chunks.append(data[position:])
+    return b"".join(chunks)
+
+
 def _fragments(body, project, bundle):
-    material = json.loads(read_artifact(body.artifact.resolve(bundle)))
-    fields = {"schema", "schema_version", "configuration", "fragments", "exports"}
-    version = material.get("schema_version")
-    if version == 2:
-        fields.add("abi_units")
-    if set(material) != fields or material["schema"] != "scar.native-units-ir" or version not in (1, 2):
-        raise ValueError("invalid C++20 fragment module")
-    fragments, abi_units = material["fragments"], material.get("abi_units", {})
+    material = read_native_material(body.artifact.resolve(bundle), graph=False)
+    fragments = material["fragments"]
+    abi_units = material["abi_units"]
+    adaptations = material["c_adaptations"]
     regions = defaultdict(list)
     configuration = material["configuration"]
     for row in body.regions:
@@ -198,17 +215,17 @@ def _fragments(body, project, bundle):
             data, spans = render_abi_wrappers(declarations)
         else:
             data = read_artifact(Member(**fragments[name]).resolve(bundle))
+        insertions, replacements = {}, []
+        if name in adaptations:
+            insertions, replacements = c_source_edits(name, data, adaptations[name])
         if name in regions:
-            from .regions import render_regions
-
-            data, helpers, emitted = render_regions(regions[name], configuration, name, data, declarations, spans)
+            guarded, helpers, emitted = region_edits(regions[name], configuration, name, data, declarations, spans)
+            replacements.extend(guarded)
             definitions.extend(helpers)
             decisions.extend(emitted)
-        destination.write_bytes(data)
+        destination.write_bytes(_apply_source_edits(name, data, insertions, replacements))
     _runtime_support(configuration, project)
     if decisions:
-        from .regions import emit_region_helpers
-
         emit_region_helpers(project, configuration, definitions)
         write_json(project / "native-region-lowering.json", dict(schema="scar.native-region-lowering",
                    schema_version=1, regions=decisions))

@@ -97,7 +97,8 @@ def test_locked_mixed_target_three_stages(tmp_path, python_binding):
     sources = tmp_path / "source"
     sources.mkdir()
     units = [
-        ("old.c", "c", "c89", "int old(x)\nint x;\n{ return x + 1; }\n"),
+        ("old.c", "c", "c89", "int old(x)\nint x;\n"
+         "{ void *opaque = &x; const int *value = opaque; return *value + 1; }\n"),
         ("new.c", "c", "c17", "int modern(int x) { return x * 2; }\n"
          "double scale_value(double x) { return 2.0 * x; }\n"
          "void initialize(double *a, double *b, int n) {\n"
@@ -213,6 +214,11 @@ end subroutine fill_pair
     assert {row["symbol"] for row in material["abi_units"][wrapper]} == {"extra", "initialize_fortran"}
     assert wrapper not in material["fragments"]
     assert "include/scar_generated/scar_f2c_call.hpp" not in material["fragments"]
+    old_c = "src/c-abi/old.cpp"
+    original_bytes = graph / material_path.parent / material["fragments"][old_c]["path"]
+    assert original_bytes.read_bytes() == (sources / "old.c").read_bytes()
+    adaptation = material["c_adaptations"][old_c]
+    assert adaptation["linkage"] and adaptation["identifier_definitions"] and adaptation["pointer_conversions"]
     if python_binding:
         links = {row["value"] for row in document["edges"] if row["kind"] == "CALL"}
         assert {"python_adjust", "scale_value"} <= links
@@ -234,6 +240,9 @@ end subroutine fill_pair
     plan = plan.rename(tmp_path / "relocated-plan")
     result = _stage(tmp_path, "backend", "compile", "--plan", plan, "--out", delivery)
     assert result["status"] == ("BUILT" if python_binding else "VALIDATED")
+    lowered_c = (delivery / "project" / old_c).read_bytes()
+    assert b'extern "C" { int old(int x)' in lowered_c
+    assert b"static_cast<const int *>" in lowered_c
     assert (delivery / "project" / wrapper).is_file()
     assert (delivery / "project/include/scar_generated/scar_f2c_call.hpp").is_file()
     generated = json.loads((delivery / "project/native-region-lowering.json").read_bytes())

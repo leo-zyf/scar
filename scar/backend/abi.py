@@ -6,6 +6,81 @@ import re
 
 
 _BINARY = {"add": "+", "sub": "-", "mul": "*", "div": "/"}
+_C_ADAPTATIONS = {"linkage", "pointer_conversions", "identifier_definitions"}
+_C_PARAMETER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def _source_span(span, size, name):
+    if (type(span) not in (tuple, list) or len(span) != 2
+            or any(type(offset) is not int for offset in span) or not 0 <= span[0] < span[1] <= size):
+        raise ValueError(f"invalid C adaptation span in {name}")
+    return tuple(span)
+
+
+def _ansi_parameters(data, begin, end, parameters, name):
+    if (type(parameters) not in (tuple, list) or not parameters
+            or data[begin:begin + 1] != b"(" or data[end:end + 1] != b"{"):
+        raise ValueError(f"invalid C identifier-list definition in {name} at byte {begin}")
+    declared, prior = [], begin + 1
+    for parameter in parameters:
+        if type(parameter) is not dict:
+            raise ValueError(f"invalid C parameter record in {name}")
+        if set(parameter) == {"span"}:
+            start, stop = _source_span(parameter["span"], end, name)
+            if start < prior:
+                raise ValueError(f"unordered C parameter spans in {name} at byte {start}")
+            declared.append(data[start:stop])
+            prior = stop
+        elif set(parameter) == {"implicit_int"}:
+            spelling = parameter["implicit_int"]
+            if type(spelling) is not str or not _C_PARAMETER.fullmatch(spelling):
+                raise ValueError(f"invalid implicit int parameter in {name}")
+            declared.append(b"int " + spelling.encode())
+        else:
+            raise ValueError(f"invalid C parameter record in {name}")
+    replacement = b"(" + b", ".join(declared) + b")"
+    return replacement + b"\n" * (data[begin:end].count(b"\n") - replacement.count(b"\n"))
+
+
+def c_source_edits(name, data, adaptation):
+    """Render sealed C declaration, conversion and identifier-list records."""
+    if (type(data) is not bytes or type(adaptation) is not dict or set(adaptation) != _C_ADAPTATIONS
+            or any(type(rows) not in (tuple, list) for rows in adaptation.values())):
+        raise ValueError(f"invalid C ABI adaptation in {name}")
+    size = len(data)
+    insertions, replacements = {}, []
+    prior = 0
+    for start, stop in sorted(_source_span(span, size, name) for span in adaptation["linkage"]):
+        if start < prior:
+            raise ValueError(f"overlapping C linkage declarations in {name}")
+        insertions.setdefault(start, []).append(b'extern "C" { ')
+        insertions.setdefault(stop, []).append(b" }")
+        prior = stop
+
+    prior = 0
+    for conversion in adaptation["pointer_conversions"]:
+        if type(conversion) is not dict or set(conversion) != {"span", "type"}:
+            raise ValueError(f"invalid C pointer conversion in {name}")
+        start, stop = _source_span(conversion["span"], size, name)
+        target = conversion["type"]
+        if type(target) is not str or not target.strip():
+            raise ValueError(f"invalid C pointer target type in {name}")
+        if start < prior:
+            raise ValueError(f"overlapping or unordered C pointer conversions in {name} at byte {start}")
+        insertions.setdefault(start, []).append(f"static_cast<{target}>(".encode())
+        insertions.setdefault(stop, []).insert(0, b")")
+        prior = stop
+
+    prior = 0
+    for definition in adaptation["identifier_definitions"]:
+        if type(definition) is not dict or set(definition) != {"span", "parameters"}:
+            raise ValueError(f"invalid C identifier-list record in {name}")
+        start, stop = _source_span(definition["span"], size, name)
+        if start < prior:
+            raise ValueError(f"overlapping or unordered C definitions in {name} at byte {start}")
+        replacements.append((start, stop, _ansi_parameters(data, start, stop, definition["parameters"], name)))
+        prior = stop
+    return insertions, replacements
 
 
 def render_expression(row, slots, symbols):
