@@ -59,6 +59,151 @@ def _payloads(graph, document):
     ]
 
 
+def test_mixed_program_images_preserve_link_and_state_boundaries(tmp_path):
+    sources = tmp_path / "source"
+    sources.mkdir()
+    texts = {
+        "first.c": (
+            "#include <stdio.h>\nint state = 4;\n"
+            "extern int increment(void);\nextern void scale_(double*);\n"
+            "int main(void) { double x = 2; scale_(&x);\n"
+            'printf("first %d %.1f\\n", increment(), x); return 0; }\n'
+        ),
+        "second.cpp": (
+            '#include <cstdio>\nextern "C" {\nint state = 40;\n'
+            "int increment(void);\nvoid scale_(double*);\n}\n"
+            "int main() { double x = 2; scale_(&x);\n"
+            'std::printf("second %d %.1f\\n", increment(), x); return 0; }\n'
+        ),
+        "shared.c": "extern int state;\nint increment(void) { return ++state; }\n",
+        "old.f": (
+            "      SUBROUTINE SCALE(X)\n      DOUBLE PRECISION X\n"
+            "      X = 3D0 * X\n      END\n"
+        ),
+        "new.f90": (
+            "subroutine scale(x)\n  implicit none\n"
+            "  double precision, intent(inout) :: x\n"
+            "  x = 5d0 * x\nend subroutine scale\n"
+        ),
+    }
+    profiles = {}
+    for name, text in texts.items():
+        path = sources / name
+        path.write_text(text)
+        language, compiler, flags = {
+            ".c": ("c", "gcc", ["-std=c89"]),
+            ".cpp": ("c++", "g++", ["-std=c++17"]),
+            ".f": ("fortran", "gfortran", ["-std=legacy"]),
+            ".f90": ("fortran", "gfortran", ["-std=f2008"]),
+        }[path.suffix]
+        profiles[name] = dict(path=name, language=language, flags=flags)
+        _run([compiler, *flags, "-c", path, "-o", sources / (name + ".o")], tmp_path)
+    images = [
+        dict(
+            id="first",
+            entry="main",
+            output="first",
+            units=["first.c", "shared.c", "old.f"],
+        ),
+        dict(
+            id="second",
+            entry="main",
+            output="second",
+            units=["second.cpp", "shared.c", "new.f90"],
+        ),
+    ]
+    expected = {}
+    for image in images:
+        original = tmp_path / ("original-" + image["id"])
+        _run(
+            [
+                "g++",
+                *(sources / (name + ".o") for name in image["units"]),
+                "-lgfortran",
+                "-o",
+                original,
+            ],
+            tmp_path,
+        )
+        expected[image["id"]] = _run([original], tmp_path)
+        original.unlink()
+    assert expected == {"first": b"first 5 6.0\n", "second": b"second 41 10.0\n"}
+    request = tmp_path / "request.json"
+    request.write_text(
+        json.dumps(
+            dict(
+                source_root=str(sources),
+                root_image="second",
+                images=[
+                    dict(image, units=[profiles[name] for name in image["units"]])
+                    for image in images
+                ],
+            )
+        )
+    )
+    graph, plan, delivery = (tmp_path / name for name in ("graph", "plan", "delivery"))
+    _stage(
+        tmp_path,
+        "frontend",
+        "build",
+        "--manifest",
+        request,
+        "--out",
+        graph,
+        "--jobs",
+        2,
+    )
+    document = json.loads((graph / "graph.json").read_bytes())
+    assert (
+        len(document["units"]) == 5
+    )  # The shared compilation profile is captured once.
+    assert document["images"][0]["units"][1] == document["images"][1]["units"][1]
+    shutil.rmtree(sources)
+    request.unlink()
+    graph = graph.rename(tmp_path / "relocated-graph")
+    logical = _stage(tmp_path, "middle", "plan", "--graph", graph, "--out", plan)
+    assert logical["status"] == "READY"
+    execution = json.loads((plan / "exec-ir.json").read_bytes())
+    assert execution["kind"] == "image_bundle" and execution["root_image"] == "second"
+    for image in execution["images"]:
+        child = json.loads((plan / image["ir"]["path"]).read_bytes())
+        assert child["status"] == "READY" and child["module"]["entry"] == "main"
+    # A complete root must not hide an incomplete required child image.
+    document["images"][0]["entry"] = "missing_entry"
+    (graph / "graph.json").write_text(json.dumps(document))
+    partial = tmp_path / "incomplete-plan"
+    rejected = _stage(
+        tmp_path, "middle", "plan", "--graph", graph, "--out", partial, returncode=2
+    )
+    assert rejected["status"] == "INCOMPLETE"
+    child_states = json.loads((partial / "plan.json").read_bytes())["images"]
+    assert [image["status"] for image in child_states] == ["INCOMPLETE", "READY"]
+    shutil.rmtree(graph)
+    plan = plan.rename(tmp_path / "relocated-plan")
+    result = _stage(
+        tmp_path,
+        "backend",
+        "compile",
+        "--ir",
+        plan,
+        "--out",
+        delivery,
+        "--physical",
+        "serial",
+    )
+    assert result["root_image"] == "second"
+    assert result["executable"] == result["executables"]["second"]
+    shutil.rmtree(plan)
+    for image in images:
+        native = Path(result["executables"][image["id"]])
+        assert (
+            native.name == image["output"]
+            and _run([native], tmp_path) == expected[image["id"]]
+        )
+    built = json.loads((delivery / "build.json").read_bytes())
+    assert built["warnings"] == 0 and set(built["executables"]) == {"first", "second"}
+
+
 def test_python_protocol_qualification_preserves_order_and_control(tmp_path):
     helpers = tmp_path / "helpers.c"
     helpers.write_text(

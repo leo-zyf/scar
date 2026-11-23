@@ -4,7 +4,7 @@ from dataclasses import dataclass
 import json
 from pathlib import Path
 
-from scar.contract import digest, json_bytes
+from scar.contract import digest, json_bytes, validate_images
 
 
 @dataclass(frozen=True)
@@ -18,6 +18,103 @@ class SourceRequest:
     project_entry: Path | None
     entry_abi: dict | None
     observation: dict | None
+    images: list[dict] | None = None
+    root_image: str | None = None
+
+
+def with_entry_abi(profile, entry_abi):
+    if (
+        entry_abi
+        and entry_abi.get("kind") == "binary_f64_arrays"
+        and profile["language"].lower() == "python"
+    ):
+        return {**profile, "abi": {**profile.get("abi", {}), **entry_abi}}
+    return profile
+
+
+def _profiles(units, default_language):
+    if not isinstance(units, list) or not units:
+        raise ValueError("expected a nonempty list of explicit compilation profiles")
+    for unit in units:
+        if not isinstance(unit, dict) or not isinstance(unit.get("path"), str):
+            raise ValueError("each compilation unit needs a path and language")
+        profile = {"language": default_language, **unit}
+        if not isinstance(profile["language"], str) or profile["language"].lower() in {
+            "",
+            "mixed",
+        }:
+            raise ValueError("each compilation unit needs its source language")
+        yield profile
+
+
+def _image_profiles(spec):
+    """Intern profiles once while retaining link membership in each image."""
+    root_image, images = spec.get("root_image"), spec["images"]
+    validate_images(images, root_image, unit_count=None)
+    if any(k in spec for k in ("units", "source", "observe")):
+        raise ValueError(
+            "multi-image requests require explicit compilation profiles per image; observation and script discovery are unavailable"
+        )
+    table, indices, membership = [], {}, []
+    for image in images:
+        if "observe" in image or "source" in image or "source_root" in image:
+            raise ValueError(
+                "image units must be explicit profiles under the shared source_root; observation and script discovery require a single image"
+            )
+        profiles = [
+            with_entry_abi(p, image.get("entry_abi"))
+            for p in _profiles(image.get("units"), spec.get("language"))
+        ]
+        python_profiles = [p for p in profiles if p["language"].lower() == "python"]
+        module_paths = {
+            p["abi"].get("module"): p["path"]
+            for p in python_profiles
+            if p.get("abi", {}).get("kind") == "python_module"
+        }
+        for p in python_profiles:
+            abi = p.get("abi", {})
+            if abi.get("kind") == "python_module":
+                project = abi.get("project", {})
+                if abi.get("module") not in project or any(
+                    module_paths.get(module) != row.get("path")
+                    for module, row in project.items()
+                ):
+                    raise ValueError(
+                        "a Python script image must include each module declared in its project catalog"
+                    )
+        if (
+            image["entry"] == "__main__"
+            and len(python_profiles) == len(profiles)
+            and not any(
+                (
+                    p.get("abi", {}).get("kind") == "python_module"
+                    and p["abi"].get("main")
+                )
+                or "__main__" in p.get("abi", {}).get("exports", {}).values()
+                for p in python_profiles
+            )
+        ):
+            raise ValueError(
+                "a Python script image requires explicit Python module profiles for its entry and imported project modules"
+            )
+        image_units = []
+        for p in profiles:
+            key = json_bytes(p)
+            if key not in indices:
+                indices[key] = len(table)
+                table.append(p)
+            image_units.append(indices[key])
+        membership.append(
+            {
+                key: image[key]
+                for key in ("id", "entry", "output", "entry_abi")
+                if key in image
+            }
+            | {"units": image_units}
+        )
+    validate_images(membership, root_image, unit_count=len(table))
+    root = next(i for i in membership if i["id"] == root_image)
+    return tuple(table), membership, root
 
 
 def read_request(path: Path) -> SourceRequest:
@@ -31,15 +128,18 @@ def read_request(path: Path) -> SourceRequest:
     else:
         spec = json.loads(manifest.read_bytes())
         root = (manifest.parent / spec.get("source_root", ".")).resolve(strict=True)
-        if "source" in spec and "units" not in spec:
+        if "source" in spec and "units" not in spec and "images" not in spec:
             spec["units"] = [
                 dict(path=spec["source"], language="python", abi=spec.get("abi", {}))
             ]
-    profiles = tuple({"language": spec.get("language"), **p} for p in spec["units"])
-    if not profiles or len({json_bytes(p) for p in profiles}) != len(profiles):
-        raise ValueError("expected distinct compilation profiles")
-    if any(not p["language"] or p["language"] == "mixed" for p in profiles):
-        raise ValueError("each compilation unit needs its source language")
+    images = None
+    if "images" in spec:
+        profiles, images, entry = _image_profiles(spec)
+    else:
+        profiles = tuple(_profiles(spec.get("units"), spec.get("language")))
+        if len({json_bytes(p) for p in profiles}) != len(profiles):
+            raise ValueError("expected distinct compilation profiles")
+        entry = spec
     locks = spec.get("source_lock", {}).get("files", {})
     python_names = {p["path"] for p in profiles if p["language"].lower() == "python"}
     names = {}
@@ -74,11 +174,13 @@ def read_request(path: Path) -> SourceRequest:
     return SourceRequest(
         manifest,
         root,
-        spec["entry"],
+        entry["entry"],
         profiles,
         hashes,
         buffers,
         project_entry,
-        spec.get("entry_abi"),
+        entry.get("entry_abi"),
         observation,
+        images,
+        spec.get("root_image"),
     )

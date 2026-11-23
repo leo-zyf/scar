@@ -1,7 +1,7 @@
 """Run the independent CPU scheduling, C++ lowering, printing, and build layers."""
 
 from pathlib import Path
-from scar.contract import document, write_json
+from scar.contract import document, open_product, write_json
 
 
 def compile_ir(source, out, *, policy="auto", workers=None):
@@ -16,11 +16,18 @@ def compile_ir(source, out, *, policy="auto", workers=None):
     target = lower_scheduled(schedule, out)
     project = print_target(target, out)
     executable = build(project["cpp20_manifest"])
+    images = {}
+    if project.get("kind") == "image_bundle":
+        _, _, built = open_product(out, "build.json", "scar.cpp20-executable")
+        images["executables"] = {
+            key: str(out / row["path"]) for key, row in built["executables"].items()
+        }
     result = document(
         "scar.cpp20-delivery",
         status="COMPILED",
         scheduled_ir=str(schedule),
         **project,
+        **images,
         executable=str(executable),
         physical_plan=str(out / "physical-plan.json"),
     )

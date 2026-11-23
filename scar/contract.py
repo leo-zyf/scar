@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 from tempfile import NamedTemporaryFile
 
 GRAPH = "scar.program-graph"
@@ -117,6 +118,64 @@ def read_member(folder, receipt):
     if len(data) != receipt["size"] or digest(data) != receipt["sha256"]:
         raise ValueError(f"artifact checksum mismatch for {relative}")
     return json.loads(data)
+
+
+def file_receipt(folder, path):
+    """Reference an already published product inside a relocatable package."""
+    folder, path = Path(folder).resolve(), Path(path).resolve(strict=True)
+    if not path.is_relative_to(folder) or not path.is_file():
+        raise ValueError("artifact product must be a file inside its package")
+    data = path.read_bytes()
+    return dict(
+        path=path.relative_to(folder).as_posix(), sha256=digest(data), size=len(data)
+    )
+
+
+def validate_images(images, root_image, *, unit_count=None):
+    """Validate image namespaces; compilation-unit indices belong to the graph."""
+    if not isinstance(images, list) or not images:
+        raise ValueError("expected a nonempty program image table")
+    identifiers, outputs = set(), set()
+    for image in images:
+        if not isinstance(image, dict):
+            raise ValueError("each program image must be a record")
+        for key in ("id", "output"):
+            if not isinstance(image.get(key), str) or not re.fullmatch(
+                r"[A-Za-z_][A-Za-z0-9_-]*", image[key]
+            ):
+                raise ValueError(f"invalid program image {key}")
+        if image["id"] in identifiers or image["output"] in outputs:
+            raise ValueError("program image ids and executable names must be unique")
+        if not isinstance(image.get("entry"), str) or not image["entry"]:
+            raise ValueError("each program image needs an entry symbol")
+        identifiers.add(image["id"])
+        outputs.add(image["output"])
+        if unit_count is not None:
+            units = image.get("units")
+            if (
+                not isinstance(units, list)
+                or not units
+                or any(
+                    type(index) is not int or not 0 <= index < unit_count
+                    for index in units
+                )
+                or len(set(units)) != len(units)
+            ):
+                raise ValueError("invalid program image compilation-unit indices")
+    if not isinstance(root_image, str) or root_image not in identifiers:
+        raise ValueError("root_image must identify a declared program image")
+
+
+def read_image_product(folder, image, key, filename, schema):
+    """Open a child image product, checking its receipt and its layer contract."""
+    receipt = image[key]
+    product = read_member(Path(folder), receipt)
+    if Path(receipt["path"]).name != filename or (
+        product.get("schema"),
+        product.get("schema_version"),
+    ) != (schema, VERSION):
+        raise ValueError(f"image {image['id']} must contain {schema} v{VERSION}")
+    return Path(folder) / receipt["path"], receipt["sha256"], product
 
 
 def open_product(path, filename, schema):

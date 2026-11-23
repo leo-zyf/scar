@@ -3,18 +3,25 @@
 from collections import Counter
 from pathlib import Path
 
-from scar.contract import GRAPH, PLAN, document, open_product, write_json
+from scar.contract import (
+    GRAPH,
+    IR,
+    PLAN,
+    document,
+    file_receipt,
+    open_product,
+    validate_images,
+    write_json,
+)
 
 
-def plan(graph_path, out, *, optimize_graph=True, shape=None, trip_count=None):
+def _plan_image(graph, folder, revision, out, *, optimize_graph, shape, trip_count):
     from .binding import bind
     from .normalization import normalize
     from .rewrites import optimize
     from .execution import prepare, seal
 
-    path, revision, graph = open_product(graph_path, "graph.json", GRAPH)
-    out = Path(out).resolve()
-    bound, issues, count = bind(graph, path.parent)
+    bound, issues, count = bind(graph, folder)
     binding_issues = len(issues)
     module, normalized_issues = normalize(bound)
     issues.extend(normalized_issues)
@@ -72,11 +79,81 @@ def plan(graph_path, out, *, optimize_graph=True, shape=None, trip_count=None):
         issue_categories=dict(Counter(d["code"] for d in issues).most_common()),
     )
     write_json(out / "plan.json", report)
+    return report, ir_path
+
+
+def plan(graph_path, out, *, optimize_graph=True, shape=None, trip_count=None):
+    path, revision, graph = open_product(graph_path, "graph.json", GRAPH)
+    out = Path(out).resolve()
+    options = dict(optimize_graph=optimize_graph, shape=shape, trip_count=trip_count)
+    if "images" not in graph:
+        report, ir_path = _plan_image(graph, path.parent, revision, out, **options)
+        return dict(
+            status=report["status"],
+            plan=str(out / "plan.json"),
+            ir=str(ir_path),
+            reachable_symbols=report["reachable_symbols"],
+            rewrites=len(report["changes"]),
+            blockers=len(report["issues"]),
+        )
+
+    images, root = graph["images"], graph["root_image"]
+    validate_images(images, root, unit_count=len(graph["units"]))
+    plans, products = [], []
+    for image in images:
+        identity = {key: image[key] for key in ("id", "entry", "output")}
+        view = dict(
+            graph,
+            entry=image["entry"],
+            entry_abi=image.get("entry_abi"),
+            units=[graph["units"][index] for index in image["units"]],
+        )
+        child_dir = out / "images" / image["id"]
+        report, child_ir = _plan_image(
+            view,
+            path.parent,
+            revision,
+            child_dir,
+            optimize_graph=optimize_graph,
+            shape=shape if image["id"] == root else None,
+            trip_count=trip_count if image["id"] == root else None,
+        )
+        products.append(dict(identity, ir=file_receipt(out, child_ir)))
+        plans.append(
+            dict(
+                identity,
+                status=report["status"],
+                reachable_symbols=report["reachable_symbols"],
+                issues=report["issues"],
+                changes=report["changes"],
+                plan=file_receipt(out, child_dir / "plan.json"),
+            )
+        )
+    status = "READY" if all(p["status"] == "READY" for p in plans) else "INCOMPLETE"
+    fields = dict(
+        kind="image_bundle", root_image=root, graph_sha256=revision, status=status
+    )
+    ir_path = out / "exec-ir.json"
+    write_json(
+        ir_path,
+        document(
+            IR,
+            **fields,
+            contract=graph["contract"],
+            logical_optimization=optimize_graph,
+            images=products,
+        ),
+    )
+    total = dict(
+        reachable_symbols=sum(p["reachable_symbols"] for p in plans),
+        blockers=sum(len(p["issues"]) for p in plans),
+        rewrites=sum(len(p["changes"]) for p in plans),
+    )
+    write_json(out / "plan.json", document(PLAN, **fields, **total, images=plans))
     return dict(
         status=status,
         plan=str(out / "plan.json"),
         ir=str(ir_path),
-        reachable_symbols=count,
-        rewrites=len(changes),
-        blockers=len(issues),
+        images=len(plans),
+        **total,
     )

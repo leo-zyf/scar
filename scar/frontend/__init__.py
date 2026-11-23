@@ -150,7 +150,7 @@ def _unit(job):
 
 def build(manifest, out, *, jobs=1):
     from .hardware import snapshot
-    from .input import read_request
+    from .input import read_request, with_entry_abi
 
     if jobs < 1:
         raise ValueError("expected a positive worker count")
@@ -179,15 +179,8 @@ def build(manifest, out, *, jobs=1):
 
         evidence = observe(request.manifest, root, request.observation)
         entry_abi = array_abi(request.entry, evidence)
-    if entry_abi and entry_abi["kind"] == "binary_f64_arrays":
-        profiles = tuple(
-            (
-                {**p, "abi": {**p.get("abi", {}), **entry_abi}}
-                if p["language"].lower() == "python"
-                else p
-            )
-            for p in profiles
-        )
+    if request.images is None and entry_abi:
+        profiles = tuple(with_entry_abi(p, entry_abi) for p in profiles)
     out.mkdir(parents=True, exist_ok=True)
     work = [
         (
@@ -238,6 +231,11 @@ def build(manifest, out, *, jobs=1):
         ],
         contract={"arithmetic": "preserve", "externally_visible_effects": "preserve"},
         coverage=dict(totals=totals, diagnostic_categories=dict(counts.most_common())),
+        **(
+            {"images": request.images, "root_image": request.root_image}
+            if request.images is not None
+            else {}
+        ),
     )
     write_json(out / "graph.json", graph)
     return dict(graph=str(out / "graph.json"), workers=workers, **totals)

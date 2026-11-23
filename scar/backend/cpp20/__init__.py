@@ -8,11 +8,15 @@ import subprocess
 from tempfile import TemporaryDirectory
 
 from scar.contract import (
+    PHYSICAL,
     digest,
     document,
+    file_receipt,
     member,
     open_product,
+    read_image_product,
     read_member,
+    validate_images,
     write_json,
 )
 from scar.host import cpu_availability
@@ -42,7 +46,18 @@ def _format_sources(formatter, files, jobs):
             task.result()
 
 
-def _package(root, sources, openmp, libraries, jobs):
+_STYLE = "BasedOnStyle: LLVM\nStandard: c++20\n"
+_HEADER = "include/scar/program.hpp"
+_METADATA = (
+    "ir_sha256",
+    "openmp",
+    "runtime_libraries",
+    "coordinate_maps",
+    "record_field_offset_checks",
+)
+
+
+def _package(root, sources, openmp, libraries, jobs, image=None):
     unknown = libraries - {"MPI", "Threads", "DynamicLoader", "libgfortran.so.5"}
     if unknown:
         raise ValueError(
@@ -51,25 +66,31 @@ def _package(root, sources, openmp, libraries, jobs):
     formatter = shutil.which("clang-format-18") or shutil.which("clang-format")
     if formatter is None:
         raise ValueError("clang-format is required for LLVM-style C++20 delivery")
-    (root / ".clang-format").write_text(
-        "BasedOnStyle: LLVM\nStandard: c++20\n", encoding="utf-8"
-    )
+    if image is None:
+        (root / ".clang-format").write_text(_STYLE, encoding="utf-8")
     generated = [root / name for name in sources]
     generated.extend(sorted((root / "include").rglob("*.hpp")))
     _format_sources(formatter, generated, jobs)
-    lines = [
-        "cmake_minimum_required(VERSION 3.20)",
-        "project(scar_delivery LANGUAGES CXX)",
-        "add_executable(scar_entry",
+    target = f"scar_{image['id']}" if image else "scar_entry"
+    lines = (
+        []
+        if image
+        else [
+            "cmake_minimum_required(VERSION 3.20)",
+            "project(scar_delivery LANGUAGES CXX)",
+        ]
+    )
+    lines += [
+        f"add_executable({target}",
         *(f"    {source}" for source in sources),
         ")",
-        "target_include_directories(scar_entry PRIVATE include)",
-        "set_target_properties(scar_entry PROPERTIES CXX_STANDARD 20",
+        f"target_include_directories({target} PRIVATE include)",
+        f"set_target_properties({target} PROPERTIES CXX_STANDARD 20",
         "    CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)",
         'if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|IntelLLVM")',
-        "    target_compile_options(scar_entry PRIVATE -Werror -fno-fast-math -frounding-math -ffp-contract=off)",
+        f"    target_compile_options({target} PRIVATE -Werror -fno-fast-math -frounding-math -ffp-contract=off)",
         'elseif(CMAKE_CXX_COMPILER_ID STREQUAL "NVHPC")',
-        "    target_compile_options(scar_entry PRIVATE -Werror -Kieee -Mnofma)",
+        f"    target_compile_options({target} PRIVATE -Werror -Kieee -Mnofma)",
         "endif()",
     ]
     for enabled, package in ((openmp, "OpenMP"), ("MPI" in libraries, "MPI")):
@@ -77,43 +98,43 @@ def _package(root, sources, openmp, libraries, jobs):
             lines.extend(
                 (
                     f"find_package({package} REQUIRED COMPONENTS CXX)",
-                    f"target_link_libraries(scar_entry PRIVATE {package}::{package}_CXX)",
+                    f"target_link_libraries({target} PRIVATE {package}::{package}_CXX)",
                 )
             )
     if "MPI" in libraries:
         lines.append(
-            "target_compile_definitions(scar_entry PRIVATE OMPI_SKIP_MPICXX=1 MPICH_SKIP_MPICXX=1)"
+            f"target_compile_definitions({target} PRIVATE OMPI_SKIP_MPICXX=1 MPICH_SKIP_MPICXX=1)"
         )
     if "Threads" in libraries:
         lines.extend(
             (
                 "find_package(Threads REQUIRED)",
-                "target_link_libraries(scar_entry PRIVATE Threads::Threads)",
+                f"target_link_libraries({target} PRIVATE Threads::Threads)",
             )
         )
     if "DynamicLoader" in libraries:
-        lines.append('target_link_libraries(scar_entry PRIVATE "${CMAKE_DL_LIBS}")')
+        lines.append(f'target_link_libraries({target} PRIVATE "${{CMAKE_DL_LIBS}}")')
     if "libgfortran.so.5" in libraries:
         lines.extend(
             (
                 "find_library(SCAR_GNU_IO_LIBRARY NAMES libgfortran.so.5 REQUIRED)",
-                'target_link_libraries(scar_entry PRIVATE "${SCAR_GNU_IO_LIBRARY}")',
+                f'target_link_libraries({target} PRIVATE "${{SCAR_GNU_IO_LIBRARY}}")',
             )
         )
-    lines.append("install(TARGETS scar_entry RUNTIME DESTINATION bin)")
+    if image:
+        lines.append(
+            f'set_target_properties({target} PROPERTIES OUTPUT_NAME "{image["output"]}")'
+        )
+    lines.append(f"install(TARGETS {target} RUNTIME DESTINATION bin)")
     (root / "CMakeLists.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def lower_scheduled(source, destination):
-    """B2a converts the sealed B1 product to C++ target trees."""
+def _lower_image(path, revision, scheduled, destination):
     from .lowering import Lowerer
     from .model import encode_unit
 
-    path, revision, scheduled = open_product(
-        source, "scheduled-ir.json", "scar.scheduled-ir"
-    )
-    if scheduled.get("status") != "READY":
-        raise ValueError("incomplete physical execution schedule")
+    if scheduled.get("status") != "READY" or scheduled.get("kind") == "image_bundle":
+        raise ValueError("expected a ready single-image physical schedule")
     physical = read_member(path.parent, scheduled["physical"])
     if (
         physical.get("schema"),
@@ -154,11 +175,117 @@ def lower_scheduled(source, destination):
     return path
 
 
-def print_target(target, destination, *, jobs=4):
-    """Print a standalone project using at most jobs formatter processes (up to four)."""
+def lower_scheduled(source, destination):
+    """Lower each link image in its own symbol namespace."""
+    path, revision, scheduled = open_product(
+        source, "scheduled-ir.json", "scar.scheduled-ir"
+    )
+    if scheduled.get("kind") != "image_bundle":
+        return _lower_image(path, revision, scheduled, destination)
+    if scheduled.get("status") != "READY":
+        raise ValueError("incomplete physical execution schedule")
+    images, root = scheduled["images"], scheduled["root_image"]
+    validate_images(images, root)
+    physical = read_member(path.parent, scheduled["physical"])
+    if (
+        physical.get("schema") != PHYSICAL
+        or physical.get("schema_version") != scheduled["schema_version"]
+        or physical.get("ir_sha256") != scheduled["ir_sha256"]
+        or physical.get("kind") != "image_bundle"
+        or physical.get("status") != "READY"
+        or physical.get("root_image") != root
+        or physical.get("planning_scope") != "per_image"
+    ):
+        raise ValueError("physical plan does not belong to the scheduled image bundle")
+    validate_images(physical.get("images"), root)
+    plans = {plan["id"]: plan for plan in physical["images"]}
+    if set(plans) != {image["id"] for image in images}:
+        raise ValueError("physical plan image set differs from the schedule")
+    destination = Path(destination).resolve()
+    destination.mkdir(parents=True, exist_ok=True)
+    targets = []
+    for image in images:
+        child, child_hash, data = read_image_product(
+            path.parent, image, "scheduled", "scheduled-ir.json", "scar.scheduled-ir"
+        )
+        if data.get("module", {}).get("entry") != image["entry"]:
+            raise ValueError(f"physical image {image['id']} entry mismatch")
+        plan = plans[image["id"]]
+        if (plan["entry"], plan["output"]) != (image["entry"], image["output"]):
+            raise ValueError(f"physical image {image['id']} identity mismatch")
+        declared, selected = plan.get("physical", {}), data.get("physical", {})
+        if any(declared.get(key) != selected.get(key) for key in ("sha256", "size")):
+            raise ValueError(f"physical image {image['id']} receipt mismatch")
+        read_image_product(
+            path.parent, plan, "physical", "physical-plan.json", PHYSICAL
+        )
+        compiled = _lower_image(
+            child, child_hash, data, destination / "images" / image["id"]
+        )
+        targets.append(
+            dict(
+                id=image["id"],
+                entry=image["entry"],
+                output=image["output"],
+                target=file_receipt(destination, compiled),
+            )
+        )
+    target = destination / "target-ir.json"
+    write_json(
+        target,
+        document(
+            "scar.cpp20-target-ir",
+            stage="B2a",
+            kind="image_bundle",
+            root_image=root,
+            images=targets,
+            ir_sha256=scheduled["ir_sha256"],
+            scheduled_ir_sha256=revision,
+        ),
+    )
+    return target
+
+
+def _print_image(path, product, directory, runtime, jobs, image=None):
     from .model import from_data
     from .printer import print_unit
 
+    if product.get("kind") == "image_bundle" or digest(runtime) != product.get(
+        "runtime_sha256"
+    ):
+        raise ValueError("target image requires a matching C++20 runtime revision")
+    (directory / "include/scar").mkdir(parents=True)
+    (directory / "src").mkdir()
+    (directory / "include/scar/runtime.hpp").write_bytes(runtime)
+    sources = []
+    for part in product["units"]:
+        output = part["output"]
+        if output != _HEADER and not re.fullmatch(
+            r"src/(program|unit_[0-9]+)\.cpp", output
+        ):
+            raise ValueError(f"invalid C++ translation unit path {output!r}")
+        file = directory / output
+        if file.exists():
+            raise ValueError(f"duplicate C++ translation unit {output!r}")
+        tree = from_data(read_member(path.parent, part["tree"]))
+        file.write_text(print_unit(tree), encoding="utf-8")
+        if output != _HEADER:
+            sources.append(output)
+    if not sources or not (directory / _HEADER).is_file():
+        raise ValueError("incomplete target translation-unit set")
+    _package(
+        directory,
+        sources,
+        product["openmp"],
+        set(product["runtime_libraries"]),
+        jobs,
+        image,
+    )
+    return sources
+
+
+def print_target(target, destination, *, jobs=4):
+    """Print and atomically publish one CMake project for all declared images."""
     if type(jobs) is not int or jobs < 1:
         raise ValueError("formatting jobs must be a positive integer")
     path, revision, product = open_product(
@@ -169,73 +296,84 @@ def print_target(target, destination, *, jobs=4):
     project = destination / "project"
     if project.exists():
         raise ValueError(f"output project already exists at {project}")
-    support = Path(__file__).with_name("runtime.hpp").read_bytes()
-    if digest(support) != product["runtime_sha256"]:
-        raise ValueError("target package requires a different C++20 runtime revision")
-    sources = []
+    runtime = Path(__file__).with_name("runtime.hpp").read_bytes()
+    manifest = destination / "cpp20.json"
     with TemporaryDirectory(prefix=".scar-project-", dir=destination) as tmp:
         staging = Path(tmp) / "project"
-        header = "include/scar/program.hpp"
-        (staging / "include/scar").mkdir(parents=True)
-        (staging / "src").mkdir()
-        (staging / "include/scar/runtime.hpp").write_bytes(support)
-        for part in product["units"]:
-            output = part["output"]
-            if output != header and not re.fullmatch(
-                r"src/(program|unit_[0-9]+)\.cpp", output
-            ):
-                raise ValueError(f"invalid C++ translation unit path {output!r}")
-            file = staging / output
-            if file.exists():
-                raise ValueError(f"duplicate C++ translation unit {output!r}")
-            tree = from_data(read_member(path.parent, part["tree"]))
-            file.write_text(print_unit(tree), encoding="utf-8")
-            if output != header:
-                sources.append(output)
-        if not sources or not (staging / header).is_file():
-            raise ValueError("incomplete target translation-unit set")
-        _package(
-            staging, sources, product["openmp"], set(product["runtime_libraries"]), jobs
-        )
-        members = []
-        for f in sorted(staging.rglob("*")):
-            if f.is_file():
-                data = f.read_bytes()
-                members.append(
+        if product.get("kind") == "image_bundle":
+            root, images = product["root_image"], product["images"]
+            validate_images(images, root)
+            staging.mkdir()
+            (staging / ".clang-format").write_text(_STYLE, encoding="utf-8")
+            cmake = [
+                "cmake_minimum_required(VERSION 3.20)",
+                "project(scar_delivery LANGUAGES CXX)",
+            ]
+            projects = []
+            for image in images:
+                child, child_hash, data = read_image_product(
+                    path.parent,
+                    image,
+                    "target",
+                    "target-ir.json",
+                    "scar.cpp20-target-ir",
+                )
+                directory = Path("images") / image["id"]
+                sources = _print_image(
+                    child, data, staging / directory, runtime, jobs, image
+                )
+                cmake.append(f"add_subdirectory({directory.as_posix()})")
+                projects.append(
                     dict(
-                        path=str(f.relative_to(staging)),
-                        sha256=digest(data),
-                        size=len(data),
+                        id=image["id"],
+                        entry=image["entry"],
+                        output=image["output"],
+                        directory=directory.as_posix(),
+                        header=(directory / _HEADER).as_posix(),
+                        sources=[(directory / s).as_posix() for s in sources],
+                        target_ir_sha256=child_hash,
                     )
                 )
-        staging.rename(project)
-    metadata = {
-        key: product[key]
-        for key in (
-            "ir_sha256",
-            "openmp",
-            "runtime_libraries",
-            "coordinate_maps",
-            "record_field_offset_checks",
+            (staging / "CMakeLists.txt").write_text(
+                "\n".join(cmake) + "\n", encoding="utf-8"
+            )
+            root_project = next(p for p in projects if p["id"] == root)
+            header, first_source = root_project["header"], root_project["sources"][0]
+            sources = [s for p in projects for s in p["sources"]]
+            metadata = dict(
+                kind="image_bundle",
+                root_image=root,
+                images=projects,
+                ir_sha256=product["ir_sha256"],
+            )
+        else:
+            sources = _print_image(path, product, staging, runtime, jobs)
+            header, first_source = _HEADER, sources[0]
+            metadata = {key: product[key] for key in _METADATA}
+        members = [
+            file_receipt(staging, f) for f in sorted(staging.rglob("*")) if f.is_file()
+        ]
+        receipt = document(
+            "scar.cpp20-project",
+            stage="B2b",
+            target_ir_sha256=revision,
+            project="project",
+            sources=sources,
+            header=header,
+            members=members,
+            **metadata,
         )
-    }
-    receipt = document(
-        "scar.cpp20-project",
-        stage="B2b",
-        target_ir_sha256=revision,
-        project="project",
-        sources=sources,
-        header=header,
-        members=members,
-        **metadata,
-    )
-    manifest = destination / "cpp20.json"
-    write_json(manifest, receipt)
+        staging.rename(project)
+        try:
+            write_json(manifest, receipt)
+        except BaseException:
+            project.rename(staging)
+            raise
     return dict(
         target_ir=str(path),
         cpp20_manifest=str(manifest),
         project=str(project),
-        source=str(project / sources[0]),
+        source=str(project / first_source),
         sources=[str(project / s) for s in sources],
         header=str(project / header),
         **metadata,

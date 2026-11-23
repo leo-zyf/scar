@@ -2,6 +2,12 @@
 
 公开产物使用 `schema_version=1`。图格式为 `scar.program-graph`，逻辑计划为 `scar.logical-plan`，执行 IR 为 `scar.execution-ir`。后端依次交接 `scar.scheduled-ir`、`scar.cpp20-target-ir`、`scar.cpp20-project` 和 `scar.cpp20-executable`；`scar.physical-plan` 保存调度成本与决策依据。图根文件按编译单元引用子图，同一源文件在不同宏、方言和参数下属于不同编译配置。
 
+程序镜像是一个独立链接与全局状态的命名空间。显式多镜像输入用 `images` 描述各镜像的 `id`、`entry`、交付文件名 `output` 和编译配置，`root_image` 指定交付入口。F0 先应用各镜像自己的 ABI，再去重编译配置；图中 `images[].units` 是共享单元表的索引。同一编译配置可供多个镜像使用，但不同镜像中的同名 `main`、全局变量和记录不会合并。该归属由输入构建清单声明，目前不从子进程命令字符串猜测。
+
+多镜像执行包使用 `kind: "image_bundle"`，每个子镜像都有独立的完整包及其相对收据。中端、调度层和目标降级层分别用 `ir`、`scheduled`、`target` 引用下一层可独立消费的镜像产物；顶层仅在全部必需镜像闭合后为 `READY`。一个镜像自己的函数收据始终相对于该镜像包，不能相对于总包解释。既有单镜像格式仍表示同一种执行模型中的一个链接目标。
+
+打印层将多镜像交付为 `project/images/<id>/{src,include,CMakeLists.txt}`，顶层 CMake 组织独立目标，构建层输出 `project/bin/<output>` 和按镜像 ID 索引的 `executables` 收据。编译镜像集合不表示进程间依赖已经闭合：启动的实际目标、每次启动的进程实例、文件版本、IPC 及跨进程资源竞争仍须分别建模。当前物理计划在各镜像内独立选择，不宣称全工作流最优调度。
+
 每个过程由 `signature`、`nodes`、`entry`、`states`、`accesses`、`state_flow` 和调用索引组成。`nodes` 是类型化操作记录表，`{ "port": 4 }` 引用本过程的第 4 号操作结果或语句。表达式依赖通过这些端口组成图；语句的有序区域表示控制关系，分支带独立区域。一个 `for` 操作拥有初始化、条件、更新和循环体端口，循环次数保持参数化。`state_flow` 用 `LOOP_CARRY` 和合流记录描述可变状态经过循环和分支后的版本关系。含未结构化跳转的过程保留原控制操作，并明确标记状态分析的保守边界。
 
 `source_defined` 表示源码中有过程体；`defined` 表示当前操作体已经满足数值/本机执行资格。图的 `definitions` 统计前者，`qualified_definitions` 统计后者。动态 Python 过程可以完整保留其结构，同时尚不具备本机执行资格，两项不能混为同一个覆盖率。
