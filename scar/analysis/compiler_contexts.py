@@ -5,7 +5,7 @@ import dis
 from types import FunctionType, MethodType, CodeType
 from scar.analysis.source_compilation_contexts import CompilationContextIndex
 from scar.analysis.source_scope_annotation_interfaces import ScopeAnnotationIndex
-from scar.analysis.source_root_interfaces import RootInterfaceIndex
+from scar.analysis.source_deferred_interfaces import RootInterfaceIndex
 from scar.analysis.source_productions import ProductionSourceIndex
 from scar.ir.program.compiler_symbols import SourceContextVariant, CompilerCodePath, CompilerCodeRole as Role
 from collections import defaultdict

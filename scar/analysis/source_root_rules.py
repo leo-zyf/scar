@@ -1,10 +1,10 @@
 """Build root and class namespace regions at their admitted source scopes."""
 from hashlib import sha256
 from pathlib import Path
-from scar.analysis.source_callable_rules import build_request_body
+from scar.analysis.statement_bindings import build_request_body
 from scar.analysis.source_expression_rules import SourceExpressionRules, _BOOL, _REF, _require
 from scar.analysis.source_statement_rules import SourceStatementRules, _StatementBuilder
-from scar.analysis.source_root_interfaces import FIELDS,clean_docstring
+from scar.analysis.source_deferred_interfaces import ROOT_FIELDS, clean_docstring
 from scar.ir.program import source_productions as P
 from scar.ir.program.control import LanguageCompletionKind as C
 from scar.ir.program.signature_patterns import CountBinding
@@ -15,9 +15,9 @@ class SourceRootRules(SourceStatementRules):
     def catalog(self):
         catalog=SourceExpressionRules.catalog(self)
         for row in catalog['rules']:
-            row['status']='LOCAL_ROOT_RULE' if row['constructor'] in FIELDS else (
+            row['status']='LOCAL_ROOT_RULE' if row['constructor'] in ROOT_FIELDS else (
                 'NON_EXECUTABLE_GRAMMAR' if row['constructor']=='FunctionType' else 'OUTSIDE_DOMAIN')
-            row['purposes']=[P.ProductionPurpose.ROOT.value] if row['constructor'] in FIELDS else []
+            row['purposes']=[P.ProductionPurpose.ROOT.value] if row['constructor'] in ROOT_FIELDS else []
         return {**catalog,'schema':'scar.source-root-rule-catalog',
             'root_implementation_sha256':sha256(Path(__file__).read_bytes()).hexdigest(),
             'scope':'ADMITTED_SOURCE_ROOT_RECIPES_ONLY',
@@ -34,7 +34,7 @@ class SourceRootRules(SourceStatementRules):
         _require(purpose is P.ProductionPurpose.ROOT,'PURPOSE_FRONTIER',str(occurrence),'root requires its entry interface')
         for name,value in (('max_steps',max_steps),('max_regions',max_regions),('max_visits',max_visits)):
             _require(type(value) is int and value>=0,'QUERY_ARGUMENT',name,'expected an exact nonnegative integer')
-        _require(syntax.nodes[occurrence].constructor in FIELDS,'RULE_FRONTIER',str(occurrence),
+        _require(syntax.nodes[occurrence].constructor in ROOT_FIELDS,'RULE_FRONTIER',str(occurrence),
             'type grammar has no executable root')
         result=_RootBuilder(self,occurrence,purpose,max_steps,max_regions).build()
         self.source.match(result,max_visits=max_visits)
@@ -71,7 +71,7 @@ class _RootBuilder(_StatementBuilder):
         interface=index.interface(self.world,self.rules.exception_abi)
         root=self.region(source,(_REF,_REF,self.world))
         world,=self.emit(root,P.EnterRootBody(interface),tuple(self.parameter(root,i) for i in range(3)),(self.world,),may_raise=False)
-        for name in FIELDS[self.node.constructor]:self.mark(name,P.ProductionDispositionKind.METADATA)
+        for name in ROOT_FIELDS[self.node.constructor]:self.mark(name,P.ProductionDispositionKind.METADATA)
         if self.node.constructor=='Expression':
             self.mark('body',P.ProductionDispositionKind.EVALUATED_CHILD)
             value,world=self.evaluate(root,self.site('body'),world)

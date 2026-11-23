@@ -70,12 +70,11 @@ _SELECTORS = {
 }
 _TARGETS = frozenset(('Name', 'Attribute', 'Subscript', 'List', 'Tuple'))
 _RULE_MODULES = ('static/lowering/source_displays.py', 'static/lowering/source_string.py',
-                 'static/lowering/source_comprehension.py', 'await_protocol.py', 'source_callable_rules.py',
+                 'static/lowering/source_comprehension.py', 'await_protocol.py',
                  'source_deferred_interfaces.py', 'source_statement_rules.py',
-                 'statement_bindings.py', 'type_parameter_rules.py',
+                 'statement_bindings.py',
                  'source_statement_exceptions.py',
                  'source_control.py', 'source_statement_interfaces.py',
-                 'source_root_interfaces.py',
                  'source_root_rules.py',
                  'source_scope_annotation_interfaces.py',
                  'annotation_state.py', 'source_compilation_contexts.py',
@@ -466,7 +465,7 @@ class _Builder:
             from scar.analysis.await_protocol import emit_delegation
             emit_delegation(self, root, state)
         elif kind in ('Lambda', 'GeneratorExp'):
-            from scar.analysis.source_callable_rules import emit_callable
+            from scar.analysis.statement_bindings import emit_callable
             emit_callable(self, root, state)
         elif kind == 'Constant':
             # A literal source reference does not assert a fresh allocation.

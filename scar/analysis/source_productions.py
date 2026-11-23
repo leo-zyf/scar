@@ -22,11 +22,9 @@ from scar.ir.program.delegation_signatures import resolve_delegation_signature
 from scar.ir.record_codec import decode, encode
 from scar.analysis.source_deferred_interfaces import (
     CaptureInterfaceIndex, DeclarationScopeIndex, DeferredInterfaceIndex, DefinitionInterfaceIndex,
-    EvaluationInterfaceIndex,
+    ClassNamespaceIndex, EvaluationInterfaceIndex, RootInterfaceIndex, TypeParameterInterfaceIndex,
 )
 from scar.analysis.source_statement_interfaces import PatternInterfaceIndex, SourceStatementInterfaceIndex
-from scar.analysis.type_parameter_rules import TypeParameterInterfaceIndex
-from scar.analysis.source_root_interfaces import ClassNamespaceIndex, RootInterfaceIndex
 from scar.analysis.source_scope_annotation_interfaces import AnnotationStateIndex, ScopeAnnotationIndex
 from scar.analysis.source_compilation_contexts import CompilationContextIndex
 from scar.analysis.source_compilation_contexts import CompilationFlowIndex, validate_flow
@@ -70,12 +68,13 @@ def production_type_catalog():
     modules[__name__] = sha256(Path(__file__).read_bytes()).hexdigest()
     for name in ('scar.analysis.program_types', 'scar.ir.record_codec', 'scar.ir.program.protocol_signatures',
                  'scar.ir.program.delegation_signatures', 'scar.analysis.source_deferred_interfaces',
-                 'scar.analysis.source_statement_interfaces', 'scar.analysis.type_parameter_rules',
-                 'scar.analysis.source_root_interfaces', 'scar.analysis.source_syntax',
+                 'scar.analysis.source_statement_interfaces', 'scar.analysis.source_syntax',
                  'scar.analysis.source_scope_annotation_interfaces',
                  'scar.analysis.source_compilation_contexts',
                  'scar.analysis.source_core_interfaces'):
         modules[name] = sha256(Path(sys.modules[name].__file__).read_bytes()).hexdigest()
+    modules['scar.analysis.statement_bindings'] = sha256(
+        Path(__file__).with_name('statement_bindings.py').read_bytes()).hexdigest()
     payload = dict(schema='scar.source-production-type-catalog', schema_version=1,
         root=root, types=rows, counts=counts, modules=dict(sorted(modules.items())),
         instruction_variants=[kind.__name__ for kind in P.ProductionInstruction.__args__],
