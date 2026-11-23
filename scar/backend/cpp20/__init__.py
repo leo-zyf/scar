@@ -1,5 +1,7 @@
 """B2 produces a relocatable, formatted C++20 project from a scheduled execution IR."""
 
+from concurrent.futures import FIRST_EXCEPTION, ThreadPoolExecutor, wait
+import os
 from pathlib import Path
 import re
 import shutil
@@ -16,7 +18,85 @@ from scar.contract import (
 )
 
 
-def _package(root, sources, openmp, libraries):
+def _format_workers(jobs, file_count):
+    affinity = getattr(os, "sched_getaffinity", None)
+    available = len(affinity(0)) if affinity else os.cpu_count() or 1
+    limit = min(jobs, 4, file_count, available)
+    if limit <= 1 or not Path("/proc/self/cgroup").exists():
+        return max(1, limit)
+
+    try:
+        groups = {}
+        for line in Path("/proc/self/cgroup").read_text().splitlines():
+            _, controllers, group = line.split(":", 2)
+            if not controllers:
+                groups["cgroup2"] = Path(group)
+            elif "cpu" in controllers.split(","):
+                groups["cgroup"] = Path(group)
+        for line in Path("/proc/self/mountinfo").read_text().splitlines():
+            before, after = line.split(" - ", 1)
+            kind, _, options = after.split()
+            if (
+                kind not in groups
+                or kind == "cgroup"
+                and "cpu" not in options.split(",")
+            ):
+                continue
+            # A namespace can mount a subtree rather than the hierarchy root.
+            mount_root, mount = (
+                Path(re.sub(r"\\([0-7]{3})", lambda m: chr(int(m[1], 8)), value))
+                for value in before.split()[3:5]
+            )
+            group = groups[kind]
+            relative = (
+                group.relative_to(mount_root)
+                if group.is_relative_to(mount_root)
+                else group.relative_to("/")
+            )
+            folder = (mount / relative).resolve()
+            if not folder.is_relative_to(mount):
+                folder = mount
+            while folder.is_relative_to(mount):
+                quota = folder / (
+                    "cpu.max" if kind == "cgroup2" else "cpu.cfs_quota_us"
+                )
+                if quota.is_file():
+                    if kind == "cgroup2":
+                        amount, period = quota.read_text().split()
+                    else:
+                        amount = quota.read_text().strip()
+                        period = (folder / "cpu.cfs_period_us").read_text().strip()
+                    if amount not in {"max", "-1"}:
+                        limit = min(limit, max(1, int(amount) // int(period)))
+                if folder == mount:
+                    break
+                folder = folder.parent
+    except (OSError, ValueError, ZeroDivisionError):
+        return 1
+    return limit
+
+
+def _format_sources(formatter, files, jobs):
+    files = sorted(files, key=lambda path: (-path.stat().st_size, str(path)))
+    workers = _format_workers(jobs, len(files))
+    command = [formatter, "--style=file", "-i"]
+    if workers == 1:
+        subprocess.run([*command, *files], check=True)
+        return
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        tasks = [
+            pool.submit(subprocess.run, [*command, path], check=True) for path in files
+        ]
+        _, pending = wait(tasks, return_when=FIRST_EXCEPTION)
+        for task in pending:
+            task.cancel()
+    # All active writers have exited before an error can release the staging directory.
+    for task in tasks:
+        if not task.cancelled():
+            task.result()
+
+
+def _package(root, sources, openmp, libraries, jobs):
     unknown = libraries - {"MPI", "Threads", "DynamicLoader", "libgfortran.so.5"}
     if unknown:
         raise ValueError(
@@ -30,7 +110,7 @@ def _package(root, sources, openmp, libraries):
     )
     generated = [root / name for name in sources]
     generated.extend(sorted((root / "include").rglob("*.hpp")))
-    subprocess.run([formatter, "--style=file", "-i", *map(str, generated)], check=True)
+    _format_sources(formatter, generated, jobs)
     lines = [
         "cmake_minimum_required(VERSION 3.20)",
         "project(scar_delivery LANGUAGES CXX)",
@@ -128,11 +208,13 @@ def lower_scheduled(source, destination):
     return path
 
 
-def print_target(target, destination):
-    """B2b prints the target-tree package and seals the standalone CMake project."""
+def print_target(target, destination, *, jobs=4):
+    """Print a standalone project using at most jobs formatter processes (up to four)."""
     from .model import from_data
     from .printer import print_unit
 
+    if type(jobs) is not int or jobs < 1:
+        raise ValueError("formatting jobs must be a positive integer")
     path, revision, product = open_product(
         target, "target-ir.json", "scar.cpp20-target-ir"
     )
@@ -166,7 +248,9 @@ def print_target(target, destination):
                 sources.append(output)
         if not sources or not (staging / header).is_file():
             raise ValueError("incomplete target translation-unit set")
-        _package(staging, sources, product["openmp"], set(product["runtime_libraries"]))
+        _package(
+            staging, sources, product["openmp"], set(product["runtime_libraries"]), jobs
+        )
         members = []
         for f in sorted(staging.rglob("*")):
             if f.is_file():
