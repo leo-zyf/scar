@@ -109,7 +109,8 @@
         "tests/integration/test_native_stage_handoff.py::test_cpp20_inputs_share_one_snapshot_and_recheck_membership",
         "tests/integration/test_native_stage_handoff.py::test_native_lowering_requires_an_abi_bridge_for_kr_promotions",
         "tests/unit/test_codegen_fused_pipeline.py",
-        "tests/unit/test_codegen_pipeline.py"
+        "tests/unit/test_codegen_pipeline.py",
+        "tests/unit/test_codegen_timed.py"
       ]
     },
     {

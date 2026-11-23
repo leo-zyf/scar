@@ -13,6 +13,7 @@ import sys
 from hashlib import sha256
 from pathlib import Path
 
+from scar.analysis.replay_transaction import current_transaction
 from scar.compiler.model import document
 from scar.optimization import resource_solver as solver
 from scar.optimization.schedule import (
@@ -46,8 +47,11 @@ def admit_timed_plan(plan, resource_schedule, solver_result) -> dict:
     tasks have an independent makespan lower bound equal to the sum of their
     declared durations; matching that bound proves optimality in this model.
     """
-    admitted = admit_schedule(plan, resource_schedule)
-    schedule = schedule_from_dict(admitted)
+    return _admit_timed_plan(plan, admit_schedule(plan, resource_schedule), solver_result)
+
+
+def _admit_timed_plan(plan, admitted_schedule, solver_result):
+    schedule = schedule_from_dict(admitted_schedule)
     _require(type(solver_result) is dict, "solver result must be a JSON object")
     try:
         result_digest = solver.semantic_sha256(solver_result)
@@ -254,17 +258,20 @@ def admit_timed_plan(plan, resource_schedule, solver_result) -> dict:
 __all__ = ["admit_timed_plan"]
 
 
-def _link_timed_plan(plan, resource_schedule, solver_result) -> dict:
-    """Bind admission to cpp.CppArtifact's implemented synchronous guards."""
-    admission = admit_timed_plan(plan, resource_schedule, solver_result)
+def _link_timed_plan(plan, admitted_schedule, solver_result) -> dict:
+    """Bind an admitted schedule to cpp.CppArtifact's synchronous guards."""
+    admission = _admit_timed_plan(plan, admitted_schedule, solver_result)
     source = admission["must_guard"]["source_version"]
+    transaction = current_transaction()
     try:
-        source_digest = sha256(Path(source["path"]).read_bytes()).hexdigest()
+        path = Path(source["path"])
+        source_digest = (transaction.pin_file(path)[0] if transaction is not None
+                         else sha256(path.read_bytes()).hexdigest())
     except OSError as error:
         raise ValueError("timed source snapshot cannot be read") from error
     _require(source_digest == source["sha256"], "timed source snapshot digest mismatch")
-    # admit_timed_plan -> admit_schedule/hardware_model_skeleton has also
-    # validated the original target snapshot and retained resource receipts.
+    # The checked schedule and hardware model replay already validate the
+    # original target snapshot and retained resource receipts.
     admission.update(
         status="LINKED_SYNCHRONOUS_CPU_PROFILE", execution_linked=True,
         snapshot_validation_scope={

@@ -22,8 +22,9 @@ import subprocess
 import sys
 import tempfile
 
+from scar.analysis.replay_transaction import replay_transaction
 from scar.compiler.model import (
-    ExecutionPlan, PROFILE, document, plan_from_dict, read_plan, validate_plan, write_plan,
+    ExecutionPlan, PROFILE, document, plan_from_dict, read_plan, validate_plan,
 )
 
 ABI_VERSION = 1
@@ -59,6 +60,10 @@ class _Table(ctypes.Structure):
 
 def _digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def _json_bytes(value, *, sort_keys=False):
+    return (json.dumps(value, sort_keys=sort_keys, indent=2, allow_nan=False) + "\n").encode()
 
 
 def runtime_implementation_sha256() -> str:
@@ -533,6 +538,12 @@ class CppArtifact:
 
 def build(plan: ExecutionPlan, out: Path, *, resource_schedule=None, timed_plan=None) -> CppArtifact:
     """Validate, emit and compile a persistent host shared-library artifact."""
+    with replay_transaction():
+        admitted = _publish(plan, out, resource_schedule, timed_plan)
+    return _bind_abi(*admitted)
+
+
+def _publish(plan, out, resource_schedule, timed_plan):
     # Freeze the caller's mutable nested attrs/proof dictionaries via its wire format.
     plan = plan_from_dict(document(plan))
     scalar = _supported(plan)
@@ -543,8 +554,7 @@ def build(plan: ExecutionPlan, out: Path, *, resource_schedule=None, timed_plan=
         admitted_schedule = admit_schedule(plan, resource_schedule)
         if type(admitted_schedule) is not dict:
             raise ValueError("resource schedule admission must return a JSON document")
-        schedule_bytes = (json.dumps(admitted_schedule, sort_keys=True, indent=2,
-                                     allow_nan=False) + "\n").encode()
+        schedule_bytes = _json_bytes(admitted_schedule, sort_keys=True)
     linked_admission = None
     timed_bytes = admission_bytes = b""
     if timed_plan is not None:
@@ -553,9 +563,9 @@ def build(plan: ExecutionPlan, out: Path, *, resource_schedule=None, timed_plan=
         from .timed import _link_timed_plan
         timed_plan = json.loads(json.dumps(timed_plan, allow_nan=False))
         linked_admission = _link_timed_plan(plan, admitted_schedule, timed_plan)
-        timed_bytes = (json.dumps(timed_plan, sort_keys=True, indent=2, allow_nan=False) + "\n").encode()
-        admission_bytes = (json.dumps(linked_admission, sort_keys=True, indent=2, allow_nan=False) + "\n").encode()
-    source = _source(plan, scalar)
+        timed_bytes = _json_bytes(timed_plan, sort_keys=True)
+        admission_bytes = _json_bytes(linked_admission, sort_keys=True)
+    source = _source(plan, scalar).encode()
     compiler_options = (*COMPILER_OPTIONS, *(("-fopenmp",) if plan.cpu_threads > 1 else ()))
     compiler = shlex.split(os.environ.get("CXX", "g++"))
     if not compiler or shutil.which(compiler[0]) is None:
@@ -566,10 +576,12 @@ def build(plan: ExecutionPlan, out: Path, *, resource_schedule=None, timed_plan=
     header_path = directory / "scar_abi_v1.h"
     plan_path = directory / "plan.json"
     header = (_DIRECTORY / "scar_abi_v1.h").read_bytes()
-    source_path.write_text(source)
+    plan_bytes = _json_bytes(document(plan))
+    payloads = {"source": source, "abi_header": header, "plan": plan_bytes}
+    source_path.write_bytes(source)
     header_path.write_bytes(header)
-    write_plan(plan, plan_path)
-    build_id = _digest(source.encode() + header + repr(compiler_options).encode() +
+    plan_path.write_bytes(plan_bytes)
+    build_id = _digest(source + header + repr(compiler_options).encode() +
                        schedule_bytes + timed_bytes + admission_bytes)
     library_path = directory / f"kernel_{build_id[:20]}.so"
     fd, temporary = tempfile.mkstemp(prefix=".kernel-", suffix=".so", dir=directory)
@@ -579,6 +591,7 @@ def build(plan: ExecutionPlan, out: Path, *, resource_schedule=None, timed_plan=
         result = subprocess.run(command, capture_output=True, text=True, check=False)
         if result.returncode:
             raise RuntimeError(f"C++20 compilation failed:\n{result.stderr.strip()}")
+        library_digest = _digest(Path(temporary).read_bytes())
         os.replace(temporary, library_path)
     finally:
         if os.path.exists(temporary):
@@ -601,8 +614,7 @@ def build(plan: ExecutionPlan, out: Path, *, resource_schedule=None, timed_plan=
                              "-o", str(library_path), "-lm"],
         "files": {"plan": plan_path.name, "source": source_path.name,
                   "abi_header": header_path.name, "library": library_path.name},
-        "sha256": {"source": _digest(source.encode()), "abi_header": _digest(header),
-                   "library": _digest(library_path.read_bytes())},
+        "sha256": {"source": _digest(source), "abi_header": _digest(header), "library": library_digest},
         "limitations": ["exact native float64 rank-two NumPy arrays",
                         "aligned data with byte strides divisible by eight",
                         "equal array shapes; scalar constants may broadcast",
@@ -626,6 +638,7 @@ def build(plan: ExecutionPlan, out: Path, *, resource_schedule=None, timed_plan=
     }
     if admitted_schedule is not None:
         (directory / "resource-plan.json").write_bytes(schedule_bytes)
+        payloads["resource_schedule"] = schedule_bytes
         metadata["files"]["resource_schedule"] = "resource-plan.json"
         metadata["sha256"]["resource_schedule"] = _digest(schedule_bytes)
         metadata["resource_schedule_sha256"] = _digest(schedule_bytes)
@@ -644,14 +657,24 @@ def build(plan: ExecutionPlan, out: Path, *, resource_schedule=None, timed_plan=
         for key, filename, data in (("timed_plan", "timed-plan.json", timed_bytes),
                                     ("timed_admission", "timed-admission.json", admission_bytes)):
             (directory / filename).write_bytes(data)
+            payloads[key] = data
             metadata["files"][key] = filename
             metadata["sha256"][key] = _digest(data)
             metadata[key + "_sha256"] = _digest(data)
         metadata["timed_plan_execution"] = _timed_execution_report(linked_admission)
         metadata.update(execution_linked=True, physical_optimality_proven=False,
                         deployment_authorized=False)
-    (directory / "artifact.json").write_text(json.dumps(metadata, indent=2, allow_nan=False) + "\n")
-    return load(directory)
+    manifest = directory / "artifact.json"
+    manifest_bytes = _json_bytes(metadata)
+    manifest.write_bytes(manifest_bytes)
+    for key, data in payloads.items():
+        if (directory / metadata["files"][key]).read_bytes() != data:
+            raise ValueError(f"artifact {key} bytes differ from this build")
+    if _digest(library_path.read_bytes()) != library_digest:
+        raise ValueError("artifact library digest mismatch")
+    if manifest.read_bytes() != manifest_bytes:
+        raise ValueError("artifact manifest bytes differ from this build")
+    return plan, directory, metadata, admitted_schedule, timed_plan, linked_admission
 
 
 def load(out: Path) -> CppArtifact:
@@ -719,6 +742,10 @@ def load(out: Path) -> CppArtifact:
             data["timed_plan"] + data["timed_admission"])
         if expected_build_id != metadata["build_id"]:
             raise ValueError("artifact timed plan build identity mismatch")
+    return _bind_abi(plan, directory, metadata, admitted_schedule, timed_plan, linked_admission)
+
+
+def _bind_abi(plan, directory, metadata, admitted_schedule, timed_plan, linked_admission):
     library = ctypes.CDLL(str(directory / metadata["files"]["library"]))
     getter = library.scar_get_operator_table_v1
     getter.argtypes = []

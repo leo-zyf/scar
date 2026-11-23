@@ -5,6 +5,7 @@ from dataclasses import replace
 from hashlib import sha256
 import json
 import os
+from pathlib import Path
 import shutil
 import sys
 
@@ -14,7 +15,7 @@ import pytest
 
 from scar.analysis.target_graph import build_target_graph
 from scar.codegen.timed import admit_timed_plan
-from scar.codegen import build, load
+from scar.codegen import build, cpp, load
 from scar.codegen.cpp import runtime_implementation_sha256
 from scar.compiler.model import ArrayRegion, Expr, SourceRef
 from scar.compiler.runtime import guarded_function
@@ -125,6 +126,7 @@ def test_fixed_cpu_timed_admission_checks_receipts_resources_and_lifetimes(tmp_p
     assert loaded.report["runtime_implementation_sha256"] == runtime_implementation_sha256()
     assert not loaded.report["deployment_authorized"]
     data = np.arange(16, dtype=np.float64).reshape(4, 4)
+    np.testing.assert_array_equal(artifact.run(data), original(data))
     np.testing.assert_array_equal(loaded.run(data), original(data))
     assert loaded.run(data).nbytes == 48
     wrapped = guarded_function(original, loaded, exclusive_inputs=True, trial=True)
@@ -165,3 +167,32 @@ def test_fixed_cpu_timed_admission_checks_receipts_resources_and_lifetimes(tmp_p
         guard_path.write_bytes(guard_bytes)
         metadata_path.write_bytes(metadata_bytes)
     np.testing.assert_array_equal(load(artifact.directory).run(data), original(data))
+
+    write = Path.write_bytes
+    for case, member, reason in (
+        ("staged-plan", tmp_path / "staged-plan" / "plan.json", "artifact plan bytes differ"),
+        ("staged-source", source_path, "metadata dependency byte identity differs"),
+    ):
+        output = tmp_path / case
+        saved = []
+
+        def change_after_manifest(path, data):
+            written = write(path, data)
+            if path == output / "artifact.json":
+                saved.append(member.read_bytes())
+                write(member, saved[0] + b" ")
+            return written
+
+        def unexpected_binding(*args):
+            pytest.fail("changed artifact reached native library binding")
+
+        try:
+            with monkeypatch.context() as patched:
+                patched.setattr(Path, "write_bytes", change_after_manifest)
+                patched.setattr(cpp, "_bind_abi", unexpected_binding)
+                with pytest.raises(ValueError, match=reason):
+                    build(plan, output, resource_schedule=schedule, timed_plan=result)
+        finally:
+            if saved:
+                write(member, saved[0])
+        assert saved
