@@ -183,6 +183,74 @@ def test_python_import_precedence_and_runtime_facts(tmp_path, monkeypatch):
             }
 
 
+def test_external_import_facts_preserve_ownership_without_execution(
+    tmp_path, monkeypatch
+):
+    from hashlib import sha256
+
+    from scar.contract import walk_operations
+
+    project = tmp_path / "project"
+    installed = tmp_path / "installed"
+    project.mkdir()
+    installed.mkdir()
+    package = installed / "scar_foreign"
+    package.mkdir()
+    for path in (
+        package / "__init__.py",
+        package / "ops.py",
+        installed / "scar_compat.py",
+    ):
+        path.write_text("raise AssertionError('capture executed target code')\n")
+    metadata = installed / "foreign_distribution-1.2.3.dist-info"
+    metadata.mkdir()
+    (metadata / "METADATA").write_text(
+        "Metadata-Version: 2.1\nName: foreign-distribution\nVersion: 1.2.3\n"
+    )
+    (metadata / "top_level.txt").write_text("scar_foreign\nscar_compat\n")
+    (metadata / "RECORD").write_text(
+        "scar_foreign/__init__.py,,\nscar_foreign/ops.py,,\nscar_compat.py,,\n"
+    )
+    monkeypatch.syspath_prepend(str(installed))
+    entry = project / "entry.py"
+    entry.write_text(
+        "import scar_foreign.ops as operations\n"
+        "from scar_foreign import ops\nimport scar_compat\n"
+        "import json.decoder\nimport scar_missing_package.part\n"
+    )
+    capture = python.capture_project(entry, project)
+    assert set(capture.catalog) == {"entry"}
+    (facts,) = capture.units
+    for name, path in (
+        ("scar_foreign", package / "__init__.py"),
+        ("scar_foreign.ops", package / "ops.py"),
+        ("scar_compat", installed / "scar_compat.py"),
+    ):
+        record = facts.providers[name]
+        assert record["status"] == "verified_distribution"
+        assert record["module"] == name
+        assert (
+            record["distribution"].lower().replace("_", "-") == "foreign-distribution"
+        )
+        assert record["version"] == "1.2.3"
+        assert record["sha256"] == sha256(path.read_bytes()).hexdigest()
+    assert facts.providers["json.decoder"]["status"] == "verified_stdlib"
+    assert facts.providers["scar_missing_package.part"]["status"] == "unresolved"
+    entry.unlink()
+    shutil.rmtree(installed)
+    neutral = _offline(monkeypatch, python, facts)
+    imports = {
+        n["module"]: n
+        for function in neutral["functions"]
+        for n in walk_operations(function.get("partial_body", ()))
+        if n["op"] == "python_import"
+    }
+    imported = imports["scar_foreign.ops"]
+    assert imported["source_provider"] == facts.providers["scar_foreign"]
+    assert imported["import_resolution"] == facts.providers["scar_foreign.ops"]
+    assert imported["initializers"] == [] and "IO" in imported["effects"]
+
+
 def test_python_binding_time_loop_edges_and_class_frames(tmp_path, monkeypatch):
     from scar.contract import walk_operations
 

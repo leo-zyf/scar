@@ -332,6 +332,113 @@ class _Frame:
         scope[name] = variable
         steps.append(dict(op="assign", target=variable.value, value=value.value))
 
+    def import_origin(self, node):
+        """Resolve the requested module independently of its execution contract."""
+        module = node["module"]
+        root = module.partition(".")[0]
+        local = node.get("provider") == "project"
+        source = node.get("source_provider", {})
+        exact = "import_resolution" in node
+        if not exact and local:
+            return None
+        resolved = node.get("import_resolution") if exact else source
+        if not isinstance(resolved, dict) or not isinstance(source, dict):
+            self.fail(
+                node, "import_identity", f"invalid resolution record for {module}"
+            )
+        if exact and resolved.get("module") != module:
+            self.fail(
+                node,
+                "import_identity",
+                f"source evidence for {resolved.get('module')!r} cannot identify {module}",
+            )
+        status = resolved.get("status")
+        if status == "project":
+            if not local or module not in self.project.initializers:
+                self.fail(
+                    node,
+                    "import_initializer",
+                    f"the resolved project module {module} has no matching graph initializer",
+                )
+            return None
+        if status == "namespace":
+            self.fail(
+                node,
+                "import_namespace",
+                f"{module} is a namespace package whose search locations and bindings need an initialization contract",
+            )
+        if status not in {"verified_stdlib", "verified_distribution"}:
+            kind = resolved.get("resolution")
+            detail = (
+                resolved.get("reason") or "no verified origin for this import request"
+            )
+            code = "import_missing" if kind == "missing" else "import_resolution"
+            origin = f" at {resolved['origin']}" if resolved.get("origin") else ""
+            self.fail(
+                node, code, f"resolution of {module}{origin} is incomplete ({detail})"
+            )
+        if local:
+            self.fail(
+                node,
+                "import_identity",
+                f"project binding for {module} conflicts with the resolved external source",
+            )
+        if exact:
+            digest = resolved.get("sha256")
+            if (
+                not resolved.get("origin")
+                or not isinstance(digest, str)
+                or len(digest) != 64
+                or any(c not in "0123456789abcdef" for c in digest)
+            ):
+                self.fail(
+                    node,
+                    "import_identity",
+                    f"{module} lacks an origin and matching file or interpreter digest",
+                )
+            if status == "verified_distribution" and not (
+                resolved.get("distribution") and resolved.get("version")
+            ):
+                self.fail(
+                    node,
+                    "import_identity",
+                    f"{module} lacks the identity and version of its owning distribution",
+                )
+        if exact and module == root:
+            keys = ["module", "status", "origin", "sha256"]
+            if status == "verified_distribution":
+                keys += ["distribution", "version"]
+            if any(source.get(key) != resolved.get(key) for key in keys):
+                self.fail(
+                    node,
+                    "import_identity",
+                    f"root provider and exact resolution disagree for {module}",
+                )
+        if module != root:
+            alias = source.get("aliases", {}).get(module)
+            if exact and alias is not None:
+                if resolved.get("canonical_module") != alias.get("module") or any(
+                    resolved.get(k) != alias.get(k)
+                    for k in ("status", "origin", "sha256")
+                ):
+                    self.fail(
+                        node,
+                        "import_identity",
+                        f"the selected source and provider alias disagree for {module}",
+                    )
+            elif not exact:
+                if (
+                    not alias
+                    or alias.get("status") != status
+                    or not alias.get("sha256")
+                ):
+                    self.fail(
+                        node,
+                        "import_resolution",
+                        f"the graph identifies {root} without a source identity for {module}",
+                    )
+        return resolved
+
     def imported(self, node, steps):
         req = node.get("request", {})
         mod = node["module"]
@@ -339,36 +446,54 @@ class _Frame:
             self.fail(
                 node,
                 "conditional_import",
-                "runtime-dependent module initialization requires an import-state contract",
+                f"runtime-dependent initialization of {mod} requires an import-state contract",
             )
-        if (
-            self.initializing
-            and node.get("source_provider", {}).get("status") == "verified_stdlib"
-        ):
-            self.store(
-                node["binding"], host_protocols.import_provider(self, node), steps
-            )
-            return
-        if (
-            self.initializing
-            and mod == "numpy"
-            and node.get("provider") != "project"
-            and req.get("form") in {"import", "from"}
-            and not req.get("level")
-        ):
-            self.store(node["binding"], arrays.import_provider(self, node), steps)
-            return
-        if (
-            not self.initializing
-            or node.get("provider") != "project"
-            or req.get("form") not in {"import", "from"}
-            or node["member"] == "*"
-        ):
+        if not self.initializing:
             self.fail(
                 node,
-                "import_contract",
-                f"{mod} requires a closed project module initialized from module scope",
+                "import_scope",
+                f"function-local import of {mod} needs an activation-time initialization and binding contract",
             )
+        if req.get("form") not in {"from", "import"} or node.get("member") == "*":
+            self.fail(
+                node,
+                "import_form",
+                f"import of {mod} needs an explicit request form and exported binding",
+            )
+        if not req.get("level") and "module" in req and req["module"] != mod:
+            self.fail(
+                node,
+                "import_identity",
+                f"absolute request for {req['module']} points to a different module {mod}",
+            )
+        origin = self.import_origin(node)
+        if origin is not None:
+            status = origin["status"]
+            if req.get("level"):
+                self.fail(
+                    node,
+                    "import_parent",
+                    f"relative external import of {mod} needs a closed parent package",
+                )
+            if status == "verified_stdlib" and host_protocols.supports_import(mod):
+                value = host_protocols.import_provider(self, node)
+                receipt = self.project.providers["stdlib:" + mod.partition(".")[0]]
+                receipt["import_effects"] = node.get("effects", ["UNKNOWN"])
+            elif status == "verified_distribution" and mod == "numpy":
+                value = arrays.import_provider(self, node)
+            else:
+                identity = (
+                    f"{origin['distribution']} {origin['version']}"
+                    if origin.get("distribution") and origin.get("version")
+                    else "the standard library"
+                )
+                self.fail(
+                    node,
+                    "import_semantics",
+                    f"{mod} resolves to {identity} at {origin.get('origin')}. Its initialization, effects and exported bindings have no execution contract.",
+                )
+            self.store(node["binding"], value, steps)
+            return
 
         def initialize(symbol):
             target = self.project.functions.get(symbol, {})

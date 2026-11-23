@@ -24,6 +24,8 @@
 
 主机接口在执行 IR 中表示为 `host_call`，包含版本化的 `interface`、已求值实参、结果类型、`effects`、`reads`、`writes` 和 `may_raise`。例如 `fs.copy2` 读取文件系统和当前目录，写入文件系统；`process.chdir` 写入当前目录；`time.wall` 读取主机时钟。`path.join` 仅操作文本，不读取当前目录。`{"kind":"handle","resource":"text_stream"}` 表示共享流身份，句柄复制不复制文件或流状态。`stream.open` 显式携带模式、UTF-8 和 `universal` 换行合同，不能把源语言的 `newline=''` 与默认换行混为一谈。当前仅闭合 POSIX 的受支持接口、默认缓冲和严格 UTF-8 文件模式，不包含任意流协议或进程启动。`console.input` 另携带已核验的标准流错误策略；支持严格 UTF-8 及输入输出一致的 surrogateescape。
 
+源图的 `python_import` 分别保留根库 `source_provider`、实际请求模块的 `import_resolution` 和可选的 `member_resolution`。后者显式带有 `package_attribute_missing` 条件；子模块文件存在不等于包属性必须绑定为该模块。来源记录包含模块名、发行包名／版本、实际 origin、文件或解释器摘要及证明范围，查找或归属未闭合时保留具体状态。来源事实与执行合同分离，符合 [Python 导入的查找、初始化及名称绑定过程](https://docs.python.org/3/reference/import.html)；发行包名与导入名也分别存储，不能按同名推断归属（[官方元数据接口](https://docs.python.org/3/library/importlib.metadata.html)）。
+
 异常值使用 `{"kind":"handle","resource":"error"}`，`error_make` 保存类别和完整显示文本，`throw` 与 `rethrow` 表示异常出口。`try` 有受保护体、按序匹配的处理器、正常落下才执行的 `else` 及必经的 `finally`；处理器的 `binding` 引用真实词法槽。`resource_scope` 只封装已证明的进入／退出协议，多个资源依次嵌套。异常发生前任意前缀都可能已执行，不能把受保护体内的赋值误认为处理器入口的确定绑定。`noreturn` 表示无正常返回，仍可能由外层捕获。退出异常分别保存进程退出码、捕获时的显示文本和未捕获时的可选 stderr 文本，避免将几种观察结果混为一谈。
 
 `text_format` 和 `text_print` 携带标量格式；二进制浮点用 `shortest_binary64`，明确最短回读数、负零、非有限值及定点／科学计数边界。打印操作先按源顺序捕获值与选项，再产生输出，不能依赖 C++ 函数实参的求值顺序。

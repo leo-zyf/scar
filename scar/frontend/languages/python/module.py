@@ -1314,6 +1314,30 @@ class _Scope:
                             if module.split(".")[0] in self.unit.providers
                             else {}
                         ),
+                        **(
+                            {"import_resolution": self.unit.providers[module]}
+                            if module in self.unit.providers
+                            else {}
+                        ),
+                        **(
+                            {
+                                "member_resolution": {
+                                    "module": module + "." + alias.name,
+                                    "when": {
+                                        "kind": "package_attribute_missing",
+                                        "module": module,
+                                        "name": alias.name,
+                                    },
+                                    "source": self.unit.providers[
+                                        module + "." + alias.name
+                                    ],
+                                }
+                            }
+                            if from_import
+                            and alias.name != "*"
+                            and module + "." + alias.name in self.unit.providers
+                            else {}
+                        ),
                         initializers=deps,
                         conditional_initializers=conditional,
                         cache="sys.modules",

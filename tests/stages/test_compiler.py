@@ -549,6 +549,30 @@ def test_python_protocol_closure_never_assumes_mutable_bindings_constant(tmp_pat
             assert ir["status"] == "INCOMPLETE" and not ir["functions"]
 
 
+def test_import_closure_distinguishes_missing_sources_and_missing_semantics(tmp_path):
+    for module, code in (
+        ("scar_missing_package.part", "python.import_missing"),
+        ("json.decoder", "python.import_semantics"),
+        ("pytest", "python.import_semantics"),
+    ):
+        folder = tmp_path / module
+        folder.mkdir()
+        entry = folder / "entry.py"
+        entry.write_text(f"import {module}\n")
+        graph, plan = folder / "graph", folder / "plan"
+        _stage(folder, "frontend", "build", "--entry", entry, "--out", graph)
+        entry.unlink()
+        report = _stage(
+            folder, "middle", "plan", "--graph", graph, "--out", plan, returncode=2
+        )
+        assert report["status"] == "INCOMPLETE" and report["blockers"] == 1
+        product = json.loads((plan / "plan.json").read_bytes())
+        assert product["issues"][0]["code"] == code
+        assert module in product["issues"][0]["detail"]
+        execution = json.loads((plan / "exec-ir.json").read_bytes())
+        assert execution["status"] == "INCOMPLETE" and not execution["functions"]
+
+
 def test_mixed_program_images_preserve_link_and_state_boundaries(tmp_path):
     sources = tmp_path / "source"
     sources.mkdir()

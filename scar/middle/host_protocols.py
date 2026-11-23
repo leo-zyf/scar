@@ -87,6 +87,11 @@ _MEMBERS = {
 }
 
 
+def supports_import(module):
+    """Whether this layer has a namespace and initialization contract for a module."""
+    return module in _MEMBERS
+
+
 def builtin(frame, node, name):
     if name in {"open", "str", "repr", "ascii", "format", "input"}:
         return Value(
