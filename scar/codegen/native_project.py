@@ -11,7 +11,7 @@ import shutil
 import subprocess
 from tempfile import TemporaryDirectory
 
-from scar.analysis.replay_transaction import pinned_file_reference
+from scar.analysis.replay_transaction import detached_replay, pinned_file_reference
 from scar.artifacts import _durable_bytes
 from scar.codegen.native_provider_bundle import _content, _dependencies
 from scar.ir.execution_recipe import open_artifact, read_artifact
@@ -66,6 +66,14 @@ def render_cpp_template(template, substitutions):
 
 
 def _project_material(root, configuration):
+    # Publication uses tuples and replay sees their JSON arrays. The same
+    # configuration refers to one directory and file snapshot in this build.
+    identity = root, json.dumps(configuration, sort_keys=True)
+    return detached_replay('scar.cpp20-project-material.v1', identity,
+                           lambda: _scan_project_material(root, configuration))
+
+
+def _scan_project_material(root, configuration):
     if configuration.get('with_c_provider'):
         raise ValueError('sealed C++20 projects only accept C++ translation units')
     files = {}
@@ -104,7 +112,8 @@ def replay_cpp20_inputs(root, reference, *, plan):
     root = Path(root).resolve(strict=True)
     if reference['schema'] != CPP20_INPUTS or Path(reference['uri']) != root / 'cpp20-inputs.json':
         raise ValueError('C++20 input receipt belongs to a different project')
-    inputs = read_artifact(reference)
+    inputs = detached_replay('scar.cpp20-project-inputs.v1', tuple(sorted(reference.items())),
+                             lambda: read_artifact(reference))
     if (inputs['schema_version'], inputs['cxx_standard'], inputs['plan']) != (1, 20, plan):
         raise ValueError('staged code, language standard or selected plan differs')
     if pinned_file_reference(plan['uri'], plan['schema']) != plan:

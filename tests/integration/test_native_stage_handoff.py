@@ -14,6 +14,7 @@ import pytest
 from scar.analysis.replay_transaction import replay_transaction
 from scar.analysis.target_graph import TargetHardwareGraph
 from scar.artifacts import file_reference
+from scar.codegen import native_project
 from scar.compiler.backend.cpp20 import replay_native_revision
 from scar.compiler.contracts import ExecutionPlanRef
 from scar.compiler.frontend.clang import stage_source_revision
@@ -384,3 +385,33 @@ def test_native_lowering_requires_an_abi_bridge_for_kr_promotions(tmp_path):
     plan.write_text('{"schema":"test.lowering-plan"}\n', encoding="utf-8")
     with pytest.raises(ValueError, match="parameter promotion or adjustment requires an ABI bridge"):
         stage_source_revision(request, tmp_path / "project", plan=file_reference(plan, "test.lowering-plan"))
+
+
+def test_cpp20_inputs_share_one_snapshot_and_recheck_membership(tmp_path, monkeypatch):
+    plan_file = tmp_path / "plan.json"
+    plan_file.write_text('{}\n')
+    plan = file_reference(plan_file, "test.lowering-plan")
+    project = tmp_path / "project"
+    (project / "src").mkdir(parents=True)
+    (project / "src/main.cpp").write_text('int main() { return 0; }\n')
+    scan = native_project._scan_project_material
+    scans = []
+
+    def scan_once(root, configuration):
+        scans.append(root)
+        return scan(root, configuration)
+
+    monkeypatch.setattr(native_project, '_scan_project_material', scan_once)
+    with pytest.raises(ValueError, match="membership version changed"):
+        with replay_transaction():
+            receipt = native_project.publish_cpp20_inputs(project, {'sources': ('src/main.cpp',)}, plan=plan)
+            inputs = native_project.replay_cpp20_inputs(project, receipt, plan=plan)
+            inputs['configuration']['sources'].clear()
+            assert native_project.replay_cpp20_inputs(project, receipt, plan=plan)['configuration']['sources'] == [
+                'src/main.cpp']
+            assert scans == [project]
+            (project / "include").mkdir()
+            (project / "include/new.hpp").write_text('/* changed membership */\n')
+            native_project.replay_cpp20_inputs(project, receipt, plan=plan)
+    with pytest.raises(ValueError, match="staged C\\+\\+20 source or link input differs"):
+        native_project.replay_cpp20_inputs(project, receipt, plan=plan)
