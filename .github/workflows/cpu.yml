@@ -41,6 +41,7 @@ jobs:
           python scripts/run_gate.py gates/cpu.json \
             --out "$RUNNER_TEMP/scar-ci/gates.json" \
             --evidence-dir "$RUNNER_TEMP/scar-ci/test-evidence"
+          python -m scar.optimization.cpu_fixed_grid_forward --help >/dev/null
 
       - name: Build source distribution and wheel
         run: python -m build --outdir "$RUNNER_TEMP/scar-ci/dist"

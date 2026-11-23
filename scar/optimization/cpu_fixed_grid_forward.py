@@ -6,8 +6,8 @@ from pathlib import Path
 
 from scar.analysis import cpu_fixed_grid_timing_graph as timing_graph
 from scar.codegen.cpu_native_route_package import _fixed_grid_route_replay
-from scar.compiler import cpu_fixed_grid_short_native_probe as native_probe
-from scar.compiler import cpu_fixed_grid_short_python_probe as python_probe
+from scar.compiler import observe_cpu_fixed_grid_native_lifecycle as native_probe
+from scar.compiler import observe_cpu_fixed_grid_python_lifecycle as python_probe
 from scar.compiler import cpu_fixed_grid_source_route_benchmark as benchmark
 from scar.compiler.calibrate_array_entry import _ref, _write
 from scar.ir.execution_recipe import _canonical, read_artifact
@@ -139,7 +139,6 @@ def main(argv=None):
     from scar.analysis.cpu_fixed_grid_input_route_graph import SCHEMA as INPUT_GRAPH
     from scar.analysis.cpu_fixed_grid_lifecycle import SCHEMA as LIFECYCLE
     from scar.codegen.cpu_native_route_package import FIXED_GRID_SCHEMA as PACKAGE
-    from scar.compiler.observe_cpu_fixed_grid_input_counters import SCHEMA as COUNTERS
 
     parser = argparse.ArgumentParser(description=__doc__)
     action = parser.add_subparsers(dest='action', required=True)
@@ -171,14 +170,14 @@ def main(argv=None):
             print(args.out / 'result.json')
             return 0
         elif args.action == 'probe-native':
-            counters = None if args.counters is None else _ref(args.counters, COUNTERS)
-            native_probe.observe_short_native(_ref(args.package, PACKAGE), _ref(args.python, python_probe.SCHEMA),
+            counters = None if args.counters is None else _ref(args.counters, native_probe.COUNTERS_SCHEMA)
+            native_probe.observe_short_native(_ref(args.package, PACKAGE), _ref(args.python, python_probe.SHORT_SCHEMA),
                                               args.out, samples=args.samples, counters_ref=counters)
             print(args.out / 'result.json')
             return 0
         else:
-            result = derive_cpu_fixed_grid_forward(_ref(args.graph, timing_graph.SCHEMA), _ref(args.python, python_probe.SCHEMA),
-                        _ref(args.native, native_probe.SCHEMA), _ref(args.holdout, benchmark.SCHEMA))
+            result = derive_cpu_fixed_grid_forward(_ref(args.graph, timing_graph.SCHEMA), _ref(args.python, python_probe.SHORT_SCHEMA),
+                        _ref(args.native, native_probe.SHORT_SCHEMA), _ref(args.holdout, benchmark.SCHEMA))
         args.out.parent.mkdir(parents=True, exist_ok=True)
         _write(args.out, result)
         print(args.out)

@@ -3,6 +3,7 @@
 import argparse
 import ast
 import json
+import os
 from pathlib import Path
 import shutil
 import stat
@@ -15,10 +16,14 @@ from scar.codegen.native_provider_bundle import _content
 from scar.compiler.aten_entry_delivery import ABI_FILE
 from scar.compiler.calibrate_array_entry import _ref, _write
 from scar.compiler.cpu_fixed_grid_cli_delivery import SCHEMA as DELIVERY, verify_cpu_fixed_grid_cli_delivery
-from scar.ir.execution_recipe import read_artifact
+from scar.ir.execution_recipe import _canonical, read_artifact
 
 
 SCHEMA = 'scar.cpu-fixed-grid-python-lifecycle-observation'
+SHORT_SCHEMA = 'scar.cpu-fixed-grid-short-python-probe'
+STEP_COUNTS = (2, 8)
+_ORACLE_STATUS = 'scar.cpu-fixed-grid-short-python-oracle-exit'
+_RAW = 'application/octet-stream'
 _CLOCKS = 'scar.cpu-fixed-grid-python-lifecycle-clocks'
 _FULL = ('PROCESS_ENTER', 'IMPORTS_BEGIN', 'IMPORTS_END', 'ENTRY_ENTER', 'INPUTS_BEGIN', 'INPUTS_END',
          'RECURRENCE_BEGIN', 'RECURRENCE_END', 'FILE_BEGIN', 'FILE_END', 'STDOUT_BEGIN', 'STDOUT_END', 'PROCESS_LEAVE')
@@ -153,7 +158,7 @@ def _capture(row, command, context, output, *, import_only):
 
 
 def _check_row(row, command, delivery, *, import_only):
-    stdout, stderr = (_ref(row/name, 'application/octet-stream') for name in ('stdout', 'markers.stderr'))
+    stdout, stderr = (_ref(row/name, _RAW) for name in ('stdout', 'markers.stderr'))
     clock = _ref(row/'clock.json', _CLOCKS)
     ticks = read_artifact(clock)
     markers, phases = _timing(read_artifact(stderr, json_document=False), ticks['start_ns'], ticks['reap_ns'], import_only)
@@ -176,6 +181,12 @@ def _check_row(row, command, delivery, *, import_only):
     _need({path.name for path in row.iterdir()} == expected_files, 'unexpected source probe side effect')
     return dict(command=command, stdout=stdout, private_marks=stderr, clock=clock, marks_ns=markers,
                 phases_ns=phases, file_publication=output)
+
+
+def _observe_row(folder, command, context, output, *, capture, import_only, expected):
+    if capture:
+        _capture(folder, command, context, output, import_only=import_only)
+    return _check_row(folder, command, expected, import_only=import_only)
 
 
 def _series(runs):
@@ -207,9 +218,8 @@ def _report(reference, root, samples, *, capture=False):
         rows = []
         for index in range(samples):
             folder = root/f'{group}-{index:02d}'
-            if capture:
-                _capture(folder, command, delivery, output_path, import_only=import_only)
-            rows.append(_check_row(folder, command, delivery, import_only=import_only))
+            rows.append(_observe_row(folder, command, delivery, output_path,
+                                     capture=capture, import_only=import_only, expected=delivery))
         groups[group] = dict(source_probe=_ref(path, 'scar.python-source'), runs=rows, phases_ns=_series(rows))
     for input_file in delivery['file_inputs']:
         _need(_content(Path(input_file['path'])) == {key:input_file[key] for key in ('sha256', 'size_bytes')},
@@ -236,6 +246,126 @@ def verify_cpu_fixed_grid_python_lifecycle(reference):
     _need(reference['schema'] == SCHEMA and saved['schema_version'] == 1 and saved == _report(
         saved['delivery'], Path(reference['uri']).parent, saved['sample_count']), 'source lifecycle differs on cold replay')
     return saved
+
+
+def _need_short(condition, detail):
+    if not condition:
+        raise ValueError('short fixed-grid Python probe: ' + detail)
+
+
+def _oracle(folder, command, package, count, *, capture):
+    output = Path(command[-1])
+    expected = json.loads(read_artifact(package['stdout'], json_document=False))
+    _need_short(expected['steps'] == package['steps'] and not output.exists() and not output.is_symlink(),
+                'original publication contract and fresh diagnostic path required')
+    if capture:
+        folder.mkdir()
+        result = subprocess.run(command, cwd=package['working_directory'], env=package['source_environment'],
+                                stdin=subprocess.DEVNULL, capture_output=True, timeout=120)
+        (folder/'stdout').write_bytes(result.stdout)
+        (folder/'stderr').write_bytes(result.stderr)
+        _need_short(result.returncode == 0 and output.is_file() and not output.is_symlink(),
+                    'short original activation did not produce a regular result')
+        mode = stat.S_IMODE(output.lstat().st_mode)
+        shutil.move(output, folder/'publication.f32')
+        _write(folder/'outcome.json', dict(schema=_ORACLE_STATUS, returncode=result.returncode, mode=mode))
+    outcome = _ref(folder/'outcome.json', _ORACLE_STATUS)
+    status = read_artifact(outcome)
+    stdout, stderr = (_ref(folder/name, _RAW) for name in ('stdout', 'stderr'))
+    final = folder/'publication.f32'
+    file = _ref(final, 'scar.native-float32-output')
+    _need_short(json.loads(read_artifact(stdout, json_document=False)) == dict(expected, steps=count)
+                and read_artifact(stderr, json_document=False) == b''
+                and status['returncode'] == 0 and stat.S_ISREG(final.lstat().st_mode)
+                and stat.S_IMODE(final.lstat().st_mode) == status['mode'] == package['publication']['expected_mode']
+                and file['size_bytes'] == package['publication']['expected_file']['size_bytes'],
+                'short original activation differs from the declared output shape, modes or streams')
+    return dict(file=file, stdout=stdout, stderr=stderr, mode=status['mode'], command=command, outcome=outcome)
+
+
+def _short_windows(row):
+    clock = read_artifact(row['clock'])
+    before = row['marks_ns']['RECURRENCE_BEGIN'] - clock['start_ns']
+    recurrence = row['marks_ns']['RECURRENCE_END'] - row['marks_ns']['RECURRENCE_BEGIN']
+    after = clock['reap_ns'] - row['marks_ns']['RECURRENCE_END']
+    _need_short(min(before, recurrence, after) > 0 and before+recurrence+after == row['phases_ns']['total'],
+                'three owner windows must partition the observed process clock')
+    return dict(before_recurrence=before, recurrence=recurrence, after_recurrence=after)
+
+
+def _short_report(package_ref, root, samples, *, capture=False):
+    from scar.codegen.cpu_native_route_package import verify_cpu_fixed_grid_native_route_package
+    from scar.compiler.cpu_fixed_grid_mapped_input_study import _input_files
+
+    package = verify_cpu_fixed_grid_native_route_package(package_ref)
+    delivery = read_artifact(package['owned_copy_delivery'])
+    plan = read_artifact(package['plan'])
+    abi = read_artifact(read_artifact(plan['proof'])['abi'])
+    original = delivery['launch']['commands']['ORIGINAL_PYTHON']
+    _need_short(type(samples) is int and 2 <= samples <= 8 and package['steps'] > max(STEP_COUNTS)
+                and original[5:] == [package['source']['uri'], *package['argv']]
+                and abi['argv']['steps'] == 2 and abi['argv']['output'] == len(package['argv']) == 3,
+                'short samples must retain the exact admitted original and counted-loop arguments')
+    stable = _input_files(package)
+    source_probe = root/'source-probe.py'
+    source_bytes = _render(package['source'], abi, import_only=False)
+    if capture:
+        _need_short(set(package['cpu_ids']) <= os.sched_getaffinity(0), 'recorded CPU cohort unavailable')
+        root.mkdir(parents=True, exist_ok=False)
+        with source_probe.open('xb') as stream:
+            stream.write(source_bytes)
+    _need_short(source_probe.read_bytes() == source_bytes, 'marked Python source differs from the exact original projection')
+
+    cases = {}
+    for count in STEP_COUNTS:
+        case = root/f'steps-{count}'
+        if capture:
+            case.mkdir()
+        output = case/'requested.f32'
+        argv = [package['argv'][0], str(count), str(output)]
+        oracle = _oracle(case/'oracle', [*original[:6], *argv], package, count, capture=capture)
+        expected = dict(delivery, validated_final_tensor=oracle['file'], validated_source_stdout=oracle['stdout'],
+                        publication_modes=[dict(mode='ORIGINAL_PYTHON', permission_bits=oracle['mode'])])
+        command = [*original[:5], str(source_probe), *argv]
+        rows = []
+        for ordinal in range(samples):
+            folder = case/f'sample-{ordinal:02}'
+            row = _observe_row(folder, command, delivery, output,
+                               capture=capture, import_only=False, expected=expected)
+            rows.append(dict(row, windows_ns=_short_windows(row)))
+        _need_short(not output.exists() and not output.is_symlink(), 'diagnostic output must be retained in its observation directory')
+        cases[str(count)] = dict(argv=argv, oracle=oracle, samples=rows)
+
+    _need_short(stable == _input_files(package), 'probe changed the stable input identities or contents')
+    return dict(schema=SHORT_SCHEMA, schema_version=1, package=package_ref, source=package['source'],
+        target=package['hardware'], cpu_ids=package['cpu_ids'], working_directory=package['working_directory'],
+        environment_sha256=package['environment_sha256'], step_counts=list(STEP_COUNTS), sample_count=samples,
+        inputs=package['file_inputs'], input_snapshots=stable, marked_source=_ref(source_probe, 'scar.python-source'),
+        cases=cases, clock='LINUX_MONOTONIC_NS', timing_basis='INSTRUMENTED_SHORT_SOURCE_OWNER_WINDOWS',
+        oracle_processes_timed=False, clean_benchmark=False, deployment_authorized=False)
+
+
+def observe_short_python(package_ref, out, *, samples=3):
+    root = Path(out).absolute()
+    package = read_artifact(package_ref)
+    protected = [Path(package_ref['uri']).parent, Path(package['publication']['path']).parent,
+                 *(Path(route['project_root']) for route in package['routes'].values()),
+                 *(Path(row['path']).parent for row in package['file_inputs'])]
+    _need_short(root.resolve() == root and not any(root.is_relative_to(path) for path in protected),
+                'fresh canonical calibration directory outside the original data and packages required')
+    report = _short_report(package_ref, root, samples, capture=True)
+    _write(root/'result.json', report)
+    return report
+
+
+def verify_short_python(reference):
+    saved = read_artifact(reference)
+    path = Path(reference['uri'])
+    _need_short(reference['schema'] == SHORT_SCHEMA and path.name == 'result.json' and path == path.resolve(strict=True),
+                'exact short Python probe receipt required')
+    replay = _short_report(saved['package'], path.parent, saved['sample_count'])
+    _need_short(_canonical(saved) == _canonical(replay), 'short Python observation differs at replay')
+    return replay
 
 
 def main(argv=None):

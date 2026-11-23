@@ -1,10 +1,11 @@
-"""Observe exact native fixed-grid lifecycle cuts in a separate C++20 build."""
+"""Measure fixed-grid native lifecycle windows and counters in separate C++20 builds."""
 
 from hashlib import sha256
 import os
 from pathlib import Path
 import shutil
 import stat
+from statistics import median
 from struct import Struct
 import subprocess
 from time import CLOCK_MONOTONIC, clock_gettime_ns
@@ -12,13 +13,23 @@ from time import CLOCK_MONOTONIC, clock_gettime_ns
 from scar.codegen.native_provider_bundle import _content, _dependencies, cpu_executable_dynamic
 from scar.codegen.aten_recurrence_source import FRESH_SOURCE_FILE
 from scar.codegen.native_project import build_native_project
+from scar.codegen.cpu_native_route_package import (
+    _fixed_grid_route_replay, _output_guards, verify_cpu_fixed_grid_native_route_package,
+)
 from scar.compiler.aten_entry_delivery import LAUNCHER
 from scar.compiler.calibrate_array_entry import _write
 from scar.compiler.cpu_fixed_grid_cli_delivery import verify_cpu_fixed_grid_cli_delivery
+from scar.compiler.cpu_fixed_grid_mapped_input_study import _input_files
 from scar.ir.execution_recipe import artifact_reference, read_artifact
+from scar.optimization.cpu_fixed_grid_mapped_input_plan import verify_cpu_fixed_grid_mapped_input_plan
 
 
 SCHEMA = 'scar.cpu-fixed-grid-native-lifecycle'
+SHORT_SCHEMA = 'scar.cpu-fixed-grid-short-native-probe'
+COUNTERS_SCHEMA = 'scar.cpu-fixed-grid-input-counters'
+_MAPPED_ROUTE = 'PROVIDER_MAP'
+_COUNTER_ROUTES = ('OWNED_COPY', _MAPPED_ROUTE)
+_COUNTER_CUTS = ('input_ingestion', 'recurrence')
 _CLOCK_SCHEMA = 'scar.cpu-fixed-grid-native-lifecycle-clock'
 _MAIN = 'src/main.cpp'
 _FILE = 'src/runtime/file_io.hpp'
@@ -309,6 +320,26 @@ def _sample(folder, command, delivery, ordinal, expected_mode, *, usage=False):
     return sample
 
 
+def _ordered_samples(samples):
+    return all(left['process_reaped_ns'] <= right['launcher_start_ns']
+               for left, right in zip(samples, samples[1:]))
+
+
+def _read_observation(reference, schema, detail, *, require=_need):
+    saved = read_artifact(reference)
+    path = Path(reference['uri'])
+    require(reference['schema'] == schema and path.name == 'result.json' and path.resolve(strict=True) == path,
+            detail)
+    return saved, path.parent
+
+
+def _diagnostic_destination(out, compiler, detail):
+    out = Path(out).absolute()
+    tool = shutil.which(compiler)
+    _need(tool is not None and out.resolve() == out and not out.exists() and not out.is_symlink(), detail)
+    return out, _ref(Path(tool).resolve(strict=True), 'application/x-executable')
+
+
 def _record(delivery_ref, root, count, compiler, *, build=False):
     delivery = verify_cpu_fixed_grid_cli_delivery(delivery_ref)
     _need(delivery['validation']['exact_publication_mode'] is True and type(count) is int and 1 <= count <= 12,
@@ -333,8 +364,7 @@ def _record(delivery_ref, root, count, compiler, *, build=False):
             _capture(folder, command, observation, publication)
         samples.append(_sample(folder, command, delivery, index, expected_mode))
     _validate_inputs(delivery['file_inputs'])
-    _need(all(left['process_reaped_ns'] <= right['launcher_start_ns'] for left, right in zip(samples, samples[1:])),
-          'independent observation clocks overlap')
+    _need(_ordered_samples(samples), 'independent observation clocks overlap')
     return dict(schema=SCHEMA, schema_version=1, delivery=delivery_ref, project=delivery['project'],
         native_executable=delivery['native_executable'], source=delivery['source'], target=delivery['target'],
         argv=delivery['argv'], steps=delivery['steps'], cpu_ids=delivery['cpu_ids'],
@@ -354,11 +384,8 @@ def _record(delivery_ref, root, count, compiler, *, build=False):
 
 def measure(delivery_ref, out, *, samples=3, compiler='g++'):
     """Compile and run an exact source-bound diagnostic sibling, with no per-kernel marks."""
-    out = Path(out).absolute()
-    tool = shutil.which(compiler)
-    _need(tool is not None and out.resolve() == out and not out.exists() and not out.is_symlink(),
-          'available compiler and fresh canonical result directory required')
-    compiler_ref = _ref(Path(tool).resolve(strict=True), 'application/x-executable')
+    out, compiler_ref = _diagnostic_destination(out, compiler,
+        'available compiler and fresh canonical result directory required')
     report = _record(delivery_ref, out, samples, compiler_ref, build=True)
     _write(out/'result.json', report)
     return report
@@ -366,10 +393,246 @@ def measure(delivery_ref, out, *, samples=3, compiler='g++'):
 
 def verify_cpu_fixed_grid_native_lifecycle(reference):
     """Replay source coordinates, diagnostic linkage, effect proofs and raw owner clocks offline."""
-    saved = read_artifact(reference)
-    path = Path(reference['uri'])
-    _need(reference['schema'] == SCHEMA and path.name == 'result.json' and path == path.resolve(strict=True),
-          'exact native lifecycle diagnostic report required')
-    checked = _record(saved['delivery'], path.parent, saved['sample_count'], saved['compiler'])
+    saved, root = _read_observation(reference, SCHEMA, 'exact native lifecycle diagnostic report required')
+    checked = _record(saved['delivery'], root, saved['sample_count'], saved['compiler'])
     _need(saved == checked, 'retained owner timestamps or C++ diagnostic project differs')
+    return saved
+
+
+def _counter_windows(samples):
+    result = {}
+    for window in _COUNTER_CUTS:
+        start, end = WINDOWS[window]
+        quantities = {'owner_wall_ns': [row['markers_ns'][end] - row['markers_ns'][start] for row in samples]}
+        for field in USAGE_FIELDS:
+            quantities[field] = [row['process_usage'][end][field] - row['process_usage'][start][field]
+                                 for row in samples]
+        result[window] = {name: dict(min=min(values), median=median(values), max=max(values), values=values)
+                          for name, values in quantities.items()}
+    return result
+
+
+def _record_counters(plan_ref, root, pairs, compiler, *, capture=False):
+    plan = verify_cpu_fixed_grid_mapped_input_plan(plan_ref)
+    _need(plan['observation'] is not None and type(pairs) is int and 1 <= pairs <= 12,
+          'bounded independent diagnostic for a validated mapped input route required')
+    compared = read_artifact(plan['observation'])
+    control = read_artifact(compared['control_delivery'])
+    input_files, argv = compared['file_inputs'], compared['argv']
+    expected_mode = compared['expected_mode']
+    _raw(compiler)
+    _validate_inputs(input_files)
+    if capture:
+        _need(set(compared['cpu_ids']) <= os.sched_getaffinity(0), 'exact diagnostic CPU cohort unavailable')
+        root.mkdir(parents=True, exist_ok=False)
+
+    owner = dict(working_directory=compared['working_directory'], python_provider_environment=compared['environment'])
+    mapped = dict(control, project=compared['mapped_project'], native_executable=compared['mapped_executable'],
+                  native_launcher=compared['launchers'][_MAPPED_ROUTE])
+    routes = {}
+    for name, source, proof in zip(_COUNTER_ROUTES, (control, mapped), (None, plan['proof']), strict=True):
+        sibling = _project(root/name, source, compiler, build=capture, usage=True, mapped_proof=proof)
+        routes[name] = dict(original_project=source['project'], original_executable=source['native_executable'],
+                            sibling=sibling, samples=[])
+
+    publication = Path(argv[-1])
+    ordered = []
+    for pair in range(pairs):
+        for name in _COUNTER_ROUTES if pair % 2 == 0 else reversed(_COUNTER_ROUTES):
+            row = routes[name]
+            folder = root/f'{pair:02}-{name}'
+            command = [row['sibling']['diagnostic_launcher']['uri'], *argv]
+            if capture:
+                _capture(folder, command, owner, publication)
+            sample = _sample(folder, command, control, pair, expected_mode, usage=True)
+            row['samples'].append(sample)
+            ordered.append(sample)
+    _need(_ordered_samples(ordered), 'route diagnostic process windows overlap')
+    _validate_inputs(input_files)
+    for row in routes.values():
+        row['windows'] = _counter_windows(row['samples'])
+
+    return dict(schema=COUNTERS_SCHEMA, schema_version=1, mapped_plan=plan_ref, observation=plan['observation'],
+        control_delivery=compared['control_delivery'], source=compared['source'], target=compared['target'],
+        argv=argv, cpu_ids=compared['cpu_ids'], working_directory=compared['working_directory'],
+        environment_sha256=compared['environment_sha256'], compiler=compiler, sample_pairs=pairs, routes=routes,
+        scope='PROCESS_WIDE_RUSAGE_SELF_AT_OWNER_SOURCE_PHASE_BOUNDARIES',
+        normal_completion_stdout_stderr_publication_and_mode_verified=True,
+        clean_benchmark=False, physical_first_touch_attributed=False, physical_io_bytes_measured=False,
+        page_cache_condition_controlled=False, forward_duration_bound_proven=False, deployment_authorized=False)
+
+
+def measure_cpu_fixed_grid_input_counters(plan_ref, out, *, pairs=3, compiler='g++'):
+    """Capture process counters for the two admitted input routes."""
+    out, compiler_ref = _diagnostic_destination(out, compiler,
+        'available compiler and fresh canonical output directory required')
+    report = _record_counters(plan_ref, out, pairs, compiler_ref, capture=True)
+    _write(out/'result.json', report)
+    return report
+
+
+def verify_cpu_fixed_grid_input_counters(reference):
+    saved, root = _read_observation(reference, COUNTERS_SCHEMA, 'exact route diagnostic report required')
+    expected = _record_counters(saved['mapped_plan'], root, saved['sample_pairs'], saved['compiler'])
+    _need(expected == saved, 'retained paired source counter observations differ')
+    return saved
+
+
+def _need_short(condition, reason):
+    if not condition:
+        raise ValueError('fixed-grid short native probe: ' + reason)
+
+
+def _short_binding(package_ref, oracle_ref):
+    from scar.compiler.observe_cpu_fixed_grid_python_lifecycle import (
+        SHORT_SCHEMA as SHORT_PYTHON_SCHEMA, STEP_COUNTS, verify_short_python,
+    )
+
+    _need_short(oracle_ref['schema'] == SHORT_PYTHON_SCHEMA, 'exact independent short-count Python oracle required')
+    with _fixed_grid_route_replay():
+        package = verify_cpu_fixed_grid_native_route_package(package_ref)
+        oracle = verify_short_python(oracle_ref)
+    _need_short(package['selected_runtime'] == _MAPPED_ROUTE and package['inputs_must_remain_stable'] is True
+          and package['deployment_authorized'] is False and oracle['package'] == package_ref
+          and oracle['source'] == package['source'] and oracle['target'] == package['hardware']
+          and oracle['cpu_ids'] == package['cpu_ids'] and oracle['working_directory'] == package['working_directory']
+          and oracle['environment_sha256'] == package['environment_sha256']
+          and oracle['step_counts'] == list(STEP_COUNTS) and set(oracle['cases']) == {str(count) for count in STEP_COUNTS},
+          'mapped native route and Python oracle scopes differ')
+    plan = read_artifact(package['plan'])
+    proof_ref = plan['proof']
+    abi = read_artifact(read_artifact(proof_ref)['abi'])
+    argv = abi['argv']
+    step, output = argv['steps'] - 1, argv['output'] - 1
+    _need_short(argv['count'] == len(package['argv']) and output == package['publication']['output_index']
+          and step != output and abi['domain']['normal_completion_only'] is True
+          and abi['domain']['step_count_min'] <= min(STEP_COUNTS) <= max(STEP_COUNTS) <= abi['domain']['step_count_max'],
+          'short counts or publication slot are outside the exact source ABI')
+    original = read_artifact(read_artifact(package['owned_copy_delivery'])['observation'])['commands']['ORIGINAL_PYTHON']
+    prefix = original[:-argv['count']]
+    for count in STEP_COUNTS:
+        row = oracle['cases'][str(count)]
+        value = row['oracle']
+        command = value['command']
+        args = command[len(prefix):]
+        expected = list(package['argv'])
+        expected[step] = str(count)
+        expected[output] = args[output]
+        _need_short(command[:len(prefix)] == prefix and args == expected == row['argv'] and Path(args[output]).is_absolute()
+              and args[output] != package['publication']['path']
+              and value['mode'] == package['publication']['expected_mode']
+              and value['file']['size_bytes'] == package['publication']['expected_file']['size_bytes']
+              and not _raw(value['stderr']), 'short-count original argv, mode or final file oracle differs')
+    return package, oracle, proof_ref, step, output
+
+
+def _short_sibling(package, proof_ref, root, compiler, counters_ref, *, build):
+    route = package['routes'][_MAPPED_ROUTE]
+    material = dict(project=route['project'], native_executable=route['executable'])
+    if counters_ref is None:
+        sibling = _project(root/'native-probe', material, compiler, build=build, mapped_proof=proof_ref)
+        return sibling, False
+    _need_short(counters_ref['schema'] == COUNTERS_SCHEMA and Path(counters_ref['uri']).name == 'result.json',
+          'exact retained counter sibling authority required')
+    counters = read_artifact(counters_ref)
+    retained = counters['routes'][_MAPPED_ROUTE]
+    _need_short(counters['mapped_plan'] == package['plan'] and counters['observation'] == package['observation']
+          and counters['control_delivery'] == package['owned_copy_delivery']
+          and counters['source'] == package['source'] and counters['target'] == package['hardware']
+          and counters['cpu_ids'] == package['cpu_ids'] and counters['working_directory'] == package['working_directory']
+          and counters['argv'] == package['argv'] and counters['environment_sha256'] == package['environment_sha256']
+          and counters['compiler'] == compiler and counters['clean_benchmark'] is False
+          and retained['original_project'] == route['project'] and retained['original_executable'] == route['executable'],
+          'retained marked C++ executable does not cover the same mapped route and context')
+    sibling = _project(Path(counters_ref['uri']).parent/_MAPPED_ROUTE, material, compiler, build=False,
+                       usage=True, mapped_proof=proof_ref)
+    _need_short(sibling == retained['sibling'], 'retained diagnostic C++ source, binary or loader changed')
+    return sibling, True
+
+
+def _short_report(package_ref, oracle_ref, root, count, compiler, counters_ref, *, capture=False):
+    package, oracle, proof_ref, step, output = _short_binding(package_ref, oracle_ref)
+    _need_short(type(count) is int and 1 <= count <= 12 and root.resolve() == root
+          and not root.is_relative_to(Path(package_ref['uri']).parent)
+          and not root.is_relative_to(Path(oracle_ref['uri']).parent)
+          and all(not root.is_relative_to(route['project_root']) for route in package['routes'].values())
+          and all(not root.is_relative_to(Path(row['path']).parent) for row in package['file_inputs']),
+          'bounded samples and independent output directory required')
+    _raw(compiler)
+    if capture:
+        _need_short(set(package['cpu_ids']) <= os.sched_getaffinity(0), 'the exact launch CPU cohort is unavailable')
+        root.mkdir(parents=True, mode=0o700, exist_ok=False)
+    sibling, usage = _short_sibling(package, proof_ref, root, compiler, counters_ref, build=capture)
+    owner = dict(working_directory=package['working_directory'], python_provider_environment=package['source_environment'])
+    expected_mode = package['publication']['expected_mode']
+    input_snapshots = _input_files(package)
+    cases, ordered = {}, []
+    outputs = root/'private-output-slots'
+    if capture:
+        outputs.mkdir(mode=0o700)
+    for steps in oracle['step_counts']:
+        expected = oracle['cases'][str(steps)]['oracle']
+        check = dict(validated_source_stdout=expected['stdout'], validated_final_tensor=expected['file'])
+        rows = []
+        for index in range(count):
+            name = f'{steps:02d}-sample-{index:02d}'
+            publish = outputs/f'{name}.f32'
+            args = list(package['argv'])
+            args[step], args[output] = str(steps), str(publish)
+            command = [sibling['diagnostic_launcher']['uri'], *args]
+            folder = root/name
+            if capture:
+                _need_short(not _output_guards(publish, expected_mode), 'private output is occupied or its mode premise changed')
+                _capture(folder, command, owner, publish)
+            row = _sample(folder, command, check, index, expected_mode, usage=usage)
+            markers = row['markers_ns']
+            first, last = markers['RECURRENCE_BEGIN'], markers['RECURRENCE_RETURN']
+            row['windows_ns'] = dict(before_recurrence=first - row['launcher_start_ns'],
+                recurrence=last - first, after_recurrence=row['process_reaped_ns'] - last)
+            _need_short(all(value > 0 for value in row['windows_ns'].values())
+                  and _raw(row['stderr']) == _raw(expected['stderr']), 'phase clock or original stderr differs')
+            rows.append(row)
+            ordered.append(row)
+        cases[str(steps)] = dict(steps=steps, oracle=expected, samples=rows)
+    _need_short(_input_files(package) == input_snapshots and not any(outputs.iterdir())
+          and _ordered_samples(ordered),
+          'input identity, privately staged output or sample order changed')
+    return dict(schema=SHORT_SCHEMA, schema_version=1, status='EXACT_SHORT_NATIVE_LIFECYCLE_OBSERVED',
+        package=package_ref, python_probe=oracle_ref, project=package['selected_project'],
+        native_executable=package['routes'][_MAPPED_ROUTE]['executable'], mapped_proof=proof_ref,
+        source=package['source'], target=package['hardware'], cpu_ids=package['cpu_ids'],
+        working_directory=package['working_directory'], environment_sha256=package['environment_sha256'],
+        argv=package['argv'], file_inputs=package['file_inputs'], input_snapshots=input_snapshots,
+        step_counts=list(oracle['step_counts']), cases=cases, sample_count=count, compiler=compiler,
+        counters_ref=counters_ref, sibling=sibling, clock='LINUX_CLOCK_MONOTONIC_NS',
+        exact_exit_streams_file_and_mode_verified=True, diagnostic_only=True, clean_benchmark=False,
+        instrumented_rusage_at_four_cuts=usage, physical_duration_bound_proven=False,
+        deployment_authorized=False, target_executed=True,
+        limitations=['BEFORE_RECURRENCE_INCLUDES_LOADER_AND_INPUT_INGRESS',
+                     'AFTER_RECURRENCE_INCLUDES_PUBLICATION_AND_PROBE_RECORDER_BEFORE_REAP',
+                     'PER_KERNEL_AND_HARDWARE_EVENTS_NOT_MEASURED'])
+
+
+def observe_short_native(package_ref, oracle_ref, out, *, samples=3, counters_ref=None):
+    """Measure three independent native lifecycle windows per declared short count."""
+    out = Path(out).absolute()
+    _need_short(out.resolve() == out and not out.exists() and not out.is_symlink(), 'fresh canonical output required')
+    if counters_ref is not None:
+        compiler = read_artifact(counters_ref)['compiler']
+    else:
+        tool = shutil.which('g++')
+        _need_short(tool is not None, 'C++20 compiler required')
+        compiler = _ref(Path(tool).resolve(strict=True), 'application/x-executable')
+    report = _short_report(package_ref, oracle_ref, out, samples, compiler, counters_ref, capture=True)
+    _write(out/'result.json', report)
+    return report
+
+
+def verify_short_native(reference):
+    """Replay exact original outputs, source modifications and native clock records cold."""
+    saved, root = _read_observation(reference, SHORT_SCHEMA, 'exact short native lifecycle receipt required',
+                                    require=_need_short)
+    expected = _short_report(saved['package'], saved['python_probe'], root, saved['sample_count'],
+                       saved['compiler'], saved['counters_ref'])
+    _need_short(saved == expected, 'saved native observations differ from cold replay')
     return saved

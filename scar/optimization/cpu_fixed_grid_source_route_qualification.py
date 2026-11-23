@@ -10,7 +10,7 @@ from scar.compiler import cpu_fixed_grid_publication_guard_study as guard_study
 from scar.compiler import cpu_fixed_grid_source_route_benchmark as source_benchmark
 from scar.compiler import observe_cpu_fixed_grid_publication as publication_observation
 from scar.compiler.calibrate_array_entry import _ref, _write
-from scar.compiler.observe_cpu_fixed_grid_input_counters import verify_cpu_fixed_grid_input_counters
+from scar.compiler.observe_cpu_fixed_grid_native_lifecycle import verify_cpu_fixed_grid_input_counters
 from scar.ir.execution_recipe import _canonical, read_artifact
 from scar.optimization.paired_entry_selection import DEFAULT_MINIMUM_GAIN
 
