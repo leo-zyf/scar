@@ -92,6 +92,36 @@ def supports_import(module):
     return module in _MEMBERS
 
 
+def array_effect_free(target):
+    """These closed interfaces may affect IO/state, but never write array storage."""
+    if target.kind == "host_method":
+        return target.value[1] in _METHODS
+    return target.kind == "host_callable" and target.value in (
+        _SIGNATURES.keys()
+        | {
+            "builtins.open",
+            "builtins.input",
+            "builtins.str",
+            "builtins.repr",
+            "builtins.ascii",
+            "builtins.format",
+            "sys.exit",
+            "os.path.join",
+            "os.makedirs",
+            "os.chdir",
+            "os.getcwd",
+        }
+    )
+
+
+def readonly_callable(base, name):
+    """Resolve an array-readonly namespace member without executing an operation."""
+    if name not in _MEMBERS.get(base.value, ()):
+        return None
+    candidate = Value("host_callable", base.value + "." + name, base.facts)
+    return candidate if array_effect_free(candidate) else None
+
+
 def builtin(frame, node, name):
     if name in {"open", "str", "repr", "ascii", "format", "input"}:
         return Value(

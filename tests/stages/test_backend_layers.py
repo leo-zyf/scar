@@ -153,6 +153,8 @@ def test_backend_products_replay_and_reject_changed_bytes(tmp_path):
             PYTHONDONTWRITEBYTECODE="1",
             PYTHONPATH=str(Path(scar.__file__).resolve().parents[1]),
         )
+        if layer in {"B2b", "B3"}:
+            env.update(SCAR_CPU_SDK="/absent-sdk", CMAKE_PREFIX_PATH="/absent-sdk")
         process = subprocess.run(
             [sys.executable, "-B", "-c", _RUN_LAYER, layer, str(source), str(out)],
             cwd=tmp_path,
@@ -173,6 +175,18 @@ def test_backend_products_replay_and_reject_changed_bytes(tmp_path):
         params=[],
         result="i32",
         body=[
+            dict(
+                op="decl",
+                name="probe",
+                type=dict(kind="ndarray", element="f64", rank=1),
+                init=dict(
+                    op="array_literal",
+                    type=dict(kind="ndarray", element="f64", rank=1),
+                    shape=[dict(op="literal", type="i64", value=1)],
+                    values=[dict(op="literal", type="f64", value=2.5)],
+                    effects=["MEM", "VAL"],
+                ),
+            ),
             dict(
                 op="expr",
                 value=dict(
@@ -212,6 +226,10 @@ def test_backend_products_replay_and_reject_changed_bytes(tmp_path):
     b1.rename(tmp_path / "hidden-schedule")
     run("B2b", b2a / "target-ir.json", b2b)
     target = json.loads((b2a / "target-ir.json").read_bytes())
+    assert target["operator_sdks"]["XTensor"]["provider"] == "xtensor-cpu"
+    cmake = (b2b / "project/CMakeLists.txt").read_text()
+    assert "vendor/xtensor-cpu/include" in cmake
+    assert "SCAR_CPU_SDK" not in cmake and "find_package(xtensor" not in cmake
     source_tree = b2a / target["units"][0]["tree"]["path"]
     from scar.backend.cpp20.model import (
         Decl,

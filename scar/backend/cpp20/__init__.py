@@ -1,6 +1,7 @@
 """B2 produces a relocatable, formatted C++20 project from a scheduled execution IR."""
 
 from concurrent.futures import FIRST_EXCEPTION, ThreadPoolExecutor, wait
+import json
 from pathlib import Path
 import re
 import shutil
@@ -57,6 +58,139 @@ _METADATA = (
     "coordinate_maps",
     "record_field_offset_checks",
 )
+
+# The two pinned packages install headers without their source-archive LICENSE.
+# Keep the shared BSD terms and both upstream notices with redistributed headers.
+_XTENSOR_NOTICE = b"""BSD 3-Clause License
+
+xtensor
+Copyright (c) 2016, Johan Mabille, Sylvain Corlay and Wolf Vollprecht
+Copyright (c) 2016, QuantStack
+
+xtl
+Copyright (c) 2017, Sylvain Corlay, Johan Mabille and Wolf Vollprecht
+Copyright (c) 2017, QuantStack
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+* Redistributions of source code must retain the above copyright notice, this
+  list of conditions and the following disclaimer.
+
+* Redistributions in binary form must reproduce the above copyright notice,
+  this list of conditions and the following disclaimer in the documentation
+  and/or other materials provided with the distribution.
+
+* Neither the name of the copyright holder nor the names of its
+  contributors may be used to endorse or promote products derived from
+  this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+"""
+
+
+def _xtensor_headers(receipt):
+    if (
+        receipt.get("schema") != "scar.cpu-sdk"
+        or receipt.get("schema_version") != 1
+        or {k: v["version"] for k, v in receipt.get("packages", {}).items()}
+        != {"xtensor": "0.27.1", "xtl": "0.8.0"}
+    ):
+        raise ValueError("incompatible installed operator SDK receipt")
+    headers = {}
+    for name, sha in receipt["files"].items():
+        if not name.startswith("include/"):
+            continue
+        if not re.fullmatch(
+            r"include/(?:xtensor\.hpp|(?:xtensor|xtl)/(?:[\w-]+/)*[\w-]+\.hpp)", name
+        ) or not re.fullmatch("[a-f0-9]{64}", sha):
+            raise ValueError(f"invalid xtensor CPU SDK header {name!r}")
+        headers[name] = sha
+    if (
+        not {
+            "include/xtensor/containers/xarray.hpp",
+            "include/xtensor/containers/xadapt.hpp",
+            "include/xtl/xtl_config.hpp",
+        }
+        <= headers.keys()
+    ):
+        raise ValueError("incomplete xtensor CPU SDK header closure")
+    return headers
+
+
+def _seal_xtensor(destination, binding):
+    # Consume exactly the installation selected by B1. Its location is not
+    # needed by B2b or by the delivered project's native build.
+    if binding.get("provider") != "xtensor-cpu" or not isinstance(
+        binding.get("prefix"), str
+    ):
+        raise ValueError("missing scheduled native operator SDK identity")
+    prefix = Path(binding["prefix"]).resolve(strict=True)
+    raw = (prefix / "scar-sdk.json").read_bytes()
+    if digest(raw) != binding.get("receipt_sha256"):
+        raise ValueError("installed operator SDK differs from its scheduled receipt")
+    receipt = json.loads(raw)
+    if receipt.get("packages") != binding.get("packages") or len(
+        receipt.get("files", {})
+    ) != binding.get("validated_files"):
+        raise ValueError(
+            "scheduled operator SDK package contract differs from its receipt"
+        )
+
+    def seal(data):
+        sha = digest(data)
+        path = f"operator-sdk/{sha}"
+        publish(destination / path, data)
+        return dict(path=path, sha256=sha, size=len(data))
+
+    headers = {}
+    for name, sha in _xtensor_headers(receipt).items():
+        path = (prefix / name).resolve(strict=True)
+        if not path.is_relative_to(prefix):
+            raise ValueError(f"operator SDK header escapes its selected prefix: {name}")
+        data = path.read_bytes()
+        if digest(data) != sha:
+            raise ValueError(f"operator SDK header changed since scheduling: {name}")
+        headers[name] = seal(data)
+    return dict(
+        provider="xtensor-cpu",
+        receipt=seal(raw),
+        headers=headers,
+        notice=seal(_XTENSOR_NOTICE),
+    )
+
+
+def _install_xtensor(folder, directory, binding):
+    if not isinstance(binding, dict) or binding.get("provider") != "xtensor-cpu":
+        raise ValueError(
+            "target has no sealed XTensor SDK; regenerate it from its physical schedule"
+        )
+    headers = _xtensor_headers(read_member(folder, binding["receipt"]))
+    members = binding["headers"]
+    if headers.keys() != members.keys():
+        raise ValueError(
+            "target native SDK header set differs from the selected receipt"
+        )
+    vendor = directory / "vendor" / "xtensor-cpu"
+    for name, sha in headers.items():
+        if members[name]["sha256"] != sha:
+            raise ValueError(
+                f"target native SDK header differs from its selected receipt: {name}"
+            )
+        output = vendor / name
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_bytes(read_blob(folder, members[name]))
+    (vendor / "LICENSE").write_bytes(read_blob(folder, binding["notice"]))
 
 
 def _package(root, sources, openmp, libraries, jobs, image=None):
@@ -130,17 +264,8 @@ def _package(root, sources, openmp, libraries, jobs, image=None):
             )
         )
     if "XTensor" in libraries:
-        lines.extend(
-            (
-                "if(DEFINED ENV{SCAR_CPU_SDK})",
-                '    list(PREPEND CMAKE_PREFIX_PATH "$ENV{SCAR_CPU_SDK}")',
-                "else()",
-                '    list(PREPEND CMAKE_PREFIX_PATH "$ENV{HOME}/.local/share/scar/sdk/xtensor-0.27.1")',
-                "endif()",
-                "find_package(xtl 0.8.0 EXACT REQUIRED CONFIG)",
-                "find_package(xtensor 0.27.1 EXACT REQUIRED CONFIG)",
-                f"target_link_libraries({target} PRIVATE xtensor)",
-            )
+        lines.append(
+            f'target_include_directories({target} SYSTEM PRIVATE "${{CMAKE_CURRENT_SOURCE_DIR}}/vendor/xtensor-cpu/include")'
         )
     if image:
         lines.append(
@@ -161,7 +286,13 @@ def _lower_image(path, revision, scheduled, destination):
         physical.get("schema"),
         physical.get("schema_version"),
         physical.get("ir_sha256"),
-    ) != ("scar.physical-plan", scheduled["schema_version"], scheduled["ir_sha256"]):
+    ) != (
+        "scar.physical-plan",
+        scheduled["schema_version"],
+        scheduled["ir_sha256"],
+    ) or physical.get(
+        "status", "READY"
+    ) != "READY":
         raise ValueError("physical plan does not belong to its scheduled IR package")
     module = dict(
         scheduled["module"],
@@ -205,6 +336,12 @@ def _lower_image(path, revision, scheduled, destination):
         coordinate_maps=lowerer.coordinate_maps,
         record_field_offset_checks=lowerer.layout_scope,
     )
+    if "XTensor" in lowerer.libraries.links:
+        metadata["operator_sdks"] = {
+            "XTensor": _seal_xtensor(
+                destination, physical["operator_backends"]["ndarray"]
+            )
+        }
     product = document(
         "scar.cpp20-target-ir",
         stage="B2a",
@@ -343,14 +480,18 @@ def _print_image(path, product, directory, runtime, jobs, image=None):
         header = (include_root / name).resolve()
         if not header.is_relative_to(include_root) or not header.is_file():
             raise ValueError(f"target package is missing local header {name!r}")
-    _package(
-        directory,
-        sources,
-        product["openmp"],
-        set(product["runtime_libraries"]),
-        jobs,
-        image,
-    )
+    libraries = set(product["runtime_libraries"])
+    bindings = product.get("operator_sdks", {})
+    if not isinstance(bindings, dict) or bindings.keys() - (libraries & {"XTensor"}):
+        raise ValueError("target declares an unused or unsupported native operator SDK")
+    if (
+        local_headers & {"scar/array.hpp", "scar/format.hpp"}
+        and "XTensor" not in libraries
+    ):
+        raise ValueError("target array header requires a sealed XTensor SDK")
+    if "XTensor" in libraries:
+        _install_xtensor(path.parent, directory, bindings.get("XTensor"))
+    _package(directory, sources, product["openmp"], libraries, jobs, image)
     return sources
 
 

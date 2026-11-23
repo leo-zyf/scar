@@ -109,6 +109,8 @@ class _Project:
         self.result_facts = {}
         self.providers = {}
         self.array_ops = set()
+        self.array_state = arrays.LiteralState()
+        self.external_array_writes = {}
         self.objects = objects.ObjectModel()
         self.graphics = graphics.Graphics()
         self.decisions = []
@@ -171,6 +173,9 @@ class _Project:
             )
         self.active.append(name)
         self.global_reads[name] = {}
+        saved_contents = self.array_state.contents if kind == "function" else None
+        if saved_contents is not None:
+            self.array_state.contents = {}
         try:
             frame = _Frame(self, fn, types)
             result = frame.lower()
@@ -178,6 +183,8 @@ class _Project:
             self.closed[name] = result
             return result
         finally:
+            if saved_contents is not None:
+                self.array_state.contents = saved_contents
             self.active.pop()
 
 
@@ -263,10 +270,8 @@ class _Frame:
             slot = _slot(self.module, name)
             result = self.env.get(name, self.project.names.get(slot))
             if result is None and slot not in self.project.shadow:
-                if name in {"print", "range"}:
+                if name in {"print", "range", "int", "float"}:
                     result = _Value("builtin", name)
-                elif name == "float":
-                    result = _Value("dtype", "f64")
                 else:
                     result = exceptions.builtin(name) or host_protocols.builtin(
                         self, node, name
@@ -286,6 +291,47 @@ class _Frame:
                 f"{name} has no definitely initialized binding at this point",
             )
         return result
+
+    def array_readonly_call(self, node, rebound):
+        """A nonactivating lookup for loop effects; unresolved dispatch stays open."""
+
+        for part in walk_operations(node.get("target", {})):
+            if part["op"] in {"var", "python_builtin"} and (
+                part["name"] in rebound or _slot(self.module, part["name"]) in rebound
+            ):
+                return False
+
+        def lookup(expr):
+            op = expr.get("op")
+            if op in {"var", "python_builtin"}:
+                name = expr["name"]
+                if op == "python_builtin":
+                    slot = _slot(self.module, name)
+                    found = self.env.get(name, self.project.names.get(slot))
+                    if found is None and slot not in self.project.shadow:
+                        if name in {"print", "range", "int", "float"}:
+                            return _Value("builtin", name)
+                        return exceptions.builtin(name) or host_protocols.builtin(
+                            self, expr, name
+                        )
+                    return found
+                scope = (
+                    self.project.names if expr.get("scope") == "global" else self.env
+                )
+                return scope.get(name)
+            if op == "member":
+                base = lookup(expr["base"])
+                if base and base.kind == "module":
+                    return self.project.names.get(_slot(base.value, expr["field"]))
+                if base and base.kind == "host_namespace":
+                    return host_protocols.readonly_callable(base, expr["field"])
+            return None
+
+        target = lookup(node.get("target", {}))
+        return target is not None and (
+            target.kind in {"builtin", "exception_class"}
+            or host_protocols.array_effect_free(target)
+        )
 
     def store(self, target, value, steps):
         if target.get("op") == "index":
@@ -327,6 +373,8 @@ class _Frame:
         previous = scope.get(name)
         if global_ and value.kind == "project_method" and not self.dynamic:
             value = objects.persist_method(self, target, value, steps)
+        if global_ and value.kind == "array_copy_method" and not self.dynamic:
+            value = arrays.persist_copy(self, target, value, steps)
         if not values.runtime(value.kind):
             if self.dynamic or value.kind == "range":
                 self.fail(
@@ -636,7 +684,7 @@ class _Frame:
             if base.kind == "graphics_namespace":
                 return self.project.graphics.member(self, node, base, node["field"])
             if values.rank(base.kind) is not None and node["field"] == "copy":
-                return _Value("array_copy_method", base)
+                return arrays.bind_copy(self, node, base, steps)
             if base.kind == "module":
                 slot = _slot(base.value, node["field"])
                 value = self.project.names.get(slot)
@@ -682,7 +730,7 @@ class _Frame:
                 return identity
             numeric = arrays.binary(self, node, operator, lhs, rhs, steps, discard)
             if numeric is None:
-                numeric = scalars.binary(self, node, operator, lhs, rhs)
+                numeric = scalars.binary(self, node, operator, lhs, rhs, steps)
             if numeric is not None:
                 if numeric.value["op"] == "scalar_power":
                     return self.effect(
@@ -771,6 +819,25 @@ class _Frame:
             )
         if target.kind in {"array_constructor", "array_copy_method"}:
             return arrays.construct(self, node, target, args, kwargs, steps, discard)
+        if target.kind == "builtin" and target.value in {"int", "float"}:
+            result = scalars.construct(self, node, target.value, args, kwargs)
+            self.project.decisions.append(
+                dict(
+                    code="numeric_conversion",
+                    symbol=self.name,
+                    location=node.get("location"),
+                    constructor=target.value,
+                    source_types=[v.kind for v in args],
+                    source_facts=[
+                        {k: v for k, v in item.facts.items() if k in {"exact", "range"}}
+                        for item in args
+                    ],
+                    result=result.kind,
+                    result_facts=result.facts,
+                    proof="source numeric protocol and proven representation domain; arguments retain evaluation order",
+                )
+            )
+            return result
         if target.kind == "graphics_callable":
             return self.project.graphics.invoke(
                 self, node, target.value, args, kwargs, steps, discard
@@ -890,6 +957,12 @@ class _Frame:
             self.fail(node, "argument_binding", f"unconsumed keywords for {name}")
         operands = [self.scalar(v, node) for v in bound]
         function = self.project.compile(name, tuple(v.kind for v in bound))
+        if name not in self.project.external_array_writes:
+            self.project.external_array_writes[name] = arrays.may_write_external(
+                function, self.project.closed
+            )
+        if self.project.external_array_writes[name]:
+            self.project.array_state.invalidate()
         call = dict(
             op="call",
             callee=name,
@@ -1169,6 +1242,7 @@ class _Frame:
 
     def loop(self, node, steps):
         counted = node["op"] == "for"
+        allocation_mark = self.project.array_state.enter_loop(self, node)
         start = self.snapshot()
         if counted:
             loop, iv, count, empty, nonempty = self.range_loop(node, steps)
@@ -1254,6 +1328,7 @@ class _Frame:
                     steps.extend(else_body)
         if exits:
             self.merge(exits)
+        self.project.array_state.leave_loop(allocation_mark)
         return bool(exits)
 
     def sequence(self, body, steps):
@@ -1320,7 +1395,9 @@ class _Frame:
                 if arrays.update(self, node, left, right, steps):
                     result = left
                 else:
-                    result = scalars.binary(self, node, node["operator"], left, right)
+                    result = scalars.binary(
+                        self, node, node["operator"], left, right, steps
+                    )
                     if result is None:
                         result = arrays.binary(
                             self, node, node["operator"], left, right, steps

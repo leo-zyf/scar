@@ -68,7 +68,8 @@ jobs:
               raise SystemExit("CPU stage gates require the complete toolchain")
           PY
           find "$RUNNER_TEMP/scar-stages" -type f \( -name '*.cpp' -o -name '*.hpp' \) \
-            -path '*/delivery/project/*' -exec clang-format-18 --dry-run --Werror --style=file {} +
+            -path '*/delivery/project/*' ! -path '*/project/vendor/*' \
+            -exec clang-format-18 --dry-run --Werror --style=file {} +
           tar -czf "$RUNNER_TEMP/scar-mixed-stages.tar.gz" \
             -C "$RUNNER_TEMP/scar-stages/test_locked_mixed_target_three0" \
             hidden-frontend relocated-plan delivery

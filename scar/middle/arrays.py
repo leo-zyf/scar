@@ -1,6 +1,10 @@
 """M2 contracts for dense binary64 arrays, element operations and shared views."""
 
+import math
+import operator
 import re
+
+from scar.contract import walk_operations
 
 from . import scalars
 from .scalars import as_float as _as_float
@@ -24,8 +28,243 @@ _COMPARISONS = {
 }
 
 
+class LiteralState:
+    """Current reaching facts from source literals, never runtime tensor samples.
+
+    Allocation tokens are unique within one normalization. Views share a token;
+    copies get a fresh one. Invalidation is monotone across control alternatives,
+    so restoring name bindings cannot revive a possibly overwritten value.
+    """
+
+    def __init__(self):
+        self.next_token = 0
+        self.contents = {}
+
+    def create(self, shape, items=None):
+        self.next_token += 1
+        facts = dict(
+            shape=tuple(shape), array_allocation=self.next_token, literal_prefix=()
+        )
+        if items is not None and all(
+            type(v) in {int, float}
+            and math.isfinite(v)
+            and (type(v) is not int or int(float(v)) == v)
+            for v in items
+        ):
+            self.contents[self.next_token] = (
+                tuple(shape),
+                tuple(float(v) for v in items),
+            )
+        return facts
+
+    def region(self, value):
+        token = value.facts.get("array_allocation")
+        stored = self.contents.get(token)
+        if stored is None:
+            return None
+        shape, items = stored
+        prefix = value.facts.get("literal_prefix", ())
+        if prefix is None:
+            return None
+        offset = 0
+        for index, size in zip(prefix, shape):
+            offset = offset * size + index
+        remaining = shape[len(prefix) :]
+        count = math.prod(remaining)
+        return remaining, items[offset * count : (offset + 1) * count]
+
+    def copied(self, source, *, negate=False):
+        region = self.region(source)
+        if region is None:
+            return self.create(_shape(source))
+        shape, items = region
+        return self.create(shape, tuple(-v for v in items) if negate else items)
+
+    def selected(self, source, indices):
+        region = self.region(source)
+        if region is None or any(type(v.exact) is not int for v in indices):
+            if len(indices) == rank(source.kind):
+                return {}
+            token = source.facts.get("array_allocation")
+            return (
+                dict(array_allocation=token, literal_prefix=None)
+                if token is not None
+                else {}
+            )
+        shape, _ = region
+        prefix = []
+        for index, extent in zip(indices, shape):
+            if not -extent <= index.exact < extent:
+                return {}
+            prefix.append(index.exact % extent)
+        facts = dict(
+            array_allocation=source.facts["array_allocation"],
+            literal_prefix=(*source.facts["literal_prefix"], *prefix),
+        )
+        selected = Value(source.kind, source.value, facts)
+        shape, items = self.region(selected)
+        return dict(facts, shape=shape) if shape else {"exact": items[0]}
+
+    def invalidate(self, source=None):
+        token = source.facts.get("array_allocation") if source else None
+        if token is None:
+            self.contents.clear()
+        else:
+            self.contents.pop(token, None)
+
+    def enter_loop(self, frame, body):
+        """Kill potential back-edge writes before reasoning about any iteration."""
+        operations = list(walk_operations(body))
+        rebound = {
+            node["target"]["name"]
+            for node in operations
+            if node["op"] in {"assign", "for"}
+            and node.get("target", {}).get("op") == "var"
+        }
+        for node in operations:
+            op = node["op"]
+            if op in {
+                "call",
+                "library_call",
+                "python_invoke",
+            } and not frame.array_readonly_call(node, rebound):
+                self.invalidate()
+                break
+            if op not in {"assign", "update"}:
+                continue
+            target = node["target"]
+            if target.get("op") == "index":
+                target = target["base"]
+            elif op == "assign":
+                continue
+            if target.get("op") != "var":
+                self.invalidate()
+                break
+            if target["name"] in rebound:
+                self.invalidate()
+                break
+            scope = (
+                frame.project.names if target.get("scope") == "global" else frame.env
+            )
+            value = scope.get(target["name"])
+            if value is None or rank(value.kind) is not None:
+                self.invalidate(value)
+        return self.next_token
+
+    def leave_loop(self, first):
+        # Each execution of an allocation in the loop creates a distinct object.
+        # A single symbolic pass cannot export its first iteration's contents.
+        self.contents = {key: val for key, val in self.contents.items() if key <= first}
+
+
+def may_write_external(function, functions, active=()):
+    """Distinguish writes to fresh local arrays from caller-visible writes."""
+    name = function["name"]
+    if name in active:
+        return True
+    assignments = {}
+    operations = list(walk_operations(function["body"]))
+    for node in operations:
+        if node["op"] == "decl" and "init" in node:
+            assignments.setdefault(node["name"], []).append(node["init"])
+        elif node["op"] == "assign" and node["target"].get("op") == "var":
+            target = node["target"]
+            if target.get("scope") != "global":
+                assignments.setdefault(target["name"], []).append(node["value"])
+    fresh = set()
+    parameters = {p["name"] for p in function["params"]}
+
+    def private(expr):
+        op = expr["op"]
+        if op in {
+            "array_create",
+            "array_literal",
+            "array_copy",
+            "array_unary",
+            "array_binary",
+        }:
+            return True
+        if op == "array_view":
+            return private(expr["base"])
+        return op == "var" and expr.get("scope") != "global" and expr["name"] in fresh
+
+    while True:
+        proven = {
+            slot
+            for slot, sources in assignments.items()
+            if slot not in parameters and all(private(source) for source in sources)
+        }
+        if proven <= fresh:
+            break
+        fresh.update(proven)
+    for node in operations:
+        if node["op"] in {"array_store", "array_update"}:
+            target = node["base"] if node["op"] == "array_store" else node["left"]
+            if not private(target):
+                return True
+        if node["op"] == "call":
+            callee = functions.get(node.get("callee"))
+            if callee is None or may_write_external(callee, functions, (*active, name)):
+                return True
+    return False
+
+
+def bind_copy(frame, node, source, steps):
+    """A bound copy method captures this handle before later name rebinding."""
+    captured = frame.effect(source.value, source.kind, steps, facts=source.facts)
+    return Value("array_copy_method", captured)
+
+
+def persist_copy(frame, target, method, steps):
+    """Only a stored module binding requires a receiver beyond its initializer."""
+    source = method.value
+    slot = "@array-method/" + target["name"]
+    frame.project.globals[slot] = source.kind
+    captured = source.at(slot, scope="global")
+    steps.append(dict(op="assign", target=captured.value, value=source.value))
+    return Value(method.kind, captured)
+
+
+def _scalar_facts(op, lhs, rhs):
+    if lhs.exact is _UNKNOWN or rhs.exact is _UNKNOWN:
+        return {}
+    if any(
+        item.kind == "i64" and int(float(item.exact)) != item.exact
+        for item in (lhs, rhs)
+    ):
+        return {}
+    evaluate = {
+        "add": operator.add,
+        "sub": operator.sub,
+        "mult": operator.mul,
+        "div": operator.truediv,
+    }.get(op)
+    if evaluate is None:
+        return {}
+    try:
+        result = evaluate(float(lhs.exact), float(rhs.exact))
+    except (OverflowError, ZeroDivisionError):
+        return {}
+    return {"exact": result} if math.isfinite(result) else {}
+
+
 def _output(frame, node, kind, steps, *, facts=None, discard=False, **fields):
     frame.project.array_ops.add(node)
+    if (
+        rank(kind) is not None
+        and node
+        in {
+            "array_create",
+            "array_literal",
+            "array_copy",
+            "array_unary",
+            "array_binary",
+        }
+        and "array_allocation" not in (facts or {})
+    ):
+        facts = frame.project.array_state.create(
+            (facts or {}).get("shape", (None,) * rank(kind))
+        )
     return frame.effect(
         dict(op=node, type=wire(kind), **fields), kind, steps, discard, facts=facts
     )
@@ -199,6 +438,7 @@ def _operation(frame, node, op, lhs, rhs, steps, *, inplace=False, discard=False
         **dispatch,
     )
     if inplace:
+        frame.project.array_state.invalidate(lhs)
         frame.project.array_ops.add("array_update")
         steps.append(
             dict(op="array_update", type="unit", effects=["STATE", "IO"], **contract)
@@ -209,7 +449,7 @@ def _operation(frame, node, op, lhs, rhs, steps, *, inplace=False, discard=False
         "array_binary",
         array_kind(len(shape)) if shape else "numpy_f64",
         steps,
-        facts={"shape": shape} if shape else {},
+        facts={"shape": shape} if shape else _scalar_facts(op, lhs, rhs),
         discard=discard,
         effects=["MEM", "VAL", "STATE", "IO"],
         **contract,
@@ -281,7 +521,7 @@ def scalar_unary(frame, node, item, steps, discard):
                 "array_unary",
                 item.kind,
                 steps,
-                facts=item.facts,
+                facts=frame.project.array_state.copied(item, negate=op == "neg"),
                 discard=discard,
                 operator=op,
                 value=item.value,
@@ -292,13 +532,20 @@ def scalar_unary(frame, node, item, steps, discard):
             "array_load",
             "numpy_f64",
             steps,
+            facts=frame.project.array_state.selected(item, []),
             base=item.value,
             indices=[],
             effects=["STATE"],
         )
     if item.kind == "numpy_f64":
         return Value(
-            "numpy_f64", dict(op="unary", operator=op, value=item.value, type="f64")
+            "numpy_f64",
+            dict(op="unary", operator=op, value=item.value, type="f64"),
+            (
+                {}
+                if item.exact is _UNKNOWN
+                else {"exact": -item.exact if op == "neg" else +item.exact}
+            ),
         )
     return scalars.unary(frame, node, item)
 
@@ -364,7 +611,11 @@ def _literal_array(frame, node, source, steps, *, force, discard=False):
         "array_literal",
         array_kind(len(shape)),
         steps,
-        facts={"shape": shape},
+        facts=(
+            frame.project.array_state.create(shape, [v.exact for v in items])
+            if all(v.exact is not _UNKNOWN for v in items)
+            else {"shape": shape}
+        ),
         discard=discard,
         shape=[literal(d).value for d in shape],
         values=values,
@@ -388,7 +639,7 @@ def construct(frame, node, target, args, keywords, steps, discard):
             source.kind,
             steps,
             discard=discard,
-            facts=source.facts,
+            facts=frame.project.array_state.copied(source),
             value=source.value,
             effects=["MEM", "STATE", "XFER"],
         )
@@ -411,6 +662,8 @@ def construct(frame, node, target, args, keywords, steps, discard):
     if explicit and not (
         dtype.kind == "dtype"
         and dtype.value == "f64"
+        or dtype.kind == "builtin"
+        and dtype.value == "float"
         or dtype.kind == "text"
         and dtype.exact in {"float64", "f8", "d"}
     ):
@@ -460,7 +713,7 @@ def construct(frame, node, target, args, keywords, steps, discard):
             source.kind,
             steps,
             discard=discard,
-            facts=source.facts,
+            facts=frame.project.array_state.copied(source),
             value=source.value,
             effects=["MEM", "STATE", "XFER"],
         )
@@ -530,6 +783,7 @@ def index(frame, node, steps, rhs=None, discard=False):
             value = rhs.value
         else:
             value = _as_float(frame, node, rhs)
+        frame.project.array_state.invalidate(base)
         frame.project.array_ops.add("array_store")
         steps.append(
             dict(
@@ -548,6 +802,7 @@ def index(frame, node, steps, rhs=None, discard=False):
             "array_load",
             "numpy_f64",
             steps,
+            facts=frame.project.array_state.selected(base, axes),
             discard=discard,
             base=base.value,
             indices=indices,
@@ -559,7 +814,7 @@ def index(frame, node, steps, rhs=None, discard=False):
         array_kind(len(result)),
         steps,
         discard=discard,
-        facts={"shape": result},
+        facts={"shape": result, **frame.project.array_state.selected(base, axes)},
         base=base.value,
         indices=indices,
         effects=["STATE", "MEM"],

@@ -184,6 +184,82 @@ except OverflowError:
     assert _run([result["executable"]], tmp_path) == expected
 
 
+def test_literal_array_facts_respect_alias_writes_and_activation_boundaries(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    entry = source / "entry.py"
+    (source / "settings.py").write_text(
+        "import numpy as np\nupper = [7.5, 9.5]\nlower = -np.array(upper)\n"
+    )
+    entry.write_text("""import numpy as np
+import settings
+def scratch():
+    local = np.zeros((2, 2))
+    row = local[0]
+    for i in range(2):
+        row[i] = 12.5
+    print('scratch', row[0] == 12.5)
+scratch()
+scale = (settings.upper[1] - settings.lower[1]) / (settings.upper[0] - settings.lower[0])
+print(int(scale * 3), int(-2.9), int(), int(True), float(), float(7))
+original = np.array([[1.9, -2.9], [3.9, 4.9]], dtype=float)
+retained = original.copy
+alias = original
+original = np.array([[8.9, 9.9], [10.9, 11.9]])
+copied = retained()
+row = alias[-1]
+independent = row.copy()
+row[0] = 55.0
+print(int(copied[0, 0]), int(copied[-1, -1]), int(independent[0]))
+print(alias[1, 0] == 55.0, original[0, 0] == 8.9)
+def closed():
+    local = -np.array([6.9])
+    return int(local[0])
+print(closed(), closed())
+def convert_flag(flag):
+    return int(flag)
+print(convert_flag(True), convert_flag(False))
+for i in range(-5, 6):
+    print(i // 3, i % 3, i // -3, i % -3)
+""")
+    expected = _run([sys.executable, "-B", entry], source)
+    graph, plan, delivery = (tmp_path / name for name in ("graph", "plan", "delivery"))
+    _stage(tmp_path, "frontend", "build", "--entry", entry, "--out", graph)
+    shutil.rmtree(source)
+    _stage(tmp_path, "middle", "plan", "--graph", graph, "--out", plan)
+    shutil.rmtree(graph)
+    result = _stage(tmp_path, "backend", "compile", "--ir", plan, "--out", delivery)
+    shutil.rmtree(plan)
+    assert _run([result["executable"]], tmp_path) == expected
+
+    # Writes kill contents through every alias. Loop bodies are not specialized
+    # to their first visit, and function signatures do not freeze a prior input.
+    prefixes = {
+        "alias": "a = np.array([1.9]); b = a\nb[0] = 7.9\nprint(int(a[0]))\n",
+        "callee": "a = np.array([1.9])\ndef change(x):\n    x[0] = 7.9\nchange(a)\nprint(int(a[0]))\n",
+        "loop": "a = np.array([1.9]); b = np.array([2.9]); x = a\nfor i in range(2):\n    print(int(b[0]))\n    x = b\n    x[0] = 7.9\n",
+        "condition": "a = np.array([1.9])\nwhile int(a[0]) < 5:\n    a[0] = 7.9\n",
+        "branch": "a = np.array([1.9])\nif input():\n    a[0] = 7.9\nprint(int(a[0]))\n",
+        "exception": "a = np.array([1.9])\ntry:\n    a[0] = 7.9\n    raise ValueError('changed')\nexcept ValueError:\n    print(int(a[0]))\n",
+        "unknown": "def convert(x):\n    return int(x)\nprint(convert(2.9))\n",
+        "boundary": "print(int(9223372036854775808.0))\n",
+    }
+    for name, body in prefixes.items():
+        folder = tmp_path / name
+        folder.mkdir()
+        entry = folder / "entry.py"
+        entry.write_text("import numpy as np\n" + body)
+        graph, plan = folder / "graph", folder / "plan"
+        _stage(folder, "frontend", "build", "--entry", entry, "--out", graph)
+        entry.unlink()
+        report = _stage(
+            folder, "middle", "plan", "--graph", graph, "--out", plan, returncode=2
+        )
+        assert report["status"] == "INCOMPLETE"
+        issues = json.loads((plan / "plan.json").read_bytes())["issues"]
+        assert issues[0]["code"] == "python.integer_conversion_range", issues
+
+
 def test_formatted_values_preserve_order_unicode_and_source_domains(tmp_path):
     entry = tmp_path / "entry.py"
     entry.write_text(
