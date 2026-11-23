@@ -22,7 +22,7 @@ include = ["scar", "scar.*"]
 namespaces = false
 
 [tool.setuptools.package-data]
-"scar.backend.cpp20" = ["runtime.hpp", "array.hpp", "host.hpp"]
+"scar.backend.cpp20" = ["runtime.hpp", "array.hpp", "host.hpp", "exceptions.hpp"]
 "scar.backend.planning" = ["calibration.cpp"]
 
 [tool.pytest.ini_options]

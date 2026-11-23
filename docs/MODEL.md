@@ -22,7 +22,9 @@
 
 对象、视图和存储具有不同作用。当前静态图中的可变 `states` 表示局部、参数、共享内存和全局状态域，`accesses` 表示读、写、取地址或未知效果。数组视图保留基址和索引表达式。`load_bytes` 和 `store_bytes` 表达同一字节存储上的类型化访问。它们支持旧 Fortran 的 COMMON/EQUIVALENCE，在目标端使用 memcpy 避免不合法的 C++ 别名访问。该静态状态版本分析仍不能作为任意动态 tensor 内容相等的证明。
 
-主机接口在执行 IR 中表示为 `host_call`，包含版本化的 `interface`、已求值实参、结果类型、`effects`、`reads`、`writes` 和 `may_raise`。例如 `fs.copy2` 读取文件系统和当前目录，写入文件系统；`process.chdir` 写入当前目录；`time.wall` 读取主机时钟。`path.join` 仅操作文本，不读取当前目录。`{"kind":"handle","resource":"text_stream"}` 表示共享流身份，句柄复制不复制文件或流状态。`stream.open` 显式携带模式、UTF-8 和 `universal` 换行合同，不能把源语言的 `newline=''` 与默认换行混为一谈。当前仅闭合 POSIX 的受支持接口、默认缓冲和严格 UTF-8 文本模式，不包含任意流协议或进程启动。
+主机接口在执行 IR 中表示为 `host_call`，包含版本化的 `interface`、已求值实参、结果类型、`effects`、`reads`、`writes` 和 `may_raise`。例如 `fs.copy2` 读取文件系统和当前目录，写入文件系统；`process.chdir` 写入当前目录；`time.wall` 读取主机时钟。`path.join` 仅操作文本，不读取当前目录。`{"kind":"handle","resource":"text_stream"}` 表示共享流身份，句柄复制不复制文件或流状态。`stream.open` 显式携带模式、UTF-8 和 `universal` 换行合同，不能把源语言的 `newline=''` 与默认换行混为一谈。当前仅闭合 POSIX 的受支持接口、默认缓冲和严格 UTF-8 文件模式，不包含任意流协议或进程启动。`console.input` 另携带已核验的标准流错误策略；支持严格 UTF-8 及输入输出一致的 surrogateescape。
+
+异常值使用 `{"kind":"handle","resource":"error"}`，`error_make` 保存类别和完整显示文本，`throw` 与 `rethrow` 表示异常出口。`try` 有受保护体、按序匹配的处理器、正常落下才执行的 `else` 及必经的 `finally`；处理器的 `binding` 引用真实词法槽。`resource_scope` 只封装已证明的进入／退出协议，多个资源依次嵌套。异常发生前任意前缀都可能已执行，不能把受保护体内的赋值误认为处理器入口的确定绑定。`noreturn` 表示无正常返回，仍可能由外层捕获。退出异常分别保存进程退出码、捕获时的显示文本和未捕获时的可选 stderr 文本，避免将几种观察结果混为一谈。
 
 `text_format` 和 `text_print` 携带标量格式；二进制浮点用 `shortest_binary64`，明确最短回读数、负零、非有限值及定点／科学计数边界。打印操作先按源顺序捕获值与选项，再产生输出，不能依赖 C++ 函数实参的求值顺序。
 

@@ -1,7 +1,7 @@
 """Close lexical Python protocols from the bound project operation graph."""
 
 from scar.contract import walk_operations
-from . import arrays, host_protocols, values
+from . import arrays, exceptions, host_protocols, values
 from .values import Value as _Value, literal as _literal
 
 
@@ -64,13 +64,21 @@ class _Project:
                 if node["op"] in {
                     "assign",
                     "update",
+                    "for",
                     "python_define",
                     "python_define_class",
                     "python_import",
+                    "exception_handler",
                 }:
-                    target = node.get("target", node.get("binding", {}))
+                    target = node.get("target") or node.get("binding") or {}
                     if target.get("scope") == "global":
                         self.shadow.add(target["name"])
+                elif node["op"] == "with_context":
+                    self.shadow.update(
+                        r["binding"]["name"]
+                        for r in node["resources"]
+                        if (r.get("binding") or {}).get("scope") == "global"
+                    )
 
     def global_read(self, name, value):
         for active in self.active:
@@ -148,6 +156,7 @@ class _Frame:
         self.returns = set()
         self.next_temp = 0
         self.loops = []
+        self.handler_depth = 0
         self.dynamic = 0
         self.params = []
         for formal, kind in zip(fn["params"], types):
@@ -212,7 +221,9 @@ class _Frame:
                 elif name == "float":
                     result = _Value("dtype", "f64")
                 else:
-                    result = host_protocols.builtin(self, node, name)
+                    result = exceptions.builtin(name) or host_protocols.builtin(
+                        self, node, name
+                    )
                     if result is None:
                         self.fail(
                             node,
@@ -469,7 +480,10 @@ class _Frame:
             left, right = self.scalar(lhs, node), self.scalar(rhs, node)
             equal = operator in {"eq", "noteq", "ne"}
             if lhs.kind == rhs.kind and (
-                equal or operator == "add" and lhs.kind == "text"
+                equal
+                and lhs.kind in {"bool", "text", "unit"}
+                or operator == "add"
+                and lhs.kind == "text"
             ):
                 if left["op"] == right["op"] == "literal":
                     a, b = left["value"], right["value"]
@@ -511,6 +525,10 @@ class _Frame:
             kwargs[key] = argument(item["value"])
         if target.kind in {"array_constructor", "array_copy_method"}:
             return arrays.construct(self, node, target, args, kwargs, steps, discard)
+        if target.kind == "exception_class":
+            return exceptions.construct(
+                self, node, target, args, kwargs, steps, discard
+            )
         if target.kind == "builtin" and target.value == "range":
             if kwargs or not 1 <= len(args) <= 3 or any(v.kind != "i64" for v in args):
                 self.fail(
@@ -622,6 +640,7 @@ class _Frame:
             args=operands,
             type=function["result"],
             parameter_types=[values.wire(v.kind) for v in bound],
+            **({"noreturn": True} if function.get("noreturn") else {}),
         )
         return self.effect(call, values.from_wire(function["result"]), steps, discard)
 
@@ -759,6 +778,15 @@ class _Frame:
         writes = {}
         nested = False
         for op in walk_operations(body):
+            if op["op"] == "exception_handler" and (count is None or count > 1):
+                alias = op.get("binding")
+                if alias and alias.get("op") == "var":
+                    env = (
+                        self.project.names
+                        if alias.get("scope") == "global"
+                        else self.env
+                    )
+                    env.pop(alias["name"], None)
             if op["op"] in {"for", "while"}:
                 nested = True
             if op["op"] in {
@@ -871,29 +899,44 @@ class _Frame:
             loop = dict(op="while", body=[])
         self.widen_loop(node, iv, count)
         header = self.snapshot()
-        if not counted:
-            test_setup = []
+        test_setup = []
+        flag = self.temporary() if node.get("else") else None
+        if counted:
+            condition = loop["condition"]
+        else:
             test = self.truth(self.evaluate(node["condition"], test_setup), node)
-            empty = test.exact is False
-            nonempty = test.exact is True
-            loop["condition"] = test.value if not test_setup else _literal(True).value
-            if test_setup:
-                loop["body"].extend(test_setup)
-                loop["body"].append(
+            empty, nonempty = test.exact is False, test.exact is True
+            condition = test.value
+            self.refine_loop_test(condition)
+        loop["condition"] = condition
+        if test_setup or flag:
+            # Mark exhaustion at the condition edge. A pending break can be
+            # replaced by a continue or a return inside source-level finally.
+            finish = []
+            if flag:
+                steps.append(
+                    dict(op="decl", name=flag, type="bool", init=_literal(False).value)
+                )
+                finish.append(
                     dict(
-                        op="if",
-                        condition=dict(
-                            op="unary", operator="not", value=test.value, type="bool"
-                        ),
-                        then=[dict(op="break")],
-                        **{"else": []},
+                        op="assign",
+                        target=_Value("bool", None).at(flag).value,
+                        value=_literal(True).value,
                     )
                 )
-            self.refine_loop_test(test.value)
-        flag = None
-        if node.get("else"):
-            flag = self.temporary()
-        flow = {"break": [], "continue": [], "else_flag": flag}
+            loop["condition"] = _literal(True).value
+            loop["body"].extend(test_setup)
+            loop["body"].append(
+                dict(
+                    op="if",
+                    condition=dict(
+                        op="unary", operator="not", value=condition, type="bool"
+                    ),
+                    then=[*finish, dict(op="break")],
+                    **{"else": []},
+                )
+            )
+        flow = {"break": [], "continue": []}
         self.loops.append(flow)
         self.dynamic += 1
         if not empty:
@@ -904,10 +947,6 @@ class _Frame:
         self.dynamic -= 1
         self.loops.pop()
         broke = flow["break"]
-        if flag and broke:
-            steps.append(
-                dict(op="decl", name=flag, type="bool", init=_literal(True).value)
-            )
         steps.append(loop)
         if empty:
             normal = [start]
@@ -942,6 +981,7 @@ class _Frame:
     def sequence(self, body, steps):
         for node in body:
             op = node["op"]
+            first = len(steps)
             if (
                 op == "decl"
                 and node.get("initial_binding") == "unbound"
@@ -965,6 +1005,15 @@ class _Frame:
                         "definition requires default, annotation, type parameter or decorator evaluation",
                     )
                 self.store(node["target"], _Value("function", node["symbol"]), steps)
+            elif op == "raise":
+                exceptions.throw(self, node, steps)
+                return False
+            elif op == "try":
+                if not exceptions.protected(self, node, steps):
+                    return False
+            elif op == "with_context":
+                if not exceptions.resources(self, node, steps):
+                    return False
             elif op == "return":
                 value = (
                     self.evaluate(node["value"], steps)
@@ -989,14 +1038,6 @@ class _Frame:
             elif op in {"break", "continue"} and self.loops:
                 flow = self.loops[-1]
                 flow[op].append(self.snapshot())
-                if op == "break" and flow["else_flag"]:
-                    steps.append(
-                        dict(
-                            op="assign",
-                            target=dict(op="var", name=flow["else_flag"], type="bool"),
-                            value=_literal(False).value,
-                        )
-                    )
                 steps.append(dict(op=op))
                 return False
             elif op == "if":
@@ -1007,6 +1048,15 @@ class _Frame:
                     return False
             else:
                 self.fail(node, "statement_contract", f"unclosed statement {op}")
+            for statement in steps[first:]:
+                if statement["op"] in {"decl", "expr", "assign"}:
+                    value = (
+                        statement.get("init")
+                        if statement["op"] == "decl"
+                        else statement.get("value")
+                    )
+                    if value and value.get("noreturn"):
+                        return False
         return True
 
     def lower(self):
@@ -1025,7 +1075,7 @@ class _Frame:
                 "result_contract",
                 f"incompatible return paths {sorted(self.returns)}",
             )
-        result = "void" if self.initializing else next(iter(self.returns))
+        result = "void" if self.initializing else next(iter(self.returns), "unit")
         parameters = {p["name"] for p in self.params}
         declarations = [
             dict(op="decl", name=n, type=values.wire(t))
@@ -1038,6 +1088,7 @@ class _Frame:
             result=values.wire(result),
             location=self.fn.get("location"),
             body=[*declarations, *body],
+            **({"noreturn": True} if not falls and not self.returns else {}),
         )
 
 

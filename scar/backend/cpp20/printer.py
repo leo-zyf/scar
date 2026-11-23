@@ -214,6 +214,21 @@ def _statement(node, depth=0):
         text = _declaration(node.decl)
     elif kind == "block":
         text = _block(node.body, depth)
+    elif kind == "throw":
+        text = (
+            "throw"
+            + (" " + _expression(node.value) if node.value is not None else "")
+            + ";"
+        )
+    elif kind == "try":
+        text = "try " + _block(node.body, depth)
+        for parameter, body in node.handlers:
+            target = (
+                _declaration(parameter, parameter=True)
+                if parameter is not None
+                else "..."
+            )
+            text += " catch (" + target + ") " + _block(body, depth)
     elif kind == "if":
         text = "if (" + _expression(node.condition) + ") " + _block(node.body, depth)
         if node.else_body:

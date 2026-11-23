@@ -3,10 +3,10 @@
 from contextlib import contextmanager
 from dataclasses import replace
 from graphlib import TopologicalSorter
-from hashlib import sha256
 import math
 import re
 
+from .control import ControlFlow, ERROR_TYPE, TEXT_STREAM_TYPE
 from .libraries import Libraries
 from .model import (
     Decl,
@@ -16,10 +16,17 @@ from .model import (
     Unit,
     binary,
     call,
+    cast,
+    declaration,
+    expression_stmt,
     integer,
     name,
     named,
     template,
+    symbol_name,
+    unary,
+    utf8_literal,
+    variable,
 )
 from .objects import ObjectModel
 
@@ -50,8 +57,10 @@ _ARRAY_EFFECTS = {
     "array_load": {"STATE"},
     "array_store": {"STATE"},
 }
-_TEXT_STREAM = {"kind": "handle", "resource": "text_stream"}
 _HOST_SIGNATURES = {
+    "console.input": ("text", ("text", "text")),
+    "process.exit": ("unit", (ERROR_TYPE,)),
+    "error.message": ("text", (ERROR_TYPE,)),
     "fs.exists": ("bool", ("text",)),
     "fs.is_file": ("bool", ("text",)),
     "fs.is_dir": ("bool", ("text",)),
@@ -64,12 +73,12 @@ _HOST_SIGNATURES = {
     "fs.copy_tree": ("text", ("text", "text")),
     "process.chdir": ("unit", ("text",)),
     "process.getcwd": ("text", ()),
-    "stream.open": (_TEXT_STREAM, ("text", "text", "text", "text")),
-    "stream.write": ("i64", (_TEXT_STREAM, "text")),
-    "stream.read": ("text", (_TEXT_STREAM, "i64")),
-    "stream.readline": ("text", (_TEXT_STREAM, "i64")),
-    "stream.close": ("unit", (_TEXT_STREAM,)),
-    "stream.flush": ("unit", (_TEXT_STREAM,)),
+    "stream.open": (TEXT_STREAM_TYPE, ("text", "text", "text", "text")),
+    "stream.write": ("i64", (TEXT_STREAM_TYPE, "text")),
+    "stream.read": ("text", (TEXT_STREAM_TYPE, "i64")),
+    "stream.readline": ("text", (TEXT_STREAM_TYPE, "i64")),
+    "stream.close": ("unit", (TEXT_STREAM_TYPE,)),
+    "stream.flush": ("unit", (TEXT_STREAM_TYPE,)),
     "time.wall": ("f64", ()),
     "time.sleep": ("unit", ("f64",)),
 }
@@ -127,16 +136,6 @@ wchar_t while xor xor_eq""".split()
 )
 
 
-def _identifier(name, category):
-    if not isinstance(name, str) or not name:
-        raise ValueError(f"empty {category} identifier")
-    if _IDENTIFIER.fullmatch(name) and not name.startswith("_") and "__" not in name:
-        return f"{category}_{name}"
-    label = re.sub(r"[^A-Za-z0-9]+", "_", name).strip("_")[:48] or "symbol"
-    key = sha256(name.encode()).hexdigest()[:20]
-    return f"{category}x_{label}_{key}"
-
-
 _UNARY_MATH = set(
     (
         "abs acos acosh asin asinh atan atanh cbrt ceil cos cosh erf erfc exp exp2 "
@@ -146,37 +145,6 @@ _UNARY_MATH = set(
 _BINARY_MATH = set(
     "atan2 copysign fdim fmax fmin fmod hypot nextafter pow remainder".split()
 )
-
-
-def unary(operator, value, postfix=False):
-    return Expr("unary", operator=operator, args=(value,), postfix=postfix)
-
-
-def utf8_literal(value, target):
-    if not isinstance(value, str):
-        raise ValueError("text literal requires a UTF-8 string")
-    return Expr(
-        "construct",
-        type=named(target),
-        args=(Expr("string", value=value), integer(len(value.encode("utf-8")))),
-        qualifier="paren",
-    )
-
-
-def variable(symbol, ty, init=None, **attributes):
-    return Decl("variable", name=symbol, type=ty, initializer=init, **attributes)
-
-
-def declaration(decl):
-    return Stmt("declaration", decl=decl)
-
-
-def expression_stmt(value):
-    return Stmt("expression", value=value)
-
-
-def cast(ty, operand, operator="static"):
-    return Expr("cast", operator=operator, type=ty, args=(operand,))
 
 
 def alignment(record):
@@ -207,10 +175,17 @@ class Lowerer:
         self.regions = physical.get("regions", {})
         self.operator_backends = physical.get("operator_backends", {})
         self.libraries = Libraries()
-        self.objects = ObjectModel(_identifier)
+        self.objects = ObjectModel(symbol_name)
         self.receiver = None
         self.headers = self.libraries.headers
         self.used_sdk_headers = set()
+        self.control = ControlFlow(
+            expression=self.expression,
+            statements=self.statements,
+            type_name=self.type_name,
+            headers=self.headers,
+            use_sdk=self.use_sdk,
+        )
         self.openmp = False
         self.map_count = 0
         self.coordinate_maps = 0
@@ -230,7 +205,7 @@ class Lowerer:
             elif _IDENTIFIER.fullmatch(symbol) and symbol not in _KEYWORDS:
                 target = symbol
             else:
-                target = _identifier(symbol, "g")
+                target = symbol_name(symbol, "g")
             self.globals[symbol] = "::" + target.removeprefix("::")
         self.shadowed_globals = set()
         self.methods = {f["name"] for f in module["functions"] if f.get("method")}
@@ -241,8 +216,13 @@ class Lowerer:
             self.functions[key] = (
                 key
                 if _IDENTIFIER.fullmatch(key) and key not in _KEYWORDS
-                else _identifier(key, "fn")
+                else symbol_name(key, "fn")
             )
+
+    def use_sdk(self, header):
+        self.used_sdk_headers.add(header)
+        if header == "host.hpp":
+            self.used_sdk_headers.add("exceptions.hpp")
 
     @contextmanager
     def lexical_scope(self, bindings=()):
@@ -276,9 +256,12 @@ class Lowerer:
                 raise ValueError(f"unsupported scalar {spec!r}")
             return named(_SCALARS[spec])
         kind = spec["kind"]
-        if spec == _TEXT_STREAM:
-            self.used_sdk_headers.add("host.hpp")
+        if spec == TEXT_STREAM_TYPE:
+            self.use_sdk("host.hpp")
             return named("scar::host::text_stream")
+        if spec == ERROR_TYPE:
+            self.used_sdk_headers.add("exceptions.hpp")
+            return named("scar::error_value")
         if kind == "ndarray":
             ndarray_rank(spec)
             if "array.hpp" not in self.used_sdk_headers:
@@ -293,7 +276,7 @@ class Lowerer:
                     raise ValueError(
                         "ndarray requires a scheduled xtensor CPU provider"
                     )
-                self.used_sdk_headers.add("array.hpp")
+                self.use_sdk("array.hpp")
                 self.libraries.links.add("XTensor")
             return Type(
                 "template",
@@ -303,7 +286,7 @@ class Lowerer:
         if kind == "library":
             return self.libraries.cpp_type(spec, self.type_name)
         if kind == "record":
-            return named(_identifier(spec["name"], "rec"))
+            return named(symbol_name(spec["name"], "rec"))
         if kind == "function":
             alias = (
                 "scar::variadic_function" if spec.get("variadic") else "scar::function"
@@ -444,10 +427,10 @@ class Lowerer:
         extended = "stream" in expr
         namespace = "scar::host::" if extended else "scar::"
         if extended:
-            self.used_sdk_headers.add("host.hpp")
+            self.use_sdk("host.hpp")
         options = {"sep": "text", "end": "text", "flush": "bool"}
         if "stream" in expr:
-            options["stream"] = _TEXT_STREAM
+            options["stream"] = TEXT_STREAM_TYPE
         order = expr.get("keyword_order", tuple(options))
         if (
             not isinstance(order, (list, tuple))
@@ -487,7 +470,9 @@ class Lowerer:
             or node["semantics_version"] != 1
         ):
             raise ValueError("invalid host interface version or operand list")
-        effects = {"VAL"} if interface == "path.join" else {"IO", "STATE"}
+        effects = (
+            {"VAL"} if interface in ("path.join", "error.message") else {"IO", "STATE"}
+        )
         if set(node.get("effects", ())) != effects:
             raise ValueError(f"invalid host effects for {interface!r}")
         if interface == "path.join" and args:
@@ -498,13 +483,20 @@ class Lowerer:
             raise ValueError(f"unsupported host interface {interface!r}")
         if node.get("type") != result or tuple(a.get("type") for a in args) != expected:
             raise ValueError(f"host interface signature mismatch for {interface!r}")
-        self.used_sdk_headers.add("host.hpp")
+        self.use_sdk("exceptions.hpp" if interface == "error.message" else "host.hpp")
+        if interface == "process.exit":
+            self.control.require_exit_handler()
         arguments = tuple(
             cast(self.type_name(a["type"]), self.expression(a)) for a in args
         )
         if interface == "path.join" or len(arguments) > 1:
             arguments = (Expr("braced", args=arguments),)
-        return call("scar::host::" + interface.replace(".", "_"), *arguments)
+        symbol = (
+            "scar::error_message"
+            if interface == "error.message"
+            else "scar::host::" + interface.replace(".", "_")
+        )
+        return call(symbol, *arguments)
 
     def array_operation(self, node):
         op = node["op"]
@@ -598,6 +590,8 @@ class Lowerer:
             return self.text_print(expr)
         if op == "host_call":
             return self.host_call(expr)
+        if op == "error_make":
+            return self.control.error_make(expr)
         if op == "text_format":
             formatting, types = self.scalar_format(expr.get("scalar_format"))
             value = expr["value"]
@@ -621,8 +615,8 @@ class Lowerer:
             symbol = expr["name"]
             return binary(
                 "*",
-                Expr("sizeof_expr", args=(unary("*", name(_identifier(symbol, "v"))),)),
-                name(_identifier(symbol, "stack_count")),
+                Expr("sizeof_expr", args=(unary("*", name(symbol_name(symbol, "v"))),)),
+                name(symbol_name(symbol, "stack_count")),
             )
         if op == "fp_traps_masked":
             return call("scar::fp_traps_masked")
@@ -642,7 +636,7 @@ class Lowerer:
                 return name(self.globals[symbol])
             if self.receiver is not None and symbol == self.receiver:
                 return name("this")
-            return name(_identifier(symbol, "v"))
+            return name(symbol_name(symbol, "v"))
         if op == "binary":
             return binary(_BINARY[expr["operator"]], E(expr["left"]), E(expr["right"]))
         if op == "unary":
@@ -722,7 +716,7 @@ class Lowerer:
             field = (
                 self.libraries.field(expr["provider"], expr["record"], expr["field"])
                 if expr.get("provider")
-                else _identifier(expr["field"], "m")
+                else symbol_name(expr["field"], "m")
             )
             return Expr("member", args=(E(expr["base"]),), name=field)
         raise ValueError(f"unsupported expression {op!r} at {expr.get('id','?')}")
@@ -759,7 +753,7 @@ class Lowerer:
         if storage not in (None, "auto", "static", "thread_local"):
             raise ValueError(f"unsupported storage {storage!r}")
         return variable(
-            symbol or _identifier(stmt["name"], "v"),
+            symbol or symbol_name(stmt["name"], "v"),
             self.type_name(stmt["type"]),
             self.expression(stmt["init"]) if stmt.get("init") is not None else None,
             alignment=alignment(stmt),
@@ -798,7 +792,7 @@ class Lowerer:
                 "scoped array requires an approved lexical lifetime and target stack assignment"
             )
         ty = self.type_name(stmt["element"])
-        cnt = _identifier(stmt["name"], "stack_count")
+        cnt = symbol_name(stmt["name"], "stack_count")
         extent = declaration(
             variable(
                 cnt,
@@ -812,7 +806,7 @@ class Lowerer:
             code += (Stmt("return", value=integer(0)),)
         argument = Decl(
             "param",
-            name=_identifier(stmt["name"], "v"),
+            name=symbol_name(stmt["name"], "v"),
             type=Type("const", element=Type("ptr", element=ty)),
         )
         action = Expr(
@@ -830,6 +824,8 @@ class Lowerer:
         E = self.expression
         if op == "array_store":
             return [expression_stmt(self.array_operation(stmt))]
+        if op in self.control.statement_kinds:
+            return self.control.statement(stmt)
         if op == "decl":
             return [declaration(self.variable_decl(stmt))]
         if op == "buffer":
@@ -851,23 +847,19 @@ class Lowerer:
                 declaration(variable(owner, owner_type, box)),
                 declaration(
                     variable(
-                        _identifier(stmt["name"], "v"),
+                        symbol_name(stmt["name"], "v"),
                         Type("const", element=Type("ptr", element=ty)),
                         raw,
                     )
                 ),
             ]
-        if op in ("label", "goto"):
-            return [Stmt(op, name=_identifier(stmt["name"], "label"))]
-        if op in ("case", "default", "return"):
+        if op in ("case", "default"):
             return [
                 Stmt(
                     op,
                     value=E(stmt["value"]) if stmt.get("value") is not None else None,
                 )
             ]
-        if op in ("break", "continue"):
-            return [Stmt(op)]
         if op == "assign":
             return [expression_stmt(binary("=", E(stmt["target"]), E(stmt["value"])))]
         if op == "store_bytes":
@@ -906,7 +898,7 @@ class Lowerer:
                         else None
                     ),
                     step=E(stmt["step"]) if stmt.get("step") is not None else None,
-                    body=self.statements(stmt["body"]),
+                    body=self.control.loop_body(stmt["body"]),
                 )
             return [Stmt("block", body=(*setup, loop))]
         if op == "each":
@@ -915,11 +907,11 @@ class Lowerer:
                     "each",
                     decl=Decl(
                         "param",
-                        name=_identifier(stmt["name"], "v"),
+                        name=symbol_name(stmt["name"], "v"),
                         type=self.type_name(stmt["type"]),
                     ),
                     value=E(stmt["range"]),
-                    body=self.statements(stmt["body"], bindings=(stmt["name"],)),
+                    body=self.control.loop_body(stmt["body"], bindings=(stmt["name"],)),
                 )
             ]
         if op == "if":
@@ -936,7 +928,11 @@ class Lowerer:
                 Stmt(
                     op,
                     condition=E(stmt["condition"]) if op != "block" else None,
-                    body=self.statements(stmt["body"]),
+                    body=(
+                        self.statements(stmt["body"])
+                        if op == "block"
+                        else self.control.loop_body(stmt["body"], switch=op == "switch")
+                    ),
                 )
             ]
         raise ValueError(f"unsupported statement {op!r} at {stmt.get('id','?')}")
@@ -954,7 +950,7 @@ class Lowerer:
         self.map_count += 1
         number = self.map_count
         limit = f"scar_extent_{number}"
-        index = _identifier(stmt["index"], "v")
+        index = symbol_name(stmt["index"], "v")
         size = name(limit)
         region = self.regions.get(stmt.get("site"), {})
         bands = region.get("widths", [dict(minimum_elements=0, workers=1)])
@@ -980,7 +976,7 @@ class Lowerer:
                 )
             )
             previous = lower
-        body = self.statements(stmt["body"], bindings=(stmt["index"],))
+        body = self.control.loop_body(stmt["body"], bindings=(stmt["index"],))
         start = declaration(
             variable(
                 limit,
@@ -1059,7 +1055,7 @@ class Lowerer:
             substitutions[id(node)] = name(symbols[axis])
         self.axis_names = substitutions
         try:
-            body = self.statements(stmt["body"], bindings=(stmt["index"],))
+            body = self.control.loop_body(stmt["body"], bindings=(stmt["index"],))
         finally:
             self.axis_names = before
         for axis, (symbol, count) in enumerate(zip(symbols, counts)):
@@ -1079,7 +1075,7 @@ class Lowerer:
         params = tuple(
             Decl(
                 "param",
-                name=_identifier(p["name"], "v"),
+                name=symbol_name(p["name"], "v"),
                 type=self.type_name(p["type"]),
             )
             for p in function["params"]
@@ -1191,7 +1187,7 @@ class Lowerer:
             raise ValueError("duplicate record")
         order = TopologicalSorter()
         for key, record in records.items():
-            tag = _identifier(key, "rec")
+            tag = symbol_name(key, "rec")
             kind = record.get("kind", "struct")
             keyword = "struct" if kind in ("class", "struct", "record") else kind
             if keyword not in ("struct", "union") or record.get("packed"):
@@ -1233,7 +1229,7 @@ class Lowerer:
             fields = tuple(
                 Decl(
                     "field",
-                    name=_identifier(f["name"], "m"),
+                    name=symbol_name(f["name"], "m"),
                     type=self.type_name(f["type"]),
                     initializer=(
                         self.expression(f["init"])
@@ -1247,7 +1243,7 @@ class Lowerer:
             definitions.append(
                 Decl(
                     "record",
-                    name=_identifier(key, "rec"),
+                    name=symbol_name(key, "rec"),
                     definition="union" if record.get("kind") == "union" else "struct",
                     bases=self.objects.bases(record),
                     members=fields + self.objects.declarations(record, self),
@@ -1258,7 +1254,7 @@ class Lowerer:
         return forwards, definitions
 
     def layout_checks(self, record):
-        tag = named(_identifier(record["name"], "rec"))
+        tag = named(symbol_name(record["name"], "rec"))
         checks = []
         for attribute, form in (
             ("size_bytes", "sizeof_type"),
@@ -1297,7 +1293,7 @@ class Lowerer:
                     record["provider"], record["symbol"], field["name"]
                 )
                 if record.get("provider")
-                else _identifier(field["name"], "m")
+                else symbol_name(field["name"], "m")
             )
             checks.append(
                 Decl(
@@ -1370,6 +1366,7 @@ class Lowerer:
                     raise ValueError("compiler-defined method with explicit body")
                 continue
             self.weight = 0
+            self.control.begin_function(fn["result"])
             with self.lexical_scope(param["name"] for param in fn["params"]):
                 if method:
                     self.receiver = fn["params"][0]["name"]
@@ -1381,8 +1378,9 @@ class Lowerer:
                     self.receiver = None
                     decl = self.signature(fn)
                     prototypes.append(decl)
+                body = self.statements_in_scope(fn["body"], fn)
                 definition = replace(
-                    decl, body=self.statements_in_scope(fn["body"], fn)
+                    decl, body=self.control.finish_function(fn["name"], body)
                 )
             if parts and group_weight + self.weight > 4000:
                 flush()
@@ -1391,6 +1389,24 @@ class Lowerer:
             group_weight += self.weight
         if parts or not groups:
             flush()
+        for path, unit in groups.items():
+            for pos, decl in enumerate(unit.declarations):
+                if (
+                    decl.kind == "function"
+                    and decl.name == "main"
+                    and decl.body is not None
+                ):
+                    body = self.control.entry_body(decl.body)
+                    if body is not decl.body:
+                        groups[path] = replace(
+                            unit,
+                            declarations=(
+                                *unit.declarations[:pos],
+                                replace(decl, body=body),
+                                *unit.declarations[pos + 1 :],
+                            ),
+                        )
+                    break
         providers = tuple(
             item
             for interface in self.libraries.declarations.values()

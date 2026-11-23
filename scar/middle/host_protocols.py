@@ -88,14 +88,14 @@ _MEMBERS = {
     "os.path": {"join", "exists", "isfile", "isdir"},
     "shutil": {"rmtree", "copyfile", "copy", "copy2", "copytree"},
     "time": {"time", "sleep"},
-    "sys": set(),
+    "sys": {"exit"},
     "math": {"pi", "e", "tau"},
     "subprocess": set(),
 }
 
 
 def builtin(frame, node, name):
-    if name in {"open", "str"}:
+    if name in {"open", "str", "input"}:
         return Value(
             "host_callable", "builtins." + name, node.get("source_runtime", {})
         )
@@ -232,7 +232,16 @@ def _emit(frame, node, interface, result, args, steps, discard):
             reads.append("filesystem")
     if interface.startswith("time."):
         reads.append("host.clock")
-    effects = ["VAL"] if interface == "path.join" else ["IO", "STATE"]
+    if interface == "console.input":
+        reads.append("stdin.state")
+        writes += ["stdin.state", "stdout.state", "stderr.state"]
+    if interface == "process.exit":
+        writes.append("process.completion")
+    if interface == "error.message":
+        reads.append("error.value")
+    effects = (
+        ["VAL"] if interface in {"path.join", "error.message"} else ["IO", "STATE"]
+    )
     return frame.effect(
         dict(
             op="host_call",
@@ -244,6 +253,7 @@ def _emit(frame, node, interface, result, args, steps, discard):
             reads=reads,
             writes=writes,
             may_raise=True,
+            **({"noreturn": True} if interface == "process.exit" else {}),
         ),
         result,
         steps,
@@ -313,6 +323,10 @@ def invoke(frame, node, target, args, keywords, steps, discard):
     name = target.value
     if name == "builtins.open":
         return _open(frame, node, target, args, keywords, steps, discard)
+    if name == "builtins.input":
+        return _input(frame, node, target, args, keywords, steps, discard)
+    if name == "sys.exit":
+        return _exit(frame, node, args, keywords, steps, discard)
     if name == "builtins.str":
         if keywords or len(args) > 1:
             frame.fail(
@@ -321,6 +335,8 @@ def invoke(frame, node, target, args, keywords, steps, discard):
         if not args:
             return literal("")
         value = args[0]
+        if value.kind == "handle:error":
+            return _emit(frame, node, "error.message", "text", [value], steps, discard)
         if value.kind not in {"bool", "i64", "f64", "text", "unit"}:
             frame.fail(
                 node,
@@ -329,14 +345,7 @@ def invoke(frame, node, target, args, keywords, steps, discard):
             )
         if value.kind == "text":
             return value
-        return frame.effect(
-            dict(
-                op="text_format", value=value.value, type="text", scalar_format=_FORMAT
-            ),
-            "text",
-            steps,
-            discard,
-        )
+        return _format(frame, node, value, steps, discard)
     if name == "os.path.join":
         if not args or keywords or any(v.kind != "text" for v in args):
             frame.fail(
@@ -370,3 +379,99 @@ def invoke(frame, node, target, args, keywords, steps, discard):
             )
         values = values[:2]
     return _emit(frame, node, interface, result, values, steps, discard)
+
+
+def _format(frame, node, value, steps, discard):
+    return frame.effect(
+        dict(
+            op="text_format",
+            value=frame.scalar(value, node),
+            type="text",
+            scalar_format=_FORMAT,
+        ),
+        "text",
+        steps,
+        discard,
+    )
+
+
+def _input(frame, node, target, args, keywords, steps, discard):
+    if keywords or len(args) > 1 or args and args[0].kind != "text":
+        frame.fail(
+            node,
+            "console_arguments",
+            "input requires at most one positional text prompt",
+        )
+    facts = target.facts
+    encodings = [facts.get(key, "") for key in ("stdin_encoding", "stdout_encoding")]
+    if any(
+        not isinstance(value, str)
+        or value.lower().replace("-", "") not in {"utf8", "utf_8"}
+        for value in encodings
+    ):
+        frame.fail(
+            node,
+            "console_encoding",
+            "console input requires proven UTF-8 input and output encodings",
+        )
+    errors = facts.get("stdin_errors")
+    if (
+        errors not in {"strict", "surrogateescape"}
+        or errors == "surrogateescape"
+        and facts.get("stdout_errors") != errors
+    ):
+        frame.fail(
+            node,
+            "console_encoding",
+            "the input error policy requires a compatible native text-output contract",
+        )
+    return _emit(
+        frame,
+        node,
+        "console.input",
+        "text",
+        [args[0] if args else literal(""), literal(errors)],
+        steps,
+        discard,
+    )
+
+
+def _exit(frame, node, args, keywords, steps, discard):
+    if keywords or len(args) > 1:
+        frame.fail(
+            node, "exit_arguments", "exit requires at most one positional status"
+        )
+    value = args[0] if args else literal(None)
+    if value.kind == "unit":
+        status, message, output = literal(0), literal(""), literal(None)
+    elif value.kind in {"i64", "bool"}:
+        status = (
+            value
+            if value.kind == "i64"
+            else Value(
+                "i64", dict(op="cast", type="i64", value=value.value), value.facts
+            )
+        )
+        message = _format(frame, node, value, steps, False)
+        output = literal(None)
+    elif value.kind == "text":
+        status, message, output = literal(1), value, value
+    else:
+        frame.fail(
+            node,
+            "exit_arguments",
+            "exit status requires a closed scalar display and integer-code contract",
+        )
+    error = frame.effect(
+        dict(
+            op="error_make",
+            category="system_exit",
+            message=message.value,
+            exit_code=status.value,
+            exit_message=output.value,
+            type=wire("handle:error"),
+        ),
+        "handle:error",
+        steps,
+    )
+    return _emit(frame, node, "process.exit", "unit", [error], steps, discard)

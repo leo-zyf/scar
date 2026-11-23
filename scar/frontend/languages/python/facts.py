@@ -199,6 +199,10 @@ class _Imports:
             os_name=os.name,
             default_text_encoding="utf-8" if sys.flags.utf8_mode else locale_encoding,
             filesystem_encoding=sys.getfilesystemencoding(),
+            stdin_encoding=getattr(sys.stdin, "encoding", None),
+            stdin_errors=getattr(sys.stdin, "errors", None),
+            stdout_encoding=getattr(sys.stdout, "encoding", None),
+            stdout_errors=getattr(sys.stdout, "errors", None),
             utf8_mode=bool(sys.flags.utf8_mode),
         )
 

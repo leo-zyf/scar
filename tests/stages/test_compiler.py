@@ -188,7 +188,129 @@ print(str(1e-5), str(1e15), str(1e16), str(False), str(None))
     ):
         assert (native / relative).read_bytes() == (reference / relative).read_bytes()
     target = json.loads((delivery / "target-ir.json").read_bytes())
-    assert [h["output"] for h in target["sdk_headers"]] == ["include/scar/host.hpp"]
+    assert [h["output"] for h in target["sdk_headers"]] == [
+        "include/scar/exceptions.hpp",
+        "include/scar/host.hpp",
+    ]
+
+
+def test_exception_regions_preserve_cleanup_and_control_transfers(tmp_path):
+    entry = tmp_path / "entry.py"
+    entry.write_text("""def protected():
+    try:
+        try:
+            raise ValueError('bad\\0χ')
+        except (ValueError, TypeError) as problem:
+            print('caught', str(problem))
+            raise
+        finally:
+            print('inner cleanup')
+    except Exception:
+        print('outer handler')
+    finally:
+        print('last cleanup')
+    with open('data.txt', 'w', encoding='utf-8') as stream, stream as entered:
+        alias = stream
+        entered.write('saved')
+    try:
+        alias.write('must fail')
+    except ValueError:
+        print('closed alias')
+    try:
+        return 7
+    finally:
+        print('return cleanup')
+print(protected())
+for i in range(3):
+    try:
+        break
+    finally:
+        continue
+else:
+    print('exhausted')
+for j in range(3):
+    try:
+        if j == 0: continue
+        break
+    finally:
+        print('iteration', j)
+else:
+    print('wrong')
+""")
+    reference = tmp_path / "reference"
+    reference.mkdir()
+    expected = _run([sys.executable, "-B", entry], reference)
+    graph, plan, delivery = (tmp_path / name for name in ("graph", "plan", "delivery"))
+    _stage(tmp_path, "frontend", "build", "--entry", entry, "--out", graph)
+    entry.unlink()
+    _stage(tmp_path, "middle", "plan", "--graph", graph, "--out", plan)
+    shutil.rmtree(graph)
+    result = _stage(tmp_path, "backend", "compile", "--ir", plan, "--out", delivery)
+    shutil.rmtree(plan)
+    native = tmp_path / "native"
+    native.mkdir()
+    assert _run([result["executable"]], native) == expected
+    assert (native / "data.txt").read_bytes() == (reference / "data.txt").read_bytes()
+
+
+def test_console_and_process_exit_preserve_handlers_and_finalization(tmp_path):
+    entry = tmp_path / "entry.py"
+    entry.write_text("""import sys
+try:
+    text = input('prompt:')
+    print('data', text)
+except EOFError:
+    print('eof')
+try:
+    sys.exit(3)
+except SystemExit as signal:
+    print('caught exit', str(signal))
+try:
+    with open('exit.txt', 'w', encoding='utf-8') as stream:
+        print('saved', file=stream)
+        sys.exit('stop')
+finally:
+    print('exit cleanup')
+""")
+    reference = tmp_path / "reference"
+    reference.mkdir()
+    inputs = (b"\xff\n", b"")
+    expected = [
+        subprocess.run(
+            [sys.executable, "-B", entry],
+            cwd=reference,
+            input=data,
+            capture_output=True,
+            timeout=30,
+        )
+        for data in inputs
+    ]
+    assert all(
+        result.returncode == 1 and result.stderr == b"stop\n" for result in expected
+    )
+    graph, plan, delivery = (tmp_path / name for name in ("graph", "plan", "delivery"))
+    _stage(tmp_path, "frontend", "build", "--entry", entry, "--out", graph)
+    entry.unlink()
+    _stage(tmp_path, "middle", "plan", "--graph", graph, "--out", plan)
+    shutil.rmtree(graph)
+    result = _stage(tmp_path, "backend", "compile", "--ir", plan, "--out", delivery)
+    shutil.rmtree(plan)
+    native = tmp_path / "native"
+    native.mkdir()
+    for data, baseline in zip(inputs, expected):
+        actual = subprocess.run(
+            [result["executable"]],
+            cwd=native,
+            input=data,
+            capture_output=True,
+            timeout=30,
+        )
+        assert (actual.returncode, actual.stdout, actual.stderr) == (
+            baseline.returncode,
+            baseline.stdout,
+            baseline.stderr,
+        )
+    assert (native / "exit.txt").read_bytes() == (reference / "exit.txt").read_bytes()
 
 
 def test_python_loops_remain_structured_and_preserve_exit_bindings(tmp_path):

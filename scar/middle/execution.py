@@ -155,9 +155,15 @@ def annotate_scoped_arrays(function):
             ):
                 raise ValueError(f"automatic array continuation crosses a {op} edge")
             nested_loop = op in {"for", "each", "while", "do_while", "map"}
-            for field in ("body", "then", "else"):
+            regions = [
+                node.get(field, ()) for field in ("body", "then", "else", "finally")
+            ]
+            regions.extend(
+                handler.get("body", ()) for handler in node.get("handlers", ())
+            )
+            for region in regions:
                 inspect(
-                    node.get(field, ()),
+                    region,
                     at_function_scope,
                     loop or nested_loop,
                     breakable or nested_loop or op == "switch",
@@ -177,8 +183,10 @@ def annotate_scoped_arrays(function):
                 inspect(items[index + 1 :], at_function_scope)
                 node["scope_control"] = "lexical_continuation"
                 count += 1
-            for field in ("body", "then", "else", "reference"):
+            for field in ("body", "then", "else", "finally", "reference"):
                 count += sequence(node.get(field, ()))
+            for handler in node.get("handlers", ()):
+                count += sequence(handler.get("body", ()))
             if node.get("op") == "schedule_choice":
                 count += sequence([node["fused"]])
         return count

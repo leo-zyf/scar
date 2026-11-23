@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import MISSING, dataclass, fields
+from hashlib import sha256
 import math
 import re
 
@@ -51,6 +52,7 @@ class Stmt:
     cases: tuple[()] = ()
     directive: str | None = None
     clauses: tuple[tuple[str, tuple[Expr, ...]], ...] = ()
+    handlers: tuple[tuple[Decl | None, tuple[Stmt, ...]], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -463,6 +465,13 @@ _GRAMMAR = {
             "each": dict(decl=_range_var, value=_expr, body=_statements),
             "while do_while switch": dict(condition=_expr, body=_statements),
             "break continue default": {},
+            "throw": dict(value=_optional(_expr)),
+            "try": dict(
+                body=_statements,
+                handlers=_sequence(
+                    _tuple(_optional(_child(Decl, "param")), _statements), minimum=1
+                ),
+            ),
             "goto label": dict(name=identifier),
             "pragma": dict(
                 directive=_choices(
@@ -614,6 +623,19 @@ def _validate(node):
             )
     elif cls is Unit:
         _check_declaration_scope(node.declarations)
+    elif cls is Stmt and kind == "try":
+        for index, (parameter, _) in enumerate(node.handlers):
+            if parameter is None:
+                _require(
+                    index == len(node.handlers) - 1, "a catch-all handler must be last"
+                )
+            else:
+                _require(
+                    parameter.type is not None
+                    and not parameter.definition
+                    and parameter.initializer is None,
+                    "invalid catch parameter",
+                )
     elif cls is Stmt and kind == "declaration":
         decl = node.decl
         _require(
@@ -712,3 +734,44 @@ def construct(type_, *args, form="paren"):
 
 def template(value, *args):
     return Expr("template_name", name=value, args=args)
+
+
+def symbol_name(name, category):
+    if not isinstance(name, str) or not name:
+        raise ValueError(f"empty {category} identifier")
+    if _IDENTIFIER.fullmatch(name) and not name.startswith("_") and "__" not in name:
+        return f"{category}_{name}"
+    label = re.sub(r"[^A-Za-z0-9]+", "_", name).strip("_")[:48] or "symbol"
+    key = sha256(name.encode()).hexdigest()[:20]
+    return f"{category}x_{label}_{key}"
+
+
+def unary(operator, value, postfix=False):
+    return Expr("unary", operator=operator, args=(value,), postfix=postfix)
+
+
+def utf8_literal(value, target):
+    if not isinstance(value, str):
+        raise ValueError("text literal requires a UTF-8 string")
+    return Expr(
+        "construct",
+        type=named(target),
+        args=(Expr("string", value=value), integer(len(value.encode("utf-8")))),
+        qualifier="paren",
+    )
+
+
+def variable(symbol, ty, init=None, **attributes):
+    return Decl("variable", name=symbol, type=ty, initializer=init, **attributes)
+
+
+def declaration(decl):
+    return Stmt("declaration", decl=decl)
+
+
+def expression_stmt(value):
+    return Stmt("expression", value=value)
+
+
+def cast(ty, operand, operator="static"):
+    return Expr("cast", operator=operator, type=ty, args=(operand,))

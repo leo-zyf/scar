@@ -1,5 +1,6 @@
 #pragma once
 
+#include "exceptions.hpp"
 #include "runtime.hpp"
 #include <cerrno>
 #include <dirent.h>
@@ -335,6 +336,52 @@ inline std::int64_t text_length(std::string_view bytes) {
   }
   return count;
 }
+
+struct console_request {
+  std::string prompt, errors;
+};
+inline std::string console_input(const console_request &request) {
+  if (request.errors != "strict" && request.errors != "surrogateescape")
+    throw std::invalid_argument("unsupported console text error policy");
+  if (std::fflush(stderr) != 0)
+    os_error("flush standard error");
+  write_stdout(request.prompt, false);
+  flush_stdout();
+  auto byte = [] {
+    const int c = std::fgetc(stdin);
+    if (c == EOF && std::ferror(stdin))
+      throw std::ios_base::failure("standard input read failed");
+    return c;
+  };
+  std::string result;
+  for (;;) {
+    const int c = byte();
+    if (c == EOF) {
+      if (result.empty())
+        throw program_error("eof", "EOF when reading a line");
+      break;
+    }
+    if (c == '\n')
+      break;
+    if (c == '\r') {
+      const int next = byte();
+      if (next != EOF && next != '\n' && std::ungetc(next, stdin) == EOF)
+        throw std::ios_base::failure("standard input pushback failed");
+      break;
+    }
+    result.push_back(static_cast<char>(c));
+  }
+  if (request.errors == "strict")
+    text_length(result);
+  // With surrogateescape, non-UTF-8 bytes retain their original encoding.
+  // The binding contract requires matching UTF-8/surrogateescape output.
+  return result;
+}
+
+[[noreturn]] inline std::nullptr_t process_exit(const error_value &value) {
+  raise_error(value);
+}
+
 inline std::string process_getcwd() {
   auto cwd = fs::current_path().native();
   text_length(cwd);
@@ -346,7 +393,7 @@ class stream_state {
   bool reading_, line_buffered_;
   std::FILE *file() const {
     if (!file_)
-      throw std::ios_base::failure("closed text stream");
+      throw std::invalid_argument("I/O operation on closed file.");
     return file_;
   }
   int byte() {
@@ -361,6 +408,7 @@ public:
       : file_(f), reading_(reading),
         line_buffered_(!reading && ::isatty(::fileno(f))) {}
   stream_state(const stream_state &) = delete;
+  void require_open() const { static_cast<void>(file()); }
   ~stream_state() {
     if (file_)
       std::fclose(file_);
@@ -377,7 +425,7 @@ public:
   std::int64_t write(std::string_view text) {
     auto *f = file();
     if (reading_)
-      throw std::ios_base::failure("text stream is not writable");
+      throw program_error("unsupported_operation", "not writable");
     auto count = text_length(text);
     if ((!text.empty() &&
          std::fwrite(text.data(), 1, text.size(), f) != text.size()) ||
@@ -390,7 +438,7 @@ public:
   std::string read(std::int64_t count, bool line) {
     file();
     if (!reading_)
-      throw std::ios_base::failure("text stream is not readable");
+      throw program_error("unsupported_operation", "not readable");
     std::string result;
     while (count != 0) {
       int c = byte();
@@ -425,6 +473,10 @@ inline stream_state &stream(const text_stream &s) {
   if (!s)
     throw std::ios_base::failure("unbound text stream");
   return *s;
+}
+inline text_stream stream_enter(const text_stream &value) {
+  stream(value).require_open();
+  return value;
 }
 struct stream_options {
   std::string path, mode, encoding, newline;

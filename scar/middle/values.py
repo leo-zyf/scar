@@ -38,7 +38,11 @@ def from_wire(spec):
 
 
 def runtime(kind):
-    return kind in SCALARS or rank(kind) is not None or kind == "handle:text_stream"
+    return (
+        kind in SCALARS
+        or rank(kind) is not None
+        or kind in {"handle:text_stream", "handle:error"}
+    )
 
 
 @dataclass(frozen=True)

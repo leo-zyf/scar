@@ -110,7 +110,7 @@ def _guarded(fact, state):
     """A late lookup may retain an identity candidate, never a captured literal."""
     result = {"state": state}
     expected = {k: fact[k] for k in ("module", "symbol", "external") if k in fact}
-    for key in ("process_handles", "bound_process_handles"):
+    for key in ("process_handles", "bound_process_handles", "context_result"):
         if key in fact:
             expected[key] = fact[key]
     if expected:
@@ -693,7 +693,7 @@ class _Scope:
             record = self.variable(node.id)
             if f.get("external", "").startswith("builtins."):
                 record = {"op": "python_builtin", "name": node.id}
-                if f["external"] == "builtins.open":
+                if f["external"] in {"builtins.open", "builtins.input"}:
                     record["source_runtime"] = self.unit.runtime
             evidence = {
                 k: f[k]
@@ -708,6 +708,7 @@ class _Scope:
                     "possible_symbols",
                     "process_handles",
                     "bound_process_handles",
+                    "context_result",
                     "state",
                     "guards",
                 )
@@ -1161,11 +1162,24 @@ class _Scope:
         examples = {name: _examples(fact) for name, fact in self.env.items()}
         for part in scope_nodes(statements):
             for name in assigned_names(part):
-                if isinstance(part, ast.Name) and isinstance(part.ctx, ast.Del):
+                if isinstance(part, ast.ExceptHandler) or (
+                    isinstance(part, ast.Name) and isinstance(part.ctx, ast.Del)
+                ):
+                    # A caught alias is deleted on every exit from that handler,
+                    # even when the same slot held a value before the loop/try.
                     bound.discard(name)
                 self.env[name] = {} if name in bound else {"maybe_unbound": True}
                 if examples.get(name):
                     self.env[name]["examples"] = examples[name]
+
+    def prefix_state(self, body, incoming):
+        """A transfer can leave after any prefix of a protected suite."""
+        previous = self.env
+        self.env = dict(incoming)
+        self.widen(body)
+        outgoing = self.env
+        self.env = previous
+        return outgoing
 
     def statements(self, body):
         result = []
@@ -1514,44 +1528,104 @@ class _Scope:
             return [R(node, op, body=steps, **fields, **{"else": otherwise})]
         if isinstance(node, (ast.With, ast.AsyncWith)):
             resources = []
-            for item in node.items:
-                value, f = self.expr(item.context_expr)
-                resources.append(
-                    dict(
-                        manager=value,
-                        binding=(
-                            self.destination(item.optional_vars, f)
-                            if item.optional_vars
-                            else None
-                        ),
-                    )
+            suppressed = []
+            asynchronous = isinstance(node, ast.AsyncWith)
+            for index, item in enumerate(node.items):
+                if resources:
+                    # An outer exit may suppress failure while acquiring a later resource.
+                    suppressed.append(self.env.copy())
+                manager, fact = self.expr(item.context_expr)
+                self.invalidate_shared()  # __enter__ / awaited __aenter__ runs here.
+                site = dict(
+                    scope=self.symbol,
+                    line=node.lineno,
+                    column=node.col_offset + 1,
+                    resource=index,
                 )
+                entered = {"context_result": site}
+                if not asynchronous and fact.get("class") in {
+                    "io.IOBase",
+                    "subprocess.Popen",
+                }:
+                    # These standard enter methods return their receiver. A
+                    # replacement method can return an entirely different value.
+                    entered.update(
+                        (key, fact[key])
+                        for key in ("class", "process_handles", "process_channels")
+                        if key in fact
+                    )
+                    entered["guards"] = [
+                        *fact.get("guards", []),
+                        {
+                            "site": site,
+                            "expected": {
+                                "enter_returns_self": fact["class"] + ".__enter__"
+                            },
+                        },
+                    ]
+                binding = None
+                if item.optional_vars:
+                    if not isinstance(item.optional_vars, ast.Name):
+                        suppressed.append(self.env.copy())
+                    binding = self.destination(item.optional_vars, entered)
+                resources.append(
+                    dict(manager=manager, enter_result=site, binding=binding)
+                )
+            start = self.env.copy()
+            steps, normal = self.branch(node.body, start)
+            self.merge(normal, self.prefix_state(node.body, start), *suppressed)
+            self.invalidate_shared()  # Reverse-order exits can call arbitrary code.
             return [
                 R(
                     node,
                     "with_context",
+                    asynchronous=asynchronous,
                     resources=resources,
-                    body=self.statements(node.body),
+                    body=steps,
                     effects=["CTRL", "STATE", "ORDER"],
                 )
             ]
         if isinstance(node, ast.Try):
             before = self.env.copy()
             body, normal = self.branch(node.body, before)
+            final_inputs = []
+            if node.finalbody:
+                final_inputs.append(self.prefix_state(node.orelse, normal))
             otherwise, normal = self.branch(node.orelse, normal)
             arms = []
             states = [normal]
             # Any prefix of the protected body may precede a handler.
-            self.widen(node.body)
-            exceptional = self.env.copy()
+            exceptional = self.prefix_state(node.body, before)
+            if node.finalbody:
+                final_inputs.append(exceptional)
             for h in node.handlers:
                 self.env = exceptional.copy()
                 test = self.expr(h.type)[0] if h.type else None
+                exceptional = self.env.copy()  # Failed matches retain test effects.
+                binding = None
+                cleanup = []
                 if h.name:
-                    self.env[h.name] = {}
+                    name = ast.copy_location(ast.Name(id=h.name, ctx=ast.Store()), h)
+                    binding = self.destination(name, {})
+                    cleanup.append(
+                        R(
+                            h,
+                            "unbind",
+                            targets=[binding],
+                            protocol="exception_target",
+                            assign_none_first=True,
+                            when="all_handler_exits",
+                        )
+                    )
+                start = self.env.copy()
                 handler, outgoing = self.branch(h.body, self.env)
                 if h.name:
                     outgoing[h.name] = {"maybe_unbound": True}
+                if node.finalbody:
+                    interrupted = self.prefix_state(h.body, start)
+                    if h.name:
+                        interrupted[h.name] = {"maybe_unbound": True}
+                    final_inputs.extend((exceptional, interrupted))
                 states.append(outgoing)
                 arms.append(
                     R(
@@ -1559,10 +1633,12 @@ class _Scope:
                         "exception_handler",
                         test=test,
                         name=h.name,
+                        binding=binding,
                         body=handler,
+                        cleanup=cleanup,
                     )
                 )
-            self.merge(*states, *([exceptional] if node.finalbody else []))
+            self.merge(*states, *final_inputs)
             final = self.statements(node.finalbody)
             return [
                 R(
@@ -1580,6 +1656,8 @@ class _Scope:
                 R(
                     node,
                     "raise",
+                    has_exception=node.exc is not None,
+                    has_cause=node.cause is not None,
                     value=self.expr(node.exc)[0],
                     cause=self.expr(node.cause)[0],
                 )
