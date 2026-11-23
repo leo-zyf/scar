@@ -61,7 +61,9 @@ def method(cursor, unit):
     if (
         kind in special
         and result["defaulted"]
-        and cursor.location.file == owner_location.file
+        and cursor.location.file
+        and owner_location.file
+        and cursor.location.file.name == owner_location.file.name
         and cursor.location.offset == owner_location.offset
     ):
         result["implicit"] = True
