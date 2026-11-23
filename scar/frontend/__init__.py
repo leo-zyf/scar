@@ -62,6 +62,7 @@ def _unit(job):
     source_facts = dict(
         files=captured,
         compiler=getattr(parsed, "compiler_id", None),
+        providers=getattr(parsed, "providers", {}),
     )
     revision = digest(json_bytes([revision, source_facts]))
     functions = [function_graph(f, revision) for f in unit.get("functions", [])]

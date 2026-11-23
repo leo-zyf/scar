@@ -23,6 +23,8 @@ class BlockOtherStages:
 
 phase = sys.argv[1]
 forbidden = {'scar.' + name for name in ('frontend', 'middle', 'backend') if name != phase}
+if phase != "frontend":
+    forbidden.add("numpy")
 sys.meta_path.insert(0, BlockOtherStages())
 from scar.cli import main
 raise SystemExit(main(sys.argv[2:]))
@@ -87,6 +89,65 @@ def test_python_project_protocols_preserve_initialization_and_effect_order(tmp_p
     result = _stage(tmp_path, "backend", "compile", "--ir", plan, "--out", delivery)
     shutil.rmtree(plan)
     assert _run([result["executable"]], tmp_path) == expected
+
+
+def test_array_protocols_preserve_views_copies_and_lifetimes(tmp_path):
+    entry = tmp_path / "arrays.py"
+    entry.write_text("""import numpy as np
+a = np.array([[1.0, 2.0], [3.0, 4.0]])
+alias = a
+row = a[-1]
+row[0] = 7.0
+copied = np.array(a)
+negative = -a
+a[0] = [8.0, 9.0]
+print(a[1, 0] == 7.0, alias[0, 1] == 9.0, copied[0, 0] == 1.0, negative[1, 0] == -7.0)
+def retain_row():
+    local = np.array([[11.0, 12.0]])
+    return local[0]
+saved = retain_row()
+print(saved[-1] == 12.0)
+scalar = np.zeros(())
+empty = np.zeros((0, 3))
+print(scalar[()] == 0.0)
+x = 1.0
+items = [x, x]
+x = 9.0
+snapshot = np.array(items)
+print(snapshot[0] == 1.0)
+""")
+    expected = _run([sys.executable, "-B", entry], tmp_path)
+    assert expected == b"True True True True\nTrue\nTrue\nTrue\n"
+    graph, plan, delivery = (tmp_path / name for name in ("graph", "plan", "delivery"))
+    _stage(tmp_path, "frontend", "build", "--entry", entry, "--out", graph)
+    entry.unlink()
+    _stage(tmp_path, "middle", "plan", "--graph", graph, "--out", plan)
+    shutil.rmtree(graph)
+    result = _stage(tmp_path, "backend", "compile", "--ir", plan, "--out", delivery)
+    shutil.rmtree(plan)
+    assert _run([result["executable"]], tmp_path) == expected
+    physical = json.loads((delivery / "physical-plan.json").read_bytes())
+    selected = physical["operator_backends"]["ndarray"]
+    assert selected["provider"] == "xtensor-cpu" and selected["device"] == "cpu"
+    target = json.loads((delivery / "target-ir.json").read_bytes())
+    assert [h["output"] for h in target["sdk_headers"]] == ["include/scar/array.hpp"]
+
+
+def test_local_provider_name_does_not_select_an_unrelated_library(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    entry = source / "entry.py"
+    entry.write_text("import numpy\nprint(numpy.zeros())\n")
+    (source / "numpy.py").write_text("def zeros():\n    return 'local provider'\n")
+    expected = _run([sys.executable, "-B", entry], source)
+    graph, plan, delivery = (tmp_path / name for name in ("graph", "plan", "delivery"))
+    _stage(tmp_path, "frontend", "build", "--entry", entry, "--out", graph)
+    shutil.rmtree(source)
+    _stage(tmp_path, "middle", "plan", "--graph", graph, "--out", plan)
+    result = _stage(tmp_path, "backend", "compile", "--ir", plan, "--out", delivery)
+    assert _run([result["executable"]], tmp_path) == expected == b"local provider\n"
+    physical = json.loads((delivery / "physical-plan.json").read_bytes())
+    assert "operator_backends" not in physical
 
 
 def test_python_protocol_closure_never_assumes_mutable_bindings_constant(tmp_path):

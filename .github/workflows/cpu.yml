@@ -30,6 +30,14 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             gcc g++ gfortran cmake binutils libclang1-18 clang-format-18
           python -m pip install build
+      - name: Provision pinned C++20 CPU array SDK
+        run: |
+          sdk_tools="$RUNNER_TEMP/scar-sdk-tools"
+          python -m pip install --no-deps --target "$sdk_tools" cmake==3.31.6
+          sdk_prefix="$RUNNER_TEMP/scar-sdk/xtensor-0.27.1"
+          CMAKE_COMMAND="$sdk_tools/cmake/data/bin/cmake" python tools/provision_cpu_sdk.py --prefix "$sdk_prefix"
+          echo "SCAR_CPU_SDK=$sdk_prefix" >> "$GITHUB_ENV"
+          echo "CMAKE_PREFIX_PATH=$sdk_prefix${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}" >> "$GITHUB_ENV"
       - name: Build and install wheel
         run: |
           packages="$RUNNER_TEMP/scar-packages"

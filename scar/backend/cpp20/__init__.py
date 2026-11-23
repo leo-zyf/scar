@@ -60,7 +60,13 @@ _METADATA = (
 
 
 def _package(root, sources, openmp, libraries, jobs, image=None):
-    unknown = libraries - {"MPI", "Threads", "DynamicLoader", "libgfortran.so.5"}
+    unknown = libraries - {
+        "MPI",
+        "Threads",
+        "DynamicLoader",
+        "libgfortran.so.5",
+        "XTensor",
+    }
     if unknown:
         raise ValueError(
             f"unsupported C++ project link requirements: {sorted(unknown)}"
@@ -123,6 +129,19 @@ def _package(root, sources, openmp, libraries, jobs, image=None):
                 f'target_link_libraries({target} PRIVATE "${{SCAR_GNU_IO_LIBRARY}}")',
             )
         )
+    if "XTensor" in libraries:
+        lines.extend(
+            (
+                "if(DEFINED ENV{SCAR_CPU_SDK})",
+                '    list(PREPEND CMAKE_PREFIX_PATH "$ENV{SCAR_CPU_SDK}")',
+                "else()",
+                '    list(PREPEND CMAKE_PREFIX_PATH "$ENV{HOME}/.local/share/scar/sdk/xtensor-0.27.1")',
+                "endif()",
+                "find_package(xtl 0.8.0 EXACT REQUIRED CONFIG)",
+                "find_package(xtensor 0.27.1 EXACT REQUIRED CONFIG)",
+                f"target_link_libraries({target} PRIVATE xtensor)",
+            )
+        )
     if image:
         lines.append(
             f'set_target_properties({target} PROPERTIES OUTPUT_NAME "{image["output"]}")'
@@ -159,6 +178,16 @@ def _lower_image(path, revision, scheduled, destination):
     support = Path(__file__).with_name("runtime.hpp").read_bytes()
     runtime = destination / "runtime" / (digest(support) + ".hpp")
     publish(runtime, support)
+    headers = []
+    for name in sorted(lowerer.used_sdk_headers):
+        if name not in {"array.hpp"}:
+            raise ValueError(f"unregistered target SDK header {name!r}")
+        data = Path(__file__).with_name(name).read_bytes()
+        sealed = destination / "runtime" / (digest(data) + ".hpp")
+        publish(sealed, data)
+        headers.append(
+            dict(output="include/scar/" + name, blob=file_receipt(destination, sealed))
+        )
     metadata = dict(
         openmp=lowerer.openmp,
         runtime_libraries=sorted(lowerer.libraries.links),
@@ -173,6 +202,7 @@ def _lower_image(path, revision, scheduled, destination):
         ir_sha256=physical.get("ir_sha256"),
         runtime_sha256=digest(support),
         runtime=file_receipt(destination, runtime),
+        sdk_headers=headers,
         **metadata,
     )
     path = destination / "target-ir.json"
@@ -266,7 +296,15 @@ def _print_image(path, product, directory, runtime, jobs, image=None):
     (directory / "include/scar").mkdir(parents=True)
     (directory / "src").mkdir()
     (directory / "include/scar/runtime.hpp").write_bytes(runtime)
+    for header in product.get("sdk_headers", ()):
+        if header["output"] not in {"include/scar/array.hpp"}:
+            raise ValueError("invalid target SDK header output")
+        target = directory / header["output"]
+        if target.exists():
+            raise ValueError("duplicate target SDK header")
+        target.write_bytes(read_blob(path.parent, header["blob"]))
     sources = []
+    local_headers = set()
     for part in product["units"]:
         output = part["output"]
         if output != _HEADER and not re.fullmatch(
@@ -277,11 +315,17 @@ def _print_image(path, product, directory, runtime, jobs, image=None):
         if file.exists():
             raise ValueError(f"duplicate C++ translation unit {output!r}")
         tree = from_data(read_member(path.parent, part["tree"]))
+        local_headers.update(name for kind, name in tree.includes if kind == "local")
         file.write_text(print_unit(tree), encoding="utf-8")
         if output != _HEADER:
             sources.append(output)
     if not sources or not (directory / _HEADER).is_file():
         raise ValueError("incomplete target translation-unit set")
+    include_root = (directory / "include").resolve()
+    for name in local_headers:
+        header = (include_root / name).resolve()
+        if not header.is_relative_to(include_root) or not header.is_file():
+            raise ValueError(f"target package is missing local header {name!r}")
     _package(
         directory,
         sources,

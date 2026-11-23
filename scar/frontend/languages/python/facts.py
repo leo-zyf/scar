@@ -3,10 +3,12 @@
 import ast
 import builtins
 from collections import deque
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from functools import cache
 from hashlib import sha256
 from importlib.util import resolve_name
+from importlib.machinery import PathFinder
+from importlib.metadata import PackageNotFoundError, distribution
 from io import BytesIO, TextIOWrapper
 from math import isfinite
 from pathlib import Path
@@ -59,6 +61,7 @@ class ParsedUnit:
     exports: dict
     source_hash: str
     diagnostics: tuple = ()
+    providers: dict = field(default_factory=dict)
 
     @property
     def source_digests(self):
@@ -126,7 +129,42 @@ def parse_unit(
         frozenset(sys.stdlib_module_names),
         _catalog(tree, module),
         source_hash,
+        providers=_provider_facts(tree, root),
     )
+
+
+def _provider_facts(tree, root):
+    """Resolve supported provider identities without importing their code."""
+    imports = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imports.update(a.name.split(".")[0] for a in node.names)
+        elif isinstance(node, ast.ImportFrom) and not node.level and node.module:
+            imports.add(node.module.split(".")[0])
+    result = {}
+    for name in imports & {"numpy"}:
+        try:
+            spec = PathFinder.find_spec(name, [str(root), *sys.path])
+            if spec is None or not spec.origin:
+                raise ValueError("module has no resolved filesystem origin")
+            package = distribution(name)
+            origin = Path(spec.origin).resolve(strict=True)
+            expected = Path(package.locate_file(name + "/__init__.py")).resolve(
+                strict=True
+            )
+            if origin != expected:
+                raise ValueError("import resolves outside the installed distribution")
+            result[name] = dict(
+                status="verified_distribution",
+                distribution=name,
+                version=package.version,
+                origin=str(origin),
+                sha256=sha256(origin.read_bytes()).hexdigest(),
+                resolution="standard path finder; provider code not executed",
+            )
+        except (OSError, ValueError, PackageNotFoundError) as error:
+            result[name] = dict(status="unresolved", reason=str(error))
+    return result
 
 
 def _relative(node, module, package):

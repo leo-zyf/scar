@@ -12,7 +12,7 @@ dependencies = []
 [project.optional-dependencies]
 cpu = ["clang==18.1.8", "fparser==0.2.3"]
 fortran = ["fparser==0.2.3"]
-test = ["pytest>=8", "numpy>=1.24", "black==26.10.1"]
+test = ["pytest>=8", "numpy>=1.24,<3", "black==26.10.1"]
 
 [project.scripts]
 scar = "scar.cli:main"
@@ -22,7 +22,7 @@ include = ["scar", "scar.*"]
 namespaces = false
 
 [tool.setuptools.package-data]
-"scar.backend.cpp20" = ["runtime.hpp"]
+"scar.backend.cpp20" = ["runtime.hpp", "array.hpp"]
 "scar.backend.planning" = ["calibration.cpp"]
 
 [tool.pytest.ini_options]

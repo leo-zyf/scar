@@ -335,6 +335,7 @@ class _ModuleGraph:
         self.table = parsed.scopes
         self.builtins = parsed.builtins
         self.libraries = parsed.libraries
+        self.providers = parsed.providers
 
     def location(self, node):
         return dict(
@@ -1272,6 +1273,15 @@ class _Scope:
                             "project"
                             if module in self.unit.project
                             else provider(module, self.unit.libraries)
+                        ),
+                        **(
+                            {
+                                "source_provider": self.unit.providers[
+                                    module.split(".")[0]
+                                ]
+                            }
+                            if module.split(".")[0] in self.unit.providers
+                            else {}
                         ),
                         initializers=deps,
                         conditional_initializers=conditional,

@@ -2,10 +2,79 @@
 
 from dataclasses import asdict, dataclass
 from fractions import Fraction
+from hashlib import sha256
+import json
 import os
 from pathlib import Path
 import re
 import sys
+
+
+def array_sdk(*, required=False):
+    """Inspect the fixed CPU array provider without provisioning or executing it."""
+    explicit = os.environ.get("SCAR_CPU_SDK")
+    prefixes = [explicit] if explicit else []
+    if not explicit:
+        prefixes.extend(
+            os.environ.get("CMAKE_PREFIX_PATH", "")
+            .replace(";", os.pathsep)
+            .split(os.pathsep)
+        )
+        prefixes.append(str(Path.home() / ".local/share/scar/sdk/xtensor-0.27.1"))
+    issues = []
+    for candidate in dict.fromkeys(p for p in prefixes if p):
+        prefix = Path(candidate).expanduser().resolve()
+        receipt = prefix / "scar-sdk.json"
+        try:
+            raw = receipt.read_bytes()
+            record = json.loads(raw)
+            if (record.get("schema"), record.get("schema_version")) != (
+                "scar.cpu-sdk",
+                1,
+            ):
+                raise ValueError("invalid CPU SDK receipt")
+            packages = record["packages"]
+            if {key: packages[key]["version"] for key in ("xtensor", "xtl")} != {
+                "xtensor": "0.27.1",
+                "xtl": "0.8.0",
+            }:
+                raise ValueError("CPU SDK versions do not match the supported profile")
+            files = record["files"]
+            required_files = {
+                "include/xtensor/containers/xarray.hpp",
+                "include/xtensor/containers/xadapt.hpp",
+                "share/cmake/xtensor/xtensorConfig.cmake",
+                "share/cmake/xtl/xtlConfig.cmake",
+            }
+            if not required_files <= files.keys():
+                raise ValueError("incomplete CPU array SDK")
+            for name, expected in files.items():
+                relative = Path(name)
+                path = (prefix / relative).resolve(strict=True)
+                if (
+                    relative.is_absolute()
+                    or ".." in relative.parts
+                    or not path.is_relative_to(prefix)
+                ):
+                    raise ValueError("CPU SDK member escapes its prefix")
+                if sha256(path.read_bytes()).hexdigest() != expected:
+                    raise ValueError(f"CPU SDK member changed: {name}")
+            return dict(
+                provider="xtensor-cpu",
+                prefix=str(prefix),
+                packages=packages,
+                receipt_sha256=sha256(raw).hexdigest(),
+                validated_files=len(files),
+                evidence="observed installed package identity; not a kernel timing",
+            )
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            issues.append(f"{prefix}: {error}")
+    if required:
+        raise ValueError(
+            "CPU ndarray SDK unavailable; run tools/provision_cpu_sdk.py: "
+            + "; ".join(issues)
+        )
+    return None
 
 
 @dataclass(frozen=True)

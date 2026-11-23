@@ -6,7 +6,7 @@ import platform
 import re
 
 from scar.contract import Edge, Resource
-from scar.host import cpu_availability
+from scar.host import array_sdk, cpu_availability
 
 
 def _text(path):
@@ -321,4 +321,7 @@ def snapshot(path):
         "architecture": architecture,
         "isa_profiles": isa_profiles,
     }
+    sdk = array_sdk()
+    if sdk:
+        evidence["operator_libraries"] = {"ndarray": sdk}
     return tuple(resources), tuple(edges), evidence

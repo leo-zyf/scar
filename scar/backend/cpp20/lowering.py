@@ -41,6 +41,15 @@ _SCALARS = {
     "f64": "double",
     "f80": "long double",
 }
+_ARRAY_EFFECTS = {
+    "array_create": {"MEM", "VAL"},
+    "array_literal": {"MEM", "VAL"},
+    "array_unary": {"MEM", "VAL"},
+    "array_copy": {"MEM", "STATE", "XFER"},
+    "array_view": {"STATE", "MEM"},
+    "array_load": {"STATE"},
+    "array_store": {"STATE"},
+}
 _BINARY = {
     "add": "+",
     "sub": "-",
@@ -156,14 +165,29 @@ def alignment(record):
     return value
 
 
+def ndarray_rank(spec):
+    if (
+        not isinstance(spec, dict)
+        or set(spec) != {"kind", "element", "rank"}
+        or spec["kind"] != "ndarray"
+        or spec["element"] != "f64"
+        or type(spec["rank"]) is not int
+        or spec["rank"] < 0
+    ):
+        raise ValueError(f"unsupported ndarray type {spec!r}")
+    return spec["rank"]
+
+
 class Lowerer:
     def __init__(self, module, physical):
         self.module = module
         self.regions = physical.get("regions", {})
+        self.operator_backends = physical.get("operator_backends", {})
         self.libraries = Libraries()
         self.objects = ObjectModel(_identifier)
         self.receiver = None
         self.headers = self.libraries.headers
+        self.used_sdk_headers = set()
         self.openmp = False
         self.map_count = 0
         self.coordinate_maps = 0
@@ -229,6 +253,27 @@ class Lowerer:
                 raise ValueError(f"unsupported scalar {spec!r}")
             return named(_SCALARS[spec])
         kind = spec["kind"]
+        if kind == "ndarray":
+            ndarray_rank(spec)
+            if "array.hpp" not in self.used_sdk_headers:
+                schedule = self.operator_backends.get("ndarray", {})
+                packages = schedule.get("packages", {})
+                if (
+                    schedule.get("provider") != "xtensor-cpu"
+                    or schedule.get("device") != "cpu"
+                    or packages.get("xtensor", {}).get("version") != "0.27.1"
+                    or packages.get("xtl", {}).get("version") != "0.8.0"
+                ):
+                    raise ValueError(
+                        "ndarray requires a scheduled xtensor CPU provider"
+                    )
+                self.used_sdk_headers.add("array.hpp")
+                self.libraries.links.add("XTensor")
+            return Type(
+                "template",
+                name="scar::ndarray",
+                args=(self.type_name(spec["element"]),),
+            )
         if kind == "library":
             return self.libraries.cpp_type(spec, self.type_name)
         if kind == "record":
@@ -395,6 +440,75 @@ class Lowerer:
         output = Expr("braced", args=(Expr("braced", args=tuple(operands)), formatting))
         return call("scar::text_print", output)
 
+    def array_operation(self, node):
+        op = node["op"]
+        if (
+            op not in _ARRAY_EFFECTS
+            or set(node.get("effects", ())) != _ARRAY_EFFECTS[op]
+        ):
+            raise ValueError(f"unsupported ndarray operation or effects for {op}")
+
+        def operands(items, ty):
+            if not isinstance(items, (tuple, list)) or any(
+                not isinstance(item, dict) or item.get("type") != ty for item in items
+            ):
+                raise ValueError(f"{op} requires a sequence of {ty} operands")
+            return Expr("braced", args=tuple(map(self.expression, items)))
+
+        def group(*parts):
+            # C++ list initialization captures operands once in their declared order.
+            return Expr("braced", args=parts)
+
+        indexed = op in {"array_view", "array_load", "array_store"}
+        ty = node["base"]["type"] if indexed else node["type"]
+        rank = ndarray_rank(ty)
+        self.type_name(ty)
+        elem = self.type_name(ty["element"])
+        target = template("scar::" + op, elem)
+        if op in {"array_create", "array_literal"}:
+            shape = operands(node["shape"], "i64")
+            if len(shape.args) != rank:
+                raise ValueError(f"{op} shape rank mismatch")
+            layout = group(integer(rank), shape)
+            if op == "array_create":
+                if node.get("initialization") != "zero":
+                    raise ValueError("unsupported ndarray initialization")
+                return call(target, layout)
+            return call(target, group(layout, operands(node["values"], ty["element"])))
+        if op in {"array_copy", "array_unary"}:
+            if node["value"].get("type") != ty:
+                raise ValueError(f"{op} changes dtype or rank")
+            args = (self.expression(node["value"]), integer(rank))
+            if op == "array_unary":
+                operator = node.get("operator")
+                if operator not in ("neg", "pos"):
+                    raise ValueError("unsupported ndarray unary operator")
+                args += (Expr("literal", value=operator == "neg"),)
+            return call(target, group(*args))
+
+        indices = operands(node["indices"], "i64")
+        remaining = rank - len(indices.args)
+        if remaining < 0:
+            raise ValueError(f"{op} has too many indices")
+        location = group(self.expression(node["base"]), integer(rank), indices)
+        if op == "array_view":
+            if ndarray_rank(node["type"]) != remaining:
+                raise ValueError("ndarray view result rank mismatch")
+            return call(target, location)
+        if op == "array_load":
+            if remaining or node.get("type") != ty["element"]:
+                raise ValueError("ndarray scalar access requires every axis")
+            return call(target, location)
+        rhs = node["value"]
+        rhs_type = rhs.get("type")
+        rhs_rank = 0 if rhs_type == ty["element"] else ndarray_rank(rhs_type)
+        if node.get("broadcasting") != "trailing" or (not remaining and rhs_rank):
+            raise ValueError("unsupported ndarray assignment broadcasting contract")
+        return call(
+            template("scar::array_store", elem, self.type_name(rhs_type)),
+            group(self.expression(rhs), integer(rhs_rank), location),
+        )
+
     def expression(self, expr):
         self.weight += 1
         if id(expr) in self.axis_names:
@@ -416,6 +530,8 @@ class Lowerer:
             return self.literal(expr["type"], expr["value"])
         if op == "text_print":
             return self.text_print(expr)
+        if op.startswith("array_") and op != "array_store":
+            return self.array_operation(expr)
         if op == "string":
             return Expr("string", value=expr["value"])
         if op == "runtime_array_size":
@@ -629,6 +745,8 @@ class Lowerer:
         self.weight += 1
         op = stmt["op"]
         E = self.expression
+        if op == "array_store":
+            return [expression_stmt(self.array_operation(stmt))]
         if op == "decl":
             return [declaration(self.variable_decl(stmt))]
         if op == "buffer":
@@ -892,7 +1010,12 @@ class Lowerer:
             params=params,
             linkage=(
                 None
-                if function["name"] == "main" or function["result"] == "text"
+                if function["name"] == "main"
+                or function["result"] == "text"
+                or (
+                    isinstance(function["result"], dict)
+                    and function["result"].get("kind") == "ndarray"
+                )
                 else "C"
             ),
         )
@@ -1192,6 +1315,7 @@ class Lowerer:
         )
         headers = (
             ("local", "scar/runtime.hpp"),
+            *(("local", "scar/" + h) for h in sorted(self.used_sdk_headers)),
             *(("system", h) for h in sorted(self.headers)),
         )
         groups["include/scar/program.hpp"] = Unit(

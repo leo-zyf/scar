@@ -16,6 +16,20 @@ from scar.contract import (
     validate_images,
     write_json,
 )
+from scar.host import array_sdk
+
+
+def _has_ndarrays(module):
+    pending = [module]
+    while pending:
+        node = pending.pop()
+        if isinstance(node, dict):
+            if node.get("kind") == "ndarray":
+                return True
+            pending.extend(node.values())
+        elif isinstance(node, (tuple, list)):
+            pending.extend(node)
+    return False
 
 
 def _schedule_image(path, revision, ir, destination, policy, workers):
@@ -25,6 +39,14 @@ def _schedule_image(path, revision, ir, destination, policy, workers):
         ir["module"], functions=[read_member(path.parent, r) for r in ir["functions"]]
     )
     selected, physical = schedule(module, policy, workers)
+    if _has_ndarrays(module):
+        physical["operator_backends"] = dict(
+            ndarray=dict(
+                array_sdk(required=True),
+                device="cpu",
+                selection="fixed semantic provider; no global performance optimum claimed",
+            )
+        )
     physical["ir_sha256"] = revision
     inventory = module.get("resource_model")
     if inventory:
