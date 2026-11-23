@@ -65,6 +65,8 @@ def _unit(job):
         providers=getattr(parsed, "providers", {}),
         runtime=getattr(parsed, "runtime_facts", {}),
     )
+    if text_profiles := getattr(parsed, "text_profiles", None):
+        source_facts["text_profiles"] = text_profiles
     revision = digest(json_bytes([revision, source_facts]))
     functions = [function_graph(f, revision) for f in unit.get("functions", [])]
     initializers = function_graph(

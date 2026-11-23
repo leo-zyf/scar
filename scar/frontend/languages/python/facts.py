@@ -19,6 +19,9 @@ import symtable
 import sys
 import sysconfig
 import tokenize
+import unicodedata
+
+from scar.contract import digest, json_bytes
 
 
 @dataclass(frozen=True)
@@ -68,12 +71,35 @@ class ParsedUnit:
     providers: dict = field(default_factory=dict)
     runtime_facts: dict = field(default_factory=dict)
     source_text: str = ""
+    text_profiles: dict = field(default_factory=dict)
 
     @property
     def source_digests(self):
         return {self.path.relative_to(self.root).as_posix(): self.source_hash}
 
     compiler_id = f"{sys.implementation.name} {sys.version.split()[0]}"
+
+
+@cache
+def _text_profiles():
+    """Capture single-code-point printability for the selected interpreter."""
+    intervals = []
+    start = None
+    for codepoint in range(0x110000):
+        if chr(codepoint).isprintable():
+            if start is not None:
+                intervals.append([start, codepoint - 1])
+                start = None
+        elif start is None:
+            start = codepoint
+    if start is not None:
+        intervals.append([start, 0x10FFFF])
+    profile = dict(
+        unicode_version=unicodedata.unidata_version,
+        interpreter=ParsedUnit.compiler_id,
+        nonprintable=intervals,
+    )
+    return {digest(json_bytes(profile)): profile}
 
 
 def parse_unit(
@@ -130,6 +156,7 @@ def parse_unit(
             source_hash,
             (issue,),
             runtime_facts=imports.runtime,
+            text_profiles=_text_profiles(),
         )
     module = (abi or {}).get("module") or ".".join(
         path.relative_to(root).with_suffix("").parts
@@ -147,6 +174,7 @@ def parse_unit(
         providers=imports.providers_for(tree),
         runtime_facts=imports.runtime,
         source_text=text,
+        text_profiles=_text_profiles(),
     )
 
 

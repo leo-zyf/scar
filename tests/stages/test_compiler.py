@@ -184,6 +184,47 @@ except OverflowError:
     assert _run([result["executable"]], tmp_path) == expected
 
 
+def test_formatted_values_preserve_order_unicode_and_source_domains(tmp_path):
+    entry = tmp_path / "entry.py"
+    entry.write_text(
+        """import numpy as np
+text = input('value:')
+print(f'{text!r}|{text!a}|{text:🟩^10.3s}')
+def value():
+    print('value', end=';')
+    return 1.25
+def width():
+    print('width', end=';')
+    return 9
+print(f'{value():0{width()}.2f}')
+print(f'{42:#010x}', f'{1234567:_d}', f'{0.001234:12.3e}', f'{-0.0:z.2f}')
+print(format(True, ''), format(True, '-'), f'{None}', format('λ', '🐍>4s'))
+print(repr(np.array([1.5])[0]), ascii(['λ', 2, None]))
+try:
+    print(format(None, '4'))
+except TypeError as error:
+    print(str(error))
+""",
+        encoding="utf-8",
+    )
+    inputs = ("λ\u200b🐍abc\n".encode(), b"\xff'\t\n")
+    expected = [_run([sys.executable, "-B", entry], tmp_path, input=v) for v in inputs]
+    assert all(b"value;width;000001.25" in v for v in expected)
+    graph, plan, delivery = (tmp_path / name for name in ("graph", "plan", "delivery"))
+    _stage(tmp_path, "frontend", "build", "--entry", entry, "--out", graph)
+    entry.unlink()
+    _stage(tmp_path, "middle", "plan", "--graph", graph, "--out", plan)
+    shutil.rmtree(graph)
+    result = _stage(tmp_path, "backend", "compile", "--ir", plan, "--out", delivery)
+    shutil.rmtree(plan)
+    for data, baseline in zip(inputs, expected):
+        assert _run([result["executable"]], tmp_path, input=data) == baseline
+    target = json.loads((delivery / "target-ir.json").read_bytes())
+    assert "include/scar/text.hpp" in {h["output"] for h in target["sdk_headers"]}
+    header = (delivery / "project/include/scar/program.hpp").read_text()
+    assert header.count("namespace scar::generated_unicode") == 1
+
+
 def test_numpy_default_warnings_survive_source_removal(tmp_path):
     entry = tmp_path / "entry.py"
     entry.write_text("""import numpy as np
@@ -269,6 +310,7 @@ print(str(1e-5), str(1e15), str(1e16), str(False), str(None))
     assert [h["output"] for h in target["sdk_headers"]] == [
         "include/scar/exceptions.hpp",
         "include/scar/host.hpp",
+        "include/scar/text.hpp",
     ]
 
 

@@ -2,18 +2,11 @@
 
 import math
 
+from . import text
 from .values import Value, literal, wire
 
 _STREAM = "handle:text_stream"
 _REQUIRED = object()
-_FORMAT = dict(
-    boolean_true="True",
-    boolean_false="False",
-    unit="None",
-    integer_base=10,
-    float="shortest_binary64",
-)
-
 # Names and defaults belong to source binding. The emitted interfaces do not.
 # Each item is (source parameter, value type, default); None is a real default.
 _SIGNATURES = {
@@ -95,7 +88,7 @@ _MEMBERS = {
 
 
 def builtin(frame, node, name):
-    if name in {"open", "str", "input"}:
+    if name in {"open", "str", "repr", "ascii", "format", "input"}:
         return Value(
             "host_callable", "builtins." + name, node.get("source_runtime", {})
         )
@@ -237,11 +230,7 @@ def _emit(frame, node, interface, result, args, steps, discard):
         writes += ["stdin.state", "stdout.state", "stderr.state"]
     if interface == "process.exit":
         writes.append("process.completion")
-    if interface == "error.message":
-        reads.append("error.value")
-    effects = (
-        ["VAL"] if interface in {"path.join", "error.message"} else ["IO", "STATE"]
-    )
+    effects = ["VAL"] if interface == "path.join" else ["IO", "STATE"]
     return frame.effect(
         dict(
             op="host_call",
@@ -327,29 +316,23 @@ def invoke(frame, node, target, args, keywords, steps, discard):
         return _input(frame, node, target, args, keywords, steps, discard)
     if name == "sys.exit":
         return _exit(frame, node, args, keywords, steps, discard)
-    if name == "builtins.str":
-        if keywords or len(args) > 1:
-            frame.fail(
-                node, "text_conversion", "str requires zero or one closed scalar"
-            )
-        if not args:
-            return literal("")
-        value = args[0]
-        if value.kind == "numpy_f64":
-            return _format(frame, node, value, steps, discard)
-        if value.kind.startswith("ndarray:") or value.kind in {"list", "tuple"}:
-            return frame.display(value, node, steps)
-        if value.kind == "handle:error":
-            return _emit(frame, node, "error.message", "text", [value], steps, discard)
-        if value.kind not in {"bool", "i64", "f64", "text", "unit"}:
+    if name in {"builtins.str", "builtins.repr", "builtins.ascii", "builtins.format"}:
+        builtin_name = name.removeprefix("builtins.")
+        if builtin_name == "str":
+            if not args and set(keywords) == {"object"}:
+                args, keywords = [keywords["object"]], {}
+            if not args and not keywords:
+                return literal("")
+        arities = {1, 2} if builtin_name == "format" else {1}
+        if keywords or len(args) not in arities:
             frame.fail(
                 node,
-                "text_conversion",
-                "str requires a scalar text conversion contract",
+                "text_arguments",
+                f"{builtin_name} needs its scalar positional signature",
             )
-        if value.kind == "text":
-            return value
-        return _format(frame, node, value, steps, discard)
+        conversion = "none" if builtin_name == "format" else builtin_name
+        spec = args[1] if len(args) == 2 else literal("")
+        return text.render(frame, node, args[0], conversion, spec, steps, discard)
     if name == "os.path.join":
         if not args or keywords or any(v.kind != "text" for v in args):
             frame.fail(
@@ -391,7 +374,7 @@ def _format(frame, node, value, steps, discard):
             op="text_format",
             value=frame.scalar(value, node),
             type="text",
-            scalar_format=_FORMAT,
+            scalar_format=text.SCALAR_FORMAT,
         ),
         "text",
         steps,

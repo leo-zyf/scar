@@ -52,6 +52,42 @@ def digest(data):
     return hashlib.sha256(data).hexdigest()
 
 
+def validate_text_profiles(profiles):
+    """Validate versioned Unicode classification data at a stage boundary."""
+    if not isinstance(profiles, dict):
+        raise ValueError("text profiles must be an identity-indexed table")
+    for identity, profile in profiles.items():
+        if not isinstance(profile, dict) or set(profile) != {
+            "unicode_version",
+            "interpreter",
+            "nonprintable",
+        }:
+            raise ValueError("invalid Unicode profile fields")
+        if not all(
+            isinstance(profile[key], str) and profile[key]
+            for key in ("unicode_version", "interpreter")
+        ):
+            raise ValueError("Unicode profile requires source version identities")
+        ranges = profile["nonprintable"]
+        if not isinstance(ranges, list):
+            raise ValueError("Unicode ranges must be closed integer intervals")
+        previous = -1
+        for interval in ranges:
+            if not isinstance(interval, list) or len(interval) != 2:
+                raise ValueError("invalid Unicode interval")
+            low, high = interval
+            if (
+                type(low) is not int
+                or type(high) is not int
+                or not previous < low <= high <= 0x10FFFF
+            ):
+                raise ValueError("Unicode intervals must be ordered and disjoint")
+            previous = high
+        if identity != digest(json_bytes(profile)):
+            raise ValueError("Unicode profile identity does not match its content")
+    return profiles
+
+
 def semantic_form(value):
     """Compare operation products independently of diagnostic annotations."""
     if isinstance(value, dict):

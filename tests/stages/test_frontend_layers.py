@@ -44,6 +44,13 @@ def test_python_capture_then_offline_normalization(tmp_path, monkeypatch):
     )
     (unit,) = python.project_units(entry, tmp_path)
     facts = python.parse_unit(entry, (), root=tmp_path, abi=unit["abi"])
+    from scar.contract import validate_text_profiles
+
+    profiles = validate_text_profiles(facts.text_profiles)
+    assert len(profiles) == 1
+    profile_id, profile = next(iter(profiles.items()))
+    assert profile["interpreter"] == facts.compiler_id
+    assert profile["nonprintable"][0] == [0, 31]
     outer = facts.scopes.children["outer", 1]
     assert outer.cell == outer.children["inner", 2].free == {"x"}
     entry.unlink()
@@ -57,6 +64,9 @@ def test_python_capture_then_offline_normalization(tmp_path, monkeypatch):
         "py:entry:outer.<locals>.inner",
     }
     assert all(f["partial_body"] for f in functions.values())
+    assert {f["python_scope"]["text_profile"] for f in functions.values()} == {
+        profile_id
+    }
 
 
 def test_scalar_annotation_contract_uses_captured_compiler_semantics(

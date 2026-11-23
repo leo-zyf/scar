@@ -1,7 +1,7 @@
 """Close lexical Python protocols from the bound project operation graph."""
 
 from scar.contract import walk_operations
-from . import arrays, exceptions, host_protocols, scalars, values
+from . import arrays, exceptions, host_protocols, scalars, text, values
 from .values import Value as _Value, literal as _literal
 
 
@@ -97,6 +97,7 @@ class _Project:
         self.types = {}
         self.closed = {}
         self.result_kinds = {}
+        self.result_facts = {}
         self.providers = {}
         self.array_ops = set()
         self.active = []
@@ -177,6 +178,7 @@ class _Frame:
         self.env = {}
         self.locals = {}
         self.returns = set()
+        self.return_facts = None
         self.next_temp = 0
         self.loops = []
         self.handler_depth = 0
@@ -444,6 +446,8 @@ class _Frame:
             return _literal(value)
         if op in {"var", "python_builtin"}:
             return self.ref(node)
+        if op in {"format_string", "format_field"}:
+            return text.evaluate(self, node, steps, discard)
         if op == "aggregate":
             return arrays.capture_sequence(self, node, steps)
         if op == "index":
@@ -579,7 +583,7 @@ class _Frame:
                 self.fail(node, "range_step", "a nonzero constant step is required")
             return _Value("range", tuple(args))
         if target.kind == "builtin" and target.value == "print":
-            args = [self.display(value, node, steps) for value in args]
+            args = [text.display(self, node, value, steps) for value in args]
             if any(
                 a.kind not in {"bool", "i64", "f64", "numpy_f64", "text", "unit"}
                 for a in args
@@ -683,100 +687,25 @@ class _Frame:
             parameter_types=[values.wire(v.kind) for v in bound],
             **({"noreturn": True} if function.get("noreturn") else {}),
         )
-        return self.effect(call, self.project.result_kinds[name], steps, discard)
-
-    def display(self, value, node, steps, *, representation=False):
-        if value.kind in {"list", "tuple"}:
-            parts = [
-                self.display(item, node, steps, representation=True)
-                for item in value.value
-            ]
-            opening, closing = ("[", "]") if value.kind == "list" else ("(", ")")
-            text = [_literal(opening).value]
-            for index, part in enumerate(parts):
-                if index:
-                    text.append(_literal(", ").value)
-                text.append(part.value)
-            if value.kind == "tuple" and len(parts) == 1:
-                closing = ",)"
-            text.append(_literal(closing).value)
-            return self.effect(
-                dict(op="text_concat", parts=text, type="text", effects=["VAL", "MEM"]),
-                "text",
-                steps,
-            )
-        if representation:
-            if value.kind == "text":
-                if type(value.exact) is not str:
-                    self.fail(
-                        node,
-                        "sequence_repr",
-                        "dynamic text in a sequence requires a Unicode repr contract",
-                    )
-                return _literal(repr(value.exact))
-            if value.kind in {"bool", "i64", "f64", "numpy_f64", "unit"}:
-                result = host_protocols.invoke(
-                    self,
-                    node,
-                    _Value("host_callable", "builtins.str"),
-                    [value],
-                    {},
-                    steps,
-                    False,
-                )
-                if (
-                    value.kind == "numpy_f64"
-                    and self.project.providers["numpy"]["version"].split(".")[0] == "2"
-                ):
-                    result = _Value(
-                        "text",
-                        dict(
-                            op="binary",
-                            operator="add",
-                            type="text",
-                            left=_literal("np.float64(").value,
-                            right=result.value,
-                        ),
-                    )
-                    result = _Value(
-                        "text",
-                        dict(
-                            op="binary",
-                            operator="add",
-                            type="text",
-                            left=result.value,
-                            right=_literal(")").value,
-                        ),
-                    )
-                return result
-            self.fail(
-                node,
-                "sequence_repr",
-                f"no closed container representation for {value.kind}",
-            )
-        if values.rank(value.kind) is None:
-            return value
-        self.project.array_ops.add("array_format")
         return self.effect(
-            dict(
-                op="array_format",
-                value=self.scalar(value, node),
-                type="text",
-                options=dict(
-                    precision=8,
-                    threshold=1000,
-                    edgeitems=3,
-                    linewidth=75,
-                    suppress=False,
-                    sign="-",
-                    floatmode="maxprec",
-                    legacy=False,
-                ),
-                effects=["VAL", "MEM", "STATE"],
-            ),
-            "text",
+            call,
+            self.project.result_kinds[name],
             steps,
+            discard,
+            facts=self.project.result_facts[name],
         )
+
+    def record_return(self, value):
+        self.returns.add(value.kind)
+        facts = (
+            values.numeric_facts(value.exact)
+            if value.kind in values.SCALARS and value.exact is not values._UNKNOWN
+            else {}
+        )
+        if self.return_facts is None:
+            self.return_facts = facts
+        elif not values.identical(self.return_facts, facts):
+            self.return_facts = {}
 
     def truth(self, value, node):
         if values.rank(value.kind) is not None:
@@ -1157,7 +1086,7 @@ class _Frame:
                     else _literal(None)
                 )
                 steps.append(dict(op="return", value=self.scalar(value, node)))
-                self.returns.add(value.kind)
+                self.record_return(value)
                 return False
             elif op == "update" and node["target"].get("op") == "var":
                 target = node["target"]
@@ -1212,7 +1141,7 @@ class _Frame:
         falls = self.sequence(self.fn["body"], body)
         if falls and not self.initializing:
             body.append(dict(op="return", value=_literal(None).value))
-            self.returns.add("unit")
+            self.record_return(_literal(None))
         if len(self.returns) > 1 or self.initializing and self.returns:
             self.fail(
                 self.fn,
@@ -1221,6 +1150,7 @@ class _Frame:
             )
         result = "void" if self.initializing else next(iter(self.returns), "unit")
         self.project.result_kinds[self.name] = result
+        self.project.result_facts[self.name] = self.return_facts or {}
         parameters = {p["name"] for p in self.params}
         declarations = [
             dict(op="decl", name=n, type=values.wire(t))
@@ -1247,6 +1177,7 @@ def normalize_protocols(module):
     if not functions:
         return module, [], []
     project = _Project(functions)
+    project.text_profiles = module.get("text_profiles", {})
     issue = None
     try:
         entry = module["entry"]

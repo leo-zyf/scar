@@ -60,6 +60,22 @@ _ARRAY_EFFECTS = {
     "array_update": {"STATE", "IO"},
     "array_format": {"VAL", "MEM", "STATE"},
 }
+# Field order is the sealed SDK's value_format_spec aggregate layout.
+_FORMAT_DEFAULTS = dict(
+    fill=" ",
+    align="auto",
+    sign="-",
+    negative_zero=False,
+    alternate=False,
+    zero=False,
+    width=0,
+    grouping="",
+    precision=-1,
+    presentation="",
+    sign_explicit=False,
+    fill_explicit=False,
+    empty=True,
+)
 _HOST_SIGNATURES = {
     "console.input": ("text", ("text", "text")),
     "process.exit": ("unit", (ERROR_TYPE,)),
@@ -182,6 +198,7 @@ class Lowerer:
         self.receiver = None
         self.headers = self.libraries.headers
         self.used_sdk_headers = set()
+        self.unicode_tables = {}
         self.control = ControlFlow(
             expression=self.expression,
             statements=self.statements,
@@ -501,6 +518,90 @@ class Lowerer:
         )
         return call(symbol, *arguments)
 
+    def format_value(self, expr):
+        operand = expr["value"]
+        kind = operand.get("type")
+        conversion = expr.get("conversion")
+        spec = expr.get("spec", {})
+        if (
+            kind not in ("text", "bool", "i64", "f64", "unit")
+            or expr.get("type") != "text"
+            or set(expr.get("effects", ())) != {"VAL", "MEM"}
+            or expr.get("may_raise") is not True
+            or conversion not in ("none", "str", "repr", "ascii")
+            or not isinstance(spec, dict)
+            or spec.keys() != _FORMAT_DEFAULTS.keys()
+            or any(type(spec[k]) is not type(v) for k, v in _FORMAT_DEFAULTS.items())
+            or (spec["empty"] and spec != _FORMAT_DEFAULTS)
+            or (not spec["sign_explicit"] and spec["sign"] != "-")
+            or (not spec["fill_explicit"] and spec["fill"] != " ")
+            or (spec["fill_explicit"] and spec["align"] == "auto")
+            or len(spec["fill"]) != 1
+            or spec["align"] not in ("auto", "<", ">", "^", "=")
+            or spec["sign"] not in ("-", "+", " ")
+            or spec["grouping"] not in ("", ",", "_")
+            or spec["presentation"] not in ("", *"sbcdoXxeEfFgG%n")
+            or (
+                spec["presentation"] == "n"
+                and conversion == "none"
+                and kind in ("i64", "f64", "bool")
+            )
+            or not 0 <= spec["width"] < 1 << 63
+            or not -1 <= spec["precision"] < 1 << 31
+        ):
+            raise ValueError("unsupported typed value-format contract")
+        formatting, accepted = self.scalar_format(expr.get("scalar_format"))
+        if kind not in accepted:
+            raise ValueError("value format omits scalar representation")
+        self.use_sdk("text.hpp")
+        table = Expr("braced")
+        if kind == "text" and conversion == "repr":
+            from ...contract import validate_text_profiles
+
+            key = expr.get("unicode_profile")
+            profiles = self.module.get("text_profiles", {})
+            if not isinstance(key, str) or key not in profiles:
+                raise ValueError("text repr requires a sealed Unicode profile")
+            if key not in self.unicode_tables:
+                validate_text_profiles({key: profiles[key]})
+                values = tuple(
+                    integer(n)
+                    for interval in profiles[key]["nonprintable"]
+                    for n in interval
+                )
+                self.unicode_tables[key] = variable(
+                    "p_" + key,
+                    Type(
+                        "template",
+                        name="std::array",
+                        args=(named("std::uint32_t"), integer(len(values))),
+                    ),
+                    Expr("braced", args=values),
+                    storage=("inline", "constexpr"),
+                )
+            table = name("scar::generated_unicode::p_" + key)
+
+        def string(value):
+            return utf8_literal(value, "std::string_view")
+
+        fields = tuple(
+            string(spec[k]) if isinstance(v, str) else Expr("literal", value=spec[k])
+            for k, v in _FORMAT_DEFAULTS.items()
+        )
+        return call(
+            "scar::format_value",
+            Expr(
+                "braced",
+                args=(
+                    cast(self.type_name(kind), self.expression(operand)),
+                    string(conversion),
+                    Expr("braced", args=fields),
+                    formatting,
+                    table,
+                ),
+            ),
+        )
+
     def array_operation(self, node):
         op = node["op"]
         effects = set(node.get("effects", ()))
@@ -728,6 +829,8 @@ class Lowerer:
             return self.literal(expr["type"], expr["value"])
         if op == "text_print":
             return self.text_print(expr)
+        if op == "format_value":
+            return self.format_value(expr)
         if op == "text_concat":
             if (
                 expr.get("type") != "text"
@@ -1596,9 +1699,29 @@ class Lowerer:
             *(("local", "scar/" + h) for h in sorted(self.used_sdk_headers)),
             *(("system", h) for h in sorted(self.headers)),
         )
+        tables = (
+            (
+                Decl(
+                    "namespace",
+                    name="scar::generated_unicode",
+                    members=tuple(
+                        self.unicode_tables[k] for k in sorted(self.unicode_tables)
+                    ),
+                ),
+            )
+            if self.unicode_tables
+            else ()
+        )
         groups["include/scar/program.hpp"] = Unit(
             includes=headers,
-            declarations=(*forwards, *providers, *prototypes, *globals_, *records),
+            declarations=(
+                *tables,
+                *forwards,
+                *providers,
+                *prototypes,
+                *globals_,
+                *records,
+            ),
             once=True,
         )
         return groups

@@ -337,6 +337,7 @@ class _ModuleGraph:
         self.libraries = parsed.libraries
         self.providers = parsed.providers
         self.runtime = parsed.runtime_facts
+        self.text_profile = next(iter(parsed.text_profiles), None)
         self.source_lines = parsed.source_text.splitlines()
         self.diagnostic_file = str(parsed.path)
 
@@ -594,6 +595,11 @@ class _Scope:
                 module=self.unit.module,
                 initializer=self.unit.root_symbol,
                 main=self.unit.main,
+                **(
+                    {"text_profile": self.unit.text_profile}
+                    if self.unit.text_profile
+                    else {}
+                ),
             ),
             calls=sorted(self.calls),
             partial_body=[*prelude, *steps],

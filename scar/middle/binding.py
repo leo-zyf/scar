@@ -6,6 +6,7 @@ from scar.contract import (
     read_member,
     semantic_form as semantics,
     walk_operations as _operations,
+    validate_text_profiles,
 )
 
 
@@ -284,7 +285,14 @@ def bind(graph, folder):
     active_objects = set()
     field_calls = defaultdict(set)
     constructor_initializers = {}
+    text_profiles = {}
     for index, unit in enumerate(graph["units"]):
+        for identity, profile in validate_text_profiles(
+            unit.get("source_facts", {}).get("text_profiles", {})
+        ).items():
+            if identity in text_profiles and text_profiles[identity] != profile:
+                raise ValueError("conflicting source Unicode profiles")
+            text_profiles[identity] = profile
         roots.update(unit["initializer_calls"])
         active_objects.update(unit.get("initializer_objects", ()))
         for owner, calls in unit.get("record_initializers", {}).items():
@@ -563,6 +571,7 @@ def bind(graph, folder):
             externs=list(externs.values()),
             records=[r for name, r in records.items() if name in used_records],
             state_evidence=state_evidence,
+            text_profiles=text_profiles,
             **({"protocol_obligations": obligations} if protocol_names else {}),
             declarations={
                 name: [
