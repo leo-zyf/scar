@@ -150,9 +150,77 @@ def test_backend_products_replay_and_reject_changed_bytes(tmp_path):
     assert subprocess.check_output([native]) == b"sealed project\n"
     success = json.loads((b2b / "build.json").read_bytes())
     assert success["stage"] == "B3" and success["warnings"] == 0
+    assert 1 <= success["build_workers"] <= success["execution_host"]["worker_budget"]
     generated = b2b / "project/src/program.cpp"
     generated.write_bytes(generated.read_bytes() + b"\n")
     run("B3", b2b / "cpp20.json", b2b, "project member changed")
+
+
+def test_cpu_budget_is_shared_with_graph_planner_and_formatter(tmp_path, monkeypatch):
+    from math import isclose
+
+    import scar.host as host
+    from scar.backend.cpp20 import _format_workers
+    from scar.backend.planning.cpu import schedule
+    from scar.frontend.hardware import snapshot
+
+    monkeypatch.setattr(host.os, "sched_getaffinity", lambda _: set(range(8)))
+    monkeypatch.setenv("OMP_NUM_THREADS", "8")
+    monkeypatch.setenv("OMP_THREAD_LIMIT", "8")
+    mount = tmp_path / "cpu space"
+    escaped = str(mount).replace(" ", r"\040")
+    cases = [
+        (
+            "0::/tenant/job/leaf\n",
+            f"31 20 0:27 /tenant {escaped} rw - cgroup2 cgroup rw\n",
+            {
+                mount / "job/leaf/cpu.max": "350000 100000",
+                mount / "job/cpu.max": "250000 100000",
+                mount / "cpu.max": "max 100000",
+            },
+            2.5,
+            2,
+        ),
+        (
+            "7:cpu,cpuacct:/job/leaf\n",
+            f"31 20 0:27 / {escaped} rw - cgroup cgroup rw,cpu,cpuacct\n",
+            {
+                mount / "job/leaf/cpu.cfs_quota_us": "-1",
+                mount / "job/leaf/cpu.cfs_period_us": "100000",
+                mount / "job/cpu.cfs_quota_us": "399999",
+                mount / "job/cpu.cfs_period_us": "100000",
+            },
+            3.99999,
+            3,
+        ),
+    ]
+    for groups, mounts, limits, capacity, budget in cases:
+        files = {
+            Path("/proc/self/cgroup"): groups,
+            Path("/proc/self/mountinfo"): mounts,
+            **limits,
+        }
+        monkeypatch.setattr(host, "_read", lambda path: files.get(Path(path)))
+        observed = host.cpu_availability()
+        assert not observed.issues and observed.worker_budget == budget
+        assert isclose(observed.as_record()["capacity_upper_bound_cores"], capacity)
+        resources, edges, platform = snapshot(tmp_path)
+        (pool,) = [r for r in resources if r.kind == "CPU_POOL"]
+        assert pool.capacity == budget
+        assert {
+            e.target
+            for e in edges
+            if e.source == pool.id and e.value == "CPU_POOL_MEMBER"
+        } == {f"cpu:{i}" for i in range(8)}
+        assert platform["cpu_availability"] == observed.as_record()
+        _, plan = schedule(dict(functions=[]), "serial", worker_limit=5)
+        assert plan["deployment_cpu"] == observed.as_record()
+        assert plan["worker_limit"] == budget and plan["workers"] == 1
+        assert _format_workers(4, 36) == budget
+    files[Path("/proc/self/mountinfo")] = "unreadable mount record"
+    unknown = host.cpu_availability()
+    assert unknown.issues and unknown.worker_budget == 1
+    assert _format_workers(4, 36) == 1
 
 
 def test_cpu_costs_price_the_traversal_actually_emitted():

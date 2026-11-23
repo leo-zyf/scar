@@ -4,6 +4,8 @@ import ast
 from pathlib import Path
 import shlex
 
+from scar.contract import digest, json_bytes
+
 from .facts import (
     _function,
     _literal_fact,
@@ -12,6 +14,13 @@ from .facts import (
     provider,
     scope_nodes,
 )
+
+_PROCESS_METHODS = {"wait", "communicate", "poll"}
+_STREAM_DIRECTIONS = {
+    "stdin": "parent_to_child",
+    "stdout": "child_to_parent",
+    "stderr": "child_to_parent",
+}
 
 
 def _declared(slot):
@@ -42,13 +51,22 @@ def _guarded(fact, state):
     """A late lookup may retain an identity candidate, never a captured literal."""
     result = {"state": state}
     expected = {k: fact[k] for k in ("module", "symbol", "external") if k in fact}
+    for key in ("process_handles", "bound_process_handles"):
+        if key in fact:
+            expected[key] = fact[key]
     if expected:
         guard = {"state": state, "expected": expected}
-        prior = fact.get("guards", [])
+        # The captured object's identity is checked at this lookup. An alias
+        # remains valid even if the slot it was copied from has been rebound.
+        prior = (
+            []
+            if ("process_handles" in expected or "bound_process_handles" in expected)
+            else fact.get("guards", [])
+        )
         result.update(expected, guards=prior if guard in prior else [*prior, guard])
         if "class" in fact:
             result["class"] = fact["class"]
-    for key in ("possible_symbols", "maybe_unbound"):
+    for key in ("possible_symbols", "maybe_unbound", "process_channels"):
         if key in fact:
             result[key] = fact[key]
     if examples := _examples(fact):
@@ -101,6 +119,11 @@ def _join_facts(*facts):
             common.pop(key, None)
     if "values" not in common and (examples := _examples(*facts)):
         common["examples"] = examples
+    if all(f.get("process_handles") for f in facts):
+        # A reaching object is one instance from one of these sites.
+        common["process_handles"] = sorted(
+            {s for f in facts for s in f["process_handles"]}
+        )
     if "symbol" not in common:
         candidates = set()
         for fact in facts:
@@ -177,6 +200,40 @@ def _static_values(operator, left, right):
     )
 
 
+def _popen_argument(node, args, keywords, name, index, default):
+    if name in keywords:
+        number = next(i for i, k in enumerate(node.keywords) if k.arg == name)
+        return keywords[name], {"operand": ["keywords", number, "value"]}
+    if len(args) > index and not any(
+        isinstance(n, ast.Starred) for n in node.args[: index + 1]
+    ):
+        return args[index], {"operand": ["args", index]}
+    if any(isinstance(n, ast.Starred) for n in node.args) or None in keywords:
+        return {}, {"status": "unresolved", "field": name}
+    return _literal_fact(default), None
+
+
+def _popen_channels(node, args, keywords):
+    """Describe the parent-side endpoints chosen by Popen's arguments."""
+    channels = {}
+    for index, channel in enumerate(_STREAM_DIRECTIONS, start=3):
+        fact, _ = _popen_argument(node, args, keywords, channel, index, None)
+        if fact.get("external") == "subprocess.PIPE":
+            route = "pipe"
+        elif channel == "stderr" and fact.get("external") == "subprocess.STDOUT":
+            route = "redirected_to_stdout"
+        elif fact.get("values") == [None]:
+            route = "inherited"
+        elif fact.get("external") == "subprocess.DEVNULL":
+            route = "devnull"
+        else:
+            route = "runtime"
+        channels[channel] = {"route": route}
+        if fact.get("guards"):
+            channels[channel]["conditions"] = fact["guards"]
+    return channels
+
+
 class _ModuleGraph:
     """Own one file and retain structured evidence separately from executable ABI bodies."""
 
@@ -185,6 +242,7 @@ class _ModuleGraph:
         self.module = abi["module"]
         self.main = abi["main"]
         self.tree = parsed.tree
+        self.source_hash = parsed.source_hash
         self.project = abi["project"]
         self.functions = []
         self.externs = {}
@@ -459,6 +517,8 @@ class _Scope:
             return {"class": "bool"}
         if target in {"builtins.len", "builtins.int", "subprocess.Popen.wait"}:
             return {"class": "int"}
+        if target == "subprocess.Popen.communicate":
+            return {"class": "tuple"}
         if target == "builtins.range":
             return {"class": "range"}
         if target == "builtins.open":
@@ -537,6 +597,8 @@ class _Scope:
                     "declared_dtype",
                     "maybe_unbound",
                     "possible_symbols",
+                    "process_handles",
+                    "bound_process_handles",
                     "state",
                     "guards",
                 )
@@ -553,7 +615,46 @@ class _Scope:
             name = node.attr
             f = {}
             member = None
-            if "module" in b:
+            handles = b.get("process_handles")
+            if handles and name in _STREAM_DIRECTIONS:
+                guards = [
+                    {
+                        "operand": "base",
+                        "expected": {
+                            "process_handles": handles,
+                            "original_stream": name,
+                        },
+                    }
+                ]
+                return (
+                    R(
+                        node,
+                        "process_stream",
+                        base=base,
+                        field=name,
+                        channel=name,
+                        direction=_STREAM_DIRECTIONS[name],
+                        handle={"operand": ["base"], "sites": handles},
+                        channel_binding=b.get("process_channels", {}).get(
+                            name, {"route": "runtime"}
+                        ),
+                        binding_guard={
+                            "status": "conditional",
+                            "conditions": guards,
+                            "require_bound": bool(b.get("maybe_unbound")),
+                            "on_failure": "runtime_lookup",
+                        },
+                        type=_py_type(),
+                        effects=["STATE"],
+                    ),
+                    {},
+                )
+            if handles and name in _PROCESS_METHODS:
+                f = {
+                    "external": "subprocess.Popen." + name,
+                    "bound_process_handles": handles,
+                }
+            elif "module" in b:
                 module = b["module"]
                 sub = module + "." + name
                 if sub in self.unit.project:
@@ -568,11 +669,23 @@ class _Scope:
                     f = {"external": sub}
             elif "external" in b:
                 f = {"external": b["external"] + "." + name}
-            elif b.get("class") in {"io.IOBase", "subprocess.Popen", "numpy.ndarray"}:
+            elif b.get("class") in {"io.IOBase", "numpy.ndarray"}:
                 f = {"external": b["class"] + "." + name}
-            if b.get("guards"):
+            if b.get("guards") and not (handles and name in _PROCESS_METHODS):
                 f["guards"] = [*b["guards"], *f.get("guards", [])]
-            if "external" in f:
+            if handles and name in _PROCESS_METHODS:
+                f.setdefault("guards", []).append(
+                    {
+                        "operand": "target",
+                        "expected": {
+                            "bound_receiver_from": handles,
+                            "method": "subprocess.Popen." + name,
+                        },
+                    }
+                )
+            if b.get("maybe_unbound"):
+                f["maybe_unbound"] = True
+            if "external" in f and not (handles and name in _PROCESS_METHODS):
                 f = _guarded(f, f["external"])
             fields = {"base": base, "field": name, "type": _py_type(f.get("class"))}
             if member:
@@ -631,15 +744,41 @@ class _Scope:
                 }:
                     op = "process_launch"
                     effect = ["CTRL", "STATE", "IO", "ORDER"]
+                    if name == "subprocess.Popen":
+                        site = digest(
+                            json_bytes(
+                                [
+                                    self.unit.source_hash,
+                                    self.symbol,
+                                    self.unit.location(node),
+                                ]
+                            )
+                        )[:32]
+                        channels = _popen_channels(node, facts, key_facts)
+                        fields.update(
+                            result_handle={
+                                "site": site,
+                                "instance": "per_successful_invocation",
+                            },
+                            channels=channels,
+                            waits_for_exit=False,
+                        )
+                        f.update(process_handles=[site], process_channels=channels)
                     command = facts[0] if facts else key_facts.get("args", {})
                     fields["command_argument"] = 0 if facts else "args"
-                    options = key_facts.get("shell", {"values": [False]}).get(
-                        "values", []
+                    shell_fact, shell_arg = _popen_argument(
+                        node, facts, key_facts, "shell", 8, False
                     )
+                    options = shell_fact.get("values", [])
                     shell = (
                         True
                         if name == "os.system"
                         else options[0] if len(options) == 1 else None
+                    )
+                    fields["shell"] = (
+                        {"value": True, "source": "provider"}
+                        if name == "os.system"
+                        else shell_arg or {"value": False, "source": "default"}
                     )
                     if "values" in command:
                         fields["command_values"] = {
@@ -669,10 +808,25 @@ class _Scope:
                                 }
                                 for v in examples
                             ]
-                    fields["cwd"] = next(
-                        (k["value"] for k in keys if k["name"] == "cwd"),
-                        self.variable_reference("process.cwd"),
-                    )
+                    _, cwd_arg = _popen_argument(node, facts, key_facts, "cwd", 9, None)
+                    fields["cwd"] = cwd_arg or self.variable_reference("process.cwd")
+                elif t.get("bound_process_handles"):
+                    method = name.rsplit(".", 1)[-1]
+                    op = "process_" + method
+                    # Capture the evaluated bound method; an aliased method retains
+                    # its receiver even after the original variable is rebound.
+                    handle = {
+                        "operand": ["target"],
+                        "projection": "bound_receiver",
+                        "sites": t["bound_process_handles"],
+                    }
+                    if target.get("op") == "member":
+                        handle.update(operand=["target", "base"], projection="identity")
+                    fields.update(handle=handle, waits_for_exit=method != "poll")
+                    if method == "communicate":
+                        effect += ["IO", "ORDER"]
+                    elif method == "wait":
+                        effect.append("ORDER")
                 elif name.startswith(("os.", "shutil.", "glob.", "io.")) or name in {
                     "builtins.open",
                     "builtins.print",
@@ -681,11 +835,15 @@ class _Scope:
                     effect.append("IO")
                 if name == "os.chdir":
                     fields["state_writes"] = ["process.cwd"]
-                if name in {
-                    "subprocess.Popen.wait",
-                    "subprocess.Popen.communicate",
-                    "time.sleep",
-                }:
+                if (
+                    name
+                    in {
+                        "subprocess.Popen.wait",
+                        "subprocess.Popen.communicate",
+                        "time.sleep",
+                    }
+                    and "ORDER" not in effect
+                ):
                     effect.append("ORDER")
                 if "shape" in f or "dtype" in f or "declared_dtype" in f:
                     fields["result_facts"] = {

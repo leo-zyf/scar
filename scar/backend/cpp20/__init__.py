@@ -1,7 +1,6 @@
 """B2 produces a relocatable, formatted C++20 project from a scheduled execution IR."""
 
 from concurrent.futures import FIRST_EXCEPTION, ThreadPoolExecutor, wait
-import os
 from pathlib import Path
 import re
 import shutil
@@ -16,64 +15,11 @@ from scar.contract import (
     read_member,
     write_json,
 )
+from scar.host import cpu_availability
 
 
 def _format_workers(jobs, file_count):
-    affinity = getattr(os, "sched_getaffinity", None)
-    available = len(affinity(0)) if affinity else os.cpu_count() or 1
-    limit = min(jobs, 4, file_count, available)
-    if limit <= 1 or not Path("/proc/self/cgroup").exists():
-        return max(1, limit)
-
-    try:
-        groups = {}
-        for line in Path("/proc/self/cgroup").read_text().splitlines():
-            _, controllers, group = line.split(":", 2)
-            if not controllers:
-                groups["cgroup2"] = Path(group)
-            elif "cpu" in controllers.split(","):
-                groups["cgroup"] = Path(group)
-        for line in Path("/proc/self/mountinfo").read_text().splitlines():
-            before, after = line.split(" - ", 1)
-            kind, _, options = after.split()
-            if (
-                kind not in groups
-                or kind == "cgroup"
-                and "cpu" not in options.split(",")
-            ):
-                continue
-            # A namespace can mount a subtree rather than the hierarchy root.
-            mount_root, mount = (
-                Path(re.sub(r"\\([0-7]{3})", lambda m: chr(int(m[1], 8)), value))
-                for value in before.split()[3:5]
-            )
-            group = groups[kind]
-            relative = (
-                group.relative_to(mount_root)
-                if group.is_relative_to(mount_root)
-                else group.relative_to("/")
-            )
-            folder = (mount / relative).resolve()
-            if not folder.is_relative_to(mount):
-                folder = mount
-            while folder.is_relative_to(mount):
-                quota = folder / (
-                    "cpu.max" if kind == "cgroup2" else "cpu.cfs_quota_us"
-                )
-                if quota.is_file():
-                    if kind == "cgroup2":
-                        amount, period = quota.read_text().split()
-                    else:
-                        amount = quota.read_text().strip()
-                        period = (folder / "cpu.cfs_period_us").read_text().strip()
-                    if amount not in {"max", "-1"}:
-                        limit = min(limit, max(1, int(amount) // int(period)))
-                if folder == mount:
-                    break
-                folder = folder.parent
-    except (OSError, ValueError, ZeroDivisionError):
-        return 1
-    return limit
+    return max(1, min(jobs, 4, file_count, cpu_availability().worker_budget))
 
 
 def _format_sources(formatter, files, jobs):

@@ -11,36 +11,24 @@ import subprocess
 from tempfile import TemporaryDirectory
 
 from scar.contract import PHYSICAL, digest, document
+from scar.host import cpu_availability
 
 _PROBE = Path(__file__).with_name("calibration.cpp")
 
 
-def _limits():
-    available = sorted(os.sched_getaffinity(0))
-    limit = len(available)
-    try:
-        group = next(
-            s[3:]
-            for s in Path("/proc/self/cgroup").read_text().splitlines()
-            if s.startswith("0::")
-        )
-        root = Path("/sys/fs/cgroup")
-        path = root / group.lstrip("/")
-        for folder in (path, *path.parents):
-            if not folder.is_relative_to(root):
-                break
-            quota = folder / "cpu.max"
-            if quota.is_file():
-                amount, period = quota.read_text().split()
-                if amount != "max":
-                    limit = min(limit, max(1, int(amount) // int(period)))
-    except (OSError, StopIteration, ValueError):
-        pass
-    for var in ("OMP_THREAD_LIMIT", "OMP_NUM_THREADS"):
-        token = os.environ.get(var, "").split(",")[0]
-        if token.isdigit() and int(token):
-            limit = min(limit, int(token))
-    return available, limit
+def _worker_caps(host_budget, requested):
+    """Apply OpenMP and caller limits to the deployment's conservative budget."""
+    caps = {"deployment_worker_budget": host_budget}
+    for name in ("OMP_THREAD_LIMIT", "OMP_NUM_THREADS"):
+        raw = os.environ.get(name, "")
+        value = (raw.partition(",")[0] if name == "OMP_NUM_THREADS" else raw).strip()
+        if value.isascii() and value.isdecimal() and int(value) > 0:
+            caps[name] = int(value)
+    if requested is not None:
+        if type(requested) is not int or requested < 1:
+            raise ValueError("worker_limit must be a positive integer")
+        caps["requested_worker_limit"] = requested
+    return caps
 
 
 def _widths(limit):
@@ -551,16 +539,18 @@ def _structural_layout(bodies):
 
 
 def schedule(module, mode, worker_limit=None):
-    available, limit = _limits()
-    if worker_limit is not None:
-        limit = min(limit, worker_limit)
+    deployment_cpu = cpu_availability()
+    caps = _worker_caps(deployment_cpu.worker_budget, worker_limit)
+    limit = min(caps.values())
     selected = deepcopy(module)
     maps, has_fusion = _collect(selected)
     report = document(
         PHYSICAL,
         target="cpu-cxx20",
         mode=mode,
-        affinity=available,
+        affinity=list(deployment_cpu.cpu_ids),
+        deployment_cpu=deployment_cpu.as_record(),
+        worker_policy=dict(method="minimum", caps=caps),
         worker_limit=limit,
         workers=1,
         minimum_parallel_elements=None,
@@ -599,7 +589,7 @@ def schedule(module, mode, worker_limit=None):
                     operations="ns per operation or named probe group",
                 ),
                 constant_divisors=dict(shift=8, other=7),
-                coverage="fraction of available widths sampled at powers of two and the available maximum",
+                coverage="powers of two and the effective probe budget",
                 sampled_widths=sorted(samples),
                 unmeasured_widths=sorted(set(_widths(probe_limit)) - samples.keys()),
             )

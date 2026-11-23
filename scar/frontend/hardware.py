@@ -6,6 +6,7 @@ import platform
 import re
 
 from scar.contract import Edge, Resource
+from scar.host import cpu_availability
 
 
 def _text(path):
@@ -111,13 +112,18 @@ def _mount(path):
 
 
 def snapshot(path):
-    resources, edges = [], []
     cpu_root = Path("/sys/devices/system/cpu")
     online = _numbers(_text(cpu_root / "online"))
-    affinity = getattr(os, "sched_getaffinity", None)
-    allowed = (
-        set(affinity(0)) if affinity else online or set(range(os.cpu_count() or 1))
+    availability = cpu_availability()
+    allowed = set(availability.cpu_ids)
+    budget_evidence = availability.as_record()
+    pool = Resource(
+        "cpu-pool:process",
+        "CPU_POOL",
+        availability.worker_budget,
+        {**budget_evidence, "capacity_unit": "conservative_worker_budget"},
     )
+    resources, edges = [pool], []
     isa_by_cpu, isa_profiles = _cpu_isa()
     architecture = platform.machine()
     by_cpu = {}
@@ -159,6 +165,7 @@ def snapshot(path):
         )
     physical_cores = {}
     for cpu in sorted(allowed):
+        edges.append(Edge(pool.id, f"cpu:{cpu}", "RESOURCE", "CPU_POOL_MEMBER"))
         topology = cpu_root / f"cpu{cpu}" / "topology"
         number = by_cpu.get(cpu)
         package = _integer(topology / "physical_package_id")
@@ -309,7 +316,8 @@ def snapshot(path):
         "provider": "linux-proc-sysfs",
         "online_cpu_ids": sorted(online),
         "affinity_cpu_ids": sorted(allowed),
-        "cpu_constraint": "sched_getaffinity" if affinity else "inventory",
+        "cpu_constraint": pool.id,
+        "cpu_availability": budget_evidence,
         "architecture": architecture,
         "isa_profiles": isa_profiles,
     }

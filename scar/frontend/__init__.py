@@ -6,6 +6,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from scar.contract import GRAPH, digest, document, json_bytes, member, write_json
+from scar.host import cpu_availability
 
 
 def _unit(job):
@@ -138,6 +139,7 @@ def _unit(job):
                 calls=f["calls"],
                 objects=f["objects"],
                 dispatch=f["dispatch"],
+                process_operations=f["process_operations"],
                 nodes=len(f["nodes"]),
             )
             for f in functions
@@ -199,10 +201,11 @@ def build(manifest, out, *, jobs=1):
         )
         for p, parsed in zip(profiles, parsed_units)
     ]
-    if jobs == 1 or len(work) == 1:
+    workers = min(jobs, len(work), cpu_availability().worker_budget)
+    if workers == 1:
         units = list(map(_unit, work))
     else:
-        with ProcessPoolExecutor(max_workers=min(jobs, len(work))) as pool:
+        with ProcessPoolExecutor(max_workers=workers) as pool:
             units = list(pool.map(_unit, work, chunksize=1))
     for unit in units:
         for name, revision in unit["source_facts"]["files"].items():
@@ -237,4 +240,4 @@ def build(manifest, out, *, jobs=1):
         coverage=dict(totals=totals, diagnostic_categories=dict(counts.most_common())),
     )
     write_json(out / "graph.json", graph)
-    return dict(graph=str(out / "graph.json"), **totals)
+    return dict(graph=str(out / "graph.json"), workers=workers, **totals)

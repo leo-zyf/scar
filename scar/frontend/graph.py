@@ -343,4 +343,7 @@ def function_graph(function, revision):
         calls=sorted(calls),
         objects=sorted(objects),
         dispatch=dispatch,
+        process_operations=[
+            i for i, row in enumerate(nodes) if row["op"].startswith("process_")
+        ],
     )

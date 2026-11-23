@@ -7,6 +7,7 @@ import subprocess
 from tempfile import TemporaryDirectory
 
 from scar.contract import digest, document, open_product, write_json
+from scar.host import cpu_availability
 
 
 def build(manifest) -> Path:
@@ -34,12 +35,17 @@ def build(manifest) -> Path:
     sources = package["sources"]
     if not sources or not {"CMakeLists.txt", package["header"], *sources} <= supplied:
         raise ValueError("incomplete C++20 project")
+    availability = cpu_availability()
+    requested = os.environ.get("CMAKE_BUILD_PARALLEL_LEVEL")
+    if requested and (not requested.isdecimal() or int(requested) < 1):
+        raise ValueError("CMAKE_BUILD_PARALLEL_LEVEL must be a positive integer")
+    parallel = min(
+        len(sources), availability.worker_budget, int(requested) if requested else 8
+    )
     with TemporaryDirectory(prefix="scar-cmake-", dir=root.parent) as scratch:
         folder = Path(scratch)
         compile_command = ["cmake", "--build", str(folder / "build")]
-        if not os.environ.get("CMAKE_BUILD_PARALLEL_LEVEL"):
-            parallel = min(len(sources), len(os.sched_getaffinity(0)), 8)
-            compile_command.extend(("--parallel", str(parallel)))
+        compile_command.extend(("--parallel", str(parallel)))
         commands = (
             [
                 "cmake",
@@ -98,6 +104,8 @@ def build(manifest) -> Path:
                 sha256=digest(data),
             ),
             warnings=0,
+            build_workers=parallel,
+            execution_host=availability.as_record(),
         ),
     )
     return target

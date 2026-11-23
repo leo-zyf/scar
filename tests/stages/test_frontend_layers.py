@@ -183,6 +183,95 @@ def selected(): return command
     )
 
 
+def test_python_process_handle_and_stream_ports(tmp_path):
+    from scar.frontend import build
+
+    entry, out = tmp_path / "entry.py", tmp_path / "graph"
+    entry.write_text("""from subprocess import Popen, PIPE
+def work(cmd, more, flag, other):
+    p = Popen(cmd, stdout=PIPE, cwd=other.cwd(), shell=flag)
+    q = p
+    wait = p.wait
+    p = Popen(cmd, stdin=PIPE, stderr=PIPE)
+    wait()
+    q.poll()
+    for line in q.stdout: pass
+    p.stdin
+    p.stderr
+    p.communicate(input=b"")
+    if flag: chosen = q
+    else: chosen = p
+    chosen.wait()
+    for item in more:
+        Popen(item).wait()
+    other.wait()
+""")
+    build(entry, out)
+    (unit,) = json.loads((out / "graph.json").read_bytes())["units"]
+    shard = json.loads((out / unit["graph"]["path"]).read_bytes())
+    work = next(
+        f for f in shard["functions"] if f["signature"]["name"].endswith(":work")
+    )
+    nodes = work["nodes"]
+    ports = {n["location"]["line"]: n for n in nodes if n["op"] == "process_launch"}
+    assert set(ports) == {3, 6, 17}
+    assert ports[3]["cwd"] == {"operand": ["keywords", 1, "value"]}
+    assert ports[3]["shell"] == {"operand": ["keywords", 2, "value"]}
+    assert (
+        sum(n["op"] == "python_invoke" and n["location"]["line"] == 3 for n in nodes)
+        == 1
+    )
+    sites = {line: n["result_handle"]["site"] for line, n in ports.items()}
+    assert len(set(sites.values())) == 3
+    assert all(
+        n["result_handle"]["instance"] == "per_successful_invocation"
+        for n in ports.values()
+    )
+    assert set(work["process_operations"]) == {
+        i for i, n in enumerate(nodes) if n["op"].startswith("process_")
+    }
+
+    operations = {
+        n["location"]["line"]: n
+        for n in nodes
+        if n["op"]
+        in {"process_wait", "process_communicate", "process_poll", "process_stream"}
+    }
+    assert list(sorted(operations)) == [7, 8, 9, 10, 11, 12, 15, 17]
+    expected = {7: {3}, 8: {3}, 9: {3}, 10: {6}, 11: {6}, 12: {6}, 15: {3, 6}, 17: {17}}
+    for line, row in operations.items():
+        assert set(row["handle"]["sites"]) == {sites[i] for i in expected[line]}
+        assert row["binding_guard"]["on_failure"] == "runtime_lookup"
+        receiver = row
+        for field in row["handle"]["operand"]:
+            receiver = nodes[receiver[field]["port"]]
+        if line == 7:
+            assert (
+                receiver["name"] == "wait"
+                and row["handle"]["projection"] == "bound_receiver"
+            )
+        elif line == 17:
+            assert (
+                receiver["op"] == "process_launch"
+                and receiver["result_handle"]["site"] == sites[17]
+            )
+        else:
+            assert receiver["op"] == "var"
+    assert not operations[8]["waits_for_exit"] and operations[12]["waits_for_exit"]
+    assert {
+        line: (operations[line]["channel"], operations[line]["direction"])
+        for line in (9, 10, 11)
+    } == {
+        9: ("stdout", "child_to_parent"),
+        10: ("stdin", "parent_to_child"),
+        11: ("stderr", "child_to_parent"),
+    }
+    assert all(operations[n]["channel_binding"]["route"] == "pipe" for n in (9, 10, 11))
+    assert any(
+        n["op"] == "python_invoke" and n["location"]["line"] == 18 for n in nodes
+    )
+
+
 def test_fortran_capture_then_offline_normalization(tmp_path, monkeypatch):
     from fparser.two import utils
     from fparser.two.parser import ParserFactory
