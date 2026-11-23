@@ -67,6 +67,7 @@ class ParsedUnit:
     diagnostics: tuple = ()
     providers: dict = field(default_factory=dict)
     runtime_facts: dict = field(default_factory=dict)
+    source_text: str = ""
 
     @property
     def source_digests(self):
@@ -145,6 +146,7 @@ def parse_unit(
         source_hash,
         providers=imports.providers_for(tree),
         runtime_facts=imports.runtime,
+        source_text=text,
     )
 
 

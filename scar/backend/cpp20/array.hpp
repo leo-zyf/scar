@@ -1,17 +1,27 @@
 #pragma once
 
 #include <algorithm>
+#include <cfenv>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <initializer_list>
+#include <ios>
 #include <limits>
 #include <memory>
+#include <mutex>
+#include <set>
 #include <stdexcept>
+#include <string>
+#include <string_view>
+#include <tuple>
 #include <type_traits>
 #include <utility>
+#include <variant>
 #include <vector>
 #include <xtensor/containers/xadapt.hpp>
 #include <xtensor/containers/xarray.hpp>
+#include <xtensor/core/xmath.hpp>
 #include <xtensor/core/xnoalias.hpp>
 #include <xtensor/core/xoperation.hpp>
 #include <xtensor/views/xbroadcast.hpp>
@@ -24,6 +34,7 @@ struct array_shape {
 };
 
 template <class T> class ndarray {
+  friend struct array_calculation;
   using shape_type = std::vector<std::size_t>;
   using strides_type = std::vector<std::ptrdiff_t>;
   using storage_type = xt::xarray<T, xt::layout_type::row_major>;
@@ -121,6 +132,18 @@ template <class T> class ndarray {
 
 public:
   ndarray() = default;
+
+  const shape_type &dimensions() const {
+    if (!region_)
+      throw std::invalid_argument("unbound array handle");
+    return region_->shape;
+  }
+
+  T value_at_flat(std::size_t index) const {
+    if (!region_ || index >= region_->size)
+      throw std::out_of_range("flat index outside array view");
+    return region_->storage->flat(region_->offset + index);
+  }
 
   static ndarray zeros(array_shape layout) {
     auto dims = shape(layout);
@@ -266,5 +289,227 @@ template <class T, class V> void array_store(array_write<T, V> write) {
   else
     loc.base.store(loc.rank, loc.indices, std::move(write.value),
                    write.source_rank);
+}
+
+enum class array_math {
+  add,
+  subtract,
+  multiply,
+  divide,
+  power,
+  square,
+  sqrt,
+  reciprocal,
+  positive,
+  ones_like
+};
+
+struct array_warning {
+  std::string_view module, file;
+  std::size_t line;
+  std::string_view operation, source_line;
+};
+
+// Each ufunc observes only its own IEEE flags. Restore both caller flags and
+// exception masks even if evaluation throws before producing a result.
+class array_fenv {
+  std::fenv_t saved_;
+  bool active_ = true;
+
+public:
+  array_fenv() {
+    if (std::feholdexcept(&saved_))
+      throw std::runtime_error("cannot isolate floating-point environment");
+  }
+  array_fenv(const array_fenv &) = delete;
+  ~array_fenv() {
+    if (active_)
+      std::fesetenv(&saved_);
+  }
+  int finish() {
+    int raised = std::fetestexcept(FE_DIVBYZERO | FE_OVERFLOW | FE_INVALID);
+    if (std::fesetenv(&saved_))
+      throw std::runtime_error("cannot restore floating-point environment");
+    active_ = false;
+    return raised;
+  }
+};
+
+inline void report_array_warnings(int flags, const array_warning &site) {
+  if (!flags)
+    return;
+  static std::mutex lock;
+  static std::set<
+      std::tuple<std::string, std::string, std::size_t, std::string, int>>
+      seen;
+  const std::lock_guard guard(lock);
+  constexpr std::pair<int, std::string_view> classes[] = {
+      {FE_DIVBYZERO, "divide by zero"},
+      {FE_OVERFLOW, "overflow"},
+      {FE_INVALID, "invalid value"}};
+  for (auto [bit, reason] : classes) {
+    if (!(flags & bit) ||
+        !seen.emplace(site.module, site.file, site.line, site.operation, bit)
+             .second)
+      continue;
+    std::string line(site.file);
+    line += ":" + std::to_string(site.line) + ": RuntimeWarning: ";
+    line += reason;
+    line += " encountered in ";
+    line += site.operation;
+    line += '\n';
+    if (!site.source_line.empty()) {
+      line += "  ";
+      line += site.source_line;
+      line += '\n';
+    }
+    if (std::fwrite(line.data(), 1, line.size(), stderr) != line.size() ||
+        std::fflush(stderr))
+      throw std::ios_base::failure("cannot write arithmetic diagnostic");
+  }
+}
+
+struct array_number {
+  std::variant<double, ndarray<double>> value;
+  std::size_t rank;
+};
+
+struct array_calculation {
+  array_number left, right;
+  array_math operation;
+  array_warning warning;
+
+private:
+  using array = ndarray<double>;
+  using shape_type = array::shape_type;
+
+  static const shape_type &shape(const array_number &n) {
+    if (const auto *a = std::get_if<array>(&n.value)) {
+      a->require_rank(n.rank);
+      return a->dimensions();
+    }
+    if (n.rank)
+      throw std::invalid_argument("scalar operand has nonzero rank");
+    static const shape_type scalar_shape;
+    return scalar_shape;
+  }
+  static const double *data(const array_number &n) {
+    if (const auto *scalar = std::get_if<double>(&n.value))
+      return scalar;
+    const auto &r = *std::get<array>(n.value).region_;
+    return r.storage->data() + r.offset;
+  }
+  static auto source(const array_number &n) {
+    return xt::adapt(data(n), shape(n));
+  }
+  shape_type result_shape() const {
+    const auto &l = shape(left), &r = shape(right);
+    shape_type result(std::max(l.size(), r.size()), 1);
+    try {
+      xt::broadcast_shape(l, result);
+      xt::broadcast_shape(r, result);
+    } catch (const xt::broadcast_error &ex) {
+      throw std::invalid_argument(ex.what());
+    }
+    return result;
+  }
+  template <class Dest>
+  void evaluate(Dest &dst, const array_number &rhs) const {
+    array_fenv environment;
+    auto l = source(left), r = source(rhs);
+    auto dest = xt::noalias(dst);
+    auto verify_exponent = [&](double value) {
+      if (rhs.rank || *data(rhs) != value)
+        throw std::invalid_argument(
+            "array power specialization exponent mismatch");
+    };
+    switch (operation) {
+    case array_math::add:
+      dest = l + r;
+      break;
+    case array_math::subtract:
+      dest = l - r;
+      break;
+    case array_math::multiply:
+      dest = l * r;
+      break;
+    case array_math::divide:
+      dest = l / r;
+      break;
+    case array_math::power:
+      dest = xt::pow(l, r);
+      break;
+    case array_math::square:
+      verify_exponent(2.);
+      dest = xt::square(l);
+      break;
+    case array_math::sqrt:
+      verify_exponent(0.5);
+      dest = xt::sqrt(l);
+      break;
+    case array_math::reciprocal:
+      verify_exponent(-1.);
+      dest = 1. / l;
+      break;
+    case array_math::positive:
+      verify_exponent(1.);
+      dest = l;
+      break;
+    case array_math::ones_like:
+      verify_exponent(0.);
+      dst.fill(1.);
+      break;
+    }
+    report_array_warnings(environment.finish(), warning);
+  }
+
+public:
+  template <class Result> Result fresh() const {
+    auto dims = result_shape();
+    if constexpr (std::is_same_v<Result, double>) {
+      if (!dims.empty())
+        throw std::invalid_argument("arithmetic scalar result rank mismatch");
+      double value;
+      auto dst = xt::adapt(&value, dims);
+      evaluate(dst, right);
+      return value;
+    } else {
+      static_assert(std::is_same_v<Result, array>);
+      if (dims.empty())
+        throw std::invalid_argument("arithmetic array result rank mismatch");
+      auto size = array::count(dims);
+      auto result = array::allocate(std::move(dims), size);
+      if (size) {
+        auto dst = result.expression();
+        evaluate(dst, right);
+      }
+      return result;
+    }
+  }
+  std::nullptr_t update() const {
+    auto dims = result_shape();
+    auto *a = std::get_if<array>(&left.value);
+    if (!a || dims != a->dimensions())
+      throw std::invalid_argument(
+          "broadcast would change the in-place array shape");
+    if (!a->region_->size)
+      return nullptr;
+    auto rhs = right;
+    if (auto *b = std::get_if<array>(&rhs.value)) {
+      const auto &dst = *a->region_, &src = *b->region_;
+      if (dst.storage == src.storage && dst.offset < src.offset + src.size &&
+          src.offset < dst.offset + dst.size)
+        rhs.value = b->materialize(rhs.rank, false);
+    }
+    auto dst = a->expression();
+    evaluate(dst, rhs);
+    return nullptr;
+  }
+};
+template <class Result> Result array_binary(const array_calculation &request) {
+  return request.fresh<Result>();
+}
+inline std::nullptr_t array_update(const array_calculation &request) {
+  return request.update();
 }
 } // namespace scar

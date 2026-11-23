@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass, field
 import math
+import struct
 
 SCALARS = {"bool", "i64", "f64", "text", "unit"}
 _UNKNOWN = object()
@@ -19,6 +20,8 @@ def array_kind(n):
 
 
 def wire(kind):
+    if kind == "numpy_f64":
+        return "f64"
     n = rank(kind)
     if n is not None:
         return dict(kind="ndarray", element="f64", rank=n)
@@ -40,6 +43,7 @@ def from_wire(spec):
 def runtime(kind):
     return (
         kind in SCALARS
+        or kind == "numpy_f64"
         or rank(kind) is not None
         or kind in {"handle:text_stream", "handle:error"}
     )
@@ -78,3 +82,26 @@ def literal(value):
         type(value)
     ]
     return Value(kind, dict(op="literal", type=kind, value=value), numeric_facts(value))
+
+
+def identical(left, right):
+    """Compare analysis records without merging distinct floating bit patterns."""
+    if type(left) is not type(right):
+        return False
+    if isinstance(left, float):
+        return struct.pack("!d", left) == struct.pack("!d", right)
+    if isinstance(left, Value):
+        return (
+            left.kind == right.kind
+            and identical(left.value, right.value)
+            and identical(left.facts, right.facts)
+        )
+    if isinstance(left, dict):
+        return left.keys() == right.keys() and all(
+            identical(value, right[key]) for key, value in left.items()
+        )
+    if isinstance(left, (tuple, list)):
+        return len(left) == len(right) and all(
+            identical(a, b) for a, b in zip(left, right)
+        )
+    return left == right

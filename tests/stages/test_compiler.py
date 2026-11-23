@@ -130,7 +130,85 @@ print(snapshot[0] == 1.0)
     selected = physical["operator_backends"]["ndarray"]
     assert selected["provider"] == "xtensor-cpu" and selected["device"] == "cpu"
     target = json.loads((delivery / "target-ir.json").read_bytes())
-    assert [h["output"] for h in target["sdk_headers"]] == ["include/scar/array.hpp"]
+    assert [h["output"] for h in target["sdk_headers"]] == [
+        "include/scar/array.hpp",
+        "include/scar/exceptions.hpp",
+    ]
+
+
+def test_numeric_domains_broadcast_and_array_display(tmp_path):
+    entry = tmp_path / "entry.py"
+    entry.write_text("""import numpy as np
+a = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+row = a[0]
+independent = a + np.array([10.0, 20.0, 30.0])
+a *= 2.0
+print(a)
+print(row)
+print(independent)
+print(12.0 / a)
+print(a ** 2)
+def scalar():
+    return a[0, 1]
+print(scalar() / 2)
+empty = np.zeros((0, 3))
+print(empty + np.zeros((1, 3)))
+zero = np.zeros(())
+print(zero + 1.0)
+print(['name', 1, 2.5, (True, None)])
+print(2.0 ** (5 - 1))
+def signed_zero(flag):
+    if flag:
+        value = -0.0
+    else:
+        value = 0.0
+    return value ** 3
+print(signed_zero(True), signed_zero(False))
+try:
+    print(0.0 ** -1)
+except ZeroDivisionError:
+    print('zero power')
+try:
+    print(1e200 ** 2)
+except OverflowError:
+    print('overflow')
+""")
+    expected = _run([sys.executable, "-B", entry], tmp_path)
+    graph, plan, delivery = (tmp_path / name for name in ("graph", "plan", "delivery"))
+    _stage(tmp_path, "frontend", "build", "--entry", entry, "--out", graph)
+    entry.unlink()
+    _stage(tmp_path, "middle", "plan", "--graph", graph, "--out", plan)
+    shutil.rmtree(graph)
+    result = _stage(tmp_path, "backend", "compile", "--ir", plan, "--out", delivery)
+    shutil.rmtree(plan)
+    assert _run([result["executable"]], tmp_path) == expected
+
+
+def test_numpy_default_warnings_survive_source_removal(tmp_path):
+    entry = tmp_path / "entry.py"
+    entry.write_text("""import numpy as np
+a = np.array([1.0, 0.0])
+for i in range(2):
+    b = a / 0.0
+print(b)
+""")
+    expected = subprocess.run(
+        [sys.executable, "-B", entry], capture_output=True, timeout=30
+    )
+    assert expected.returncode == 0 and expected.stderr.count(b"RuntimeWarning:") == 2
+    graph, plan, delivery = (tmp_path / name for name in ("graph", "plan", "delivery"))
+    _stage(tmp_path, "frontend", "build", "--entry", entry, "--out", graph)
+    entry.unlink()
+    _stage(tmp_path, "middle", "plan", "--graph", graph, "--out", plan)
+    shutil.rmtree(graph)
+    result = _stage(tmp_path, "backend", "compile", "--ir", plan, "--out", delivery)
+    shutil.rmtree(plan)
+    actual = subprocess.run([result["executable"]], capture_output=True, timeout=30)
+    assert (actual.returncode, actual.stdout, actual.stderr) == (
+        expected.returncode,
+        expected.stdout,
+        expected.stderr,
+    )
 
 
 def test_host_protocols_preserve_files_stream_aliases_and_text(tmp_path):

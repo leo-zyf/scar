@@ -1,37 +1,26 @@
-"""M2 contracts for exact-width scalar arithmetic, dense arrays and their views."""
+"""M2 contracts for dense binary64 arrays, element operations and shared views."""
 
-import math
-import operator
 import re
 
-from .values import (
-    SCALARS,
-    Value,
-    _MIN,
-    _MAX,
-    _UNKNOWN,
-    array_kind,
-    from_wire,
-    literal,
-    numeric_facts as _numeric_facts,
-    rank,
-    runtime,
-    wire,
-)
+from . import scalars
+from .scalars import as_float as _as_float
+from .values import Value, _UNKNOWN, array_kind, literal, rank, runtime, wire
 
-_NUMERIC = {"i64", "f64"}
 _PROVIDED = {"array", "zeros", "float64"}
 _OPERATORS = {
-    "add": ("add", operator.add),
-    "sub": ("sub", operator.sub),
-    "mult": ("mul", operator.mul),
-    "div": ("div", operator.truediv),
-    "eq": ("eq", operator.eq),
-    "noteq": ("ne", operator.ne),
-    "lt": ("lt", operator.lt),
-    "lte": ("le", operator.le),
-    "gt": ("gt", operator.gt),
-    "gte": ("ge", operator.ge),
+    "add": ("add", "add"),
+    "sub": ("sub", "subtract"),
+    "mult": ("mul", "multiply"),
+    "div": ("div", "divide"),
+    "pow": ("pow", "power"),
+}
+_COMPARISONS = {
+    "eq": "eq",
+    "noteq": "ne",
+    "lt": "lt",
+    "lte": "le",
+    "gt": "gt",
+    "gte": "ge",
 }
 
 
@@ -89,18 +78,199 @@ def provider_member(frame, node, name):
     )
 
 
-def _as_float(frame, node, item):
-    if item.kind == "f64":
-        return item.value
-    if item.kind == "i64":
-        return dict(op="cast", type="f64", value=item.value)
-    frame.fail(node, "array_element", f"cannot convert {item.kind} to binary64")
+def _shape(item):
+    dimensions = rank(item.kind)
+    return () if dimensions is None else item.facts.get("shape", (None,) * dimensions)
+
+
+def _broadcast(frame, node, lhs, rhs, *, inplace):
+    left, right = _shape(lhs), _shape(rhs)
+    if inplace and len(right) > len(left):
+        frame.fail(
+            node,
+            "array_broadcast",
+            "the RHS rank exceeds the in-place destination rank",
+        )
+    dimensions = max(len(left), len(right))
+    left = (1,) * (dimensions - len(left)) + left
+    right = (1,) * (dimensions - len(right)) + right
+    result = []
+    for axis, (a, b) in enumerate(zip(left, right)):
+        if inplace:
+            if a is not None and b not in (None, 1, a):
+                frame.fail(
+                    node,
+                    "array_broadcast",
+                    f"cannot write RHS extent {b} into extent {a} on axis {axis}",
+                )
+            extent = a
+        elif a == b or b == 1:
+            extent = a
+        elif a == 1 or a is None:
+            extent = b
+        elif b is None:
+            extent = a
+        else:
+            frame.fail(
+                node,
+                "array_broadcast",
+                f"incompatible extents {a} and {b} on axis {axis}",
+            )
+        result.append(extent)
+    return tuple(result)
+
+
+def _power_path(frame, node, lhs, rhs):
+    """The source numeric slot chooses a ufunc before broadcasting or conversion."""
+    if rank(lhs.kind) is None or rank(rhs.kind) not in (None, 0):
+        return "power"
+    revision = frame.project.providers.get("numpy", {}).get("version", "")
+    match = re.match(r"^(\d+)\.(\d+)", revision)
+    version = tuple(map(int, match.groups())) if match else ()
+    if (1, 24) <= version < (2, 3):
+        choices = {
+            -1: "reciprocal",
+            0: "ones_like",
+            0.5: "sqrt",
+            1: "positive",
+            2: "square",
+        }
+    elif (2, 3) <= version < (2, 6):
+        choices = {
+            "i64": {-1: "reciprocal", 2: "square"},
+            "f64": {0.5: "sqrt"},
+        }.get(rhs.kind, {})
+    else:
+        frame.fail(
+            node,
+            "array_power_dispatch",
+            f"no scalar power dispatch contract for NumPy {revision!r}",
+        )
+    if rhs.exact is not _UNKNOWN:
+        return choices.get(rhs.exact, "power")
+    if rhs.kind == "i64":
+        lo, hi = rhs.bounds
+        choices = {
+            v: path for v, path in choices.items() if int(v) == v and lo <= v <= hi
+        }
+        if lo == hi:
+            return choices.get(lo, "power")
+    if choices:
+        frame.fail(
+            node,
+            "array_power_dispatch",
+            "runtime exponent could require a different numerical kernel and warning operation",
+        )
+    return "power"
+
+
+def _operand(frame, node, value):
+    return (
+        value.value if rank(value.kind) is not None else _as_float(frame, node, value)
+    )
+
+
+def _operation(frame, node, op, lhs, rhs, steps, *, inplace=False, discard=False):
+    if op not in _OPERATORS:
+        frame.fail(node, "array_operator", f"no binary64 array contract for {op}")
+    left, right = (_operand(frame, node, item) for item in (lhs, rhs))
+    shape = _broadcast(frame, node, lhs, rhs, inplace=inplace)
+    operator, ufunc = _OPERATORS[op]
+    dispatch = {}
+    if operator == "pow":
+        ufunc = _power_path(frame, node, lhs, rhs)
+        dispatch["power_path"] = ufunc
+    if rank(lhs.kind) is None and rank(rhs.kind) is None:
+        ufunc = "scalar " + ufunc
+    location = dict(node.get("location", {}))
+    warning = {"operation": ufunc}
+    if frame.module:
+        warning["module"] = "__main__" if frame.scope.get("main") else frame.module
+    if "source_line" in location:
+        warning["source_line"] = location["source_line"]
+    contract = dict(
+        operator=operator,
+        left=left,
+        right=right,
+        broadcasting="trailing",
+        numeric_policy="numpy_default",
+        warning=warning,
+        location=location,
+        **dispatch,
+    )
+    if inplace:
+        frame.project.array_ops.add("array_update")
+        steps.append(
+            dict(op="array_update", type="unit", effects=["STATE", "IO"], **contract)
+        )
+        return
+    return _output(
+        frame,
+        "array_binary",
+        array_kind(len(shape)) if shape else "numpy_f64",
+        steps,
+        facts={"shape": shape} if shape else {},
+        discard=discard,
+        effects=["MEM", "VAL", "STATE", "IO"],
+        **contract,
+    )
+
+
+def binary(frame, node, op, lhs, rhs, steps, discard=False):
+    """Select NumPy arithmetic from source operand identities, including scalar loads."""
+    if all(rank(v.kind) is None and v.kind != "numpy_f64" for v in (lhs, rhs)):
+        return None
+    if op in _COMPARISONS:
+        if any(rank(v.kind) not in (None, 0) for v in (lhs, rhs)):
+            frame.fail(
+                node,
+                "array_comparison",
+                "a non-scalar comparison requires a boolean array contract",
+            )
+        operands = []
+        for v in (lhs, rhs):
+            if v.kind == "i64" and max(map(abs, v.bounds)) > 1 << 53:
+                frame.fail(
+                    node,
+                    "integer_precision",
+                    "mixed scalar comparison requires an exact integer conversion",
+                )
+            if rank(v.kind) == 0:
+                v = _output(
+                    frame,
+                    "array_load",
+                    "numpy_f64",
+                    steps,
+                    base=v.value,
+                    indices=[],
+                    effects=["STATE"],
+                )
+            operands.append(_as_float(frame, node, v))
+        return Value(
+            "bool",
+            dict(
+                op="binary",
+                operator=_COMPARISONS[op],
+                left=operands[0],
+                right=operands[1],
+                type="bool",
+            ),
+        )
+    return _operation(frame, node, op, lhs, rhs, steps, discard=discard)
+
+
+def update(frame, node, lhs, rhs, steps):
+    """Update the existing storage so live views observe the write."""
+    if rank(lhs.kind) is None:
+        return False
+    _operation(frame, node, node["operator"], lhs, rhs, steps, inplace=True)
+    return True
 
 
 def scalar_unary(frame, node, item, steps, discard):
     op = {"uadd": "pos", "usub": "neg"}.get(node["operator"])
     n = rank(item.kind)
-    if op is None or n is None and item.kind not in _NUMERIC:
+    if op is None or n is None and item.kind not in {"i64", "f64", "numpy_f64"}:
         frame.fail(
             node, "unary_contract", f"unclosed {node['operator']} on {item.kind}"
         )
@@ -120,83 +290,17 @@ def scalar_unary(frame, node, item, steps, discard):
         item = _output(
             frame,
             "array_load",
-            "f64",
+            "numpy_f64",
             steps,
             base=item.value,
             indices=[],
             effects=["STATE"],
         )
-    exact = item.exact
-    if item.kind == "i64" and op == "neg" and item.bounds[0] == _MIN:
-        frame.fail(
-            node,
-            "integer_range",
-            "integer negation needs a representable result on all paths",
+    if item.kind == "numpy_f64":
+        return Value(
+            "numpy_f64", dict(op="unary", operator=op, value=item.value, type="f64")
         )
-    facts = (
-        {} if exact is _UNKNOWN else _numeric_facts(+exact if op == "pos" else -exact)
-    )
-    if item.kind == "i64":
-        low, high = item.bounds
-        facts["range"] = (low, high) if op == "pos" else (-high, -low)
-    return Value(
-        item.kind,
-        dict(op="unary", type=item.kind, operator=op, value=item.value),
-        facts,
-    )
-
-
-def scalar_binary(frame, node, op, lhs, rhs):
-    """Return a typed numeric expression, or None for the nonnumeric protocol."""
-    if lhs.kind not in _NUMERIC or rhs.kind not in _NUMERIC:
-        return None
-    if op not in _OPERATORS:
-        frame.fail(node, "arithmetic_contract", f"unclosed numeric operator {op}")
-    symbol, evaluate = _OPERATORS[op]
-    a, b = lhs.exact, rhs.exact
-    known = a is not _UNKNOWN and b is not _UNKNOWN
-    compare = symbol in {"eq", "ne", "lt", "le", "gt", "ge"}
-    floating = "f64" in (lhs.kind, rhs.kind) or symbol == "div"
-    nonzero = (
-        (b is not _UNKNOWN and b != 0)
-        or rhs.kind == "i64"
-        and not rhs.bounds[0] <= 0 <= rhs.bounds[1]
-    )
-    if symbol == "div" and not nonzero:
-        frame.fail(
-            node, "division_contract", "the divisor must be proven nonzero at this use"
-        )
-    result_type = "bool" if compare else ("f64" if floating else "i64")
-    facts = _numeric_facts(evaluate(a, b)) if known else {}
-    if result_type == "i64":
-        corners = [evaluate(x, y) for x in lhs.bounds for y in rhs.bounds]
-        low, high = min(corners), max(corners)
-        if not _MIN <= low <= high <= _MAX:
-            frame.fail(
-                node,
-                "integer_range",
-                "integer operation needs a proven signed 64-bit result range",
-            )
-        facts["range"] = (low, high)
-    if floating and (compare or symbol == "div" and lhs.kind == rhs.kind == "i64"):
-        if any(
-            v.kind == "i64" and max(map(abs, v.bounds)) > 1 << 53 for v in (lhs, rhs)
-        ):
-            if known:
-                return literal(evaluate(a, b))
-            frame.fail(
-                node,
-                "integer_precision",
-                "integer/floating comparison or true division requires exact integer conversion",
-            )
-    left, right = (
-        _as_float(frame, node, v) if floating else v.value for v in (lhs, rhs)
-    )
-    return Value(
-        result_type,
-        dict(op="binary", type=result_type, operator=symbol, left=left, right=right),
-        facts,
-    )
+    return scalars.unary(frame, node, item)
 
 
 def capture_sequence(frame, node, steps):
@@ -212,7 +316,7 @@ def capture_sequence(frame, node, steps):
             # A sequence captures the current value, including the current array handle.
             # A module-level sequence may outlive its initializer's local temporaries.
             if item.exact is not _UNKNOWN:
-                item = literal(item.exact)
+                item = Value(item.kind, literal(item.exact).value, item.facts)
             elif frame.initializing:
                 name = frame.temporary()
                 slot = f"@sequence/{frame.name}/{name}"
@@ -442,7 +546,7 @@ def index(frame, node, steps, rhs=None, discard=False):
         return _output(
             frame,
             "array_load",
-            "f64",
+            "numpy_f64",
             steps,
             discard=discard,
             base=base.value,

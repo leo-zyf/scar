@@ -337,15 +337,23 @@ class _ModuleGraph:
         self.libraries = parsed.libraries
         self.providers = parsed.providers
         self.runtime = parsed.runtime_facts
+        self.source_lines = parsed.source_text.splitlines()
+        self.diagnostic_file = str(parsed.path)
 
     def location(self, node):
-        return dict(
+        result = dict(
             file=self.path,
             line=getattr(node, "lineno", 1),
             column=getattr(node, "col_offset", 0) + 1,
             end_line=getattr(node, "end_lineno", 1),
             end_column=getattr(node, "end_col_offset", 0) + 1,
         )
+        if isinstance(node, ast.BinOp) and 0 < result["line"] <= len(self.source_lines):
+            result.update(
+                diagnostic_file=self.diagnostic_file,
+                source_line=self.source_lines[result["line"] - 1].strip(),
+            )
+        return result
 
     def issue(self, node, symbol, field, detail):
         location = self.location(node)

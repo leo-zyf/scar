@@ -56,6 +56,9 @@ _ARRAY_EFFECTS = {
     "array_view": {"STATE", "MEM"},
     "array_load": {"STATE"},
     "array_store": {"STATE"},
+    "array_binary": {"MEM", "VAL", "STATE", "IO"},
+    "array_update": {"STATE", "IO"},
+    "array_format": {"VAL", "MEM", "STATE"},
 }
 _HOST_SIGNATURES = {
     "console.input": ("text", ("text", "text")),
@@ -500,11 +503,53 @@ class Lowerer:
 
     def array_operation(self, node):
         op = node["op"]
+        effects = set(node.get("effects", ()))
         if (
             op not in _ARRAY_EFFECTS
-            or set(node.get("effects", ())) != _ARRAY_EFFECTS[op]
+            or effects != _ARRAY_EFFECTS[op]
+            and not (
+                op == "array_update"
+                and {"STATE", "IO"} <= effects <= _ARRAY_EFFECTS["array_binary"]
+            )
         ):
             raise ValueError(f"unsupported ndarray operation or effects for {op}")
+        if op in ("array_binary", "array_update"):
+            return self.array_arithmetic(node)
+        if op == "array_format":
+            expected = dict(
+                precision=8,
+                threshold=1000,
+                edgeitems=3,
+                linewidth=75,
+                suppress=False,
+                sign="-",
+                floatmode="maxprec",
+                legacy=False,
+            )
+            options = node.get("options")
+            value = node["value"]
+            if (
+                options != expected
+                or any(type(options[k]) is not type(v) for k, v in expected.items())
+                or node.get("type") != "text"
+            ):
+                raise ValueError("unsupported array display profile")
+            ndarray_rank(value.get("type"))
+            self.type_name(value["type"])
+            self.use_sdk("format.hpp")
+            fields = tuple(
+                (
+                    utf8_literal(v, "std::string_view")
+                    if isinstance(v, str)
+                    else Expr("literal", value=v)
+                )
+                for v in expected.values()
+            )
+            return call(
+                "scar::format_array",
+                self.expression(value),
+                Expr("braced", args=fields),
+            )
 
         def operands(items, ty):
             if not isinstance(items, (tuple, list)) or any(
@@ -567,6 +612,101 @@ class Lowerer:
             group(self.expression(rhs), integer(rhs_rank), location),
         )
 
+    def array_arithmetic(self, node):
+        if (
+            node.get("broadcasting") != "trailing"
+            or node.get("numeric_policy") != "numpy_default"
+        ):
+            raise ValueError(
+                "array arithmetic requires trailing broadcast and a closed numeric policy"
+            )
+        operator = node.get("operator")
+        primitive = {
+            "add": "add",
+            "sub": "subtract",
+            "mul": "multiply",
+            "div": "divide",
+            "pow": "power",
+        }.get(operator)
+        if primitive is None:
+            raise ValueError("unsupported array binary operator")
+        if operator == "pow":
+            primitive = node.get("power_path")
+            if primitive not in (
+                "power",
+                "square",
+                "sqrt",
+                "reciprocal",
+                "positive",
+                "ones_like",
+            ):
+                raise ValueError("array power requires a concrete numerical operation")
+        elif "power_path" in node:
+            raise ValueError("non-power operator carries a power path")
+        warning = node.get("warning", {})
+        operation = warning.get("operation")
+        if operation not in (
+            primitive,
+            "scalar " + primitive,
+            "_ones_like" if primitive == "ones_like" else primitive,
+        ):
+            raise ValueError(
+                "array diagnostic operation differs from numerical operation"
+            )
+        location = node.get("location", {})
+        file, line = location.get(
+            "diagnostic_file", location.get("file")
+        ), location.get("line")
+        if not isinstance(file, str) or not file or type(line) is not int or line <= 0:
+            raise ValueError("array diagnostics require source location")
+        notice = Expr(
+            "braced",
+            args=(
+                utf8_literal(warning.get("module", file), "std::string_view"),
+                utf8_literal(file, "std::string_view"),
+                integer(line),
+                utf8_literal(operation, "std::string_view"),
+                utf8_literal(warning.get("source_line", ""), "std::string_view"),
+            ),
+        )
+        left, right = node["left"], node["right"]
+        left_array = left.get("type") != "f64"
+
+        def operand(value):
+            ty = value.get("type")
+            rank = 0 if ty == "f64" else ndarray_rank(ty)
+            return rank, Expr(
+                "braced",
+                args=(cast(self.type_name(ty), self.expression(value)), integer(rank)),
+            )
+
+        lrank, l = operand(left)
+        rrank, r = operand(right)
+        if (
+            operator == "pow"
+            and primitive != "power"
+            and (rrank != 0 or not left_array)
+        ):
+            raise ValueError(
+                "array power specialization requires array base and scalar exponent"
+            )
+        rank = max(lrank, rrank)
+        array_type = {"kind": "ndarray", "element": "f64", "rank": rank}
+        # A scalar result can still require an array-library execution contract.
+        self.type_name(array_type)
+        update = node["op"] == "array_update"
+        result = "unit" if update else array_type if rank else "f64"
+        if node.get("type") != result or (update and not left_array):
+            raise ValueError(
+                "array arithmetic result differs from input rank or update target"
+            )
+        payload = Expr(
+            "braced", args=(l, r, name("scar::array_math::" + primitive), notice)
+        )
+        if update:
+            return call("scar::array_update", payload)
+        return call(template("scar::array_binary", self.type_name(result)), payload)
+
     def expression(self, expr):
         self.weight += 1
         if id(expr) in self.axis_names:
@@ -588,8 +728,47 @@ class Lowerer:
             return self.literal(expr["type"], expr["value"])
         if op == "text_print":
             return self.text_print(expr)
+        if op == "text_concat":
+            if (
+                expr.get("type") != "text"
+                or set(expr.get("effects", ())) != {"VAL", "MEM"}
+                or any(part.get("type") != "text" for part in expr["parts"])
+            ):
+                raise ValueError("invalid text concatenation contract")
+            return call(
+                "scar::concat_text",
+                Expr(
+                    "braced",
+                    args=tuple(
+                        cast(named("std::string"), E(part)) for part in expr["parts"]
+                    ),
+                ),
+            )
         if op == "host_call":
             return self.host_call(expr)
+        if op == "scalar_power":
+            values = (expr["base"], expr["exponent"])
+            if (
+                expr.get("type") != "f64"
+                or expr.get("domain") != "real"
+                or any(v.get("type") != "f64" for v in values)
+                or set(expr.get("effects", ())) != {"VAL"}
+                or expr.get("may_raise") is not True
+            ):
+                raise ValueError("unsupported real scalar power contract")
+            self.use_sdk("exceptions.hpp")
+            self.headers.add("tuple")
+            captured = Expr(
+                "construct",
+                type=Type(
+                    "template",
+                    name="std::pair",
+                    args=(named("double"), named("double")),
+                ),
+                args=tuple(cast(named("double"), self.expression(v)) for v in values),
+                qualifier="brace",
+            )
+            return call("std::apply", name("scar::real_power"), captured)
         if op == "error_make":
             return self.control.error_make(expr)
         if op == "text_format":
@@ -822,7 +1001,7 @@ class Lowerer:
         self.weight += 1
         op = stmt["op"]
         E = self.expression
-        if op == "array_store":
+        if op in ("array_store", "array_update"):
             return [expression_stmt(self.array_operation(stmt))]
         if op in self.control.statement_kinds:
             return self.control.statement(stmt)

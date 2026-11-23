@@ -1,8 +1,11 @@
 #pragma once
 
+#include "exceptions.hpp"
+
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <cerrno>
 #include <cfenv>
 #include <charconv>
 #include <climits>
@@ -49,6 +52,20 @@ struct text_output {
   std::initializer_list<text_operand> operands;
   text_format format;
 };
+
+inline std::string concat_text(std::initializer_list<std::string> parts) {
+  std::string result;
+  std::size_t size = 0;
+  for (const auto &part : parts) {
+    if (part.size() > result.max_size() - size)
+      throw std::length_error("text concatenation exceeds capacity");
+    size += part.size();
+  }
+  result.reserve(size);
+  for (const auto &part : parts)
+    result += part;
+  return result;
+}
 
 inline void flush_stdout() {
   if (std::fflush(stdout) != 0)
@@ -228,6 +245,53 @@ template <class T, class U> T pointer_cast(U value) {
     return static_cast<T>(
         const_cast<void *>(static_cast<const volatile void *>(value)));
 }
+
+inline double real_power(double base, double exponent) {
+  static_assert(std::numeric_limits<double>::is_iec559 &&
+                std::numeric_limits<double>::digits == 53);
+  if (exponent == 0.0 || base == 1.0)
+    return 1.0;
+  if (std::isnan(base))
+    return base;
+  if (std::isnan(exponent))
+    return exponent;
+  const double magnitude = std::abs(base);
+  if (std::isinf(exponent)) {
+    if (magnitude == 1.0)
+      return 1.0;
+    return (exponent > 0.0) == (magnitude > 1.0)
+               ? std::numeric_limits<double>::infinity()
+               : 0.0;
+  }
+  const bool negative =
+      std::signbit(base) && std::fmod(std::abs(exponent), 2.0) == 1.0;
+  if (std::isinf(base)) {
+    const double result = exponent > 0.0 ? magnitude : 0.0;
+    return negative ? -result : result;
+  }
+  if (base == 0.0 && exponent < 0.0)
+    throw program_error("zero_division_error",
+                        "0.0 cannot be raised to a negative power");
+  if (base < 0.0 && exponent != std::trunc(exponent))
+    throw std::logic_error("real power requires a proven real result");
+
+  double result = magnitude;
+  if (magnitude != 0.0 && magnitude != 1.0) {
+    errno = 0;
+    result = std::pow(magnitude, exponent);
+    if (std::isinf(result) && errno == 0)
+      errno = ERANGE;
+    else if (errno == ERANGE && result == 0.0)
+      errno = 0;
+    if (const int error = errno) {
+      const auto message = std::generic_category().message(error);
+      throw program_error(error == ERANGE ? "overflow_error" : "value_error",
+                          "(" + std::to_string(error) + ", '" + message + "')");
+    }
+  }
+  return negative ? -result : result;
+}
+
 template <class T, class E> T powi(T base, E exponent) {
   static_assert(std::is_integral_v<E>);
   const bool negative = exponent < 0;

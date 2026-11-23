@@ -20,11 +20,17 @@ from scar.host import array_sdk
 
 
 def _has_ndarrays(module):
+    if module.get("operator_requirements", {}).get("ndarray"):
+        return True
     pending = [module]
     while pending:
         node = pending.pop()
         if isinstance(node, dict):
-            if node.get("kind") == "ndarray":
+            if node.get("kind") == "ndarray" or node.get("op") in {
+                "array_binary",
+                "array_update",
+                "array_format",
+            }:
                 return True
             pending.extend(node.values())
         elif isinstance(node, (tuple, list)):

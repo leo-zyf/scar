@@ -16,6 +16,10 @@ _CLASSES = {
     "EOFError": "eof",
     "RuntimeError": "runtime_error",
     "SystemExit": "system_exit",
+    "ZeroDivisionError": "zero_division_error",
+    "OverflowError": "overflow_error",
+    "ArithmeticError": "arithmetic_error",
+    "LookupError": "lookup_error",
 }
 
 

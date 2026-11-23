@@ -335,6 +335,10 @@ def invoke(frame, node, target, args, keywords, steps, discard):
         if not args:
             return literal("")
         value = args[0]
+        if value.kind == "numpy_f64":
+            return _format(frame, node, value, steps, discard)
+        if value.kind.startswith("ndarray:") or value.kind in {"list", "tuple"}:
+            return frame.display(value, node, steps)
         if value.kind == "handle:error":
             return _emit(frame, node, "error.message", "text", [value], steps, discard)
         if value.kind not in {"bool", "i64", "f64", "text", "unit"}:
