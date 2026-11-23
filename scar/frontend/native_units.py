@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 import re
 
-from ..contract import Artifact, artifact, read_artifact, write_json
+from ..contract import Artifact, artifact, json_digest, read_artifact, write_json
 
 _GNU_CFI_HEADER = "ISO_Fortran_binding.h"
 _GNU_CFI_ROUTINES = {"CFI_establish", "CFI_is_contiguous", "CFI_section", "CFI_setpointer"}
@@ -195,7 +195,7 @@ def _c_abi_spans(path, data, declarations):
         yield start, stop
 
 
-def _lower_c(path, data, declarations, conversions, definitions, edits, regions):
+def _lower_c(path, data, declarations, conversions, definitions, regions):
     linkage = list(_c_abi_spans(path, data, declarations))
     insertions = defaultdict(list)
     prior = 0
@@ -217,10 +217,6 @@ def _lower_c(path, data, declarations, conversions, definitions, edits, regions)
         prior = stop
         provenance.append({'span': [start, stop], 'from': 'void *', 'to': target})
     replacements = {start: (stop, text) for (start, stop), (text, _) in definitions.items()}
-    for start, stop, replacement in edits:
-        if start in replacements or any(left < stop and start < right for left, right in conversions):
-            raise ValueError(f'selected source edit overlaps a typed C++20 conversion: {path}:{start}')
-        replacements[start] = stop, replacement
     converted = _apply_spans(path, data, insertions, replacements)
     return converted, provenance, linkage, _map_body_spans(data, converted, insertions, replacements, regions)
 
@@ -297,31 +293,11 @@ def _stage_gnu_cfi(header, project, headers):
 
     # It remains a toolchain header when sealed into the relocatable project.
     _stage(project, 'include/scar_generated/' + _GNU_CFI_HEADER, b'#pragma GCC system_header\n' + data)
-    if not symbols:
-        return None
-    source = 'src/fortran-abi/scar_gnu_cfi.cpp'
-    implementation = Path(__file__).with_name('gnu_cfi.cpp')
-    _stage(project, source, implementation.read_bytes())
-    return source
+    return bool(symbols)
 
 
-def _source_edits(rows, units, source_bytes):
-    edits = defaultdict(dict)
-    for row in rows:
-        name = row['unit']
-        if name not in units:
-            raise ValueError(f'source edit has no locked translation unit: {name}')
-        start, stop = row['span']
-        data = source_bytes[name]
-        if (not 0 <= start < stop <= len(data) or start in edits[name]
-                or sha256(data[start:stop]).hexdigest() != row['original_sha256']):
-            raise ValueError(f'selected source edit no longer matches {name}:{start}')
-        edits[name][start] = stop, row['replacement'].encode('ascii')
-    return edits
-
-
-def stage_native_sources(manifest, lowering, project, regions):
-    """Translate and stage pinned source inputs using the plan's original type evidence."""
+def _stage_native_sources(manifest, evidence, project, regions):
+    """Translate and stage pinned source inputs using captured type evidence."""
     profile = manifest['language']
     units = {unit['path']: unit for unit in manifest['units']}
     languages = {name: unit.get('language', profile) for name, unit in units.items()}
@@ -334,10 +310,7 @@ def stage_native_sources(manifest, lowering, project, regions):
     root = Path(manifest['source_root']).resolve()
     fortran = [units[name] for name, language in languages.items() if language == 'fortran']
     source_bytes = {name: _locked_source(root, name, lock) for name, lock in material.items()}
-    edits = _source_edits(lowering.get('source_edits', ()), units, source_bytes)
-    if any(unit['path'] in edits for unit in fortran):
-        raise ValueError('Fortran translation requires type evidence for the selected source revision')
-    captures = lowering.get('compiler_types', {})
+    captures = evidence.get('compiler_types', {})
     project.mkdir()
     if not mixed and fortran:
         from .fortran_bridge import emit_fortran
@@ -368,9 +341,8 @@ def stage_native_sources(manifest, lowering, project, regions):
             if language == 'c':
                 output = output.with_suffix('.cpp')
                 settings[output.as_posix()] = _compile_settings(units[name]['flags'], root, c_root)
-            selected = [(start, *edit) for start, edit in edits.get(name, {}).items()]
             converted, conversions, linkage, spans = _lower_c(
-                name, data, decls[name], casts[name], headers[name], selected, unit_regions)
+                name, data, decls[name], casts[name], headers[name], unit_regions)
             _stage(project, output, converted)
             anchors.update({region: (output.as_posix(), span) for region, span in spans.items()})
             if language == 'c' or conversions or linkage:
@@ -381,17 +353,15 @@ def stage_native_sources(manifest, lowering, project, regions):
                 translation.append(row)
         if language in (None, 'c++'):
             output = cxx_root / name
-            replacements = edits.get(name, {})
-            converted = _apply_spans(name, data, {}, replacements)
-            _stage(project, output, converted)
-            spans = _map_body_spans(data, converted, {}, replacements, unit_regions)
-            anchors.update({region: (output.as_posix(), span) for region, span in spans.items()})
+            _stage(project, output, data)
+            anchors.update({row['region']: (output.as_posix(), row['source']['span']) for row in unit_regions})
             if language == 'c++':
                 settings[output.as_posix()] = _compile_settings(units[name]['flags'], root, cxx_root)
 
     if translation:
         (project / 'translation.json').write_text(json.dumps(translation, indent=2) + '\n')
     fortran_libraries = ()
+    runtime_support = ()
     if fortran:
         from .fortran_bridge import emit_fortran
 
@@ -401,19 +371,55 @@ def stage_native_sources(manifest, lowering, project, regions):
         settings.update({name: ((), bridge['compile_options']) for name in bridge['sources']})
         fortran_libraries = bridge['libraries']
         if cfi_headers or bridge.get('gnu_cfi_descriptors'):
-            cfi_source = _stage_gnu_cfi(lowering.get('gnu_cfi_header'), project, cfi_headers)
-            if cfi_source:
-                settings[cfi_source] = ((), ())
+            if _stage_gnu_cfi(evidence.get('gnu_cfi_header'), project, cfi_headers):
+                runtime_support = ('gnu-cfi-v1',)
 
     profiles = (manifest,) if profile == 'c' else (manifest, manifest.get('cxx', {}))
     linkage = {key: tuple(value for profile in profiles for value in profile.get(key, ()))
                for key in ('libraries', 'link_options', 'runtime_dirs')}
     linkage['libraries'] = (*linkage['libraries'], *fortran_libraries)
     common = set(settings.values())
+    if runtime_support:
+        common.add(((), ()))
     include_dirs, compile_options = next(iter(common)) if len(common) == 1 else ((), ())
     configuration = dict(sources=tuple(settings), include_dirs=include_dirs, compile_options=compile_options,
                          source_settings=settings if len(common) > 1 else {}, **linkage)
+    if runtime_support:
+        configuration['runtime_support'] = runtime_support
     return configuration, anchors
+
+
+def _fortran_fragment(region, export, capture, emission, fragments, compiler_types):
+    abi, source = region['fortran_abi'], region['source']
+    if (abi['profile'] != 'BIND_C_RANK1_ASSUMED_SIZE' or abi['procedure'] != export['procedure']
+            or abi['symbol'] != region['symbol'] or source['sha256'] != export['source_sha256']
+            or region['return_type'] != 'void' or export['result'] is not None
+            or capture is None or capture.get('types') != compiler_types
+            or compiler_types is None or compiler_types['sha256'] != abi['semantic_sha256']
+            or capture.get('ssa', {}).get('sha256') != abi['ssa_sha256']):
+        return None
+    parameters, bindings = [], {}
+    for arg in export['arguments']:
+        name = arg['name']
+        if arg['by_value'] and arg['shape'] is None and arg['c_type'] in {'int', 'double'}:
+            parameters.append(dict(name=name, type='i32' if arg['c_type'] == 'int' else 'f64', passing='VALUE'))
+        elif not arg['by_value'] and 'lower' in arg and arg['c_type'] == 'double':
+            pointer = 'ptr<const f64>' if arg['read_only'] else 'ptr<f64>'
+            parameters.append(dict(name=name, type=pointer, lower=arg['lower'], passing='ADDRESS'))
+        else:
+            return None
+        bindings[name] = arg['wrapper_name']
+    if (parameters != abi['parameters'] or region['parameters'] != [
+            dict(name=row['name'], type=row['type']) for row in parameters]):
+        return None
+    wrapper = export['wrapper']
+    if fragments.get(wrapper['path'], {}).get('sha256') != wrapper['sha256']:
+        raise ValueError(f'generated Fortran wrapper changed for {export["symbol"]}')
+    translation = dict(schema='scar.fortran-region-bridge', schema_version=1, emission=emission,
+                       compiler_types=compiler_types, compiler_ssa=capture['ssa'])
+    domain = dict(parameter=abi['bounds']['parameter'], minimum=1, maximum=abi['bounds']['maximum'])
+    return dict(wrapper, bindings=bindings, translation=translation,
+                authority='VERIFIED_ABI_WRAPPER', count_domain=domain)
 
 
 def prepare_native_units(target, evidence, out, *, regions=()) -> tuple[Artifact, list[dict]]:
@@ -424,7 +430,7 @@ def prepare_native_units(target, evidence, out, *, regions=()) -> tuple[Artifact
     by_unit = defaultdict(list)
     for region in regions:
         by_unit[region['source']['path']].append(region)
-    configuration, anchors = stage_native_sources(target, evidence, pending, by_unit)
+    configuration, anchors = _stage_native_sources(target, evidence, pending, by_unit)
     fragments = {}
     for directory in ('src', 'include'):
         for path in sorted((pending / directory).rglob('*')):
@@ -433,8 +439,13 @@ def prepare_native_units(target, evidence, out, *, regions=()) -> tuple[Artifact
                 fragments[name] = asdict(artifact(path))
     emission = pending / 'fortran-emission.json'
     exports = []
+    bridge_exports = {}
+    captures = {row['unit']: row for row in evidence.get('units', ()) if row['language'] == 'fortran'}
     if emission.is_file():
-        exports = sorted(row['symbol'] for row in json.loads(emission.read_bytes())['c_exports'])
+        data = emission.read_bytes()
+        emission_ref = asdict(Artifact(str(emission.resolve()), sha256(data).hexdigest(), len(data)))
+        bridge_exports = {(row['unit'], row['symbol']): row for row in json.loads(data)['c_exports']}
+        exports = sorted(row['symbol'] for row in bridge_exports.values())
     retained = []
     for region in regions:
         if region['region'] in anchors:
@@ -442,5 +453,12 @@ def prepare_native_units(target, evidence, out, *, regions=()) -> tuple[Artifact
             fragment = {'path': path, 'span': span, 'sha256': fragments[path]['sha256'],
                         'slice_sha256': region['source']['slice_sha256']}
             retained.append({**region, 'fragment': fragment})
-    return write_json(out / 'native-units.json', dict(schema='scar.native-units-ir', schema_version=1,
-                       configuration=configuration, fragments=fragments, exports=exports)), retained
+        elif 'fortran_abi' in region and (export := bridge_exports.get((region['source']['path'], region['symbol']))):
+            unit = region['source']['path']
+            fragment = _fortran_fragment(region, export, captures.get(unit), emission_ref,
+                                         fragments, evidence['compiler_types'].get(unit))
+            if fragment is not None:
+                retained.append({**region, 'fragment': fragment})
+    seals = {row['region']: json_digest(row) for row in retained}
+    return write_json(out / 'native-units.json', dict(schema='scar.native-units-ir', schema_version=2,
+                       configuration=configuration, fragments=fragments, exports=exports, region_seals=seals)), retained

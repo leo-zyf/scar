@@ -3,6 +3,8 @@
 from collections import Counter
 import math
 
+from scar.contract import json_digest
+
 
 def _reads(expression, index, parameters):
     kind, dtype, *operands = expression
@@ -11,6 +13,9 @@ def _reads(expression, index, parameters):
         if parameters.get(pointer) in ('ptr<f64>', 'ptr<const f64>') and subscript == index:
             return (pointer,)
     elif kind == 'index' and expression == index:
+        return ()
+    elif expression == ['add', 'i32', index, ['constant', 'i32', 1]]:
+        # i < n and n is a positive signed int32 count.
         return ()
     elif kind == 'parameter' and len(operands) == 1 and dtype in ('i32', 'f64'):
         if parameters.get(operands[0]) == dtype:
@@ -99,26 +104,66 @@ def _subtree_operations(region_id, regions):
     return operations
 
 
-def rewrite_native_regions(graph, fragments):
+def _count_limit(row, source, fragment, operations):
+    """Admit a phase-neutral source or verified ABI fragment handoff."""
+    witness = row['fragment']
+    for selection, receipt in ((row['source'], source), (witness, fragment)):
+        start, stop = selection['span']
+        if (type(start) is not int or type(stop) is not int or not 0 <= start < stop <= receipt['size']):
+            return None
+    if any(operations[key].attributes.get('symbol') != row['symbol']
+           or operations[key].attributes.get('unit') != row['source']['path']
+           for key in row['operations']):
+        return None
+
+    authority = witness.get('authority', 'DIRECT_SOURCE')
+    if authority == 'DIRECT_SOURCE':
+        if witness['slice_sha256'] == row['source']['slice_sha256'] and 'bindings' not in witness:
+            return 2**31 - 1
+        return None
+    if authority != 'VERIFIED_ABI_WRAPPER':
+        return None
+    domain = witness.get('count_domain', {})
+    bindings = witness.get('bindings', {})
+    maximum = domain.get('maximum')
+    if (domain.get('parameter') != row['guard']['length'] or domain.get('minimum') != 1
+            or type(maximum) is not int or not 0 < maximum < 2**31
+            or set(bindings) != {parameter['name'] for parameter in row['parameters']}
+            or len(set(bindings.values())) != len(bindings)):
+        return None
+    return maximum
+
+
+def rewrite_native_regions(graph, fragments, seals=None):
     """Return guarded typed bodies and their source-aligned proof ledger."""
     regions = {region.id: region for region in graph.regions}
     sources = graph.evidence.get('locked_sources', {})
+    operations = {operation.id: operation for operation in graph.operations}
     optimized, proofs, seen = [], [], set()
     for row in graph.evidence.get('native_regions', ()):
         identity = row['region']
+        if seals is not None and seals.get(identity) != json_digest(row):
+            continue
+        if seals is None and row['fragment'].get('authority', 'DIRECT_SOURCE') != 'DIRECT_SOURCE':
+            continue
         region = regions.get(identity)
         fragment = fragments.get(row['fragment']['path'])
         source = sources.get(row['source']['path'])
-        if (region is None or region.kind != 'FUNCTION' or region.name != row['symbol']
+        if (region is None or region.kind != 'FUNCTION'
                 or fragment is None or fragment['sha256'] != row['fragment']['sha256']
                 or source is None or source['sha256'] != row['source']['sha256']
-                or row['fragment']['slice_sha256'] != row['source']['slice_sha256']
                 or identity in seen or not row['operations']
+                or len(set(row['operations'])) != len(row['operations'])
                 or set(row['operations']) != _subtree_operations(identity, regions)):
             continue
         candidate = _fuse(row)
         if candidate is None:
             continue
+        maximum = _count_limit(candidate, source, fragment, operations)
+        if maximum is None:
+            continue
+        if 'count_domain' in candidate['fragment']:
+            candidate['guard']['max_count'] = maximum
         optimized.append(candidate)
         seen.add(identity)
         proofs.append(dict(rule='FUSE_ADJACENT_COUNTED_PRODUCER_COPY', region=identity,

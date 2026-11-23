@@ -152,6 +152,11 @@ def _identity(path, data):
     return Artifact(str(path), sha256(data).hexdigest(), len(data))
 
 
+def json_digest(document):
+    payload = json.dumps(document, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return sha256(payload.encode("utf-8")).hexdigest()
+
+
 def artifact(path):
     path = Path(path).resolve(strict=True)
     digest = sha256()

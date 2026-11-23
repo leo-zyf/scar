@@ -7,7 +7,9 @@ from ctypes import (CDLL, CFUNCTYPE, POINTER, Structure, byref, c_char_p, c_int,
 from dataclasses import dataclass
 from functools import lru_cache
 from hashlib import sha256
+import json
 from pathlib import Path
+import re
 import subprocess
 from tempfile import TemporaryDirectory
 
@@ -288,3 +290,19 @@ def gnu_cfi_header(compiler):
     if not header.is_absolute() or not header.is_file():
         return None
     return header.resolve(strict=True)
+
+
+def scalar_declarations(native, compiler_types, symbols):
+    accepted = {}
+    for unit in native["units"]:
+        if unit.get("language", native["language"]) not in {"c", "c++"}:
+            continue
+        types = json.loads(read_artifact(compiler_types[unit["path"]]))
+        for row in types["records"]:
+            if row["kind"] != "FunctionDecl" or row["symbol"] not in symbols:
+                continue
+            match = re.fullmatch(r"double \(((?:double(?:, double)*)?)\)", row["canonical_type"])
+            arity = match[1].count("double") if match else None
+            if accepted.setdefault(row["symbol"], arity) != arity:
+                raise ValueError(f"inconsistent native declarations for {row['symbol']}")
+    return accepted

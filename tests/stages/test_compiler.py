@@ -112,6 +112,7 @@ extern "C" int newest(int);
 extern "C" int formula_(int*);
 extern "C" int extra(int*);
 extern "C" void initialize(double*, double*, int);
+extern "C" void initialize_fortran(int, double*, double*);
 #ifdef SCAR_PYTHON_ABI
 extern "C" double python_adjust(double);
 #endif
@@ -123,6 +124,11 @@ int main() {
     initialize(overlapping, overlapping + 1, 5);
     for (int i = 0; i < 5; ++i) {
         if (first[i] != second[i] || overlapping[i + 1] != 1.0) return 2;
+    }
+    initialize_fortran(5, first, second);
+    initialize_fortran(0, first, second);
+    for (int i = 0; i < 5; ++i) {
+        if (first[i] != 2.5 * (i + 1) || second[i] != first[i]) return 3;
     }
     std::printf("%d\\n", old(n) + modern(n) + newest(n) + formula_(&n) + extra(&n));
 #ifdef SCAR_PYTHON_ABI
@@ -141,6 +147,20 @@ function extra(n) result(value) bind(C)
   integer(c_int) :: value
   value = 2*n
 end function extra
+
+subroutine fill_pair(n,left,right) bind(C, name="initialize_fortran")
+  use, intrinsic :: iso_c_binding, only: c_int, c_double
+  implicit none
+  integer(c_int), value, intent(in) :: n
+  real(c_double), intent(inout) :: left(*), right(*)
+  integer(c_int) :: i
+  do i = 1,n
+    left(i) = 2.5_c_double * real(i,c_double)
+  end do
+  do i = 1,n
+    right(i) = left(i)
+  end do
+end subroutine fill_pair
 '''),
     ]
     files, profiles, objects = {}, [], []
@@ -192,12 +212,17 @@ end function extra
     _stage(tmp_path, "middle", "plan", "--graph", graph, "--out", plan)
     logical = json.loads((plan / "plan.json").read_bytes())
     assert all(row["resource"] is None and row["start_ns"] is None for row in logical["schedule"])
-    assert any(row["rule"] == "FUSE_ADJACENT_COUNTED_PRODUCER_COPY" for row in logical["rewrites"])
+    rewrites = {row["region"] for row in logical["rewrites"] if row["rule"] == "FUSE_ADJACENT_COUNTED_PRODUCER_COPY"}
+    regions = logical["lowering"]["bodies"][0]["regions"]
+    typed = {row["symbol"]: row for row in regions if row["region"] in rewrites}
+    assert {"initialize", "initialize_fortran"} <= typed.keys()
     graph.rename(tmp_path / "hidden-frontend")
     plan = plan.rename(tmp_path / "relocated-plan")
     result = _stage(tmp_path, "backend", "compile", "--plan", plan, "--out", delivery)
     assert result["status"] == ("BUILT" if python_binding else "VALIDATED")
-    assert (delivery / "project/native-region-lowering.json").is_file()
+    generated = json.loads((delivery / "project/native-region-lowering.json").read_bytes())
+    emitted = {row["region"] for row in generated["regions"] if row["status"] == "GUARDED_REGION"}
+    assert {typed[name]["region"] for name in ("initialize", "initialize_fortran")} <= emitted
     executable = Path(result["executable"]["path"])
     assert _run([original], tmp_path, input=b"7\n") == b"91\n"
     assert _run([executable], tmp_path, input=b"7\n") == expected

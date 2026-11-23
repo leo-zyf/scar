@@ -11,6 +11,10 @@ permissions:
 jobs:
   cpu:
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.12", "3.14.7"]
     env:
       PYTHONDONTWRITEBYTECODE: "1"
     steps:
@@ -19,7 +23,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
-          python-version: "3.14.7"
+          python-version: ${{ matrix.python }}
       - name: Install compiler toolchain
         run: |
           sudo apt-get update
@@ -39,12 +43,21 @@ jobs:
           verify="$RUNNER_TEMP/scar-verify/bin/python"
           cd "$RUNNER_TEMP"
           "$verify" -m scar --help
+          "$verify" -c 'from importlib.resources import files; assert files("scar.backend").joinpath("gnu_cfi.cpp").is_file()'
           "$verify" -m pytest --import-mode=importlib -q "$GITHUB_WORKSPACE/tests/stages" \
             --junitxml="$RUNNER_TEMP/scar-gates.xml"
+          "$verify" - "$RUNNER_TEMP/scar-gates.xml" <<'PY'
+          import sys
+          from xml.etree import ElementTree
+
+          report = ElementTree.parse(sys.argv[1])
+          if any(int(suite.get("skipped", 0)) for suite in report.iter("testsuite")):
+              raise SystemExit("CPU stage gates require the complete toolchain")
+          PY
       - name: Upload packages and stage results
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
-          name: scar-cpu
+          name: scar-cpu-${{ matrix.python }}
           path: |
             ${{ runner.temp }}/scar-packages/*
             ${{ runner.temp }}/scar-gates.xml

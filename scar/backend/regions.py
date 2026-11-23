@@ -33,6 +33,9 @@ def _expression(row, symbols, index, pointers, locals_):
         return operands[0]
     if kind == "index" and row == ["index", "i32", index]:
         return index
+    if kind == "add" and dtype == "i32" and operands == [["index", "i32", index], ["constant", "i32", 1]]:
+        # The loop's last index is below its signed int32 element count.
+        return f"({index} + 1)"
     if kind == "local" and dtype == "f64" and len(operands) == 1 and operands[0] in locals_:
         return locals_[operands[0]]
     if kind == "load" and dtype == "f64" and len(operands) == 2:
@@ -94,20 +97,26 @@ def _region(row, symbol, original):
         raise ValueError("invalid typed native signature")
     guard = row["guard"]
     length, pointers = guard["length"], guard["pointers"]
-    if guard["kind"] != "DISJOINT_FP64_RANGES" or parameters.get(length) != "i32" or not pointers:
+    max_count = guard.get("max_count", 2**31 - 1)
+    if (guard["kind"] != "DISJOINT_FP64_RANGES" or parameters.get(length) != "i32" or not pointers
+            or type(max_count) is not int or not 0 < max_count < 2**31):
         raise ValueError("unsupported native region guard")
     code, accessed = _loops(row["optimized_body"], parameters, length)
     if len(pointers) != len(set(pointers)) or accessed != set(pointers):
         raise ValueError("native guard does not cover the exact optimized memory access set")
     signature = ", ".join(_PARAMETERS[value] for value in parameters.values())
     signature_named = ", ".join(f"{_PARAMETERS[value]} {key}" for key, value in parameters.items())
-    arguments = ", ".join(parameters)
+    bindings = row["fragment"].get("bindings", dict(zip(parameters, parameters)))
+    if set(bindings) != parameters.keys() or len(set(bindings.values())) != len(parameters):
+        raise ValueError("native fragment parameter bindings differ from the typed signature")
+    arguments = ", ".join(_identifier(bindings[name]) for name in parameters)
     aliases = "scar_ranges_" + symbol.removeprefix("scar_try_")
     if aliases in parameters or symbol in parameters:
         raise ValueError("native helper name collides with its signature")
     helper = [f'extern "C" bool {symbol}({signature_named}) noexcept {{',
               f'    const double* const {aliases}[] = {{{", ".join(pointers)}}};',
-              f'    if (!admit({length}, {aliases})) return false;', *code, '    return true;', '}']
+              f'    if (!admit({length}, {max_count}, {aliases})) return false;',
+              *code, '    return true;', '}']
     prefix = (f'{{\n    extern bool {symbol}({signature}) noexcept __asm__("{symbol}");\n'
               f'    if ({symbol}({arguments})) return;\n    ').encode("ascii")
     return prefix + original + b"\n}", "\n".join(helper)
@@ -172,8 +181,8 @@ _GUARD = """#include <cfloat>
 
 namespace {
 template<std::size_t N>
-bool admit(int length, const double* const (&arrays)[N]) noexcept {
-    if (length <= 0 || std::fegetround() != FE_TONEAREST) return false;
+bool admit(int length, int maximum, const double* const (&arrays)[N]) noexcept {
+    if (length <= 0 || length > maximum || std::fegetround() != FE_TONEAREST) return false;
 #if defined(__GLIBC__) && defined(__USE_GNU)
     if (::fegetexcept() != 0) return false;
 #else

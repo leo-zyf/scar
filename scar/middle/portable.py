@@ -1,9 +1,34 @@
 """Exact local rewrites and array lifetime proof for the closed elementwise IR."""
 
 from collections import Counter
+import math
 
 
 _BINARY = {'add', 'sub', 'mul', 'div'}
+
+
+def canonical_values(graph):
+    representatives, rewrites = {}, []
+    for operation in graph.operations:
+        if operation.kind != 'CONSTANT' or operation.effects != ('PURE',):
+            continue
+        dtype = operation.attributes.get('dtype')
+        if type(dtype) is not str or 'value' not in operation.attributes:
+            continue
+        value = operation.attributes['value']
+        if type(value) is float and not math.isfinite(value):
+            continue
+        if type(value) not in (bool, int, float, str, type(None)):
+            continue
+        # Exact payload equality leaves object identity and operation execution intact.
+        payload = value.hex() if type(value) is float else value
+        key = operation.region, dtype, type(value), payload
+        canonical = representatives.setdefault(key, operation.id)
+        if canonical != operation.id:
+            rewrites.append(dict(rule='CANONICAL_LITERAL_VALUE', operation=operation.id,
+                                 canonical=canonical, region=operation.region, dtype=dtype,
+                                 scope='TYPED_PAYLOAD', source_edit=False))
+    return tuple(rewrites)
 
 
 def _reads(expression):

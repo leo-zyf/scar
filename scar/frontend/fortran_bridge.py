@@ -325,6 +325,8 @@ def _c_abi_source(exports):
         lines.append(_CFI_VIEW)
     if has_packing:
         lines.append(_CFI_PACKING)
+    header = ('\n'.join(lines) + '\n').encode()
+    chunks, spans, position = [header], {}, len(header)
     for row in exports:
         result = row['result']
         native_return = result['c_type'] if result else 'void'
@@ -333,6 +335,7 @@ def _c_abi_source(exports):
         packings, copy_backs = [], []
         for index, argument in enumerate(row['arguments']):
             name = f'arg{index}'
+            argument['wrapper_name'] = name
             types.append(f'{argument["transport_type"]} *')
             if descriptor := argument.get('descriptor'):
                 parameters.append(f'CFI_cdesc_t *{name}')
@@ -359,20 +362,23 @@ def _c_abi_source(exports):
             else:
                 parameters.append(f'{argument["c_type"]} *{name}')
                 arguments.append(name)
-        lines.append(f'extern "C" {transport_return} {row["transport"]}({", ".join(types)});')
-        lines.append(f'extern "C" {native_return} {row["symbol"]}({", ".join(parameters)}) {{')
-        lines.extend(checks)
-        lines.extend(packings)
+        prefix = (f'extern "C" {transport_return} {row["transport"]}({", ".join(types)});\n'
+                  f'extern "C" {native_return} {row["symbol"]}({", ".join(parameters)}) ').encode()
+        body = ['{', *checks, *packings]
         call = f'{row["transport"]}({", ".join(arguments)});'
         if result and copy_backs:
-            lines.append('    const auto result = ' + call)
-            lines.extend(copy_backs)
-            lines.append('    return result;')
+            body.append('    const auto result = ' + call)
+            body.extend(copy_backs)
+            body.append('    return result;')
         else:
-            lines.append('    ' + ('return ' if result else '') + call)
-            lines.extend(copy_backs)
-        lines.append('}')
-    return '\n'.join(lines) + '\n'
+            body.append('    ' + ('return ' if result else '') + call)
+            body.extend(copy_backs)
+        compound = '\n'.join((*body, '}')).encode()
+        start = position + len(prefix)
+        spans[row['symbol']] = (start, start + len(compound))
+        chunks.extend((prefix, compound, b'\n'))
+        position = start + len(compound) + 1
+    return b''.join(chunks), spans
 
 
 def _translate_freeform(manifest, units, project, config, captures, source_directory, mixed):
@@ -398,7 +404,7 @@ def _translate_freeform(manifest, units, project, config, captures, source_direc
             snapshot.write_bytes(data)
             semantics = temporary / f'unit-{index}.fortran-original'
             semantics.write_bytes(read_artifact(captures[name]))
-            snapshots.append({'source': str(snapshot), 'semantics': str(semantics),
+            snapshots.append({'unit': name, 'source': str(snapshot), 'semantics': str(semantics),
                               'passthrough': Path(name).suffix.lower() in _FIXED_SUFFIXES})
         request = {'entry': manifest.get('entry', 'main'), 'mixed': mixed, 'units': snapshots}
         arguments = temporary / 'lowering.json'
@@ -412,8 +418,14 @@ def _translate_freeform(manifest, units, project, config, captures, source_direc
         exports = lowered['exports']
         if exports:
             wrapper = Path(source_directory) / 'scar_c_abi.cpp'
-            (project / wrapper).write_text(_c_abi_source(exports), encoding='utf-8')
+            data, spans = _c_abi_source(exports)
+            (project / wrapper).write_bytes(data)
             build['sources'].append(wrapper.as_posix())
+            digest = hashlib.sha256(data).hexdigest()
+            for row in exports:
+                start, stop = spans[row['symbol']]
+                row['wrapper'] = dict(path=wrapper.as_posix(), span=[start, stop], sha256=digest,
+                                      slice_sha256=hashlib.sha256(data[start:stop]).hexdigest())
         if lowered['descriptor_units']:
             build['gnu_cfi_descriptors'] = True
         return build, exports
@@ -434,9 +446,11 @@ def emit_fortran(manifest, project, source_bytes, *, source_directory='src', mix
         build, exports = _translate_freeform(manifest, units, project, config, captures,
                                             source_directory, mixed)
         translation = 'gfortran-typed-fparser-fixed-form-f2c-cxx20'
+    digests = {name: hashlib.sha256(data).hexdigest() for name, data, _, _ in units}
+    for row in exports:
+        row['source_sha256'] = digests[row['unit']]
     recipe = {'schema': 'scar.fortran-emission', 'schema_version': 1, 'compiler': translation,
-              'sources': [{'path': name, 'sha256': hashlib.sha256(data).hexdigest()}
-                          for name, data, _, _ in units],
+              'sources': [{'path': name, 'sha256': digest} for name, digest in digests.items()],
               'native_libraries': list(build['libraries']), 'c_exports': exports}
     (project / 'fortran-emission.json').write_text(json.dumps(recipe, indent=2) + '\n', encoding='utf-8')
     return build

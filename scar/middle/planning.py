@@ -1,7 +1,6 @@
 """Canonicalize values and publish equivalent typed CPU execution bodies."""
 
 import json
-import math
 from pathlib import Path
 from dataclasses import asdict
 
@@ -11,31 +10,7 @@ from scar.contract import (
 )
 
 from .native import rewrite_native_regions
-from .portable import rewrite_portable
-
-
-def _canonical_values(graph):
-    representatives, rewrites = {}, []
-    for operation in graph.operations:
-        if operation.kind != 'CONSTANT' or operation.effects != ('PURE',):
-            continue
-        dtype = operation.attributes.get('dtype')
-        if type(dtype) is not str or 'value' not in operation.attributes:
-            continue
-        value = operation.attributes['value']
-        if type(value) is float and not math.isfinite(value):
-            continue
-        if type(value) not in (bool, int, float, str, type(None)):
-            continue
-        # Exact payload equality leaves object identity and operation execution intact.
-        payload = value.hex() if type(value) is float else value
-        key = operation.region, dtype, type(value), payload
-        canonical = representatives.setdefault(key, operation.id)
-        if canonical != operation.id:
-            rewrites.append(dict(rule='CANONICAL_LITERAL_VALUE', operation=operation.id,
-                                 canonical=canonical, region=operation.region, dtype=dtype,
-                                 scope='TYPED_PAYLOAD', source_edit=False))
-    return tuple(rewrites)
+from .portable import canonical_values, rewrite_portable
 
 
 def _structural_schedule(graph):
@@ -74,10 +49,14 @@ def _input_shape(value, portable):
 
 def _seal_fragments(graph, reference, product, root):
     material = json.loads(read_artifact(reference))
+    version = material.get('schema_version')
+    seals = material.pop('region_seals', None) if version == 2 else None
     if (set(material) != {'schema', 'schema_version', 'configuration', 'fragments', 'exports'}
-            or material['schema'] != 'scar.native-units-ir' or material['schema_version'] != 1):
+            or material['schema'] != 'scar.native-units-ir' or version not in (1, 2)
+            or (version == 2 and type(seals) is not dict)):
         raise ValueError('invalid frontend fragment material')
-    regions, rewrites = rewrite_native_regions(graph, material['fragments'])
+    regions, rewrites = rewrite_native_regions(graph, material['fragments'], seals)
+    material['schema_version'] = 1
     members = {}
     for name, file in material['fragments'].items():
         identity = file['sha256']
@@ -167,7 +146,7 @@ def plan(source, out, *, input_shape=None, trip_count=None):
         input_shape=input_shape, trip_count=trip_count)
     schedule = _structural_schedule(graph)
     validation = _seal_cases(graph.target, product, path.parent) if lowering.bodies else {}
-    result = Plan(reference, validation, (*_canonical_values(graph), *changes), schedule, lowering, decision,
+    result = Plan(reference, validation, (*canonical_values(graph), *changes), schedule, lowering, decision,
                   reference_lowering=original, resources=graph.resources)
     write_plan(path, result)
     return result

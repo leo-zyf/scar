@@ -2,30 +2,14 @@
 
 import json
 from pathlib import Path
-import re
 
 from scar.contract import Edge, Graph, artifact, read_artifact, write_graph
 
 from .hardware import snapshot
 
 
-def _scalar_declarations(native, compiler_types, symbols):
-    accepted = {}
-    for unit in native["units"]:
-        if unit.get("language", native["language"]) not in {"c", "c++"}:
-            continue
-        types = json.loads(read_artifact(compiler_types[unit["path"]]))
-        for row in types["records"]:
-            if row["kind"] != "FunctionDecl" or row["symbol"] not in symbols:
-                continue
-            match = re.fullmatch(r"double \(((?:double(?:, double)*)?)\)", row["canonical_type"])
-            arity = match[1].count("double") if match else None
-            if accepted.setdefault(row["symbol"], arity) != arity:
-                raise ValueError(f"inconsistent native declarations for {row['symbol']}")
-    return accepted
-
-
 def _mixed_graph(target, request, out, jobs):
+    from .clang import scalar_declarations
     from .native import build_native
     from .python import build_python
 
@@ -50,7 +34,7 @@ def _mixed_graph(target, request, out, jobs):
 
     symbols = {symbol for unit in python for role in ("exports", "imports")
                for symbol in unit["abi"].get(role, {}).values()}
-    declarations = _scalar_declarations(native, evidence["compiler_types"], symbols)
+    declarations = scalar_declarations(native, evidence["compiler_types"], symbols)
     exported, functions = {}, []
     regions, operations, edges = list(regions), list(operations), list(edges)
     for index, unit in enumerate(python):

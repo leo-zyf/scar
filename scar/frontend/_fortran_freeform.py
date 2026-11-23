@@ -63,6 +63,7 @@ class Procedure:
     specification: tuple
     execution: tuple
     symbols: dict
+    unit: str
 
 
 def _symbol_tables(dump):
@@ -114,17 +115,6 @@ def _source_text(node, symbols, aliases=None):
 
         fragment = _KINDED_NUMBER.sub(number, fragment)
         fragment = _SOURCE_RELATIONS.sub(lambda match: _RELATIONS[match[0]], fragment)
-        # Preserve conversions to compiler-resolved real kinds in the fixed dialect.
-        def real_conversion(match):
-            value, kind = match.groups()
-            fact = symbols.get(kind.lower())
-            kind = fact.value if fact else kind
-            if kind not in {'4', '8'}:
-                raise ValueError(f'unsupported real conversion kind {kind}')
-            return ('DBLE' if kind == '8' else 'REAL') + '(' + value + ')'
-
-        fragment = re.sub(r'\bREAL\s*\(\s*(\w+)\s*,\s*(\w+)\s*\)', real_conversion,
-                          fragment, flags=re.IGNORECASE)
         if aliases:
             fragment = _IDENTIFIER.sub(lambda match: aliases.get(match[0].lower(), match[0]), fragment)
         return fragment
@@ -164,7 +154,7 @@ def _parameter_lines(symbols, used):
             yield f'PARAMETER ({name} = {_literal(symbol.value, symbol)})'
 
 
-def _collect_procedures(node, tables, inherited, procedures):
+def _collect_procedures(node, tables, inherited, procedures, unit):
     if isinstance(node, F.Module):
         module = str(node.content[0].items[1]).lower()
         if module not in tables:
@@ -181,10 +171,10 @@ def _collect_procedures(node, tables, inherited, procedures):
             for statement in (item.content if isinstance(item, F.Implicit_Part) else (item,)))
         execution = next((tuple(child.content) for child in node.content
                           if isinstance(child, F.Execution_Part)), ())
-        procedures[name] = Procedure(name, node, specification, execution, {**inherited, **tables[name]})
+        procedures[name] = Procedure(name, node, specification, execution, {**inherited, **tables[name]}, unit)
     for child in getattr(node, 'content', ()):
         if isinstance(child, (*_PROGRAM_UNITS, *_CONTAINERS, F.Module)):
-            _collect_procedures(child, tables, inherited, procedures)
+            _collect_procedures(child, tables, inherited, procedures, unit)
 
 
 def _declarations(procedure, known, *, result=None, bridge=False, descriptors=None):
@@ -314,11 +304,29 @@ def _cfi_index(node, descriptors, symbols):
     return False
 
 
-def _cfi_expression(node, descriptors, symbols):
+def _lower_expression(node, descriptors, symbols):
     if isinstance(node, F.Intrinsic_Function_Reference):
         inquiry = _cfi_inquiry(node, descriptors, symbols)
         if inquiry is not None:
             return inquiry
+        intrinsic, arguments = node.items
+        fact = symbols.get('real')
+        if (str(intrinsic).upper() == 'REAL' and fact and 'INTRINSIC' in fact.attributes
+                and arguments and len(arguments.items) == 2):
+            actual = {}
+            for name, value in zip(('a', 'kind'), arguments.items):
+                if isinstance(value, F.Actual_Arg_Spec):
+                    label, value = value.items
+                    name = str(label).lower()
+                actual[name] = value
+            if actual.keys() != {'a', 'kind'}:
+                raise ValueError(f'unsupported REAL intrinsic arguments. {node}')
+            kind = _integer_constant(actual['kind'], symbols)
+            if kind not in {4, 8}:
+                raise ValueError(f'unsupported real conversion kind {kind}')
+            name = 'DBLE' if kind == 8 else 'REAL'
+            value = _lower_expression(actual['a'], descriptors, symbols)
+            return f'{name}({value})'
     if isinstance(node, F.Part_Ref):
         name, subscripts = node.items
         descriptor = descriptors.get(str(name).lower())
@@ -329,7 +337,7 @@ def _cfi_expression(node, descriptors, symbols):
                 raise ValueError(f'CFI element access needs one scalar default-integer subscript per axis. {node}')
             terms = []
             for index, axis in zip(subscripts.items, axes):
-                index = _cfi_expression(index, descriptors, symbols)
+                index = _lower_expression(index, descriptors, symbols)
                 terms.append(f'(({index}) - {axis["origin"]}) * {axis["stride"]}')
             return f'{descriptor["array"]}(1 + {" + ".join(terms)})'
         if _all_names((subscripts,)) & descriptors.keys():
@@ -341,12 +349,12 @@ def _cfi_expression(node, descriptors, symbols):
     if isinstance(node, F.Name) and str(node).lower() in descriptors:
         raise ValueError(f'CFI array requires an element access or scalar shape inquiry. {node}')
     if isinstance(node, tuple):
-        return tuple(_cfi_expression(item, descriptors, symbols) for item in node)
+        return tuple(_lower_expression(item, descriptors, symbols) for item in node)
     if isinstance(node, list):
-        return [_cfi_expression(item, descriptors, symbols) for item in node]
+        return [_lower_expression(item, descriptors, symbols) for item in node]
     if hasattr(node, 'items'):
         replacement = copy(node)
-        replacement.items = _cfi_expression(node.items, descriptors, symbols)
+        replacement.items = _lower_expression(node.items, descriptors, symbols)
         return replacement
     return node
 
@@ -357,6 +365,8 @@ class FixedSource:
         self.columns = columns
         self.aliases = aliases
         self.descriptors = descriptors
+        real = procedure.symbols.get('real')
+        self.normalize_expressions = descriptors or (real and 'INTRINSIC' in real.attributes)
         self.lines = []
         self.indices = []
         self.used = _all_names((*procedure.specification, *procedure.execution))
@@ -380,8 +390,8 @@ class FixedSource:
             if bounds:
                 self.broadcast(node, name, bounds, label)
                 return
-        if self.descriptors:
-            node = _cfi_expression(node, self.descriptors, symbols)
+        if self.normalize_expressions:
+            node = _lower_expression(node, self.descriptors, symbols)
         self.line(_source_text(node, symbols, self.aliases), label)
 
     def broadcast(self, assignment, array, bounds, label):
@@ -465,7 +475,7 @@ def _c_export(procedure, transport):
         by_value = 'VALUE' in attributes
         c_type, argument_type, return_type = _C_TYPES[fact.type_and_kind]
         transport_type = return_type if result else argument_type
-        row = dict(c_type=c_type, transport_type=transport_type, by_value=by_value,
+        row = dict(name=name, c_type=c_type, transport_type=transport_type, by_value=by_value,
                    read_only='DUMMY(IN)' in fact.attributes, shape=str(shape) if shape is not None else None)
         if shape is not None or 'DIMENSION' in attributes:
             if result or by_value:
@@ -492,12 +502,19 @@ def _c_export(procedure, transport):
                     row['descriptor'].update(contiguous=True, intent=intent[1].lower() if intent else 'inout')
             elif not isinstance(shape, (F.Explicit_Shape_Spec_List, F.Assumed_Size_Spec)):
                 raise ValueError(f'unsupported C array ABI for {name} in {procedure.name}')
+            elif isinstance(shape, F.Assumed_Size_Spec) and shape.items[0] is None:
+                lower = shape.items[1]
+                try:
+                    row['lower'] = _integer_constant(lower, procedure.symbols) if lower is not None else 1
+                except ValueError:
+                    # Dynamic lower bounds still use the original transport.
+                    pass
         return row
 
     arguments = start.items[2]
     inputs = [abi(str(item).lower()) for item in arguments.items] if arguments else []
     result = _function_result(procedure)
-    return dict(symbol=symbol.binding, transport=transport + '_', arguments=inputs,
+    return dict(unit=procedure.unit, procedure=procedure.name, symbol=symbol.binding, transport=transport + '_', arguments=inputs,
                 result=abi(result, result=True) if result else None)
 
 
@@ -556,7 +573,7 @@ def main(request):
         tree = reader(FortranFileReader(row['source'], ignore_comments=True))
         semantics = Path(row['semantics']).read_text(encoding='utf-8')
         before = set(procedures) if row.get('passthrough') else None
-        _collect_procedures(tree, _symbol_tables(semantics), {}, procedures)
+        _collect_procedures(tree, _symbol_tables(semantics), {}, procedures, row['unit'])
         if before is not None:
             passthrough.update(procedures.keys() - before)
     entries = [node.name for node in procedures.values() if isinstance(node.node, F.Main_Program)]

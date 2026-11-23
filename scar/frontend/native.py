@@ -42,6 +42,64 @@ _FORTRAN_SCALARS = {
 }
 _FORTRAN_DECL = re.compile(
     r"^  (?:static )?((?:integer|real|logical)\(kind=[48]\)) ([A-Za-z_][\w.]*)\s*(?:= .*?)?;$", re.M)
+_FORTRAN_PROCEDURE = re.compile(r"^[ \t]*procedure name = (\w+)[ \t]*$", re.M)
+_FORTRAN_SYMBOL = re.compile(
+    r"^[ \t]*symtree: '(\w+)'[ \t]*\|\| symbol: '\w+'(?:[ \t]*\|\| binding_label: '([^']+)')?[ \t]*\n", re.M)
+_FORTRAN_ARRAY = re.compile(r"^[ \t]*Array spec:\(1 \[0\] AS_ASSUMED_SIZE ([01]) \(\) \)[ \t]*$", re.M)
+
+
+def _fortran_bodies(dump, semantics, ssa):
+    """Read GNU's exact BIND(C) formal declarations without a second compiler pass."""
+    result, ambiguous = {}, set()
+    scopes = list(_FORTRAN_PROCEDURE.finditer(dump))
+    for index, scope in enumerate(scopes):
+        stop = scopes[index + 1].start() if index + 1 < len(scopes) else len(dump)
+        text = dump[scope.end():stop].split("\n  code:", 1)[0]
+        entries = list(_FORTRAN_SYMBOL.finditer(text))
+        fields = {row[1]: (row[2], text[row.end():entries[i + 1].start() if i + 1 < len(entries) else len(text)])
+                  for i, row in enumerate(entries)}
+        procedure = scope[1]
+        label, owner = fields.get(procedure, (None, ""))
+        if not label or not re.fullmatch(r"[A-Za-z_]\w*", label) or "BIND(C) SUBROUTINE)" not in owner:
+            continue
+        formals = re.search(r"^[ \t]*Formal arglist:[ \t]+([A-Za-z_][\w \t]*)$", owner, re.M)
+        if not formals:
+            continue
+        names = formals[1].split()
+        parameters = []
+        for name in names:
+            _, details = fields.get(name, (None, ""))
+            attributes = re.search(r"^[ \t]*attributes:[ \t]*\(([^\n]*)\)[ \t]*$", details, re.M)
+            if not attributes:
+                break
+            roles = set(attributes[1].split())
+            if not any(role == "DUMMY" or role.startswith("DUMMY(") for role in roles):
+                break
+            if roles & {"OPTIONAL", "VOLATILE", "ASYNCHRONOUS", "TARGET", "POINTER", "ALLOCATABLE", "COARRAY"}:
+                break
+            lower = _FORTRAN_ARRAY.search(details)
+            if "(INTEGER 4 C_INTEROP)" in details and "VALUE" in roles and "DIMENSION" not in roles:
+                parameters.append({"name": name, "type": "i32", "passing": "VALUE"})
+            elif "(REAL 8 C_INTEROP)" in details and lower and "DIMENSION" in roles and "VALUE" not in roles:
+                type_ = "ptr<const f64>" if "DUMMY(IN)" in roles else "ptr<f64>"
+                parameters.append({"name": name, "type": type_, "passing": "ADDRESS", "lower": int(lower[1])})
+            else:
+                break
+        counts = [p["name"] for p in parameters if p["passing"] == "VALUE"]
+        lowers = {p["lower"] for p in parameters if p["passing"] == "ADDRESS"}
+        if len(parameters) != len(names) or len(lowers) != 1 or len(counts) != 1 or len(names) < 3:
+            continue
+        lower = next(iter(lowers))
+        minimum, maximum = -(2**31) + (lower == 0), 2**31 - 1 - (lower == 1)
+        abi = {"profile": "BIND_C_RANK1_ASSUMED_SIZE", "procedure": procedure, "symbol": label,
+               "semantic_sha256": semantics, "ssa_sha256": ssa, "induction_lower": lower,
+               "parameters": parameters, "min_count": minimum, "max_count": maximum,
+               "bounds": {"parameter": counts[0], "minimum": minimum, "maximum": maximum}}
+        if label in result:
+            ambiguous.add(label)
+        result[label] = {"parameters": [{"name": p["name"], "type": p["type"]} for p in parameters],
+                         "fortran_abi": abi}
+    return {label: declaration for label, declaration in result.items() if label not in ambiguous}
 
 
 def _lock_sources(target):
@@ -146,6 +204,10 @@ def _capture(target, unit, compiler, out, scratch, cfi):
     if ssa.is_file():
         evidence["ssa"] = asdict(artifact(ssa))
         functions = _functions(ssa.read_text(errors="replace"))
+        if (language == "fortran" and not _LOOSE_FLOAT.intersection(flags)
+                and Path(unit["path"]).suffix.lower() in {".f90", ".f95", ".f03", ".f08"}
+                and "-ffixed-form" not in flags):
+            bodies = _fortran_bodies(result.stdout.decode(errors="replace"), typed.sha256, evidence["ssa"]["sha256"])
     if ipa.is_file():
         evidence["symbols"] = asdict(artifact(ipa))
         symbols = _symbols(ipa.read_text(errors="replace"))
@@ -246,7 +308,9 @@ def _functions(raw):
             continue
         preamble = body[:blocks[0].start()]
         locals_ = re.findall(r"^  (int|double) ([A-Za-z_]\w*);$", preamble, re.M)
+        prototype = re.search(r"^void \w+ \((.*)\)$", preamble, re.M)
         functions.append({"name": function[1], "symbol": function[2], "locals": {name: type_ for type_, name in locals_},
+                          "prototype": prototype[1] if prototype else None,
                           "scalar_types": {name: _FORTRAN_SCALARS[type_] for type_, name in _FORTRAN_DECL.findall(preamble)
                                            if type_ in _FORTRAN_SCALARS},
                           "blocks": [
@@ -324,13 +388,15 @@ def _active_instructions(block):
 
 _ARITHMETIC = {"plus_expr": "add", "minus_expr": "sub", "mult_expr": "mul", "rdiv_expr": "div"}
 _FLOAT_LITERAL = re.compile(r"[+-]?(?:\d+\.\d*|\.\d+)(?:[eE][+-]?\d+)?")
+_FORTRAN_REF = re.compile(r"\(\*([^()]+\(D\))\)\[([^][]+)\]")
 
 
 class _CountedLane:
     """Decode one acyclic SSA loop body with an exact scalar memory interface."""
 
-    def __init__(self, rows, induction, index, parameters):
+    def __init__(self, rows, induction, index, parameters, *, fortran_lower=None):
         self.induction, self.index, self.parameters = induction, index, parameters
+        self.fortran_lower = fortran_lower
         self.index_value = ["index", "i32", index]
         self.definitions = {}
         self.used = set()
@@ -341,7 +407,7 @@ class _CountedLane:
             args = _fields(row)
             _require(len(args) == 5 and args[-1] == "NULL")
             destination = args[1]
-            if destination.startswith("*"):
+            if destination.startswith("*") or (fortran_lower is not None and _FORTRAN_REF.fullmatch(destination)):
                 _require(self.store is None and row["memory"] and row["memory"][1])
                 self.store = args
             else:
@@ -360,10 +426,22 @@ class _CountedLane:
         return match[1]
 
     def address(self, operand, *, write=False):
+        allowed = {"ptr<f64>"} if write else {"ptr<f64>", "ptr<const f64>"}
+        if self.fortran_lower is not None:
+            access = _FORTRAN_REF.fullmatch(operand)
+            _require(access is not None)
+            name = self.parameter(access[1], allowed)
+            index = access[2]
+            if self.fortran_lower == 1:
+                offset, memory = self.definition(index)
+                _require(not memory and offset[0] == "plus_expr" and offset[3:] == ("-1", "NULL"))
+                index = offset[2]
+            cast, memory = self.definition(index)
+            _require(not memory and cast[0] == "nop_expr" and cast[2:] == (self.induction, "NULL", "NULL"))
+            return name
         _require(operand.startswith("*"))
         fields, memory = self.definition(operand[1:])
         _require(not memory and fields[0] == "pointer_plus_expr" and fields[4] == "NULL")
-        allowed = {"ptr<f64>"} if write else {"ptr<f64>", "ptr<const f64>"}
         name = self.parameter(fields[2], allowed)
         scale, memory = self.definition(fields[3])
         _require(not memory and scale[0] == "mult_expr" and scale[3:] == ("8", "NULL"))
@@ -373,6 +451,8 @@ class _CountedLane:
 
     def expression(self, value, type_):
         if type_ == "i32" and value == self.induction:
+            if self.fortran_lower == 1:
+                return ["add", "i32", self.index_value, ["constant", "i32", 1]]
             return self.index_value
         if type_ == "f64" and _FLOAT_LITERAL.fullmatch(value):
             number = float(value)
@@ -386,7 +466,8 @@ class _CountedLane:
             return ["parameter", type_, self.parameter(value, {type_})]
         fields, memory = self.definition(value)
         opcode, _, left, right, _ = fields
-        if opcode == "mem_ref" and type_ == "f64":
+        load_opcode = "array_ref" if self.fortran_lower is not None else "mem_ref"
+        if opcode == load_opcode and type_ == "f64":
             _require(memory and memory[1] is None and right == "NULL")
             name = self.address(left)
             self.accesses.append({"kind": "READ", "pointer": name, "index": self.index_value, "type": type_})
@@ -396,6 +477,9 @@ class _CountedLane:
             return ["cast", type_, self.expression(left, "i32")]
         if opcode in {"ssa_name", "integer_cst", "real_cst"} and right == "NULL":
             return self.expression(left, type_)
+        if self.fortran_lower == 1 and type_ == "i32" and (opcode, left, right) == (
+                "plus_expr", self.induction, "-1"):
+            return self.index_value
         _require(opcode in _ARITHMETIC and (type_ == "f64" or opcode != "rdiv_expr") and right != "NULL")
         return [_ARITHMETIC[opcode], type_, self.expression(left, type_), self.expression(right, type_)]
 
@@ -411,7 +495,41 @@ class _CountedLane:
         return {"kind": "store", "pointer": name, "index": self.index_value, "value": result, "type": "f64"}
 
 
+def _counted_bounds(entry, test, fortran):
+    _require(all(row["opcode"] == "gimple_assign" and not row["memory"] for row in entry))
+    _require(test and test[-1]["opcode"] == "gimple_cond" and not test[-1]["memory"])
+    condition = _fields(test[-1])
+    _require(len(condition) == 5 and condition[3:] == ("NULL", "NULL"))
+    if fortran is None:
+        _require(len(entry) == 1 and condition[0] == "lt_expr")
+        initial = _fields(entry[0])
+        _require(len(initial) == 5 and initial[0] == "integer_cst" and initial[2:] == ("0", "NULL", "NULL"))
+        return initial[1], condition[1], condition[2], test[:-1]
+    _require(len(entry) == 2 and len(test) >= 2 and condition[0] == "ne_expr" and condition[2] == "0"
+             and test[-2]["opcode"] == "gimple_assign" and not test[-2]["memory"])
+    bound, initial, comparison = _fields(entry[0]), _fields(entry[1]), _fields(test[-2])
+    _require(len(bound) == len(initial) == len(comparison) == 5)
+    lower = fortran["induction_lower"]
+    code, increment = ("ssa_name", "NULL") if lower == 1 else ("plus_expr", "-1")
+    _require(bound[0] == code and bound[3:] == (increment, "NULL")
+             and initial[0] == "integer_cst" and initial[2:] == (str(lower), "NULL", "NULL")
+             and comparison[0] == "gt_expr" and comparison[1] == condition[1]
+             and comparison[3:] == (bound[1], "NULL"))
+    return initial[1], comparison[2], bound[2], test[:-2]
+
+
+def _fortran_prototype(function, abi):
+    expected = []
+    for parameter in abi["parameters"]:
+        base = r"integer\(kind=4\)" if parameter["passing"] == "VALUE" else r"real\(kind=8\)\[0:\] \* restrict"
+        expected.append(f"{base} {re.escape(parameter['name'])}")
+    _require(function["prototype"] is not None and re.fullmatch(", ".join(expected), function["prototype"]))
+
+
 def _counted_body(function, loops, declaration):
+    fortran = declaration.get("fortran_abi")
+    if fortran is not None:
+        _fortran_prototype(function, fortran)
     parameters = {row["name"]: row["type"] for row in declaration["parameters"]}
     blocks = {block["number"]: block for block in function["blocks"]}
     position = function["blocks"][0]["number"]
@@ -423,34 +541,33 @@ def _counted_body(function, loops, declaration):
         if entry["successors"] == ("EXIT",):
             _require(len(rows) == 1 and rows[0]["text"] == "gimple_return <NULL>")
             break
-        _require(len(rows) == 1 and rows[0]["opcode"] == "gimple_assign" and not rows[0]["memory"])
-        initial = _fields(rows[0])
-        _require(len(initial) == 5 and initial[0] == "integer_cst" and initial[2:] == ("0", "NULL", "NULL"))
         _require(len(entry["successors"]) == 1 and entry["successors"][0] in loops)
         header = entry["successors"][0]
         check = blocks[header]
         _require(len(check["branches"]) == 2 and len(check["successors"]) == 2)
-        repeat, exit_ = check["branches"]
+        repeat, exit_ = check["branches"] if fortran is None else reversed(check["branches"])
         _require({repeat, exit_} == set(check["successors"]) and loops[header] == {header, repeat}
                  and repeat != header and exit_ in blocks and blocks[repeat]["successors"] == (header,)
                  and not {header, repeat} & visited)
         visited.update((header, repeat))
-        test = _active_instructions(check)
-        _require(test and test[-1]["opcode"] == "gimple_cond" and not test[-1]["memory"])
-        condition = _fields(test[-1])
-        _require(len(condition) == 5 and condition[0] == "lt_expr" and condition[3:] == ("NULL", "NULL"))
-        _, induction, upper, _, _ = condition
+        initial, induction, upper, phis = _counted_bounds(rows, _active_instructions(check), fortran)
         name = _VERSIONED_NAME.fullmatch(induction)
-        _require(name is not None and not name[2] and function["locals"].get(name[1]) == "int")
-        phis = [row for row in test[:-1] if row["opcode"] == "gimple_phi"]
-        _require(len(phis) == len(test) - 1)
+        _require(name is not None and not name[2])
+        if fortran is None:
+            _require(function["locals"].get(name[1]) == "int")
+        else:
+            _require(function["scalar_types"].get(name[1]) == "i32")
+        _require(all(row["opcode"] == "gimple_phi" for row in phis))
         index_phis = [row for row in phis if row["result"] == induction]
         _require(len(index_phis) == 1 and all(row["result"].startswith(".MEM_") or row is index_phis[0]
                                               for row in phis))
         incoming = {block: value for value, block in index_phis[0]["phi"]}
-        _require(incoming.keys() == {position, repeat} and incoming[position] == initial[1])
-        lane = _CountedLane(_active_instructions(blocks[repeat]), induction, name[1], parameters)
+        _require(incoming.keys() == {position, repeat} and incoming[position] == initial)
+        lower = None if fortran is None else fortran["induction_lower"]
+        lane = _CountedLane(_active_instructions(blocks[repeat]), induction, name[1], parameters, fortran_lower=lower)
         bound = lane.parameter(upper, {"i32"})
+        if fortran is not None:
+            _require(bound == fortran["bounds"]["parameter"])
         statement = lane.finish(incoming[repeat])
         accesses.extend({**access, "loop": len(body)} for access in lane.accesses)
         body.append({"kind": "for", "index": name[1], "index_type": "i32", "start": ["constant", "i32", 0],
@@ -460,12 +577,41 @@ def _counted_body(function, loops, declaration):
     return body, accesses
 
 
+def _fortran_span(source, abi, operations, locked):
+    name = re.escape(abi["procedure"].encode("ascii"))
+    beginnings = list(re.finditer(rb"^[ \t]*subroutine[ \t]+" + name + rb"[ \t]*\(", source, re.M | re.I))
+    if len(beginnings) != 1:
+        return None
+    start = beginnings[0].start()
+    tail = source[beginnings[0].end():]
+    end = re.search(rb"^[ \t]*end[ \t]+subroutine(?:[ \t]+(" + name + rb"))?[ \t]*(?:![^\n]*)?$",
+                    tail, re.M | re.I)
+    if not end or re.search(rb"^[ \t]*(?:contains\b|subroutine\b|end[ \t]+subroutine\b)", tail[:end.start()],
+                            re.M | re.I):
+        return None
+    stop = beginnings[0].end() + end.end()
+    if b"#" in source[start:stop]:
+        return None
+    first, last = source.count(b"\n", 0, start) + 1, source.count(b"\n", 0, stop) + 1
+    for operation in operations:
+        site = operation.attributes["source"]
+        if site is not None:
+            if not first <= int(site["line"]) <= last or site["file"] and site["file"] != locked.path:
+                return None
+    return start, stop
+
+
 def _counted_region(function, loops, declaration, region, operations, unit, locked, source):
     if not declaration or not loops:
         return None
-    start, stop = declaration["span"]
+    fortran = declaration.get("fortran_abi")
+    span = (declaration["span"] if fortran is None else _fortran_span(source, fortran, operations, locked))
+    if span is None:
+        return None
+    start, stop = span
     original = source[start:stop]
-    if not (0 <= start < stop <= len(source) and original.startswith(b"{") and original.endswith(b"}")
+    if fortran is None and not (0 <= start < stop <= len(source)
+            and original.startswith(b"{") and original.endswith(b"}")
             and not any(token in original for token in (b"#", b"%:", b"??=", b"\\\n", b"_Pragma", b"__pragma"))):
         return None
     try:
@@ -477,7 +623,8 @@ def _counted_region(function, loops, declaration, region, operations, unit, lock
             "parameters": declaration["parameters"], "return_type": "void", "body": body,
             "source": {"path": unit, "sha256": locked.sha256, "span": [start, stop],
                        "slice_sha256": sha256(original).hexdigest()},
-            "effects": {"external": "NONE", "floating_exceptions": "PRESERVE_PROFILE", "accesses": accesses}}
+            "effects": {"external": "NONE", "floating_exceptions": "PRESERVE_PROFILE", "accesses": accesses},
+            **({"fortran_abi": fortran} if fortran is not None else {})}
 
 
 _KINDS = {"gimple_assign": "ASSIGN", "gimple_call": "CALL", "gimple_return": "RETURN",

@@ -168,6 +168,22 @@ def _elementwise(body, cpus, project):
     return configuration, (), invocation
 
 
+def _runtime_support(configuration, project):
+    support = configuration.pop("runtime_support", ())
+    if not support:
+        return
+    if support != ["gnu-cfi-v1"]:
+        raise ValueError("unknown native runtime requirement")
+    if not (project / "include/scar_generated/ISO_Fortran_binding.h").is_file():
+        raise ValueError("generated GNU CFI runtime requires its sealed ABI header")
+    name = "src/fortran-abi/scar_gnu_cfi.cpp"
+    destination = project / name
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with destination.open("xb") as stream:
+        stream.write(Path(__file__).with_name("gnu_cfi.cpp").read_bytes())
+    configuration["sources"] = [*configuration["sources"], name]
+
+
 def _fragments(body, project, bundle):
     material = json.loads(read_artifact(body.artifact.resolve(bundle)))
     if (set(material) != {"schema", "schema_version", "configuration", "fragments", "exports"}
@@ -195,6 +211,7 @@ def _fragments(body, project, bundle):
             definitions.extend(helpers)
             decisions.extend(emitted)
         destination.write_bytes(data)
+    _runtime_support(configuration, project)
     if decisions:
         from .regions import emit_region_helpers
 

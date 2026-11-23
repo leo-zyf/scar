@@ -13,7 +13,6 @@ from statistics import median
 import subprocess
 
 from ..contract import ElementwiseEntry, artifact
-from .project import compiler_path
 
 
 def _text(path):
@@ -112,12 +111,10 @@ def _widths(limit):
     return widths
 
 
-def _probe(directory, cpus, widths, memory):
+def _probe(directory, cpus, widths, memory, compiler, env):
     source = directory / "cpu-probe.cpp"
     binary = directory / "cpu-probe"
     source.write_text(_PROBE, encoding="utf-8")
-    compiler = compiler_path()
-    env = {key: value for key, value in os.environ.items() if not key.startswith("LD_")}
     flags = ["-std=c++20", "-O3", "-pthread", "-ffp-contract=off", "-fno-fast-math"]
     subprocess.run([compiler, *flags, str(source), "-o", str(binary)], env=env,
                    capture_output=True, check=True, timeout=20)
@@ -127,7 +124,7 @@ def _probe(directory, cpus, widths, memory):
         raise ValueError("insufficient free memory for a CPU bandwidth probe")
     iterations = 2**20
     command = [str(binary), str(elements), str(iterations), ",".join(map(str, cpus)), ",".join(map(str, widths))]
-    result = subprocess.run(command, env={**env, "LC_ALL": "C"}, capture_output=True,
+    result = subprocess.run(command, env=env, capture_output=True,
                             text=True, check=True, timeout=15)
     samples = defaultdict(list)
     for line in result.stdout.splitlines():
@@ -159,7 +156,7 @@ def _estimates(work, cpus, probe):
     return estimates
 
 
-def physical_plan(plan, directory, cpu_threads):
+def physical_plan(plan, directory, cpu_threads, compiler, environment):
     """Return selected CPU ids and evidence, with a serial fallback on weak evidence."""
     available = tuple(sorted(cpu for cpu in os.sched_getaffinity(0) if 0 <= cpu < 1024))
     explicit = plan.lowering.cpu_ids
@@ -198,7 +195,7 @@ def physical_plan(plan, directory, cpu_threads):
         limit = min(len(cohort), work["elements"])
         if not explicit and limit > 1:
             try:
-                probe = _probe(directory, cohort[:limit], _widths(limit), memory)
+                probe = _probe(directory, cohort[:limit], _widths(limit), memory, compiler, environment)
                 estimates = _estimates(work, cohort, probe)
             except (OSError, ValueError, subprocess.SubprocessError) as error:
                 reason = "CPU_PROBE_UNAVAILABLE"
