@@ -8,13 +8,27 @@ from scar.contract import walk_operations
 
 from . import exceptions, scalars, text
 from .scalars import as_float as _as_float
-from .values import Value, _UNKNOWN, array_kind, literal, protocols, rank, runtime, wire
+from .values import (
+    Value,
+    _UNKNOWN,
+    array_kind,
+    binding_targets,
+    literal,
+    protocols,
+    rank,
+    runtime,
+    wire,
+)
 
-_PROVIDED = {"array", "zeros", "float64", "linspace"}
+_PROVIDED = {"array", "zeros", "float64", "linspace", "meshgrid"}
 _LINEAR_SPACE_SOURCE = {
     "numpy": "09295a80660f17925ae23765ce8cbd7ff7ceae968d5f2f89349f1cb74c0b9e11",
     "numpy._core": "837ce8aec8693095d2e1c7c306d385d1785a50be97a009935c64cae04e3555d2",
     "numpy._core.function_base": "97925f5f2a271088cbff838a149a6312335d8dac80ac0314f0c85a31b442c1b5",
+}
+_COORDINATE_GRID_SOURCE = {
+    "numpy": _LINEAR_SPACE_SOURCE["numpy"],
+    "numpy.lib._function_base_impl": "6b892b2733cdd036443c360cbf5ff702f62e2b37affe7a541c424236d8f18a27",
 }
 _OPERATORS = {
     "add": ("add", "add"),
@@ -48,7 +62,9 @@ class LiteralState:
     def create(self, shape, items=None):
         self.next_token += 1
         facts = dict(
-            shape=tuple(shape), array_allocation=self.next_token, literal_prefix=()
+            shape=tuple(shape),
+            array_allocation=self.next_token,
+            literal_region=(0, tuple(shape)),
         )
         if items is not None and all(
             type(v) in {int, float}
@@ -67,16 +83,13 @@ class LiteralState:
         stored = self.contents.get(token)
         if stored is None:
             return None
-        shape, items = stored
-        prefix = value.facts.get("literal_prefix", ())
-        if prefix is None:
+        _, items = stored
+        layout = value.facts.get("literal_region")
+        if layout is None:
             return None
-        offset = 0
-        for index, size in zip(prefix, shape):
-            offset = offset * size + index
-        remaining = shape[len(prefix) :]
-        count = math.prod(remaining)
-        return remaining, items[offset * count : (offset + 1) * count]
+        offset, shape = layout
+        count = math.prod(shape)
+        return shape, items[offset : offset + count]
 
     def copied(self, source, *, negate=False):
         region = self.region(source)
@@ -92,23 +105,36 @@ class LiteralState:
                 return {}
             token = source.facts.get("array_allocation")
             return (
-                dict(array_allocation=token, literal_prefix=None)
+                dict(array_allocation=token, literal_region=None)
                 if token is not None
                 else {}
             )
         shape, _ = region
-        prefix = []
-        for index, extent in zip(indices, shape):
+        offset = source.facts["literal_region"][0]
+        for axis, (index, extent) in enumerate(zip(indices, shape)):
             if not -extent <= index.exact < extent:
                 return {}
-            prefix.append(index.exact % extent)
+            offset += index.exact % extent * math.prod(shape[axis + 1 :])
+        remaining = shape[len(indices) :]
         facts = dict(
             array_allocation=source.facts["array_allocation"],
-            literal_prefix=(*source.facts["literal_prefix"], *prefix),
+            literal_region=(offset, remaining),
         )
         selected = Value(source.kind, source.value, facts)
         shape, items = self.region(selected)
         return dict(facts, shape=shape) if shape else {"exact": items[0]}
+
+    def reshaped(self, source, shape):
+        facts = dict(shape=tuple(shape))
+        token = source.facts.get("array_allocation")
+        if token is not None:
+            facts.update(array_allocation=token, literal_region=None)
+            if self.region(source) is not None and all(type(n) is int for n in shape):
+                facts["literal_region"] = (
+                    source.facts["literal_region"][0],
+                    tuple(shape),
+                )
+        return facts
 
     def invalidate(self, source=None):
         token = source.facts.get("array_allocation") if source else None
@@ -121,10 +147,11 @@ class LiteralState:
         """Kill potential back-edge writes before reasoning about any iteration."""
         operations = list(walk_operations(body))
         rebound = {
-            node["target"]["name"]
+            target["name"]
             for node in operations
             if node["op"] in {"assign", "for"}
-            and node.get("target", {}).get("op") == "var"
+            for target in binding_targets(node.get("target", {}))
+            if target.get("op") == "var"
         }
         for node in operations:
             op = node["op"]
@@ -137,23 +164,22 @@ class LiteralState:
                 break
             if op not in {"assign", "update"}:
                 continue
-            target = node["target"]
-            if target.get("op") == "index":
-                target = target["base"]
-            elif op == "assign":
-                continue
-            if target.get("op") != "var":
-                self.invalidate()
-                break
-            if target["name"] in rebound:
-                self.invalidate()
-                break
-            scope = (
-                frame.project.names if target.get("scope") == "global" else frame.env
-            )
-            value = scope.get(target["name"])
-            if value is None or rank(value.kind) is not None:
-                self.invalidate(value)
+            for target in binding_targets(node["target"]):
+                if target.get("op") == "index":
+                    target = target["base"]
+                elif op == "assign":
+                    continue
+                if target.get("op") != "var" or target["name"] in rebound:
+                    self.invalidate()
+                    break
+                scope = (
+                    frame.project.names
+                    if target.get("scope") == "global"
+                    else frame.env
+                )
+                value = scope.get(target["name"])
+                if value is None or rank(value.kind) is not None:
+                    self.invalidate(value)
         return self.next_token
 
     def leave_loop(self, first):
@@ -186,12 +212,13 @@ def may_write_external(function, functions, active=()):
             "array_iota",
             "array_literal",
             "array_copy",
+            "array_broadcast_copy",
             "array_unary",
             "array_binary",
         }:
             return True
-        if op == "array_view":
-            return private(expr["base"])
+        if op in {"array_view", "array_reshape"}:
+            return private(expr["base"] if op == "array_view" else expr["value"])
         return op == "var" and expr.get("scope") != "global" and expr["name"] in fresh
 
     while True:
@@ -264,6 +291,7 @@ def _output(frame, node, kind, steps, *, facts=None, discard=False, **fields):
             "array_iota",
             "array_literal",
             "array_copy",
+            "array_broadcast_copy",
             "array_unary",
             "array_binary",
         }
@@ -675,34 +703,40 @@ def _literal_array(frame, node, source, steps, *, force, discard=False):
     )
 
 
-def _linspace(frame, node, args, keywords, steps, discard):
-    """Expand a versioned public sequence contract into neutral scalar/array ops."""
-    first_operation = len(steps)
+def _implementation(frame, node, name, sources):
+    """Bind a registered composite contract to its sealed public export evidence."""
     provider = frame.project.providers.get("numpy", {})
-    exported = provider.get("exports", {}).get("linspace", {})
+    exported = provider.get("exports", {}).get(name, {})
     candidates = exported.get("candidates", ())
-    expected = _LINEAR_SPACE_SOURCE["numpy._core.function_base"]
+    implementation = next(reversed(sources))
     matches = [
         p
         for p in candidates
-        if p.get("sha256") == expected and p.get("name") == "linspace"
+        if p.get("sha256") == sources[implementation] and p.get("name") == name
     ]
     if provider.get("version") != "2.5.5" or len(matches) != 1:
         frame.fail(
             node,
             "provider_implementation",
-            "linspace needs captured source evidence for its registered implementation profile",
+            f"{name} needs captured source evidence for its registered implementation profile",
         )
     profile = matches[0]
     route = {p["module"]: p.get("sha256") for p in profile.get("via", ())}
-    if provider.get("sha256") != _LINEAR_SPACE_SOURCE["numpy"] or any(
-        route.get(m) != sha for m, sha in _LINEAR_SPACE_SOURCE.items()
+    if provider.get("sha256") != sources["numpy"] or any(
+        route.get(m) != sha for m, sha in sources.items()
     ):
         frame.fail(
             node,
             "provider_implementation",
             "the public API export path differs from the registered source profile",
         )
+    return profile
+
+
+def _linspace(frame, node, args, keywords, steps, discard):
+    """Expand a versioned public sequence contract into neutral scalar/array ops."""
+    first_operation = len(steps)
+    profile = _implementation(frame, node, "linspace", _LINEAR_SPACE_SOURCE)
     names = ("start", "stop", "num", "endpoint", "retstep", "dtype", "axis")
     defaults = (
         None,
@@ -976,6 +1010,133 @@ def _linspace(frame, node, args, keywords, steps, discard):
     return selected
 
 
+def _meshgrid(frame, node, args, keywords, steps, discard):
+    """Factor a coordinate region into shared layouts and explicit materializations."""
+    profile = _implementation(frame, node, "meshgrid", _COORDINATE_GRID_SOURCE)
+    if set(keywords) - {"copy", "sparse", "indexing"}:
+        frame.fail(node, "array_arguments", "meshgrid has unbound keyword arguments")
+    indexing = keywords.get("indexing", literal("xy"))
+    if indexing.kind != "text" or indexing.exact not in {"xy", "ij"}:
+        frame.fail(
+            node, "array_layout", "meshgrid needs a proven xy or ij indexing mode"
+        )
+    flags = [
+        frame.truth(keywords.get(k, literal(v)), node)
+        for k, v in (("copy", True), ("sparse", False))
+    ]
+    if any(type(v.exact) is not bool for v in flags):
+        frame.fail(
+            node, "array_layout", "meshgrid ownership and sparse layout must be proven"
+        )
+    copy, sparse = (v.exact for v in flags)
+    if args and not copy and not sparse:
+        frame.fail(
+            node,
+            "array_alias",
+            "dense noncopy grids require overlapping writable views and their source warning contract",
+        )
+    first = len(steps)
+    vectors, sizes, extents = [], [], []
+    for item in args:
+        if rank(item.kind) is None:
+            item = _literal_array(frame, node, item, steps, force=False)
+        shape = _shape(item)
+        if all(type(n) is int for n in shape):
+            count = math.prod(shape)
+            size = literal(count)
+        else:
+            count = None
+            size = _output(
+                frame,
+                "array_size",
+                "i64",
+                steps,
+                value=item.value,
+                effects=["STATE"],
+                facts={"range": (0, (1 << 63) - 1)},
+            )
+        vectors.append(item)
+        sizes.append(size)
+        extents.append(count)
+    order = list(range(len(args)))
+    if indexing.exact == "xy" and len(order) > 1:
+        order[:2] = (1, 0)
+    dense_shape = tuple(extents[i] for i in order)
+    result = []
+    for i, item in enumerate(vectors):
+        axis = order.index(i)
+        shape = tuple(extents[i] if j == axis else 1 for j in range(len(args)))
+        dimensions = [
+            sizes[i].value if j == axis else literal(1).value for j in range(len(args))
+        ]
+        view = _output(
+            frame,
+            "array_reshape",
+            array_kind(len(args)),
+            steps,
+            value=item.value,
+            shape=dimensions,
+            layout="C",
+            effects=["STATE", "MEM"],
+            facts=frame.project.array_state.reshaped(item, shape),
+        )
+        if sparse:
+            output = (
+                _output(
+                    frame,
+                    "array_copy",
+                    view.kind,
+                    steps,
+                    value=view.value,
+                    effects=["MEM", "STATE", "XFER"],
+                    facts=frame.project.array_state.copied(view),
+                )
+                if copy
+                else view
+            )
+        else:
+            output = _output(
+                frame,
+                "array_broadcast_copy",
+                view.kind,
+                steps,
+                value=view.value,
+                shape=[sizes[j].value for j in order],
+                broadcasting="trailing",
+                effects=["MEM", "STATE", "XFER"],
+                facts={"shape": dense_shape},
+            )
+        result.append(output)
+    region = "coordinates/" + (node.get("site") or frame.temporary())
+    pending = list(steps[first:])
+    while pending:
+        stmt = pending.pop()
+        stmt["origin_region"] = region
+        for key in ("body", "then", "else"):
+            pending.extend(stmt.get(key, ()))
+    frame.project.decisions.append(
+        dict(
+            code="expanded_coordinate_region",
+            symbol=frame.name,
+            region=region,
+            source_site=node.get("site"),
+            location=node.get("location"),
+            provider=profile["module"],
+            implementation_sha256=profile["sha256"],
+            axes=order,
+            sparse=sparse,
+            copy=copy,
+            proof="C-order flatten and singleton reshape retain source storage; explicit broadcast/copy produces independent outputs; xy permutes the first two coordinate axes only",
+            binding_contract="registered release public API with pristine exported namespace and numeric inputs; static export candidates alone do not establish runtime identity",
+        )
+    )
+    return (
+        literal(None)
+        if discard
+        else _capture_values(frame, node, "tuple", result, steps)
+    )
+
+
 def construct(frame, node, target, args, keywords, steps, discard):
     options = dict(keywords)
     if target.kind == "array_copy_method":
@@ -999,6 +1160,8 @@ def construct(frame, node, target, args, keywords, steps, discard):
     name = target.value
     if name == "linspace":
         return _linspace(frame, node, args, options, steps, discard)
+    if name == "meshgrid":
+        return _meshgrid(frame, node, args, options, steps, discard)
     formal = "shape" if name == "zeros" else "object"
     if not args and formal in options:
         args = [options.pop(formal)]

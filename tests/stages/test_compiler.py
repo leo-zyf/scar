@@ -586,6 +586,80 @@ def test_scalar_selection_keeps_observable_behavior_and_precision_boundaries(tmp
         assert report["issues"][0]["code"] == "python." + issue
 
 
+def test_coordinate_regions_preserve_layout_copies_aliases_and_unpack_order(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    entry = source / "entry.py"
+    entry.write_text("""import numpy as np
+left = np.array([1.0, 2.0])
+right = np.array([3.0, 4.0, 5.0])
+x, y = np.meshgrid(left, right)
+left[0] = 9.0
+x[0, 0] = 7.0
+print(x, y, left, right, sep='\\n')
+def coordinates(a, b):
+    first, second = np.meshgrid(a, b, indexing='ij')
+    print(first, second, sep='\\n')
+coordinates(left, right)
+u, v, w = np.meshgrid([1.0, 2.0], [3.0], [4.0, 5.0], indexing='ij')
+print(u, v, w, sep='\\n')
+base = np.array([[1.0, 2.0], [3.0, 4.0]])
+shared, column = np.meshgrid(base, [5.0, 6.0], sparse=True, copy=False)
+shared[0, 2] = 11.0
+print(base, shared, column, base[1, 0] == 11.0, sep='\\n')
+owned, = np.meshgrid(base[1], sparse=True)
+base[1, 1] = 12.0
+print(owned)
+borrowed, = np.meshgrid(base[1], sparse=True, copy=False)
+borrowed[0] = 13.0
+print(base, borrowed, sep='\\n')
+empty_x, empty_y = np.meshgrid([], [1.0])
+print(empty_x, empty_y, sep='\\n')
+scalar, = np.meshgrid(2.5)
+print(scalar, np.meshgrid())
+a, b = 1, 2
+a, b = b, a
+print(a, b)
+index = 0
+target = np.array([0.0, 0.0])
+index, target[index] = 1, 8.0
+print(index, target)
+index = 0
+for i in range(3):
+    print(index)
+    index, extra = i, 2
+def protected():
+    value = 0
+    try:
+        value, other = 1, 2
+        raise ValueError('stop')
+    except ValueError:
+        print(value)
+protected()
+""")
+    expected = subprocess.run(
+        [sys.executable, "-B", entry], capture_output=True, check=True
+    )
+    graph, plan, delivery = (tmp_path / name for name in ("graph", "plan", "delivery"))
+    _stage(tmp_path, "frontend", "build", "--entry", entry, "--out", graph)
+    shutil.rmtree(source)
+    _stage(tmp_path, "middle", "plan", "--graph", graph, "--out", plan)
+    report = json.loads((plan / "plan.json").read_bytes())
+    regions = [
+        n for n in report["normalizations"] if n["code"] == "expanded_coordinate_region"
+    ]
+    assert len(regions) == 9
+    ir = json.loads((plan / "exec-ir.json").read_bytes())
+    assert {"array_size", "array_reshape", "array_broadcast_copy"} <= set(
+        ir["module"]["operator_requirements"]["ndarray"]["operations"]
+    )
+    shutil.rmtree(graph)
+    result = _stage(tmp_path, "backend", "compile", "--ir", plan, "--out", delivery)
+    shutil.rmtree(plan)
+    native = subprocess.run([result["executable"]], capture_output=True, check=True)
+    assert (native.stdout, native.stderr) == (expected.stdout, expected.stderr)
+
+
 def test_numpy_default_warnings_survive_source_removal(tmp_path):
     entry = tmp_path / "entry.py"
     entry.write_text("""import numpy as np

@@ -2,7 +2,7 @@
 
 from scar.contract import walk_operations
 from . import host_protocols
-from .values import Value, literal, runtime, wire
+from .values import Value, literal, runtime, wire, written_targets
 
 ERROR = "handle:error"
 _CLASSES = {
@@ -117,26 +117,12 @@ def throw(frame, node, steps):
 
 def _affected(body):
     names = {}
-
-    def record(target, remove=False):
-        if isinstance(target, dict) and target.get("op") == "var":
-            key = (target.get("scope") == "global", target["name"])
-            names[key] = remove or names.get(key, False)
-
     for node in walk_operations(body):
-        op = node["op"]
-        if op in {"assign", "update", "for", "python_define", "python_define_class"}:
-            record(node.get("target"))
-        elif op == "python_import":
-            record(node.get("binding"))
-        elif op == "exception_handler":
-            record(node.get("binding"), True)
-        elif op == "with_context":
-            for resource in node["resources"]:
-                record(resource.get("binding"))
-        elif op == "unbind":
-            for target in node["targets"]:
-                record(target, True)
+        removed = node["op"] in {"exception_handler", "unbind"}
+        for target in written_targets(node):
+            if target.get("op") == "var":
+                key = (target.get("scope") == "global", target["name"])
+                names[key] = removed or names.get(key, False)
     return names
 
 

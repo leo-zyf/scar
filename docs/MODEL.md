@@ -73,3 +73,5 @@ B2a 将选定执行方式降低为 `Type/Expr/Stmt/Decl/Attribute/Unit` 组成�
 图的表示能力、字段的可知程度、闭包的可编译程度分别报告。当前 Python 动态对象与部分库接口仍存在未闭合操作；完整图结构不等于所有字段已被证明，也不等于任意程序已可生成 C++20。不会把缺失的效果当作无副作用。
 
 `ndarray` 类型分别声明元素类型和维数，轴长度作为值参与计算。`array_create/literal/copy/unary` 明确产生新存储，`array_view` 保留原存储所有权，普通句柄赋值保持共享。`array_load/store` 携带整数索引；写入合同指定尾轴广播，重叠源先形成快照。序列捕获不能延迟读取后来被重绑的变量，整数操作必须有溢出界证明，浮点除数必须证明非零。当前 CPU 实现支持 binary64 和整数前缀索引，其余类型及索引协议保留明确缺口。
+
+`array_size` 读取当前区域的元素数；`array_reshape` 以显式 C-order 形状重解释同一连续区域，保留 storage 与 offset；`array_broadcast_copy` 按尾轴广播到新的独立区域，直接写入新分配，不先清零。静态字面量事实使用 allocation token 加 `(offset, shape)` 描述连续区域，reshape 和前缀 view 共享失效 token；不同形状不能再借用原索引前缀推定值。

@@ -91,6 +91,32 @@ def runtime(kind):
     )
 
 
+def binding_targets(target):
+    """Yield assignment destinations in source order, keeping each index or member whole."""
+    if not isinstance(target, dict):
+        return
+    if target.get("op") == "unpack":
+        for item in target["items"]:
+            yield from binding_targets(item)
+    else:
+        yield target
+
+
+def written_targets(node):
+    """Bound destinations of a source operation; receiver/index reads are separate."""
+    op = node.get("op")
+    if op in {"assign", "update", "for", "python_define", "python_define_class"}:
+        yield from binding_targets(node.get("target"))
+    elif op in {"python_import", "exception_handler"}:
+        yield from binding_targets(node.get("binding"))
+    elif op == "with_context":
+        for resource in node["resources"]:
+            yield from binding_targets(resource.get("binding"))
+    elif op == "unbind":
+        for target in node["targets"]:
+            yield from binding_targets(target)
+
+
 @dataclass(frozen=True)
 class Value:
     kind: str

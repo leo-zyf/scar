@@ -24,6 +24,7 @@
 #include <xtensor/core/xmath.hpp>
 #include <xtensor/core/xnoalias.hpp>
 #include <xtensor/core/xoperation.hpp>
+#include <xtensor/core/xstrides.hpp>
 #include <xtensor/generators/xbuilder.hpp>
 #include <xtensor/views/xbroadcast.hpp>
 #include <xtensor/views/xstrided_view.hpp>
@@ -78,12 +79,17 @@ template <class T> class ndarray {
     return size;
   }
 
-  static ndarray allocate(shape_type shape, std::size_t size) {
-    auto data =
-        std::make_shared<storage_type>(storage_type::from_shape({size}));
+  static strides_type row_strides(const shape_type &shape, std::size_t size) {
     strides_type strides(shape.size());
     if (size)
       xt::compute_strides(shape, xt::layout_type::row_major, strides);
+    return strides;
+  }
+
+  static ndarray allocate(shape_type shape, std::size_t size) {
+    auto data =
+        std::make_shared<storage_type>(storage_type::from_shape({size}));
+    auto strides = row_strides(shape, size);
     return ndarray(
         {std::move(data), 0, size, std::move(shape), std::move(strides)});
   }
@@ -138,6 +144,43 @@ public:
     if (!region_)
       throw std::invalid_argument("unbound array handle");
     return region_->shape;
+  }
+
+  std::int64_t size(std::size_t rank) const {
+    require_rank(rank);
+    if (!std::in_range<std::int64_t>(region_->size))
+      throw std::length_error("array size exceeds i64");
+    return static_cast<std::int64_t>(region_->size);
+  }
+
+  ndarray reshape(std::size_t rank, array_shape layout) const {
+    require_rank(rank);
+    const auto &src = *region_;
+    auto dims = shape(layout);
+    if (count(dims) != src.size)
+      throw std::invalid_argument("array reshape changes element count");
+    if (src.size && !xt::do_strides_match(src.shape, src.strides,
+                                          xt::layout_type::row_major, true))
+      throw std::invalid_argument(
+          "array reshape requires a contiguous C-order source");
+    auto strides = row_strides(dims, src.size);
+    return ndarray({src.storage, src.offset, src.size, std::move(dims),
+                    std::move(strides)});
+  }
+
+  ndarray broadcast_copy(std::size_t rank, array_shape layout) const {
+    require_rank(rank);
+    auto dims = shape(layout);
+    if (!xt::broadcastable(region_->shape, std::as_const(dims)))
+      throw std::invalid_argument(
+          "source shape cannot broadcast to requested shape");
+    auto size = count(dims);
+    auto result = allocate(std::move(dims), size);
+    if (size) {
+      auto dst = result.expression();
+      xt::noalias(dst) = xt::broadcast(expression(), result.region_->shape);
+    }
+    return result;
   }
 
   T value_at_flat(std::size_t index) const {
@@ -263,6 +306,24 @@ template <class T> ndarray<T> array_create(array_shape shape) {
 
 template <class T> ndarray<T> array_iota(std::int64_t count) {
   return ndarray<T>::iota(count);
+}
+
+template <class T>
+std::int64_t array_size(const ndarray<T> &value, std::size_t rank) {
+  return value.size(rank);
+}
+
+template <class T> struct array_shape_change {
+  ndarray<T> value;
+  std::size_t source_rank;
+  array_shape shape;
+};
+template <class T> ndarray<T> array_reshape(array_shape_change<T> input) {
+  return input.value.reshape(input.source_rank, input.shape);
+}
+template <class T>
+ndarray<T> array_broadcast_copy(array_shape_change<T> input) {
+  return input.value.broadcast_copy(input.source_rank, input.shape);
 }
 
 template <class T> struct array_elements {

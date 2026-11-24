@@ -92,10 +92,9 @@ def _join_facts(items):
         facts["range"] = min(item.bounds[0] for item in items), max(
             item.bounds[1] for item in items
         )
-    if "array_allocation" in facts and "literal_prefix" not in facts:
+    if "array_allocation" in facts and "literal_region" not in facts:
         # Different views may still share their owner's invalidation token.
-        # A missing prefix would be interpreted as the whole allocation.
-        facts["literal_prefix"] = None
+        facts["literal_region"] = None
     return facts
 
 

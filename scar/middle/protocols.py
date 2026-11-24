@@ -59,15 +59,6 @@ def _join(paths):
 def _global_bindings(functions):
     """Prove single module bindings without loop/reentrant or alias writes."""
     writes, repeated = {}, set()
-    targets = {
-        "assign",
-        "update",
-        "for",
-        "python_define",
-        "python_define_class",
-        "python_import",
-        "exception_handler",
-    }
     for function in functions.values():
         pending = [(function["body"], function["python_scope"]["kind"] != "module")]
         while pending:
@@ -78,13 +69,8 @@ def _global_bindings(functions):
             if not isinstance(node, dict):
                 continue
             op = node.get("op")
-            bindings = []
-            if op in targets:
-                bindings.append(node.get("target") or node.get("binding") or {})
-            if op == "with_context":
-                bindings.extend(item.get("binding") or {} for item in node["resources"])
             multiple = multiple or op in {"for", "while", "exception_handler"}
-            for target in bindings:
+            for target in values.written_targets(node):
                 if target.get("op") == "var" and target.get("scope") == "global":
                     name = target["name"]
                     writes[name] = writes.get(name, 0) + 1
@@ -400,6 +386,32 @@ class _Frame:
         )
 
     def store(self, target, value, steps):
+        if target.get("op") == "unpack":
+            items = target["items"]
+            for item in items:
+                if item.get("op") == "starred" or item.get("construct") == "Starred":
+                    self.fail(
+                        item,
+                        "unpack_starred",
+                        "a starred target requires a list of the remaining values",
+                    )
+            if value.kind not in {"tuple", "list"}:
+                self.fail(
+                    target,
+                    "unpack_iterable",
+                    f"unpacking {value.kind} requires a closed iterator contract",
+                )
+            if len(items) != len(value.value):
+                self.fail(
+                    target,
+                    "unpack_arity",
+                    f"assignment expects {len(items)} items, received {len(value.value)}",
+                )
+            # Check each nested sequence upon reaching its target. Earlier targets
+            # can rebind names used to evaluate a later receiver or index.
+            for item, element in zip(items, value.value):
+                self.store(item, element, steps)
+            return
         if target.get("op") == "index":
             arrays.index(self, target, steps, rhs=value)
             return
@@ -1160,14 +1172,7 @@ class _Frame:
                     env.pop(alias["name"], None)
             if op["op"] in {"for", "while"}:
                 nested = True
-            if op["op"] in {
-                "for",
-                "assign",
-                "update",
-                "python_define",
-                "python_import",
-            }:
-                dest = op.get("target", op.get("binding", {}))
+            for dest in values.written_targets(op):
                 if dest.get("op") == "var":
                     writes.setdefault(
                         (dest.get("scope") == "global", dest["name"]), []
@@ -1210,6 +1215,7 @@ class _Frame:
                     op = site.get("operator")
                     if (
                         site["op"] == "assign"
+                        and site["target"].get("op") == "var"
                         and rhs.get("op") == "binary"
                         and rhs["left"].get("op") == "var"
                         and rhs["left"]["name"] == name

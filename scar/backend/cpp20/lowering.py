@@ -55,6 +55,9 @@ _ARRAY_EFFECTS = {
     "array_unary": {"MEM", "VAL"},
     "array_copy": {"MEM", "STATE", "XFER"},
     "array_view": {"STATE", "MEM"},
+    "array_size": {"STATE"},
+    "array_reshape": {"STATE", "MEM"},
+    "array_broadcast_copy": {"MEM", "STATE", "XFER"},
     "array_load": {"STATE"},
     "array_store": {"STATE"},
     "array_binary": {"MEM", "VAL", "STATE", "IO"},
@@ -667,6 +670,48 @@ class Lowerer:
         def group(*parts):
             # C++ list initialization captures operands once in their declared order.
             return Expr("braced", args=parts)
+
+        if op in {"array_size", "array_reshape", "array_broadcast_copy"}:
+            value = node.get("value")
+            source_type = value.get("type") if isinstance(value, dict) else None
+            source_rank = ndarray_rank(source_type)
+            self.type_name(source_type)
+            source = self.expression(value)
+            if op == "array_size":
+                if node.get("type") != "i64":
+                    raise ValueError("array_size requires an i64 result")
+                return call("scar::array_size", source, integer(source_rank))
+            result_rank = ndarray_rank(node.get("type"))
+            if op == "array_reshape" and node.get("layout") != "C":
+                raise ValueError("array_reshape requires C layout")
+            if op == "array_broadcast_copy" and (
+                node.get("broadcasting") != "trailing" or source_rank > result_rank
+            ):
+                raise ValueError(
+                    "array_broadcast_copy requires trailing broadcast to the declared rank"
+                )
+            dims = node.get("shape")
+            if (
+                not isinstance(dims, (list, tuple))
+                or len(dims) != result_rank
+                or any(
+                    isinstance(dim, dict)
+                    and dim.get("op") == "literal"
+                    and (
+                        type(dim.get("value")) is not int
+                        or not 0 <= dim["value"] < 1 << 63
+                    )
+                    for dim in dims
+                )
+            ):
+                raise ValueError(
+                    f"{op} requires one nonnegative i64 extent per result axis"
+                )
+            shape = operands(dims, "i64")
+            return call(
+                template("scar::" + op, self.type_name(source_type["element"])),
+                group(source, integer(source_rank), group(integer(result_rank), shape)),
+            )
 
         indexed = op in {"array_view", "array_load", "array_store"}
         ty = node["base"]["type"] if indexed else node["type"]
