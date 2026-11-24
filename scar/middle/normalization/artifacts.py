@@ -206,20 +206,31 @@ def analyze(module):
         file_calls[name], file_effects[name] = dependencies, effects
         for callee in dependencies:
             dependents[callee].add(name)
-    recursive, inspected, visiting = set(), set(), []
-
-    def inspect_calls(name):
-        if name in visiting:
-            recursive.update(visiting[visiting.index(name) :])
-        elif name not in inspected:
-            visiting.append(name)
-            for callee in file_calls[name]:
-                inspect_calls(callee)
-            visiting.pop()
-            inspected.add(name)
-
-    for name in functions:
-        inspect_calls(name)
+    # Iterative Kosaraju: include every member of a recursive component,
+    # including cross edges into an already finished DFS branch. Neither
+    # traversal depends on Python's recursion limit or unrolls program calls.
+    inspected, finished = set(), []
+    for root in functions:
+        pending_calls = [(root, False)]
+        while pending_calls:
+            name, expanded = pending_calls.pop()
+            if expanded:
+                finished.append(name)
+            elif name not in inspected:
+                inspected.add(name)
+                pending_calls.append((name, True))
+                pending_calls.extend((callee, False) for callee in file_calls[name])
+    recursive, assigned = set(), set()
+    for root in reversed(finished):
+        component, pending_calls = set(), [root]
+        while pending_calls:
+            name = pending_calls.pop()
+            if name not in assigned:
+                assigned.add(name)
+                component.add(name)
+                pending_calls.extend(dependents[name])
+        if component and (len(component) > 1 or root in file_calls[root]):
+            recursive.update(component)
     for name in recursive:
         file_effects[name].add("OPAQUE")
     work = deque(name for name, effects in file_effects.items() if effects)

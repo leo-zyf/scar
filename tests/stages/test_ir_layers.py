@@ -351,6 +351,28 @@ def test_constant_file_proof_preserves_control_and_handle_boundaries():
     assert not any(
         edge.get("role") == "stream_read" for edge in barrier["graph"]["edges"]
     )
+    # Both DFS branches belong to the same recursive component; visiting
+    # only back-edge stack entries can miss a branch through a finished node.
+    recursive = dict(
+        functions=[
+            dict(
+                name=name,
+                params=[],
+                result="unit",
+                body=[
+                    dict(op="expr", value=dict(op="call", callee=target, args=[]))
+                    for target in targets
+                ],
+            )
+            for name, targets in (("a", ("b", "c")), ("b", ("a",)), ("c", ("b",)))
+        ]
+    )
+    assert (
+        _layer("normalization", code, recursive)["file_effect_summary"][
+            "recursive_functions"
+        ]
+        == 3
+    )
     cases = [
         [
             start,
