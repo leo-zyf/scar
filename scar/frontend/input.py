@@ -146,20 +146,29 @@ def read_request(path: Path) -> SourceRequest:
                 dict(path=spec["source"], language="python", abi=spec.get("abi", {}))
             ]
     images, build_trace = None, None
+    if "images" in spec:
+        profiles, images, entry = _image_profiles(spec)
+    elif "build_trace" in spec:
+        profiles, entry = (), {"entry": spec.get("entry", "main")}
+    else:
+        profiles = tuple(_profiles(spec.get("units"), spec.get("language")))
+        if len({json_bytes(p) for p in profiles}) != len(profiles):
+            raise ValueError("expected distinct compilation profiles")
+        entry = spec
     if "build_trace" in spec:
+        if "root_image" in spec and images is None:
+            raise ValueError("root_image requires an explicit image catalog")
         if any(
             key in spec
             for key in (
                 "units",
-                "images",
                 "source",
                 "observe",
                 "entry_abi",
-                "root_image",
             )
         ):
             raise ValueError(
-                "a build trace supplies its own compilation units and images"
+                "declare controller units within images beside a build trace"
             )
         trace = spec["build_trace"]
         if not isinstance(trace, dict) or trace.get("provider") != "bear-3-intercept":
@@ -177,14 +186,6 @@ def read_request(path: Path) -> SourceRequest:
         ):
             raise ValueError("build targets must be distinct nonempty output paths")
         build_trace = dict(provider=trace["provider"], raw=raw, targets=targets)
-        profiles, entry = (), {"entry": spec.get("entry", "main")}
-    elif "images" in spec:
-        profiles, images, entry = _image_profiles(spec)
-    else:
-        profiles = tuple(_profiles(spec.get("units"), spec.get("language")))
-        if len({json_bytes(p) for p in profiles}) != len(profiles):
-            raise ValueError("expected distinct compilation profiles")
-        entry = spec
     locks = spec.get("source_lock", {}).get("files", {})
     python_names = {p["path"] for p in profiles if p["language"].lower() == "python"}
     scripts = [image["source"] for image in images or () if "source" in image]

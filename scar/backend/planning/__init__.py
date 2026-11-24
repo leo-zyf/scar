@@ -18,6 +18,7 @@ from scar.contract import (
     walk_operations,
 )
 from scar.host import array_sdk
+from . import mpi
 
 _ARRAY_OPERATIONS = {
     "array_create",
@@ -75,11 +76,7 @@ def _observed_operators(module):
                 observed.setdefault("ndarray", set())
                 element = node.get("element")
                 elements.add(element if isinstance(element, str) else "unspecified")
-            if (
-                node.get("provider") == "mpi"
-                or "mpi_interface" in node
-                or "mpi_interfaces" in node
-            ):
+            if mpi.dependency(node):
                 observed.setdefault("mpi", set())
             pending.extend(node.values())
         elif isinstance(node, (tuple, list)):
@@ -153,14 +150,33 @@ def _process_binding(requirement, observed, module, context):
         )
         for image in images
     }
-    references = set()
-    for node in walk_operations(module):
+    references, launches = set(), {}
+    for node in walk_operations(
+        [module.get(k, ()) for k in ("functions", "globals", "records")]
+    ):
         if node["op"] == "process_spawn":
             if node.get("image_id") not in targets:
                 raise ValueError(
                     "process launch references an undeclared or unsealed image"
                 )
-            references.add(node["image_id"])
+            image = node["image_id"]
+            references.add(image)
+            if "launcher" in node:
+                qualify_worker = context.get("qualify_mpi")
+                if qualify_worker is None:
+                    raise ValueError("MPI launch requires the sealed worker IR package")
+                _, worker = qualify_worker(image)
+                site, binding = mpi.qualify_launcher(
+                    node, targets[image], worker, context["launcher_cache"]
+                )
+                if site in launches and launches[site] != binding:
+                    raise ValueError("MPI launch site has competing physical bindings")
+                launches[site] = binding
+                node["launch_binding"] = site
+            elif node.get("shell", False) is not False or "source_command" in node:
+                raise ValueError(
+                    "shell image launch requires an explicitly qualified launcher"
+                )
         elif node.get("operator_family") == "process" and (
             node["op"] != "host_call"
             or node.get("interface") not in {"process.stdout", "process.wait"}
@@ -171,6 +187,7 @@ def _process_binding(requirement, observed, module, context):
         target="linux-cxx20",
         binding="declared_images",
         images={name: targets[name] for name in sorted(references)},
+        **({"launches": launches} if launches else {}),
         environment_contract="immutable executable generation during execution; inherited cwd, environment and input",
     )
 
@@ -250,14 +267,18 @@ def _qualify(module, image_context=None):
     for family, requirement in sorted(requested.items()):
         resolve = _OPERATOR_BINDINGS.get(family)
         if family == "mpi":
-            from . import mpi
-
             try:
-                requested[family], bindings[family] = mpi.qualify(
-                    module,
-                    requirement,
-                    explicit=family in module.get("operator_requirements", {}),
+                resolve_worker = (image_context or {}).get("qualify_mpi")
+                result = (
+                    resolve_worker(image_context["current_image"], module)
+                    if resolve_worker
+                    else mpi.qualify(
+                        module,
+                        requirement,
+                        explicit=family in module.get("operator_requirements", {}),
+                    )
                 )
+                requested[family], bindings[family] = result
                 continue
             except ValueError as exc:
                 detail = str(exc)
@@ -293,16 +314,26 @@ def _qualify(module, image_context=None):
     return requested, bindings, issues
 
 
+def _load_module(path, ir):
+    return dict(
+        ir["module"], functions=[read_member(path.parent, r) for r in ir["functions"]]
+    )
+
+
 def _schedule_image(
     path, revision, ir, destination, policy, workers, image_context=None
 ):
-    module = dict(
-        ir["module"], functions=[read_member(path.parent, r) for r in ir["functions"]]
-    )
+    module = _load_module(path, ir)
     module.pop("image_bindings", None)
+    module.pop("process_launch_bindings", None)
     requirements, bindings, issues = _qualify(module, image_context)
     if "process" in bindings:
         module["image_bindings"] = bindings["process"]["images"]
+        if "launches" in bindings["process"]:
+            module["process_launch_bindings"] = {
+                site: digest(json_bytes(binding))
+                for site, binding in bindings["process"]["launches"].items()
+            }
     status = "INCOMPLETE" if issues else "READY"
     fields = dict(stage="B1", status=status, ir_sha256=revision)
     if issues:
@@ -391,6 +422,29 @@ def schedule_ir(source, destination, *, policy="auto", workers=None):
         {k: image[k] for k in ("id", "entry", "output")} | {"ir_sha256": child[1]}
         for image, child in inputs
     ]
+    child_inputs = {image["id"]: child for image, child in inputs}
+    qualified, launcher_cache = {}, {}
+
+    def qualify_mpi(image_id, module=None):
+        # A controller may precede its worker in the input manifest. Qualify
+        # the worker itself, reusing the result for its own schedule.
+        if image_id not in qualified:
+            if module is None:
+                child_path, _, child_ir = child_inputs[image_id]
+                module = _load_module(child_path, child_ir)
+            claims = module.get("operator_requirements", {})
+            try:
+                result = mpi.qualify(
+                    module, claims.get("mpi"), explicit="mpi" in claims
+                )
+                qualified[image_id] = result, None
+            except ValueError as exc:
+                qualified[image_id] = None, str(exc)
+        result, error = qualified[image_id]
+        if error is not None:
+            raise ValueError(f"MPI capability of image {image_id}: {error}")
+        return result
+
     for image, child in inputs:
         identity = {key: image[key] for key in ("id", "entry", "output")}
         child_dir = destination / "images" / image["id"]
@@ -399,7 +453,12 @@ def schedule_ir(source, destination, *, policy="auto", workers=None):
             child_dir,
             policy,
             workers,
-            image_context=dict(current_image=image["id"], images=catalog),
+            image_context=dict(
+                current_image=image["id"],
+                images=catalog,
+                qualify_mpi=qualify_mpi,
+                launcher_cache=launcher_cache,
+            ),
         )
         identity["status"] = child_status
         issues.extend(dict(issue, image_id=image["id"]) for issue in child_issues)

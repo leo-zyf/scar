@@ -1,5 +1,7 @@
 """Encode one definition as a hierarchical port graph, including mutable effects."""
 
+from copy import deepcopy
+
 from scar.contract import digest, json_bytes
 
 _REGIONS = {"body", "then", "else", "init", "handlers", "cleanup", "finally"}
@@ -377,3 +379,54 @@ def function_graph(function, revision):
             i for i, row in enumerate(nodes) if row["op"].startswith("process_")
         ],
     )
+
+
+def unit_graph(unit, revision):
+    """F3: form hierarchical graphs from neutral declarations without mutating F2."""
+    payload = {
+        key: deepcopy(unit.get(key, []))
+        for key in ("externs", "records", "templates", "enums")
+    }
+    for record in payload["records"]:
+        fields = [field for field in record.get("fields", ()) if "init" in field]
+        if fields:
+            record["initializer_graph"] = function_graph(
+                dict(
+                    name="@field_initializers/" + record["name"],
+                    result="void",
+                    params=[
+                        dict(
+                            name="this",
+                            type=dict(
+                                kind="ptr", to=dict(kind="record", name=record["name"])
+                            ),
+                        )
+                    ],
+                    body=[
+                        dict(
+                            op="decl",
+                            name=field["name"],
+                            type=field["type"],
+                            init=field.pop("init"),
+                        )
+                        for field in fields
+                    ],
+                ),
+                revision,
+            )
+    payload["global_graph"] = function_graph(
+        dict(
+            name="@initializers",
+            params=[],
+            result="void",
+            body=[
+                {"op": "decl", **global_, "scope": "global"}
+                for global_ in unit.get("globals", [])
+            ],
+        ),
+        revision,
+    )
+    payload["functions"] = [
+        function_graph(function, revision) for function in unit.get("functions", [])
+    ]
+    return payload

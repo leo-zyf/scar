@@ -23,7 +23,8 @@ namespaces = false
 
 [tool.setuptools.package-data]
 "scar.backend.cpp20" = ["runtime.hpp", "array.hpp", "host.hpp", "exceptions.hpp", "format.hpp", "text.hpp"]
-"scar.backend.planning" = ["calibration.cpp", "mpi_probe.cpp"]
+"scar.backend.planning" = ["calibration.cpp"]
+"scar.backend.planning.mpi" = ["probe.cpp"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests/stages"]

@@ -1,9 +1,16 @@
 """M2 process identity, declared image references and ordered pipe observations."""
 
+import re
+
 from .values import Value, literal, wire
 
 PROCESS = "handle:process"
 STREAM = "handle:text_stream"
+_SHELL_COMMAND = re.compile(
+    r"[A-Za-z0-9_./,:@%+=-]+(?:[ \t]+[A-Za-z0-9_./,:@%+=-]+)*\Z"
+)
+_SHELL_ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
+_MAX_RANK = str((1 << 63) - 1)
 
 
 def is_process(kind):
@@ -64,6 +71,131 @@ def persist_method(frame, target, method, steps):
     return Value(method.kind, (captured, name))
 
 
+def _command(frame, node, command, shell):
+    if shell.exact not in (True, False) or type(shell.exact) is not bool:
+        frame.fail(node, "process_shell", "shell needs a fixed boolean contract")
+    if shell.exact:
+        text = command.exact
+        if (
+            command.kind != "text"
+            or not isinstance(text, str)
+            or not _SHELL_COMMAND.fullmatch(text.strip(" \t"))
+        ):
+            frame.fail(
+                node,
+                "process_shell",
+                "shell launch requires fixed ASCII words and spaces without quoting, expansion or control operators",
+            )
+        words = text.split()
+        if _SHELL_ASSIGNMENT.match(words[0]):
+            frame.fail(
+                node, "process_shell", "shell environment assignments are not closed"
+            )
+        runtime = node.get("source_runtime", {})
+        if runtime.get("os_name") != "posix" or runtime.get("platform") not in {
+            "linux",
+            "linux2",
+        }:
+            frame.fail(
+                node,
+                "process_shell",
+                "the default POSIX shell identity is not captured",
+            )
+        return [literal(word) for word in words]
+    if command.kind == "text":
+        argv = [command]
+    elif command.kind in {"list", "tuple"}:
+        argv = list(command.value)
+    else:
+        frame.fail(
+            node,
+            "process_arguments",
+            "process arguments need a fixed vector of text values",
+        )
+    if not argv or any(v.kind != "text" for v in argv):
+        frame.fail(
+            node, "process_arguments", "process argument vector must be nonempty text"
+        )
+    return argv
+
+
+def _image(frame, target):
+    return [
+        image
+        for image in frame.project.execution_images
+        if target == "./" + image["output"]
+    ]
+
+
+def _launch(frame, node, command, shell):
+    argv = _command(frame, node, command, shell)
+    source_argv = argv
+    matches = _image(frame, argv[0].exact)
+    launcher = None
+    if not matches:
+        words = [value.exact for value in argv]
+        if (
+            len(words) < 4
+            or any(not isinstance(word, str) for word in words)
+            or words[1] not in {"-n", "-np", "--np"}
+            or not words[2].isascii()
+            or not words[2].isdecimal()
+            or ":" in words
+        ):
+            frame.fail(
+                node,
+                "process_image_binding",
+                "launch needs a declared image or a fixed positive-rank launcher argument contract",
+            )
+        ranks = words[2].lstrip("0")
+        if (
+            not ranks
+            or len(ranks) > len(_MAX_RANK)
+            or len(ranks) == len(_MAX_RANK)
+            and ranks > _MAX_RANK
+        ):
+            frame.fail(
+                node,
+                "process_launcher",
+                "launcher rank count must be a positive signed 64-bit integer",
+            )
+        launcher = dict(
+            kind="mpi",
+            ranks=literal(int(ranks)).value,
+            semantics_version=1,
+            source_reference=words[0],
+            rank_option=words[1],
+        )
+        argv = argv[3:]
+        matches = _image(frame, argv[0].exact)
+    if len(matches) != 1:
+        frame.fail(
+            node,
+            "process_image_binding",
+            "the executable has no unique declared application image",
+        )
+    fields = {}
+    if launcher is not None or shell.exact:
+        runtime = node.get("source_runtime", {})
+        fields.update(
+            shell=shell.exact,
+            source_command=dict(
+                form="posix_shell" if shell.exact else "argv",
+                argv=[value.exact for value in source_argv],
+                text=command.exact if shell.exact else None,
+                shell_path="/bin/sh" if shell.exact else None,
+                runtime={
+                    key: runtime[key]
+                    for key in ("interpreter", "platform", "os_name")
+                    if key in runtime
+                },
+            ),
+        )
+    if launcher is not None:
+        fields["launcher"] = launcher
+    return matches[0], argv, fields
+
+
 def invoke(frame, node, target, args, keywords, steps, discard):
     if target.kind == "process_method":
         if args or keywords:
@@ -81,38 +213,8 @@ def invoke(frame, node, target, args, keywords, steps, discard):
     command = args[0] if args else options.pop("args", None)
     if command is None:
         frame.fail(node, "process_arguments", "process launch needs an argument vector")
-    if command.kind == "text":
-        argv = [command]
-    elif command.kind in {"list", "tuple"}:
-        argv = list(command.value)
-    else:
-        frame.fail(
-            node,
-            "process_arguments",
-            "process arguments need a fixed vector of text values",
-        )
-    if not argv or any(v.kind != "text" for v in argv):
-        frame.fail(
-            node, "process_arguments", "process argument vector must be nonempty text"
-        )
-    source_target = argv[0].exact
-    matches = [
-        i for i in frame.project.execution_images if source_target == "./" + i["output"]
-    ]
-    if len(matches) != 1:
-        frame.fail(
-            node,
-            "process_image_binding",
-            "the executable has no unique declared application image; external tools, build actions and launchers need separate bindings",
-        )
-    image = matches[0]
     shell = options.pop("shell", literal(False))
-    if shell.exact is not False:
-        frame.fail(
-            node,
-            "process_shell",
-            "a shell invocation requires its own bound command and status contract",
-        )
+    image, argv, launch = _launch(frame, node, command, shell)
     stdin = options.pop("stdin", literal(None))
     stdout = options.pop("stdout", literal(None))
     stderr = options.pop("stderr", literal(None))
@@ -179,7 +281,7 @@ def invoke(frame, node, target, args, keywords, steps, discard):
             location=node.get("location"),
             image_id=image["id"],
             output=image["output"],
-            source_target=source_target,
+            source_target=argv[0].exact,
             proof="exact logical executable reference in the explicitly declared application image namespace; no filesystem-name guessing or source-language subprocess fallback",
         )
     )
@@ -188,9 +290,11 @@ def invoke(frame, node, target, args, keywords, steps, discard):
         dict(
             op="process_spawn",
             operator_family="process",
+            **{key: node[key] for key in ("site", "location") if key in node},
             type=wire(kind),
             image_id=image["id"],
             argv=[v.value for v in argv],
+            **launch,
             **routes,
             encoding="utf-8",
             errors="strict",

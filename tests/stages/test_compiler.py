@@ -62,7 +62,10 @@ def _payloads(graph, document):
     ]
 
 
-def test_make_capture_preserves_mixed_profiles_and_independent_stages(tmp_path):
+@pytest.mark.parametrize("controller", [False, True])
+def test_make_capture_preserves_mixed_profiles_and_independent_stages(
+    tmp_path, controller
+):
     from scar.contract import read_member
 
     source = tmp_path / "source"
@@ -103,6 +106,23 @@ def test_make_capture_preserves_mixed_profiles_and_independent_stages(tmp_path):
     )
     expected = _run([source / "hybrid"], source)
     assert expected == b"15\n"
+    project = {}
+    if controller:
+        driver = source / "driver.py"
+        driver.write_text(
+            "import subprocess\n"
+            'child = subprocess.Popen(["./hybrid"], stdout=subprocess.PIPE, text=True)\n'
+            'for line in child.stdout:\n    print(line, end="")\n'
+            "print(child.wait())\n"
+        )
+        expected = _run([sys.executable, driver], source)
+        assert expected == b"15\n0\n"
+        project = dict(
+            root_image="driver",
+            images=[
+                dict(id="driver", output="driver", entry="__main__", source="driver.py")
+            ],
+        )
     manifest = tmp_path / "request.json"
     manifest.write_text(
         json.dumps(
@@ -111,6 +131,7 @@ def test_make_capture_preserves_mixed_profiles_and_independent_stages(tmp_path):
                 entry="main",
                 targets=["hybrid"],
                 build_trace=dict(provider="bear-3-intercept", path=trace.name),
+                **project,
             )
         )
     )
@@ -125,7 +146,14 @@ def test_make_capture_preserves_mixed_profiles_and_independent_stages(tmp_path):
     assert build_graph["nodes"] and build_graph["edges"]
     assert any(r["kind"] == "LIBRARY_REQUEST" for r in document["resources"])
     assert any(r["kind"] == "ELF_LIBRARY_DEPENDENCY" for r in document["resources"])
-    assert len(document["images"]) == 1
+    assert len(document["images"]) == (2 if controller else 1)
+    (binding,) = document["build"]["bindings"]
+    assert binding["image_id"] == "hybrid"
+    assert next(
+        node
+        for node in build_graph["nodes"]
+        if node["id"] == binding["target_artifact"]
+    )["path"] == str(source / "hybrid")
     shutil.rmtree(source)
     trace.unlink()
     manifest.unlink()
@@ -133,7 +161,119 @@ def test_make_capture_preserves_mixed_profiles_and_independent_stages(tmp_path):
     shutil.rmtree(graph)
     result = _stage(tmp_path, "backend", "compile", "--ir", plan, "--out", delivery)
     shutil.rmtree(plan)
-    assert _run([result["executable"]], tmp_path) == expected
+    executable = Path(result["executable"])
+    assert _run([executable], executable.parent) == expected
+
+
+def test_mpi_controller_joins_captured_worker_and_preserves_launch_conventions(
+    tmp_path, monkeypatch
+):
+    if os.geteuid() == 0:
+        monkeypatch.setenv("OMPI_ALLOW_RUN_AS_ROOT", "1")
+        monkeypatch.setenv("OMPI_ALLOW_RUN_AS_ROOT_CONFIRM", "1")
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "worker.c").write_text(
+        "#include <mpi.h>\n#include <stdio.h>\n"
+        "int main(int argc, char **argv) {\n"
+        "int rank, size; MPI_Init(&argc, &argv);\n"
+        "MPI_Comm_rank(MPI_COMM_WORLD, &rank); MPI_Comm_size(MPI_COMM_WORLD, &size);\n"
+        'if (rank == 0) printf("ranks=%d argv0=%s value=%s\\n", size, argv[0], argv[1]);\n'
+        "MPI_Finalize(); return 0; }\n"
+    )
+    (source / "Makefile").write_text(
+        "worker: worker.c\n\tmpicc -std=c99 -O2 -o $@ $<\n"
+    )
+    (source / "driver.py").write_text(
+        "import subprocess\n"
+        'first = subprocess.Popen(["mpiexec", "-n", "2", "./worker", "data"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)\n'
+        'for line in first.stdout:\n    print(line, end="")\n'
+        "print(first.wait())\n"
+        'second = subprocess.Popen("mpiexec -n 2 ./worker data", shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)\n'
+        'for line in second.stdout:\n    print(line, end="")\n'
+        "print(second.wait())\n"
+    )
+    trace = tmp_path / "events.json"
+    _run(
+        [
+            "bear",
+            "intercept",
+            "--force-preload",
+            "--output",
+            trace,
+            "--",
+            "make",
+            "-j2",
+        ],
+        source,
+    )
+    expected = _run([sys.executable, source / "driver.py"], source)
+    assert expected == b"ranks=2 argv0=./worker value=data\n0\n" * 2
+    original_worker = (source / "worker").read_bytes()
+    request = tmp_path / "request.json"
+    request.write_text(
+        json.dumps(
+            dict(
+                source_root="source",
+                root_image="driver",
+                images=[
+                    dict(
+                        id="driver",
+                        output="driver",
+                        entry="__main__",
+                        source="driver.py",
+                    )
+                ],
+                build_trace=dict(provider="bear-3-intercept", path=trace.name),
+            )
+        )
+    )
+    graph, plan, delivery = (tmp_path / name for name in ("graph", "plan", "delivery"))
+    _stage(
+        tmp_path,
+        "frontend",
+        "build",
+        "--manifest",
+        request,
+        "--out",
+        graph,
+        "--jobs",
+        2,
+    )
+    document = json.loads((graph / "graph.json").read_bytes())
+    assert document["root_image"] == "driver"
+    assert {image["id"] for image in document["images"]} == {"driver", "worker"}
+    assert document["build"]["bindings"][0]["image_id"] == "worker"
+    shutil.rmtree(source)
+    trace.unlink()
+    request.unlink()
+    logical = _stage(tmp_path, "middle", "plan", "--graph", graph, "--out", plan)
+    assert logical["status"] == "READY"
+    shutil.rmtree(graph)
+    result = _stage(
+        tmp_path,
+        "backend",
+        "compile",
+        "--ir",
+        plan,
+        "--out",
+        delivery,
+        "--physical",
+        "serial",
+    )
+    shutil.rmtree(plan)
+    executable = Path(result["executable"])
+    assert _run([executable], executable.parent) == expected
+    copied = tmp_path / "working-directory"
+    copied.mkdir()
+    shutil.copy2(executable.parent / "worker", copied / "worker")
+    assert _run([executable], copied) == expected
+    # The launcher must never fall back to the original executable even though
+    # it is runnable, implements the same MPI calls and prints the same output.
+    (copied / "worker").write_bytes(original_worker)
+    failed = subprocess.run([executable], cwd=copied, capture_output=True, timeout=20)
+    assert failed.returncode != 0 and not failed.stdout
+    assert b"published executable" in failed.stderr
 
 
 def test_mpi_calls_survive_independent_stages_and_two_rank_execution(

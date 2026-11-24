@@ -6,6 +6,8 @@ from graphlib import TopologicalSorter
 import math
 import re
 
+from scar.contract import digest, json_bytes
+
 from .control import ControlFlow, ERROR_TYPE, TEXT_STREAM_TYPE
 from .libraries import Libraries
 from .model import (
@@ -495,6 +497,77 @@ class Lowerer:
         output = Expr("braced", args=(Expr("braced", args=tuple(operands)), formatting))
         return call(namespace + "text_print", output)
 
+    def mpi_launch(self, node, target):
+        site = node.get("launch_binding")
+        bindings = self.operator_backends.get("process", {}).get("launches", {})
+        binding = bindings.get(site)
+        source, launcher = node.get("source_command"), node.get("launcher")
+        if (
+            not isinstance(binding, dict)
+            or not isinstance(source, dict)
+            or not isinstance(launcher, dict)
+            or self.module.get("process_launch_bindings", {}).get(site)
+            != digest(json_bytes(binding))
+            or binding.get("source_command_sha256") != digest(json_bytes(source))
+            or binding.get("kind") != "mpi"
+            or binding.get("semantics_version") != 1
+            or binding.get("image_id") != node["image_id"]
+            or binding.get("worker_output") != target["output"]
+            or binding.get("worker_ir_sha256") != target["ir_sha256"]
+            or not re.fullmatch(
+                r"[0-9a-f]{64}", str(binding.get("worker_mpi_receipt_sha256"))
+            )
+            or binding.get("worker_guard") != "same_file_or_equal_bytes"
+            or binding.get("deployment_scope") != "single_host_immutable_generation"
+            or (binding.get("shell") is not None) != node.get("shell")
+            or binding.get("ranks") != launcher.get("ranks", {}).get("value")
+            or binding.get("rank_option") != launcher.get("rank_option")
+        ):
+            raise ValueError(
+                "MPI launch site lacks its scheduled worker and tool identities"
+            )
+
+        def identity(tool):
+            if (
+                not isinstance(tool, dict)
+                or not isinstance(tool.get("lookup"), str)
+                or not isinstance(tool.get("realpath"), str)
+                or not tool["realpath"].startswith("/")
+                or not re.fullmatch(r"[0-9a-f]{64}", str(tool.get("sha256")))
+            ):
+                raise ValueError("invalid qualified MPI launch tool identity")
+            return Expr(
+                "construct",
+                qualifier="brace",
+                type=named("scar::host::tool_identity"),
+                args=tuple(
+                    utf8_literal(tool[k], "std::string")
+                    for k in ("lookup", "realpath", "sha256")
+                ),
+            )
+
+        words = source.get("argv")
+        if (
+            not isinstance(words, list)
+            or len(words) < 4
+            or words[0] != binding["tool"]["lookup"]
+            or words[3] != "./" + target["output"]
+        ):
+            raise ValueError("MPI launch arguments differ from their scheduled binding")
+        return Expr(
+            "construct",
+            qualifier="brace",
+            type=named("scar::host::mpi_launch"),
+            args=(
+                identity(binding["tool"]),
+                Expr(
+                    "braced", args=tuple(utf8_literal(w, "std::string") for w in words)
+                ),
+                identity(binding["shell"]) if node["shell"] else name("std::nullopt"),
+                utf8_literal(source["text"] if node["shell"] else "", "std::string"),
+            ),
+        )
+
     def process_spawn(self, node):
         if (
             node.get("type") != _PROCESS_TYPE
@@ -506,7 +579,7 @@ class Lowerer:
             or node.get("stdin") != "inherit"
             or node.get("cwd") != "inherit"
             or node.get("env", "inherit") != "inherit"
-            or node.get("shell", False) is not False
+            or type(node.get("shell", False)) is not bool
             or node.get("close_fds", True) is not True
             or node.get("restore_signals", True) is not True
             or (node.get("encoding"), node.get("errors"), node.get("newline"))
@@ -541,6 +614,9 @@ class Lowerer:
         ):
             raise ValueError("process launch requires a nonempty text argument vector")
         self.use_sdk("host.hpp")
+        launch = (
+            "launcher" in node or "source_command" in node or node.get("shell", False)
+        )
         # The ordered vector owns every argument, including the caller's argv[0].
         arguments = Expr("braced", args=tuple(self.expression(arg) for arg in args))
         request = Expr(
@@ -550,6 +626,7 @@ class Lowerer:
                 arguments,
                 Expr("literal", value=node["stdout"] == "pipe"),
                 Expr("literal", value=node["stderr"] == "stdout"),
+                *((self.mpi_launch(node, target),) if launch else ()),
             ),
         )
         return call("scar::host::process_spawn", request)

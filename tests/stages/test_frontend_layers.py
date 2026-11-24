@@ -101,6 +101,31 @@ def test_build_normalization_uses_only_captured_artifact_facts(tmp_path, monkeyp
         d["code"] == "build.missing_object_producer"
         for d in incomplete["build_graph"]["diagnostics"]
     )
+    # Equal source flags do not identify the source toolchain. Keep both
+    # profiles even when the two object outputs enter one final link.
+    other = dict(facts["compilations"][0])
+    other["arguments"] = ["/opt/other/g++", *compile_args[1:-1], "-oother.o"]
+    other["output"] = "other.o"
+    facts["compilations"].append(other)
+    facts["invocations"].append(
+        dict(
+            id="other",
+            executable="/opt/other/g++",
+            directory=root,
+            arguments=other["arguments"],
+            status=0,
+            environment={},
+        )
+    )
+    link_args.remove("unobserved.o")
+    link_args.insert(2, "other.o")
+    distinct = normalize_build(facts, targets=["app"])
+    assert len(distinct["profiles"]) == 2
+    assert distinct["profiles"][0]["flags"] == distinct["profiles"][1]["flags"]
+    assert (
+        distinct["profiles"][0]["source_compiler"]
+        != distinct["profiles"][1]["source_compiler"]
+    )
 
 
 def _offline(monkeypatch, language, facts, *parser_methods):

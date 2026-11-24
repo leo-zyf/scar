@@ -2,10 +2,15 @@
 
 #include "exceptions.hpp"
 #include "runtime.hpp"
+#include <algorithm>
+#include <array>
 #include <cerrno>
+#include <cstdlib>
+#include <cstring>
 #include <dirent.h>
 #include <fcntl.h>
 #include <filesystem>
+#include <linux/if_alg.h>
 #include <list>
 #include <memory>
 #include <mutex>
@@ -13,6 +18,7 @@
 #include <signal.h>
 #include <spawn.h>
 #include <stdexcept>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <sys/xattr.h>
@@ -659,10 +665,163 @@ struct spawn_attributes {
   spawn_attributes(const spawn_attributes &) = delete;
   ~spawn_attributes() { ::posix_spawnattr_destroy(&value); }
 };
+
+struct tool_identity {
+  std::string lookup, realpath, sha256;
+};
+struct mpi_launch {
+  tool_identity tool;
+  std::vector<std::string> source_argv;
+  std::optional<tool_identity> shell;
+  std::string shell_text;
+};
+
+template <class F> inline auto syscall_retry(F operation, const char *label) {
+  auto result = operation();
+  while (result < 0 && errno == EINTR)
+    result = operation();
+  if (result < 0)
+    os_error(label);
+  return result;
+}
+
+inline std::string executable_digest(const fs::path &path) {
+  descriptor file(::open(path.c_str(), O_RDONLY | O_NONBLOCK | O_CLOEXEC));
+  if (!S_ISREG(status_of(file.get()).st_mode))
+    throw std::invalid_argument("launch tool must be a regular file");
+  sockaddr_alg algorithm{};
+  algorithm.salg_family = AF_ALG;
+  std::memcpy(algorithm.salg_type, "hash", sizeof("hash"));
+  std::memcpy(algorithm.salg_name, "sha256", sizeof("sha256"));
+  descriptor transform(::socket(AF_ALG, SOCK_SEQPACKET | SOCK_CLOEXEC, 0));
+  if (::bind(transform.get(), reinterpret_cast<const sockaddr *>(&algorithm),
+             sizeof(algorithm)) < 0)
+    os_error("select kernel SHA-256");
+  descriptor operation(syscall_retry(
+      [&] {
+        return ::accept4(transform.get(), nullptr, nullptr, SOCK_CLOEXEC);
+      },
+      "open kernel SHA-256 operation"));
+  std::array<char, 65536> chunk;
+  for (;;) {
+    const auto count = syscall_retry(
+        [&] { return ::read(file.get(), chunk.data(), chunk.size()); },
+        "read launch tool");
+    if (count == 0)
+      break;
+    for (ssize_t sent = 0; sent < count;) {
+      auto n = syscall_retry(
+          [&] {
+            return ::send(operation.get(), chunk.data() + sent, count - sent,
+                          MSG_MORE | MSG_NOSIGNAL);
+          },
+          "hash launch tool");
+      if (n == 0)
+        throw std::runtime_error("short write to kernel SHA-256");
+      sent += n;
+    }
+  }
+  syscall_retry(
+      [&] { return ::send(operation.get(), nullptr, 0, MSG_NOSIGNAL); },
+      "finish launch tool digest");
+  std::array<unsigned char, 32> result;
+  const auto n = syscall_retry(
+      [&] { return ::recv(operation.get(), result.data(), result.size(), 0); },
+      "read launch tool digest");
+  if (n != static_cast<ssize_t>(result.size()))
+    throw std::runtime_error("invalid kernel SHA-256 digest");
+  constexpr char hex[] = "0123456789abcdef";
+  std::string text;
+  text.reserve(2 * result.size());
+  for (auto byte : result) {
+    text.push_back(hex[byte >> 4]);
+    text.push_back(hex[byte & 15]);
+  }
+  return text;
+}
+
+inline fs::path qualified_tool(const tool_identity &tool, bool shell_lookup) {
+  fs::path location(file_path(tool.lookup));
+  if (location.empty())
+    throw std::invalid_argument("empty launcher lookup");
+  if (!location.has_parent_path()) {
+    const char *value = std::getenv("PATH");
+    if (!value)
+      throw std::runtime_error(
+          "MPI launcher lookup requires the qualified PATH");
+    const std::string_view paths(value);
+    if (shell_lookup && paths.find('%') != paths.npos)
+      throw std::runtime_error(
+          "shell PATH contains unqualified command lookup modifiers");
+    for (std::size_t start = 0;;) {
+      const auto next = paths.find(':', start);
+      const auto entry = fs::path(paths.substr(start, next - start)) / location;
+      std::error_code error;
+      if (fs::is_regular_file(entry, error) &&
+          ::faccessat(AT_FDCWD, entry.c_str(), X_OK, AT_EACCESS) == 0) {
+        location = entry;
+        break;
+      }
+      if (next == paths.npos)
+        throw std::runtime_error(
+            "MPI launcher is absent from the runtime PATH");
+      start = next + 1;
+    }
+  }
+  if (fs::canonical(location) != file_path(tool.realpath) ||
+      ::faccessat(AT_FDCWD, location.c_str(), X_OK, AT_EACCESS) != 0 ||
+      executable_digest(location) != tool.sha256)
+    throw std::runtime_error(
+        "launch tool differs from its qualified executable");
+  return location;
+}
+
+inline void verify_worker(const fs::path &published,
+                          const fs::path &requested) {
+  descriptor expected(
+      ::open(published.c_str(), O_RDONLY | O_NONBLOCK | O_CLOEXEC));
+  descriptor actual(
+      ::open(requested.c_str(), O_RDONLY | O_NONBLOCK | O_CLOEXEC));
+  const auto left = status_of(expected.get()), right = status_of(actual.get());
+  if (!S_ISREG(left.st_mode) || !S_ISREG(right.st_mode) ||
+      ::faccessat(AT_FDCWD, requested.c_str(), X_OK, AT_EACCESS) != 0 ||
+      left.st_size != right.st_size)
+    throw std::runtime_error(
+        "requested worker differs from its published executable image");
+  if (left.st_dev == right.st_dev && left.st_ino == right.st_ino)
+    return;
+  std::array<char, 65536> a, b;
+  const auto read_at = [&](int fd, auto &buffer, std::size_t count,
+                           off_t offset) {
+    for (std::size_t done = 0; done < count;) {
+      auto n = syscall_retry(
+          [&] {
+            return ::pread(fd, buffer.data() + done, count - done,
+                           offset + static_cast<off_t>(done));
+          },
+          "compare published worker");
+      if (n == 0)
+        throw std::runtime_error("worker changed during image verification");
+      done += static_cast<std::size_t>(n);
+    }
+  };
+  for (off_t offset = 0; offset < left.st_size;) {
+    const auto count = static_cast<std::size_t>(
+        std::min<off_t>(left.st_size - offset, a.size()));
+    read_at(expected.get(), a, count, offset);
+    read_at(actual.get(), b, count, offset);
+    if (std::memcmp(a.data(), b.data(), count) != 0)
+      throw std::runtime_error(
+          "requested worker differs from its published executable image");
+    offset += static_cast<off_t>(count);
+  }
+}
+
 struct spawn_request {
   std::string output_image;
   std::vector<std::string> argv;
   bool pipe_stdout, stderr_to_stdout;
+  std::optional<mpi_launch> launcher = std::nullopt;
 };
 inline process_handle process_spawn(spawn_request request) {
   if (request.argv.empty())
@@ -674,6 +833,27 @@ inline process_handle process_spawn(spawn_request request) {
   const auto image = fs::read_symlink("/proc/self/exe").parent_path() / output;
   if (fs::is_symlink(fs::symlink_status(image)))
     throw std::invalid_argument("executable image must be a published file");
+  auto executable = image;
+  if (request.launcher) {
+    auto &launch = *request.launcher;
+    if (launch.source_argv.size() < 4 ||
+        launch.source_argv.front() != launch.tool.lookup ||
+        launch.source_argv[3] != "./" + request.output_image ||
+        !std::equal(launch.source_argv.begin() + 3, launch.source_argv.end(),
+                    request.argv.begin(), request.argv.end()))
+      throw std::invalid_argument(
+          "MPI worker arguments differ from the bound command");
+    verify_worker(image, request.argv.front());
+    executable = qualified_tool(launch.tool, launch.shell.has_value());
+    if (launch.shell) {
+      if (launch.shell->lookup != "/bin/sh")
+        throw std::invalid_argument("unqualified MPI command interpreter");
+      executable = qualified_tool(*launch.shell, false);
+      request.argv = {launch.shell->lookup, "-c", std::move(launch.shell_text)};
+    } else {
+      request.argv = std::move(launch.source_argv);
+    }
+  }
   std::vector<char *> argv;
   argv.reserve(request.argv.size() + 1);
   for (auto &arg : request.argv) {
@@ -728,8 +908,8 @@ inline process_handle process_spawn(spawn_request request) {
                           "close child auxiliary descriptors");
 #endif
   pid_t pid;
-  spawn_check(::posix_spawn(&pid, image.c_str(), &actions.value, &attrs.value,
-                            argv.data(), ::environ),
+  spawn_check(::posix_spawn(&pid, executable.c_str(), &actions.value,
+                            &attrs.value, argv.data(), ::environ),
               "launch executable image");
   child->started(pid);
   return child;

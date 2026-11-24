@@ -147,7 +147,7 @@ def test_mpi_contracts_preserve_lifetimes_without_guessing_user_symbols():
         externs=[dict(name=name, provider="mpi") for name in names],
         operator_requirements=dict(ndarray=dict(operations=[])),
     )
-    code = """from scar.middle.mpi import qualify
+    code = """from scar.middle.normalization.mpi import qualify
 changes,issues=qualify(data)
 print(json.dumps(dict(module=data,changes=changes,issues=issues)))
 """

@@ -29,7 +29,7 @@ project(scar_mpi_qualification LANGUAGES CXX)
 set(MPI_ASSUME_NO_BUILTIN_MPI TRUE)
 set(MPI_CXX_SKIP_MPICXX TRUE)
 find_package(MPI REQUIRED COMPONENTS CXX)
-add_executable(probe mpi_probe.cpp)
+add_executable(probe probe.cpp)
 set_target_properties(probe PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED YES CXX_EXTENSIONS NO)
 target_compile_definitions(probe PRIVATE OMPI_SKIP_MPICXX=1 MPICH_SKIP_MPICXX=1)
 target_link_libraries(probe PRIVATE MPI::MPI_CXX ${CMAKE_DL_LIBS})
@@ -37,6 +37,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|IntelLLVM|NVHPC")
   target_compile_options(probe PRIVATE -Werror)
 endif()
 file(WRITE "${CMAKE_BINARY_DIR}/selection" "${MPI_CXX_VERSION}\n${CMAKE_CXX_COMPILER}\n${MPI_CXX_COMPILER}\n")
+file(APPEND "${CMAKE_BINARY_DIR}/selection" "launcher=${MPIEXEC_EXECUTABLE}\nrank_option=${MPIEXEC_NUMPROC_FLAG}\n")
 foreach(dir IN LISTS MPI_CXX_INCLUDE_DIRS)
   file(APPEND "${CMAKE_BINARY_DIR}/selection" "include=${dir}\n")
 endforeach()
@@ -50,6 +51,15 @@ def _identifier(value, pattern=_IDENT):
     if not isinstance(value, str) or not pattern.fullmatch(value):
         raise ValueError(f"invalid MPI C ABI identifier {value!r}")
     return value
+
+
+def dependency(node):
+    """Recognize both tagged operations and externally bound type-only uses."""
+    return (
+        node.get("provider") == "mpi"
+        or "mpi_interface" in node
+        or "mpi_interfaces" in node
+    )
 
 
 def _wire_type(spec, records):
@@ -175,7 +185,7 @@ def _artifact(path):
 
 
 def _probe(specs):
-    template = Path(__file__).with_name("mpi_probe.cpp")
+    template = Path(__file__).with_name("probe.cpp")
     source = template.read_bytes()
     with TemporaryDirectory(prefix="scar-mpi-sdk-") as temp:
         root = Path(temp)
@@ -214,7 +224,7 @@ def _probe(specs):
             raise ValueError("MPI::MPI_CXX supplied no identifiable link library")
         # The make generator's tested TU records the actual header reads. Select
         # only those reached under the MPI target's explicit include roots.
-        dep = build / "CMakeFiles/probe.dir/mpi_probe.cpp.o.d"
+        dep = build / "CMakeFiles/probe.dir/probe.cpp.o.d"
         operands = dep.read_text().replace("\\\n", " ").split(":", 1)[1]
         headers = {}
         for operand in shlex.split(operands):
@@ -249,6 +259,11 @@ def _probe(specs):
                         "runtime MPI version provider differs from the selected link inputs"
                     )
                 version_provider = dict(kind="loaded_shared_library", **loaded)
+        options = dict(
+            v.split("=", 1)
+            for v in selection
+            if v.startswith(("launcher=", "rank_option="))
+        )
         return dict(
             provider="mpi-c",
             device="cpu",
@@ -257,6 +272,9 @@ def _probe(specs):
             standard_version=api,
             library_version=implementation.strip(),
             version_provider=version_provider,
+            launcher_candidate=dict(
+                path=options["launcher"], rank_option=options["rank_option"]
+            ),
             headers=[headers[k] for k in sorted(headers)],
             libraries=libraries,
             probe=dict(

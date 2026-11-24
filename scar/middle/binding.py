@@ -399,6 +399,42 @@ class _PythonClasses:
         return classes, optional
 
 
+def _build_bindings(graph, build, captured):
+    """Check source-build provenance without authorizing removal of the recipe."""
+    images = {image["id"]: image for image in graph.get("images", [])}
+    artifacts = {
+        node["id"]: node
+        for node in captured["nodes"]
+        if node["kind"] == "BUILD_ARTIFACT"
+    }
+    bindings, seen = build.get("bindings", []), set()
+    if not isinstance(bindings, list):
+        raise ValueError("build image bindings must be a list")
+    for binding in bindings:
+        image = images.get(binding["image_id"])
+        artifact = artifacts.get(binding["target_artifact"])
+        if (
+            image is None
+            or artifact is None
+            or image["id"] in seen
+            or binding["target_artifact"] != image.get("build_artifact")
+            or binding["source_path"] != artifact["path"]
+            or binding["unit_indices"] != image["units"]
+            or binding["trace_sha256"] != captured["trace_sha256"]
+            or binding["trace_sha256"] != build["trace_sha256"]
+            or binding["evidence"] != "captured_compile_and_link"
+            or binding["obligations"]
+            != dict(
+                historical_input_versions="unproven",
+                recipe_effects="unproven",
+                diagnostic_stream="unobserved",
+            )
+        ):
+            raise ValueError("build image binding disagrees with the sealed capture")
+        seen.add(image["id"])
+    return bindings
+
+
 def bind(graph, folder):
     image_context = {}
     if "images" in graph:
@@ -418,10 +454,12 @@ def bind(graph, folder):
     definitions = defaultdict(list)
     roots = {graph["entry"]}
     all_issues, records = [], {}
+    build_bindings = []
     if build := graph.get("build"):
         build_graph = read_member(folder, build["graph"])
         if build_graph["diagnostics"] != build["diagnostics"]:
             raise ValueError("build diagnostics disagree with the sealed build graph")
+        build_bindings = _build_bindings(graph, build, build_graph)
         all_issues.extend(build_graph["diagnostics"])
     layout_issues = []
     active_objects = set()
@@ -771,6 +809,7 @@ def bind(graph, folder):
                 topology=graph.get("topology", []),
                 platform=graph.get("platform", {}),
                 software_headers=software_headers,
+                **({"build_bindings": build_bindings} if build_bindings else {}),
             ),
         ),
         issues,

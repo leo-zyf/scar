@@ -198,11 +198,12 @@ def _profile_flags(arguments, directory):
     return result
 
 
-def normalize_build(facts, *, targets=None, entry="main"):
+def normalize_build(facts, *, targets=None, entry="main", require_root=True):
     """Return F3-ready source profiles and a separately sealable build graph.
 
     The first explicit target is the root image. Without a selection, a capture
-    containing several executables is an ambiguous request, not a guessed root.
+    containing several executables needs a root unless a containing project
+    already supplies its controller image.
     """
     root = posixpath.normpath(facts["root"])
     files = facts.get("files", {})
@@ -324,7 +325,35 @@ def normalize_build(facts, *, targets=None, entry="main"):
             "path": posixpath.relpath(source, root),
             "language": language,
             "flags": flags,
+            "source_compiler": {
+                "driver": arguments[0],
+                "candidates": [],
+                "observed_at": "capture_not_historical",
+            },
         }
+        driver = arguments[0]
+        if "/" in driver:
+            candidates = {canonical_path(driver, directory)}
+        else:
+            candidates = {
+                row.get("canonical_executable")
+                or canonical_path(row["executable"], directory)
+                for row in facts.get("invocations", ())
+                if row["directory"] == directory
+                and posixpath.basename(row["executable"]) == driver
+            }
+        for path in sorted(candidates):
+            receipt = files.get(path, {})
+            profile["source_compiler"]["candidates"].append(
+                dict(
+                    path=path,
+                    receipt={
+                        key: receipt[key]
+                        for key in ("sha256", "size")
+                        if key in receipt
+                    },
+                )
+            )
         key = json.dumps(profile, sort_keys=True)
         if key not in profile_ids:
             profile_ids[key] = len(profile_table)
@@ -510,7 +539,7 @@ def normalize_build(facts, *, targets=None, entry="main"):
                 selected.append(candidates[0])
     else:
         selected = sorted(links)
-        if len(selected) > 1:
+        if require_root and len(selected) > 1:
             issue(
                 "ambiguous_root_image",
                 "select the root executable explicitly",

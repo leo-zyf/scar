@@ -13,6 +13,7 @@ from scar.contract import (
     digest,
     document,
     file_receipt,
+    json_bytes,
     member,
     open_product,
     publish,
@@ -436,6 +437,37 @@ def _lower_image(path, revision, scheduled, destination):
     return path
 
 
+def _check_launch_targets(folder, plans):
+    workers, launches = {}, []
+    for image_id, plan in plans.items():
+        _, _, physical = read_image_product(
+            folder, plan, "physical", "physical-plan.json", PHYSICAL
+        )
+        bindings = physical.get("operator_backends", {})
+        sdk = bindings.get("mpi")
+        if isinstance(sdk, dict) and physical.get("status") == "READY":
+            workers[image_id] = (
+                plan["output"],
+                physical["ir_sha256"],
+                digest(json_bytes(sdk)),
+            )
+        launches.extend(bindings.get("process", {}).get("launches", {}).items())
+    for site, launch in launches:
+        expected = workers.get(launch["image_id"])
+        actual = tuple(
+            launch.get(key)
+            for key in (
+                "worker_output",
+                "worker_ir_sha256",
+                "worker_mpi_receipt_sha256",
+            )
+        )
+        if actual != expected:
+            raise ValueError(
+                f"MPI launch {site!r} differs from the sealed worker physical plan"
+            )
+
+
 def lower_scheduled(source, destination):
     """Lower each link image in its own symbol namespace."""
     path, revision, scheduled = open_product(
@@ -462,6 +494,7 @@ def lower_scheduled(source, destination):
     plans = {plan["id"]: plan for plan in physical["images"]}
     if set(plans) != {image["id"] for image in images}:
         raise ValueError("physical plan image set differs from the schedule")
+    _check_launch_targets(path.parent, plans)
     destination = Path(destination).resolve()
     destination.mkdir(parents=True, exist_ok=True)
     targets = []
@@ -477,9 +510,6 @@ def lower_scheduled(source, destination):
         declared, selected = plan.get("physical", {}), data.get("physical", {})
         if any(declared.get(key) != selected.get(key) for key in ("sha256", "size")):
             raise ValueError(f"physical image {image['id']} receipt mismatch")
-        read_image_product(
-            path.parent, plan, "physical", "physical-plan.json", PHYSICAL
-        )
         compiled = _lower_image(
             child, child_hash, data, destination / "images" / image["id"]
         )
