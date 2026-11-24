@@ -1630,4 +1630,5 @@ def test_link_image_compilation_survives_target_relocation(tmp_path):
         output = image["output"]
         assert Path(line.split(" -o ", 1)[1].split()[0]).name == output
         assert ("-flto=1" in line) == (output == "first")
+        assert ("-flto-partition=one" in line) == (output == "first")
         assert subprocess.run([build / "images" / image["id"] / output]).returncode == 7

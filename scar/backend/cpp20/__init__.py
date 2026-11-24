@@ -320,6 +320,9 @@ def _package(root, sources, openmp, libraries, jobs, options, image=None, mpi=No
                 "endif()",
                 f'target_compile_options({objects} PRIVATE "-flto=${{scar_lto_workers}}" -fno-fat-lto-objects)',
                 f'target_link_options({target} PRIVATE "-flto=${{scar_lto_workers}}")',
+                "if(scar_lto_workers EQUAL 1)",
+                f"    target_link_options({target} PRIVATE -flto-partition=one)",
+                "endif()",
             )
         )
     if "MPI" in libraries:

@@ -78,7 +78,7 @@ jobs:
           verify="$RUNNER_TEMP/scar-verify/bin/python"
           cd "$RUNNER_TEMP"
           "$verify" -m scar --help
-          "$verify" -m pytest --import-mode=importlib -q "$GITHUB_WORKSPACE/tests/stages" \
+          "$verify" -m pytest --import-mode=importlib -q --maxfail=1 "$GITHUB_WORKSPACE/tests/stages" \
             --basetemp="$RUNNER_TEMP/scar-stages" \
             --junitxml="$RUNNER_TEMP/scar-gates.xml"
           "$verify" - "$RUNNER_TEMP/scar-gates.xml" <<'PY'
@@ -96,6 +96,7 @@ jobs:
             -C "$RUNNER_TEMP/scar-stages/test_locked_mixed_target_three0" \
             hidden-frontend relocated-plan delivery
       - name: Upload packages and stage results
+        if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: scar-cpu-${{ matrix.python }}
