@@ -83,7 +83,7 @@ _MEMBERS = {
     "time": {"time", "sleep"},
     "sys": {"exit"},
     "math": {"pi", "e", "tau"},
-    "subprocess": {"Popen", "PIPE", "STDOUT"},
+    "subprocess": {"Popen", "PIPE", "STDOUT", "CalledProcessError"},
 }
 
 

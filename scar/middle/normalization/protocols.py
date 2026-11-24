@@ -175,6 +175,7 @@ class _Project:
         self.providers = {}
         self.array_ops = set()
         self.process_ops = set()
+        self.process_requests = {}
         self.execution_images = []
         self.array_state = arrays.LiteralState()
         self.external_array_writes = {}
@@ -1768,6 +1769,11 @@ def normalize_protocols(module):
         status="INCOMPLETE" if issue else "READY",
         **({"first_gap": issue} if issue else {}),
         **(
+            {"process_requirements": list(project.process_requests.values())}
+            if project.process_requests
+            else {}
+        ),
+        **(
             {"graphics_operations": sorted(project.graphics.operations)}
             if project.graphics.operations
             else {}
@@ -1838,7 +1844,10 @@ def normalize_protocols(module):
         )
     if project.process_ops:
         module.setdefault("operator_requirements", {})["process"] = dict(
-            operations=sorted(project.process_ops), binding="declared_images"
+            operations=sorted(project.process_ops),
+            binding=(
+                "explicit_targets" if project.process_requests else "declared_images"
+            ),
         )
     if project.graphics.operations:
         module.setdefault("operator_requirements", {})[

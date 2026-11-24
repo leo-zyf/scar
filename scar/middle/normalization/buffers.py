@@ -34,6 +34,7 @@ _CALLS = {
     "object_new",
     "object_destroy",
     "process_spawn",
+    "process_request",
 }
 _CONVERSION = re.compile(
     r"%(?:[1-9][0-9]*\$)?[-+ #0']*(?:\*(?:[1-9][0-9]*\$)?|[0-9]+)?"

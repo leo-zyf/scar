@@ -228,6 +228,60 @@ def test_constant_file_proof_preserves_control_and_handle_boundaries():
         positive["constant_materializations"][0]["file_content_status"]
         == "conditional_on_storage_and_writer_contracts"
     )
+    copied = dict(
+        op="expr",
+        value=dict(
+            op="host_call",
+            interface="fs.copy_file",
+            args=[literal("out.h"), literal("copy.h")],
+        ),
+    )
+    read_handle = dict(op="var", name="reader")
+    read = [
+        dict(
+            op="decl",
+            name="reader",
+            init={**opened, "args": [literal("copy.h"), *opened["args"][1:]]},
+        ),
+        dict(
+            op="expr",
+            value=dict(op="host_call", interface="stream.read", args=[read_handle]),
+        ),
+    ]
+    read[0]["init"]["args"][1] = literal("r")
+    copied_flow = analysis([start, write, close, copied, *read])["graph"]
+    nodes = {node["id"]: node for node in copied_flow["nodes"]}
+    (edge,) = [
+        edge for edge in copied_flow["edges"] if edge["kind"] == "COPIES_FILE_VERSION"
+    ]
+    source, target = (nodes[edge[key]] for key in ("source", "target"))
+    assert source["value"] == target["value"] and source["locator"] != target["locator"]
+    assert target["requires"] and target["copy_contract"]["metadata"] == "content_only"
+    assert {
+        edge["role"]
+        for edge in copied_flow["edges"]
+        if edge["kind"] == "REQUIRES_FILE_VERSION"
+    } == {"copy_source", "open_read", "stream_read"}
+    for boundary in (
+        dict(op="call", callee="unknown", args=[]),
+        dict(op="process_request", request_id="unbound"),
+    ):
+        invalidated = analysis(
+            [start, write, close, dict(op="expr", value=boundary), copied]
+        )["graph"]
+        assert any(
+            edge["kind"] == "MAY_INVALIDATE_FILE_VERSION"
+            for edge in invalidated["edges"]
+        )
+        assert not any(
+            edge["kind"] == "COPIES_FILE_VERSION" for edge in invalidated["edges"]
+        )
+    copy2 = deepcopy(copied)
+    copy2["value"]["interface"] = "fs.copy2"
+    assert any(
+        item["field"] == "copy_destination_kind"
+        for item in analysis([start, write, close, copy2])["boundaries"]
+    )
     cases = [
         [
             start,

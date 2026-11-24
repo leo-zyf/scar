@@ -41,7 +41,7 @@ _ARRAY_OPERATIONS = {
 def _observed_operators(module):
     # Collect tagged operations and the type-only dependencies of older
     # packages in one traversal of the sealed IR.
-    observed, elements = {}, set()
+    observed, elements, process_requests = {}, set(), []
     defined = {fn["name"] for fn in module.get("functions", ())}
     external = [
         decl for decl in module.get("externs", ()) if decl["name"] not in defined
@@ -67,11 +67,13 @@ def _observed_operators(module):
                 if isinstance(op, str) and op in _ARRAY_OPERATIONS:
                     observed.setdefault("ndarray", set()).add(op)
                 if (
-                    op == "process_spawn"
+                    op in ("process_spawn", "process_request")
                     or op == "host_call"
                     and node.get("interface") in {"process.stdout", "process.wait"}
                 ):
                     observed.setdefault("process", set()).add(op)
+                if op == "process_request":
+                    process_requests.append(node)
             if node.get("kind") == "ndarray":
                 observed.setdefault("ndarray", set())
                 element = node.get("element")
@@ -81,7 +83,7 @@ def _observed_operators(module):
             pending.extend(node.values())
         elif isinstance(node, (tuple, list)):
             pending.extend(node)
-    return observed, elements
+    return observed, elements, process_requests
 
 
 def _ndarray_binding(requirement, observed):
@@ -124,7 +126,8 @@ def _process_binding(requirement, observed, module, context):
     if (
         not isinstance(requirement, dict)
         or requirement.keys() - {"operations", "binding"}
-        or requirement.get("binding", "declared_images") != "declared_images"
+        or requirement.get("binding", "declared_images")
+        not in ("declared_images", "explicit_targets")
         or not isinstance(requirement.get("operations", []), list)
         or any(not isinstance(op, str) for op in requirement.get("operations", ()))
         or observed.union(requirement.get("operations", ()))
@@ -252,10 +255,12 @@ def _qualify(module, image_context=None):
     if not isinstance(requested, dict):
         raise ValueError("operator requirements must be a family-indexed table")
     requested = dict(requested)
-    observed, array_elements = _observed_operators(module)
+    observed, array_elements, process_requests = _observed_operators(module)
     for family, operators in observed.items():
         if family not in requested:
             requirement = dict(operations=sorted(operators))
+            if family == "process" and process_requests:
+                requirement["binding"] = "explicit_targets"
             if family == "ndarray":
                 requirement["device"] = "cpu"
                 if len(array_elements) > 1:
@@ -264,8 +269,36 @@ def _qualify(module, image_context=None):
                     requirement["element"] = next(iter(array_elements), "f64")
             requested[family] = requirement
     bindings, issues = {}, _external_execution_boundaries(module)
+    process = requested.get("process")
+    if (
+        not process_requests
+        and isinstance(process, dict)
+        and isinstance(process.get("operations"), list)
+        and "process_request" in process["operations"]
+    ):
+        # A family declaration alone supplies no executable target either.
+        process_requests = [{}]
+    if process_requests:
+        for request in process_requests:
+            issues.append(
+                dict(
+                    stage="B1",
+                    code="missing_process_target_binding",
+                    requirement="process",
+                    target="cpu-cxx20",
+                    request_id=request.get("request_id"),
+                    site=request.get("site"),
+                    location=request.get("location"),
+                    binding_obligations=request.get("binding_obligations", []),
+                    detail="logical process request requires a qualified executable target before physical scheduling",
+                )
+            )
     for family, requirement in sorted(requested.items()):
         resolve = _OPERATOR_BINDINGS.get(family)
+        if process_requests and (resolve is not None or family in {"mpi", "process"}):
+            # Deployment cannot proceed. Report other unregistered families
+            # below without probing any physical providers.
+            continue
         if family == "mpi":
             try:
                 resolve_worker = (image_context or {}).get("qualify_mpi")

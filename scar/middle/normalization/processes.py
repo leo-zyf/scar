@@ -1,8 +1,9 @@
-"""M2 process identity, declared image references and ordered pipe observations."""
+"""M2 process protocols, explicit target obligations and ordered pipe observations."""
 
 import re
 
-from .values import Value, literal, wire
+from scar.contract import digest, json_bytes
+from .values import Value, literal, source_site, wire
 
 PROCESS = "handle:process"
 STREAM = "handle:text_stream"
@@ -72,36 +73,17 @@ def persist_method(frame, target, method, steps):
 
 
 def _command(frame, node, command, shell):
+    """Describe a source command without authorizing or interpreting its target."""
     if shell.exact not in (True, False) or type(shell.exact) is not bool:
         frame.fail(node, "process_shell", "shell needs a fixed boolean contract")
     if shell.exact:
-        text = command.exact
-        if (
-            command.kind != "text"
-            or not isinstance(text, str)
-            or not _SHELL_COMMAND.fullmatch(text.strip(" \t"))
-        ):
+        if command.kind != "text":
             frame.fail(
                 node,
-                "process_shell",
-                "shell launch requires fixed ASCII words and spaces without quoting, expansion or control operators",
+                "process_arguments",
+                "a shell command requires a text value",
             )
-        words = text.split()
-        if _SHELL_ASSIGNMENT.match(words[0]):
-            frame.fail(
-                node, "process_shell", "shell environment assignments are not closed"
-            )
-        runtime = node.get("source_runtime", {})
-        if runtime.get("os_name") != "posix" or runtime.get("platform") not in {
-            "linux",
-            "linux2",
-        }:
-            frame.fail(
-                node,
-                "process_shell",
-                "the default POSIX shell identity is not captured",
-            )
-        return [literal(word) for word in words]
+        return dict(form="posix_shell", text=command.value)
     if command.kind == "text":
         argv = [command]
     elif command.kind in {"list", "tuple"}:
@@ -116,7 +98,7 @@ def _command(frame, node, command, shell):
         frame.fail(
             node, "process_arguments", "process argument vector must be nonempty text"
         )
-    return argv
+    return dict(form="argv", argv=[value.value for value in argv])
 
 
 def _image(frame, target):
@@ -128,7 +110,23 @@ def _image(frame, target):
 
 
 def _launch(frame, node, command, shell):
-    argv = _command(frame, node, command, shell)
+    """Prove a declared-image binding; otherwise retain a logical request."""
+    if shell.exact:
+        text = command.exact
+        runtime = node.get("source_runtime", {})
+        if (
+            not isinstance(text, str)
+            or not _SHELL_COMMAND.fullmatch(text.strip(" \t"))
+            or runtime.get("os_name") != "posix"
+            or runtime.get("platform") not in {"linux", "linux2"}
+        ):
+            return None
+        words = text.split()
+        if _SHELL_ASSIGNMENT.match(words[0]):
+            return None
+        argv = [literal(word) for word in words]
+    else:
+        argv = [command] if command.kind == "text" else list(command.value)
     source_argv = argv
     matches = _image(frame, argv[0].exact)
     launcher = None
@@ -142,11 +140,7 @@ def _launch(frame, node, command, shell):
             or not words[2].isdecimal()
             or ":" in words
         ):
-            frame.fail(
-                node,
-                "process_image_binding",
-                "launch needs a declared image or a fixed positive-rank launcher argument contract",
-            )
+            return None
         ranks = words[2].lstrip("0")
         if (
             not ranks
@@ -154,11 +148,7 @@ def _launch(frame, node, command, shell):
             or len(ranks) == len(_MAX_RANK)
             and ranks > _MAX_RANK
         ):
-            frame.fail(
-                node,
-                "process_launcher",
-                "launcher rank count must be a positive signed 64-bit integer",
-            )
+            return None
         launcher = dict(
             kind="mpi",
             ranks=literal(int(ranks)).value,
@@ -169,11 +159,7 @@ def _launch(frame, node, command, shell):
         argv = argv[3:]
         matches = _image(frame, argv[0].exact)
     if len(matches) != 1:
-        frame.fail(
-            node,
-            "process_image_binding",
-            "the executable has no unique declared application image",
-        )
+        return None
     fields = {}
     if launcher is not None or shell.exact:
         runtime = node.get("source_runtime", {})
@@ -196,6 +182,47 @@ def _launch(frame, node, command, shell):
     return matches[0], argv, fields
 
 
+def _process_error(frame, node, args, keywords, steps, discard):
+    parameters = ("returncode", "cmd", "output", "stderr")
+    if len(args) > len(parameters) or set(keywords) - set(parameters):
+        frame.fail(node, "process_error_arguments", "unclosed process error fields")
+    fields = dict(zip(parameters, args))
+    if fields.keys() & keywords.keys():
+        frame.fail(node, "process_error_arguments", "repeated process error field")
+    fields.update(keywords)
+    if not {"returncode", "cmd"} <= fields.keys():
+        frame.fail(node, "process_error_arguments", "status and command are required")
+    fields.setdefault("output", literal(None))
+    fields.setdefault("stderr", literal(None))
+    if (
+        fields["returncode"].kind != "i64"
+        or fields["cmd"].kind != "text"
+        or any(fields[key].kind not in {"unit", "text"} for key in ("output", "stderr"))
+    ):
+        frame.fail(
+            node,
+            "process_error_fields",
+            "process errors require integer status, text command and optional text output",
+        )
+    return frame.effect(
+        dict(
+            op="process_error_make",
+            operator_family="process_error",
+            category="called_process_error",
+            **source_site(node),
+            **{key: value.value for key, value in fields.items()},
+            type=wire("handle:error"),
+            effects=["MEM", "STATE"],
+            reads=[],
+            writes=["object.allocation"],
+            may_raise=True,
+        ),
+        "handle:error",
+        steps,
+        discard,
+    )
+
+
 def invoke(frame, node, target, args, keywords, steps, discard):
     if target.kind == "process_method":
         if args or keywords:
@@ -203,7 +230,11 @@ def invoke(frame, node, target, args, keywords, steps, discard):
                 node, "process_arguments", "wait timeout needs its own timing contract"
             )
         return _host(frame, "process.wait", "i64", [target.value[0]], steps, discard)
-    if target.kind != "host_callable" or target.value != "subprocess.Popen":
+    if target.kind != "host_callable":
+        return None
+    if target.value == "subprocess.CalledProcessError":
+        return _process_error(frame, node, args, keywords, steps, discard)
+    if target.value != "subprocess.Popen":
         return None
     if len(args) > 1 or (args and "args" in keywords):
         frame.fail(
@@ -214,7 +245,7 @@ def invoke(frame, node, target, args, keywords, steps, discard):
     if command is None:
         frame.fail(node, "process_arguments", "process launch needs an argument vector")
     shell = options.pop("shell", literal(False))
-    image, argv, launch = _launch(frame, node, command, shell)
+    request = _command(frame, node, command, shell)
     stdin = options.pop("stdin", literal(None))
     stdout = options.pop("stdout", literal(None))
     stderr = options.pop("stderr", literal(None))
@@ -273,28 +304,60 @@ def invoke(frame, node, target, args, keywords, steps, discard):
         stdout="pipe" if stdout.exact == -1 else "inherit",
         stderr="stdout" if stderr.exact == -2 else "inherit",
     )
-    frame.project.process_ops.add("process_spawn")
-    frame.project.decisions.append(
-        dict(
-            code="bound_process_image",
-            symbol=frame.name,
-            location=node.get("location"),
-            image_id=image["id"],
-            output=image["output"],
-            source_target=argv[0].exact,
-            proof="exact logical executable reference in the explicitly declared application image namespace; no filesystem-name guessing or source-language subprocess fallback",
+    launch = _launch(frame, node, command, shell)
+    if launch is None:
+        identity = dict(symbol=frame.name, **source_site(node))
+        if not source_site(node):
+            identity["ordinal"] = len(frame.project.process_requests)
+        request_id = "process-request:" + digest(json_bytes(identity))
+        fields = dict(
+            op="process_request",
+            request_id=request_id,
+            command=request,
+            shell=shell.exact,
+            target_binding=None,
+            binding_obligations=[
+                "qualified_executable_target",
+                "target_effect_and_completion_contract",
+                "preserved_command_environment_and_working_directory",
+            ],
         )
-    )
+        frame.project.process_requests.setdefault(
+            request_id,
+            dict(
+                **identity,
+                request_id=request_id,
+                binding_obligations=fields["binding_obligations"],
+                status="UNBOUND",
+            ),
+        )
+    else:
+        image, argv, launch_fields = launch
+        fields = dict(
+            op="process_spawn",
+            image_id=image["id"],
+            argv=[value.value for value in argv],
+            **launch_fields,
+        )
+        frame.project.decisions.append(
+            dict(
+                code="bound_process_image",
+                symbol=frame.name,
+                location=node.get("location"),
+                image_id=image["id"],
+                output=image["output"],
+                source_target=argv[0].exact,
+                proof="exact logical executable reference in the explicitly declared application image namespace; no filesystem-name guessing or source-language subprocess fallback",
+            )
+        )
+    frame.project.process_ops.add(fields["op"])
     kind = PROCESS + ":" + routes["stdout"] + ":" + routes["stderr"]
     return frame.effect(
         dict(
-            op="process_spawn",
+            **fields,
             operator_family="process",
-            **{key: node[key] for key in ("site", "location") if key in node},
+            **source_site(node),
             type=wire(kind),
-            image_id=image["id"],
-            argv=[v.value for v in argv],
-            **launch,
             **routes,
             encoding="utf-8",
             errors="strict",

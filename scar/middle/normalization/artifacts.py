@@ -36,6 +36,9 @@ class _Stream:
     writes: list = field(default_factory=list)
     closed: bool = False
     unresolved: set = field(default_factory=set)
+    locator: str | None = None
+    path_key: tuple | None = None
+    last_operation: str | None = None
 
 
 def analyze(module):
@@ -199,14 +202,18 @@ def analyze(module):
                 value, parameter["type"]
             )
         fact_epoch_clean, live_process_effects = True, False
+        cwd, file_versions, filesystem_epoch = ("invocation.cwd", "."), {}, 0
+        last_file_operation, operation_ids = None, {}
 
         def operation(node):
             nonlocal ordinal
+            if id(node) in operation_ids:
+                return operation_ids[id(node)]
             ordinal += 1
             site = node.get("site")
             if site in source_operations:
                 return source_operations[site]
-            return add(
+            identity = add(
                 "CANONICAL_OPERATION",
                 [symbol, completion, site, ordinal, context],
                 symbol=symbol,
@@ -214,11 +221,95 @@ def analyze(module):
                 operation=node["op"],
                 instance_scope="per_dynamic_invocation_and_iteration",
             )
+            operation_ids[id(node)] = identity
+            return identity
 
-        def invalidate(reason):
+        def ordered(site):
+            nonlocal last_file_operation
+            if last_file_operation is not None and last_file_operation != site:
+                edges.append(
+                    dict(
+                        kind="FILESYSTEM_ORDER_IF_NORMAL",
+                        source=last_file_operation,
+                        target=site,
+                        context=context,
+                    )
+                )
+            last_file_operation = site
+
+        def invalidate(reason, site=None, *, changes_cwd=False, retain=()):
+            nonlocal filesystem_epoch, cwd
+            filesystem_epoch += 1
+            if site is not None:
+                ordered(site)
+                for key, version in file_versions.items():
+                    if key in retain:
+                        continue
+                    edges.append(
+                        dict(
+                            kind="MAY_INVALIDATE_FILE_VERSION",
+                            source=site,
+                            target=version,
+                            reason=reason,
+                            epoch=filesystem_epoch,
+                        )
+                    )
+            for key in list(file_versions):
+                if key not in retain:
+                    del file_versions[key]
+            if changes_cwd:
+                cwd = None
             for stream in streams:
                 if not stream.closed:
                     stream.unresolved.add(reason)
+
+        def locate(path, site):
+            key = None
+            # Resolving '..' through symlinks requires directory identity,
+            # not string normalization. Keep it as a field-level boundary.
+            if type(path) is str and "\0" not in path and ".." not in path.split("/"):
+                if posixpath.isabs(path):
+                    key = (None, posixpath.normpath(path))
+                elif cwd is not None:
+                    key = (cwd[0], posixpath.normpath(posixpath.join(cwd[1], path)))
+            location = dict(
+                path=key[1] if key is not None else None,
+                cwd=key[0] if key is not None else "unresolved.cwd",
+                symbol=symbol,
+            )
+            locator = add(
+                "FILE_LOCATOR",
+                [location, context, site if key is None else None],
+                **location,
+                identity_scope="normal_path_expression",
+                inode_aliases="unresolved",
+            )
+            if key is None:
+                boundaries.append(
+                    dict(
+                        symbol=symbol,
+                        field="file_locator",
+                        source=site,
+                        reason="path_or_cwd_resolution_unproven",
+                    )
+                )
+            return key, locator
+
+        def requires(version, site, **fields):
+            edges.append(
+                dict(
+                    kind="REQUIRES_FILE_VERSION",
+                    source=version,
+                    target=site,
+                    conditional=True,
+                    filesystem_epoch=filesystem_epoch,
+                    requires=[
+                        "normal_completion",
+                        "no_external_filesystem_interference",
+                    ],
+                    **fields,
+                )
+            )
 
         def exact(node, role, value, index=None):
             facts = node.get("argument_facts", {}).get(role)
@@ -286,23 +377,7 @@ def analyze(module):
             )
             if value is not None:
                 nodes[value]["literal_text"] = content
-            location = dict(
-                path=stream.path if isinstance(stream.path, str) else None,
-                cwd=(
-                    "invocation.cwd"
-                    if not isinstance(stream.path, str)
-                    or not posixpath.isabs(stream.path)
-                    else None
-                ),
-                symbol=symbol,
-            )
-            locator = add(
-                "FILE_LOCATOR",
-                [location, context],
-                **location,
-                identity_scope="normal_path_expression",
-                inode_aliases="unresolved",
-            )
+            locator = stream.locator
             version = add(
                 "FILE_VERSION_TEMPLATE",
                 [stream.identity, closing, context],
@@ -319,10 +394,12 @@ def analyze(module):
                     else "unresolved_content"
                 ),
                 unresolved_fields=sorted(stream.unresolved),
+                filesystem_epoch=filesystem_epoch,
                 requires=[
                     "regular_byte_file",
                     "exclusive_file_writer",
                     "no_unmodeled_concurrent_effects",
+                    "no_unmodeled_file_alias_writes",
                 ],
             )
             edges.extend(
@@ -359,6 +436,12 @@ def analyze(module):
                     source_sites=stream.writes,
                 )
             )
+            if (
+                stream.path_key is not None
+                and not stream.unresolved
+                and not live_process_effects
+            ):
+                file_versions[stream.path_key] = version
             if value is None:
                 return
             materializations.append(
@@ -392,8 +475,116 @@ def analyze(module):
                 )
             )
 
+        def copy_file(interface, args, site):
+            source_key, _ = locate(args[0], site)
+            target_key, target = locate(args[1], site)
+            source_version = file_versions.get(source_key)
+            if source_version is not None:
+                requires(source_version, site, role="copy_source")
+            if interface != "fs.copy_file" and target_key not in file_versions:
+                # A string names either a directory or a file. A content
+                # version at that exact locator is our only closed file-kind
+                # evidence here; no directory is inferred from its spelling.
+                invalidate("copy_destination_kind_unproven", site)
+                boundaries.append(
+                    dict(
+                        symbol=symbol,
+                        field="copy_destination_kind",
+                        source=site,
+                        interface=interface,
+                        reason="directory_or_file_unproven",
+                    )
+                )
+                return _UNKNOWN
+            if source_key is None or target_key is None or source_version is None:
+                invalidate("copy_source_version_unproven", site)
+                return _UNKNOWN
+            if source_key == target_key:
+                invalidate("copy_source_destination_alias", site)
+                boundaries.append(
+                    dict(
+                        symbol=symbol,
+                        field="copy_alias",
+                        source=site,
+                        reason="same_locator_cannot_complete_as_a_regular_file_copy",
+                    )
+                )
+                return _UNKNOWN
+            invalidate("copy_may_alias_another_file", site, retain=(source_key,))
+            if live_process_effects:
+                return _UNKNOWN
+            value = nodes[source_version]["value"]
+            version = add(
+                "FILE_VERSION_TEMPLATE",
+                [site, source_version, target, context],
+                locator=target,
+                value=value,
+                producer=site,
+                completion=site,
+                source_version=source_version,
+                interface=interface,
+                copy_contract=dict(
+                    semantics_version=1,
+                    follow_symlinks=(
+                        args[2] if len(args) > 2 and type(args[2]) is bool else None
+                    ),
+                    metadata={
+                        "fs.copy_file": "content_only",
+                        "fs.copy": "mode",
+                        "fs.copy2": "stat",
+                    }[interface],
+                    failures="preserve_source_interface",
+                ),
+                filesystem_epoch=filesystem_epoch,
+                instance_scope="per_successful_dynamic_invocation",
+                valid_at="successful_copy_return",
+                historical_instance="unresolved",
+                value_status="conditional_file_content",
+                unresolved_fields=[],
+                requires=[
+                    "source_and_destination_are_regular_byte_files",
+                    "source_and_destination_are_distinct_inodes",
+                    "source_version_remains_current_through_copy",
+                    "exclusive_file_writer",
+                    "normal_completion",
+                    "no_unmodeled_concurrent_effects",
+                    "preserve_interface_metadata_and_failure_effects",
+                ],
+            )
+            edges.extend(
+                [
+                    dict(
+                        kind="COPIES_FILE_VERSION",
+                        source=source_version,
+                        target=version,
+                        conditional=True,
+                        interface=interface,
+                    ),
+                    dict(
+                        kind="PRODUCES_VERSION_IF_NORMAL", source=site, target=version
+                    ),
+                    dict(kind="LOCATED_BY", source=version, target=target),
+                ]
+            )
+            if value is not None:
+                edges.append(dict(kind="HAS_CONTENT", source=version, target=value))
+            file_versions[target_key] = version
+            templates.append(
+                dict(
+                    symbol=symbol,
+                    version=version,
+                    context=context,
+                    value=value,
+                    source_sites=[site],
+                    source_version=source_version,
+                    derivation="copy",
+                    interface=interface,
+                )
+            )
+            return args[1]
+
         def expression(node):
-            nonlocal fact_epoch_clean, live_process_effects
+            nonlocal fact_epoch_clean, live_process_effects, cwd
             if not isinstance(node, dict):
                 return _UNKNOWN
             op = node["op"]
@@ -442,7 +633,17 @@ def analyze(module):
                     )
                 fact_epoch_clean = False
                 environment.clear()
-                invalidate("interprocedural_file_effect")
+                invalidate(
+                    "interprocedural_file_effect", operation(node), changes_cwd=True
+                )
+                boundaries.append(
+                    dict(
+                        symbol=symbol,
+                        field="interprocedural_file_state_summary",
+                        target=callee["name"],
+                        reason="file_state_transition_not_summarized",
+                    )
+                )
                 return evidence_scalar(node.get("result_facts"), callee.get("result"))
             if op == "text_concat":
                 parts = [expression(part) for part in node["parts"]]
@@ -463,11 +664,30 @@ def analyze(module):
                         if args and all(type(arg) is str for arg in args)
                         else _UNKNOWN
                     )
+                if interface == "process.chdir":
+                    key, _ = locate(args[0], site)
+                    ordered(site)
+                    cwd = key
+                    return None
+                if interface == "process.getcwd":
+                    ordered(site)
+                    return cwd[1] if cwd is not None and cwd[0] is None else _UNKNOWN
+                if interface in {"fs.copy_file", "fs.copy", "fs.copy2"}:
+                    ordered(site)
+                    return copy_file(interface, args, site)
                 if interface == "stream.open":
                     overlapping = any(not stream.closed for stream in streams)
                     if overlapping:
                         invalidate("possible_overlapping_file_handle")
+                    if args[1] not in {"r", "rt"}:
+                        # Different path spellings may still be hard links.
+                        # Opening a writer kills prior content facts until a
+                        # distinct-storage relationship has actually been proved.
+                        invalidate("file_open_may_write_alias", site)
                     stream = _Stream(site, args[0], args[1], site)
+                    stream.path_key, stream.locator = locate(args[0], site)
+                    stream.last_operation = site
+                    ordered(site)
                     if overlapping:
                         stream.unresolved.add("possible_overlapping_file_handle")
                     if live_process_effects:
@@ -475,6 +695,8 @@ def analyze(module):
                     if args[2:] != ["utf-8", "universal"]:
                         stream.unresolved.add("text_encoding")
                     streams.append(stream)
+                    if args[1] in {"r", "rt"} and stream.path_key in file_versions:
+                        requires(file_versions[stream.path_key], site, role="open_read")
                     return stream
                 if (
                     interface.startswith("stream.")
@@ -482,6 +704,16 @@ def analyze(module):
                     and isinstance(args[0], _Stream)
                 ):
                     stream = args[0]
+                    ordered(site)
+                    if stream.last_operation != site:
+                        edges.append(
+                            dict(
+                                kind="STREAM_ORDER_IF_NORMAL",
+                                source=stream.last_operation,
+                                target=site,
+                            )
+                        )
+                    stream.last_operation = site
                     if stream.closed:
                         stream.unresolved.add("operation_after_close")
                         return _UNKNOWN
@@ -500,12 +732,42 @@ def analyze(module):
                     }:
                         stream.unresolved.add("unclosed_stream_protocol")
                     elif interface in {"stream.read", "stream.readline"}:
-                        stream.unresolved.add("read_position")
+                        version = file_versions.get(stream.path_key)
+                        if (
+                            version is not None
+                            and not stream.unresolved
+                            and not live_process_effects
+                        ):
+                            requires(
+                                version,
+                                site,
+                                role="stream_read",
+                                range="runtime_position_and_requested_size",
+                            )
+                        else:
+                            boundaries.append(
+                                dict(
+                                    symbol=symbol,
+                                    field="file_read_version",
+                                    source=site,
+                                    reason="current_file_version_unproven",
+                                )
+                            )
+                        boundaries.append(
+                            dict(
+                                symbol=symbol,
+                                field="read_content_range",
+                                source=site,
+                                reason="runtime_position_and_requested_size",
+                            )
+                        )
                     return _UNKNOWN
                 if "filesystem" in node.get("writes", ()) or "stream.state" in node.get(
                     "writes", ()
                 ):
-                    invalidate("unresolved_filesystem_effect")
+                    invalidate("unresolved_filesystem_effect", site)
+                elif interface.startswith("process.") and node.get("writes"):
+                    invalidate("external_process_effect", site, changes_cwd=True)
                 return _UNKNOWN
             if op == "text_print":
                 args = [
@@ -521,6 +783,16 @@ def analyze(module):
                 stream = expression(node["stream"]) if "stream" in node else None
                 if isinstance(stream, _Stream):
                     site = operation(node)
+                    ordered(site)
+                    if stream.last_operation != site:
+                        edges.append(
+                            dict(
+                                kind="STREAM_ORDER_IF_NORMAL",
+                                source=stream.last_operation,
+                                target=site,
+                            )
+                        )
+                    stream.last_operation = site
                     stream.writes.append(site)
                     if stream.closed:
                         stream.unresolved.add("operation_after_close")
@@ -533,23 +805,25 @@ def analyze(module):
                     else:
                         stream.unresolved.add("nonconstant_print")
                 elif "stream" in node:
-                    invalidate("unresolved_print_receiver")
+                    invalidate("unresolved_print_receiver", operation(node))
                 else:
-                    invalidate("unresolved_console_file_alias")
+                    invalidate("unresolved_console_file_alias", operation(node))
                 return None
             # A closed scalar expression need not imply filesystem effects.
             # Unknown calls can still reach a stream or an aliased file.
-            if op == "process_spawn":
+            if op in {"process_spawn", "process_request"}:
                 live_process_effects = True
                 fact_epoch_clean = False
                 environment.clear()
-                invalidate("unmodeled_live_process")
+                invalidate("unmodeled_live_process", operation(node), changes_cwd=True)
             elif op in {"call", "indirect_call", "library_call"}:
                 fact_epoch_clean = False
                 environment.clear()
-                invalidate("interprocedural_file_effect")
+                invalidate(
+                    "interprocedural_file_effect", operation(node), changes_cwd=True
+                )
             elif "filesystem" in node.get("writes", ()):
-                invalidate("unresolved_filesystem_effect")
+                invalidate("unresolved_filesystem_effect", operation(node))
             elif any(
                 child is not node
                 and (
@@ -559,6 +833,7 @@ def analyze(module):
                         "indirect_call",
                         "library_call",
                         "process_spawn",
+                        "process_request",
                         "text_print",
                     }
                     or {"filesystem", "stream.state"}.intersection(
@@ -567,7 +842,9 @@ def analyze(module):
                 )
                 for child in walk_operations(node)
             ):
-                invalidate("unexpanded_effectful_expression")
+                invalidate(
+                    "unexpanded_effectful_expression", operation(node), changes_cwd=True
+                )
             return _UNKNOWN
 
         def stored(value, spec):
@@ -673,6 +950,13 @@ def analyze(module):
     graph["edges"] = [
         json.loads(encoded) for encoded in sorted({json_bytes(edge) for edge in edges})
     ]
+    graph.setdefault("coverage", {})["normal_path_file_state"] = dict(
+        scope="single_straight_line_activation",
+        initial_cwd="symbolic_invocation_cwd",
+        interprocedural_file_state="not_summarized",
+        directory_kind="not_inferred_from_path_spelling",
+        read_value="not_constant_folded",
+    )
     validate_artifact_flow(graph)
     return dict(
         graph=graph,

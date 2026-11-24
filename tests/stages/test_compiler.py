@@ -189,7 +189,7 @@ def test_generated_content_joins_parser_snapshots_without_inventing_read_history
         'import producer\nimport subprocess\nproducer.forward(".", "#define SCALE 3\\n")\n'
         'child = subprocess.Popen("make -B -j2 worker", shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)\n'
         'for line in child.stdout:\n    print(line, end="")\n'
-        "print(child.wait())\n"
+        'status = child.wait()\nprint(status)\nif status != 0:\n    raise subprocess.CalledProcessError(status, "make -B -j2 worker")\n'
     )
     (source / "worker.c").write_text(
         '#include "values.h"\n#include <stdio.h>\n'
@@ -329,10 +329,8 @@ def test_generated_content_joins_parser_snapshots_without_inventing_read_history
     trace.unlink()
     observation.unlink()
     process_tree.unlink()
-    logical = _stage(
-        tmp_path, "middle", "plan", "--graph", graph, "--out", plan, returncode=2
-    )
-    assert logical["status"] == "INCOMPLETE"
+    logical = _stage(tmp_path, "middle", "plan", "--graph", graph, "--out", plan)
+    assert logical["status"] == "READY"
     report = json.loads((plan / "images/driver/plan.json").read_bytes())
     analysis = report["artifact_analysis"]
     (materialization,) = analysis["constant_materializations"]
@@ -359,10 +357,40 @@ def test_generated_content_joins_parser_snapshots_without_inventing_read_history
         for edge in flow["edges"]
         if edge["kind"] == "CAPTURED_AT_SAME_LOCATOR"
     )
-    # Prefix and complete fragments are audit members, never executable bodies.
+    # Process semantics are known even though no execution target is qualified.
     ir = json.loads((plan / "images/driver/exec-ir.json").read_bytes())
-    assert ir["status"] == "INCOMPLETE" and ir["functions"] == []
-    assert report["protocol_analysis"]["prefix_fragments"]
+    from scar.contract import walk_operations
+
+    functions = [read_member(plan / "images/driver", item) for item in ir["functions"]]
+    (request,) = [
+        node for node in walk_operations(functions) if node["op"] == "process_request"
+    ]
+    assert request["target_binding"] is None
+    assert request["command"]["text"]["value"] == "make -B -j2 worker"
+    assert request["external_effect"] == "UNKNOWN"
+    assert (
+        ir["module"]["operator_requirements"]["process"]["binding"]
+        == "explicit_targets"
+    )
+    assert any(
+        node["op"] == "process_error_make" for node in walk_operations(functions)
+    )
+    delivery = tmp_path / "delivery"
+    result = _stage(
+        tmp_path, "backend", "compile", "--ir", plan, "--out", delivery, returncode=2
+    )
+    assert result["status"] == "INCOMPLETE"
+    assert any(
+        issue["code"] == "missing_process_target_binding"
+        and issue["request_id"] == request["request_id"]
+        for issue in result["issues"]
+    )
+    assert any(
+        issue["code"] == "missing_operator_binding"
+        and issue["requirement"] == "process_error"
+        for issue in result["issues"]
+    )
+    assert not list(delivery.rglob("main.cpp"))
 
 
 def test_byte_buffer_versions_connect_commands_without_executing_them(tmp_path):
