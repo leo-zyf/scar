@@ -2868,28 +2868,48 @@ end subroutine legacy_text
     assert _run([executable], tmp_path, input=b"7\n") == expected
 
 
-def test_conditional_copy_materialization_is_removed_through_all_stages(tmp_path):
+def test_conditional_copy_materialization_is_removed_through_all_stages(
+    tmp_path, monkeypatch
+):
     source = tmp_path / "source"
     source.mkdir()
     caller = source / "caller.c"
     caller.write_text(
-        "#include <stdio.h>\nextern void clip_(int*, double*, const double*);\n"
+        "#include <stdio.h>\nextern void clip_(int*, double*, const double*, const double*);\n"
+        "extern void relay_(const double*);\n"
         "int main(void) {\nint n=5; double x[5]={-2.0,0.5,4.0,-0.0,9.0};\n"
-        "const double limit=0.5; clip_(&n,x,&limit);\n"
+        "const double limit=0.5; clip_(&n,x,&limit,&limit);\n"
         'for(int i=0;i<5;++i) printf("%a\\n",x[i]);\n'
-        "n=0; clip_(&n,x,&limit); return 0; }\n"
+        "n=0; clip_(&n,x,&limit,&limit);\n"
+        "for(int i=0;i<4;++i) x[i]=0.0; relay_(x);\n"
+        'for(int i=0;i<4;++i) printf("%a\\n",x[i]); return 0; }\n'
     )
     kernel = source / "clip.f90"
     kernel.write_text(
-        "subroutine clip(n,x,limit)\nimplicit none\n"
+        "subroutine clip(n,x,limit,bound)\nimplicit none\n"
         "integer,intent(in)::n\nreal(8),intent(inout)::x(n)\n"
-        "real(8),intent(in)::limit\nwhere (x<limit)\nx=limit\n"
+        "real(8),intent(in)::limit,bound\nwhere (x<bound)\nx=limit\n"
         "end where\nend subroutine\n"
+        "subroutine relay(x)\nreal(8),intent(in)::x(4)\n"
+        "call write_scalar(x(2))\ncall write_pair(x(1:4:2))\nend subroutine\n"
+    )
+    writer = source / "writer.f90"
+    writer.write_text(
+        "subroutine write_scalar(x)\nreal(8)::x\nx=11d0\nend subroutine\n"
+        "subroutine write_pair(x)\nreal(8)::x(*)\nx(1)=23d0\nx(2)=37d0\nend subroutine\n"
     )
     _run(["gcc", "-std=c99", "-c", caller, "-o", source / "caller.o"], source)
     _run(["gfortran", "-c", kernel, "-o", source / "clip.o"], source)
+    _run(["gfortran", "-c", writer, "-o", source / "writer.o"], source)
     _run(
-        ["gfortran", source / "caller.o", source / "clip.o", "-o", source / "original"],
+        [
+            "gfortran",
+            source / "caller.o",
+            source / "clip.o",
+            source / "writer.o",
+            "-o",
+            source / "original",
+        ],
         source,
     )
     expected = _run([source / "original"], source)
@@ -2902,6 +2922,7 @@ def test_conditional_copy_materialization_is_removed_through_all_stages(tmp_path
                 units=[
                     dict(path="caller.c", language="c", flags=["-std=c99"]),
                     dict(path="clip.f90", language="fortran", flags=["-std=f2008"]),
+                    dict(path="writer.f90", language="fortran", flags=["-std=f2008"]),
                 ],
             )
         )
@@ -2917,6 +2938,15 @@ def test_conditional_copy_materialization_is_removed_through_all_stages(tmp_path
         if c["rule"] == "pointwise_materialization_forwarding"
     ]
     assert len(changes) == 1 and changes[0]["removed_traversals"] == 1
+    from scar.contract import read_member, validate_access_contract
+
+    ir = json.loads((plan / "exec-ir.json").read_bytes())
+    function = next(
+        fn
+        for fn in (read_member(plan, p) for p in ir["functions"])
+        if fn["name"] == "clip_"
+    )
+    assert validate_access_contract(function) == ("bound", "limit", "n", "x")
     shutil.rmtree(graph)
     result = _stage(
         tmp_path,
@@ -2930,8 +2960,48 @@ def test_conditional_copy_materialization_is_removed_through_all_stages(tmp_path
         delivery,
     )
     assert result["status"] == "COMPILED"
+    physical = json.loads((delivery / "physical-plan.json").read_bytes())
+    access = physical["parameter_access"]
+    assert access["qualification"]["supported"] is True
+    assert access["qualification"]["evidence"] == "compile_only"
+    assert access["functions"]["clip_"]["parameters"] == ["bound", "limit", "n", "x"]
+    assert "__restrict__" in "\n".join(
+        p.read_text() for p in (delivery / "project/src").glob("*.cpp")
+    )
+    # Lack of the optional compiler feature preserves the original execution.
+    # The wrapper rejects only the compile-only probe, never application code.
+    compiler = tmp_path / "compiler-without-access-feature"
+    compiler.write_text(
+        '#!/bin/sh\nfor arg; do\ncase "$arg" in\n'
+        "-DSCAR_CXX_ACCESS_PROBE=1) exit 1;;\nesac\ndone\nexec "
+        + shlex.quote(shutil.which("c++"))
+        + ' "$@"\n'
+    )
+    compiler.chmod(0o755)
+    monkeypatch.setenv("CXX", str(compiler))
+    fallback = tmp_path / "fallback"
+    retained = _stage(
+        tmp_path,
+        "backend",
+        "compile",
+        "--ir",
+        plan,
+        "--physical",
+        "serial",
+        "--out",
+        fallback,
+    )
+    decision = json.loads((fallback / "physical-plan.json").read_bytes())[
+        "parameter_access"
+    ]
+    assert retained["status"] == "COMPILED" and decision["qualifier"] is None
+    assert decision["qualification"]["supported"] is False
+    assert "__restrict__" not in "\n".join(
+        p.read_text() for p in (fallback / "project/src").glob("*.cpp")
+    )
     shutil.rmtree(plan)
     assert _run([result["executable"]], tmp_path) == expected
+    assert _run([retained["executable"]], tmp_path) == expected
 
 
 def test_fixed_form_program_emits_cpp20(tmp_path):

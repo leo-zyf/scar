@@ -251,6 +251,90 @@ def sequence_element(spec):
     return spec["element"]
 
 
+def validate_access_contract(function):
+    """Validate invocation-scoped, parameter-based exclusive modified bytes.
+
+    This is not pairwise disjointness of pointer values or read-only storage.
+    Read-only arguments may overlap. If bytes accessed through a root are also
+    modified by any means, all accesses must be based on that root. The extra
+    readonly_when_accessed clause prevents deriving C99 const-restrict's
+    stronger promise merely from an ordinary pointer-to-const type.
+    A loop-local independence flag cannot establish this stronger contract.
+    """
+    contract = function.get("access_contract")
+    if contract is None:
+        return ()
+    if (
+        not isinstance(contract, dict)
+        or set(contract) != {"semantics_version", "scope", "parameters"}
+        or type(contract["semantics_version"]) is not int
+        or contract["semantics_version"] != 1
+        or contract["scope"] != "invocation"
+        or not isinstance(contract["parameters"], list)
+        or not contract["parameters"]
+    ):
+        raise ValueError("invalid invocation access contract")
+    params = {p["name"]: p for p in function["params"]}
+    if len(params) != len(function["params"]):
+        raise ValueError("access contract requires unique parameter bindings")
+    roots = []
+    for claim in contract["parameters"]:
+        if (
+            not isinstance(claim, dict)
+            or set(claim)
+            != {
+                "parameter",
+                "rule",
+                "region",
+                "paths",
+                "basis",
+                "readonly_when_accessed",
+            }
+            or not isinstance(claim["parameter"], str)
+            or claim["parameter"] not in params
+            or claim["parameter"] in roots
+            or claim["rule"] != "exclusive_modified_bytes"
+            or claim["region"] != "accessed_referent_bytes"
+            or claim["paths"] != "based_on_parameter"
+            or type(claim["readonly_when_accessed"]) is not bool
+        ):
+            raise ValueError("invalid parameter access claim")
+        basis = claim["basis"]
+        if (
+            not isinstance(basis, dict)
+            or set(basis) != {"kind", "rule_id", "evidence"}
+            or basis["kind"] != "source_precondition"
+            or not isinstance(basis["rule_id"], str)
+            or not basis["rule_id"]
+            or not isinstance(basis["evidence"], dict)
+            or not basis["evidence"]
+        ):
+            raise ValueError("access claim requires its source precondition evidence")
+        spec = params[claim["parameter"]]["type"]
+        while isinstance(spec, dict) and spec.get("kind") in {"const", "volatile"}:
+            spec = spec["of"]
+        if not isinstance(spec, dict) or spec.get("kind") != "ptr":
+            raise ValueError("parameter access claim requires a pointer root")
+        referent = spec["to"]
+        const_referent = False
+        while isinstance(referent, dict) and referent.get("kind") in {
+            "const",
+            "volatile",
+        }:
+            const_referent |= referent["kind"] == "const"
+            referent = referent["of"]
+        if isinstance(referent, dict) and referent.get("kind") == "function":
+            raise ValueError("parameter access claim requires object storage")
+        if const_referent and not claim["readonly_when_accessed"]:
+            raise ValueError(
+                "const pointer access requires a readonly source precondition"
+            )
+        roots.append(claim["parameter"])
+    if roots != sorted(roots):
+        raise ValueError("parameter access claims must be sorted by root")
+    return tuple(roots)
+
+
 def validate_resource_flow(flow, resources=None):
     """Validate symbolic copies and materializations, never physical IO claims."""
     if (flow.get("schema"), flow.get("schema_version")) != (RESOURCE_FLOW, VERSION):

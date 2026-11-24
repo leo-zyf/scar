@@ -332,6 +332,94 @@ print(json.dumps(module))
     return module["functions"][0]
 
 
+def test_invocation_access_uses_source_claims_and_allows_shared_reads():
+    ptr = {"kind": "ptr", "to": {"kind": "const", "of": "f64"}}
+    mutable = {"kind": "ptr", "to": "f64"}
+    proof = {
+        "rule": "exclusive_modified_bytes",
+        "scope": "invocation",
+        "paths": "based_on_parameter",
+        "readonly_when_accessed": True,
+        "basis": {
+            "kind": "source_precondition",
+            "rule_id": "qualified_source_pointer",
+            "evidence": {"location": {"file": "unit", "line": 1}},
+        },
+    }
+    readers = {
+        "name": "readers",
+        "result": "void",
+        "params": [
+            {"name": name, "type": ptr, "access_precondition": proof}
+            for name in ("right", "left")
+        ],
+        "body": [{"op": "return"}],
+    }
+    value = {"op": "var", "name": "shared"}
+    call = {"op": "call", "callee": "readers", "args": [value, value]}
+    bridge = {
+        "op": "call",
+        "callee": "forward",
+        "args": [value],
+        "parameter_types": [ptr],
+    }
+    forward = {
+        "name": "forward",
+        "result": "void",
+        "params": [{"name": "data", "type": mutable}],
+        "body": [{"op": "return"}],
+    }
+    caller = {
+        "name": "caller",
+        "result": "void",
+        "params": [{"name": "shared", "type": ptr, "elementwise_noalias": True}],
+        "body": [{"op": "expr", "value": call}, {"op": "expr", "value": bridge}],
+    }
+    output = _layer(
+        "normalization",
+        """from scar.middle.normalization import normalize
+module, issues = normalize(data)
+assert not issues
+data["functions"][1]["body"][1]["value"]["parameter_types"][0] = {"kind": "ptr", "to": "f32"}
+assert any(i["code"] == "argument_referent_type" for i in normalize(data)[1])
+print(json.dumps(module["functions"]))
+""",
+        {
+            "functions": [readers, caller, forward],
+            "globals": [],
+            "records": [],
+            "externs": [],
+            "declarations": {},
+            "abi_environment": {"architecture": "x86_64"},
+        },
+    )
+    functions = {fn["name"]: fn for fn in output}
+    contract = functions["readers"]["access_contract"]
+    assert contract == {
+        "semantics_version": 1,
+        "scope": "invocation",
+        "parameters": [
+            {
+                "parameter": name,
+                "rule": proof["rule"],
+                "region": "accessed_referent_bytes",
+                "paths": proof["paths"],
+                "readonly_when_accessed": True,
+                "basis": proof["basis"],
+            }
+            for name in ("left", "right")
+        ],
+    }
+    assert all("access_precondition" not in p for p in functions["readers"]["params"])
+    assert "access_contract" not in functions["caller"]
+    first, second = functions["caller"]["body"]
+    assert first["value"] == call
+    cast = second["value"]["args"][0]
+    assert second["value"]["parameter_types"] == [mutable]
+    assert cast["mode"] == "qualification" and cast["source_type"] == ptr
+    assert cast["type"] == mutable and cast["value"] == value
+
+
 def test_materialization_forwarding_retains_mask_order_and_requires_ownership():
     def var(name):
         return dict(op="var", name=name)

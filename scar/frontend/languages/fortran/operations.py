@@ -189,9 +189,19 @@ def integer(expr):
 
 class Body:
     def __init__(
-        self, symbols, function_name, result_name, link_name, location, defaults, target
+        self,
+        symbols,
+        function_name,
+        result_name,
+        link_name,
+        location,
+        defaults,
+        target,
+        *,
+        interoperable=False,
     ):
         self.target = target
+        self.interoperable = interoperable
         self.symbols = symbols
         self.function_name, self.result_name = function_name, result_name
         self.link_name, self.location = link_name, location
@@ -882,13 +892,14 @@ class Body:
         if interface and len(args) != len(interface["params"]):
             raise Gap("call_arity", name)
 
-        def pointer(value, symbol, dtype):
-            # Legacy references use an unqualified address ABI. The original
-            # INTENT(IN) still forbids the callee from defining this actual.
-            if symbol and symbol.intent == "in":
+        def pointer(value, symbol, dtype, readonly):
+            # A native INTENT(IN) dummy still has a mutable address when it
+            # is forwarded. Only an interoperable IN dummy has a const base.
+            if self.interoperable and symbol and symbol.intent == "in" and not readonly:
                 return {
                     "op": "cast",
                     "mode": "qualification",
+                    "source_type": ptr(dtype, True),
                     "type": ptr(dtype),
                     "value": value,
                 }
@@ -896,6 +907,9 @@ class Body:
 
         for position, arg in enumerate(args):
             formal = interface["params"][position] if interface else {}
+            readonly = bool(
+                interface and interface["bind_c"] and formal.get("intent") == "in"
+            )
             arg_name = str(arg).lower() if kind(arg) == "Name" else ""
             symbol = self.symbols.get(arg_name)
             origin = arg_name or (
@@ -919,24 +933,24 @@ class Body:
             chars = self.character_view(arg)
             if chars is not None:
                 text, length = chars
-                if kind(arg) == "Char_Literal_Constant":
+                if kind(arg) == "Char_Literal_Constant" and not readonly:
                     text = {
                         "op": "cast",
                         "mode": "qualification",
                         "type": ptr("char"),
                         "value": text,
                     }
-                else:
+                elif kind(arg) != "Char_Literal_Constant":
                     source = str(arg if kind(arg) == "Name" else arg.items[0]).lower()
-                    text = pointer(text, self.fact(source), "char")
+                    text = pointer(text, self.fact(source), "char", readonly)
                 actuals.append(text)
-                types.append(ptr("char"))
+                types.append(ptr("char", readonly))
                 if not (interface and interface["bind_c"]):
                     lengths.append(cast(self.target.size_type, length))
                 continue
             if symbol and symbol.dims:
-                actuals.append(pointer(var(arg_name), symbol, symbol.dtype))
-                types.append(ptr(symbol.dtype))
+                actuals.append(pointer(var(arg_name), symbol, symbol.dtype, readonly))
+                types.append(ptr(symbol.dtype, readonly))
                 continue
             if kind(arg) == "Part_Ref" and self.shape_of(arg):
                 base = str(arg.items[0]).lower()
@@ -967,6 +981,7 @@ class Body:
                             ),
                             symbol,
                             symbol.dtype,
+                            readonly,
                         )
                     )
                 else:
@@ -994,7 +1009,11 @@ class Body:
                             }
                         )
                     actuals.append(var(buffer))
-                    if symbol.intent != "in" and formal.get("intent") != "in":
+                    # An implicit interface can modify an actual even when the
+                    # caller's native dummy has INTENT(IN). Preserve copy-out.
+                    if formal.get("intent") != "in" and not (
+                        self.interoperable and symbol.intent == "in"
+                    ):
                         writebacks.append(
                             {
                                 "op": "map",
@@ -1005,7 +1024,7 @@ class Body:
                                 "body": [assign(cell, tmp)],
                             }
                         )
-                types.append(ptr(symbol.dtype))
+                types.append(ptr(symbol.dtype, readonly))
                 continue
             value, dtype = self.expression(arg)
             if value["op"] not in {"index", "var"} and not (
@@ -1016,8 +1035,8 @@ class Body:
                 value = var(tmp)
             if kind(arg) == "Part_Ref":
                 symbol = self.symbols.get(str(arg.items[0]).lower())
-            actuals.append(pointer(unary("addr", value), symbol, dtype))
-            types.append(ptr(dtype))
+            actuals.append(pointer(unary("addr", value), symbol, dtype, readonly))
+            types.append(ptr(dtype, readonly))
         actuals.extend(lengths)
         if lengths:
             types.extend([self.target.size_type] * len(lengths))
@@ -1026,7 +1045,17 @@ class Body:
             "params": [dict(name=f"arg{i}", type=t) for i, t in enumerate(types)],
             "result": result_type,
         }
-        operation = {"op": "call", "callee": target, "args": actuals}
+        operation = {
+            "op": "call",
+            "callee": target,
+            "args": actuals,
+            "parameter_types": types,
+            "parameter_type_basis": (
+                "actual_types_with_explicit_passing"
+                if interface
+                else "actual_argument_abi"
+            ),
+        }
         if not writebacks:
             return operation
         if result_type == "void":

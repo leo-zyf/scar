@@ -7,6 +7,52 @@ from .facts import Gap, ParsedUnit, kind, ptr
 from .operations import Body, decl, literal, number, var
 
 
+def _argument_access(symbol, location, interoperable):
+    """Prove the ordinary dummy association rule for a direct data address."""
+    if (
+        not symbol.byref
+        or symbol.category not in {"INTEGER", "REAL", "LOGICAL", "COMPLEX", "CHARACTER"}
+        or "VARIABLE" not in symbol.attrs
+        or symbol.attrs
+        - {
+            "VARIABLE",
+            "DIMENSION",
+            "IMPLICIT-TYPE",
+            "DUMMY",
+            "DUMMY(IN)",
+            "DUMMY(OUT)",
+            "DUMMY(INOUT)",
+        }
+    ):
+        # POINTER, TARGET, CODIMENSION and other storage/association modes
+        # need their own proof. A new compiler attribute is conservative here.
+        return None
+    # F1 admitted only explicit-shape or assumed-size bounds. F2 has already
+    # checked the data ABI, including any separate character length parameter.
+    shape = "scalar"
+    if symbol.dims:
+        shape = "assumed_size" if symbol.dims[-1][1] is None else "explicit_shape"
+    return {
+        "rule": "exclusive_modified_bytes",
+        "scope": "invocation",
+        "paths": "based_on_parameter",
+        "readonly_when_accessed": interoperable and symbol.intent == "in",
+        "basis": {
+            "kind": "source_precondition",
+            "rule_id": "fortran.ordinary_dummy_argument_association",
+            "evidence": {
+                "location": location,
+                "intrinsic_type": symbol.category,
+                "kind_value": symbol.size,
+                "attributes": sorted(symbol.attrs),
+                "array_form": shape,
+                "passing": "direct_data_address",
+                "interoperable": interoperable,
+            },
+        },
+    }
+
+
 def _bind_storage(builder, statements, common_blocks, globals_):
     """Solve EQUIVALENCE offset equations and declare explicit shared storage."""
     adjacency = {}
@@ -265,6 +311,7 @@ def normalize_unit(parsed: ParsedUnit) -> dict:
             names = set(dummy_names)
             result = procedure.result
             owner = table.get(name)
+            interoperable = bool(owner and "BIND(C)" in owner.attrs)
             builder = Body(
                 table,
                 name,
@@ -273,6 +320,7 @@ def normalize_unit(parsed: ParsedUnit) -> dict:
                 parsed.location,
                 parsed.defaults,
                 parsed.target,
+                interoperable=interoperable,
             )
             builder.interfaces = procedure.interfaces
             builder.formats = procedure.formats
@@ -305,7 +353,7 @@ def normalize_unit(parsed: ParsedUnit) -> dict:
                             s.location or head,
                         )
                     hidden_length = None
-                    if not owner or "BIND(C)" not in owner.attrs:
+                    if not interoperable:
                         hidden_length = builder.fresh("character_length")
                         hidden.append(
                             {
@@ -329,7 +377,9 @@ def normalize_unit(parsed: ParsedUnit) -> dict:
                     )
                 param = {
                     "name": arg,
-                    "type": ptr(dt, s.intent == "in") if s.byref else dt,
+                    "type": (
+                        ptr(dt, interoperable and s.intent == "in") if s.byref else dt
+                    ),
                     "intent": s.intent,
                 }
                 if s.dims:
@@ -340,6 +390,11 @@ def normalize_unit(parsed: ParsedUnit) -> dict:
                         lower_bounds=[d[0] for d in s.bounds],
                         elementwise_noalias=s.restricted and s.intent != "in",
                     )
+                access = _argument_access(
+                    s, parsed.location(s.location or head), interoperable
+                )
+                if access is not None:
+                    param["access_precondition"] = access
                 fn["params"].append(param)
             fn["params"].extend(hidden)
             declarations = _bind_storage(

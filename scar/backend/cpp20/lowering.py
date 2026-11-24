@@ -6,7 +6,12 @@ from graphlib import TopologicalSorter
 import math
 import re
 
-from scar.contract import array_rank_domain, digest, json_bytes
+from scar.contract import (
+    array_rank_domain,
+    digest,
+    json_bytes,
+    validate_access_contract,
+)
 
 from .control import ControlFlow, ERROR_TYPE, TEXT_STREAM_TYPE
 from .libraries import Libraries
@@ -207,11 +212,77 @@ def ndarray_rank(spec):
     return rank
 
 
+def _qualified_parameters(module, physical):
+    """Verify B1's target decision against each invocation contract in the SIR."""
+    expected = {}
+    for fn in module["functions"]:
+        roots = validate_access_contract(fn)
+        if roots:
+            expected[fn["name"]] = dict(
+                contract_sha256=digest(json_bytes(fn["access_contract"])),
+                parameters=list(roots),
+            )
+    seal = "parameter_access_binding_sha256"
+    if not expected and "parameter_access" not in physical and seal not in module:
+        return {}
+    decision = physical.get("parameter_access")
+    if not isinstance(decision, dict) or module.get(seal) != digest(
+        json_bytes(decision)
+    ):
+        raise ValueError("missing or mismatched physical parameter access binding")
+    qualification = decision.get("qualification")
+    if (
+        type(decision.get("semantics_version")) is not int
+        or decision["semantics_version"] != 1
+        or decision.get("scope") != "invocation"
+        or decision.get("feature") != "gnu_restrict_parameter"
+        or not isinstance(qualification, dict)
+        or type(qualification.get("supported")) is not bool
+        or "qualifier" not in decision
+        or decision["qualifier"]
+        != ("__restrict__" if qualification["supported"] else None)
+        or decision.get("functions") != expected
+    ):
+        raise ValueError("invalid physical parameter access binding for this module")
+    if not qualification["supported"]:
+        if (
+            not isinstance(qualification.get("reason"), str)
+            or not qualification["reason"].strip()
+        ):
+            raise ValueError("unsupported parameter access feature requires a reason")
+        return {}
+    compiler = qualification.get("compiler")
+    arguments = qualification.get("compiler_arguments")
+    if (
+        not isinstance(compiler, dict)
+        or not isinstance(compiler.get("path"), str)
+        or not compiler["path"]
+        or type(compiler.get("size")) is not int
+        or compiler["size"] <= 0
+        or not isinstance(arguments, list)
+        or not all(isinstance(a, str) for a in arguments)
+        or not all(
+            isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value)
+            for value in (qualification.get("probe_sha256"), compiler.get("sha256"))
+        )
+        or qualification.get("definition") != "SCAR_CXX_ACCESS_PROBE=1"
+        or qualification.get("cxx_standard") != 20
+        or qualification.get("evidence") != "compile_only"
+        or qualification.get("application_executed") is not False
+    ):
+        raise ValueError("parameter access qualifier lacks sealed compiler evidence")
+    return {
+        name: {symbol_name(root, "v") for root in facts["parameters"]}
+        for name, facts in expected.items()
+    }
+
+
 class Lowerer:
     unit_weight_limit = 4000
 
     def __init__(self, module, physical):
         self.module = module
+        self.qualified_parameters = _qualified_parameters(module, physical)
         self.regions = physical.get("regions", {})
         self.operator_backends = physical.get("operator_backends", {})
         native = self.operator_backends.get("posix_runtime")
@@ -2076,7 +2147,12 @@ class Lowerer:
         )
         for fn in ordered:
             method = fn.get("method", {})
+            qualified = self.qualified_parameters.get(fn["name"])
             if any(method.get(k) for k in ("deleted", "defaulted", "implicit")):
+                if qualified:
+                    raise ValueError(
+                        "parameter access requires an emitted function definition"
+                    )
                 if fn["body"] or fn.get("initializers"):
                     raise ValueError("compiler-defined method with explicit body")
                 continue
@@ -2093,6 +2169,22 @@ class Lowerer:
                     self.receiver = None
                     decl = self.signature(fn)
                     prototypes.append(decl)
+                if qualified:
+                    if not qualified <= {p.name for p in decl.params}:
+                        raise ValueError(
+                            "parameter access requires explicit definition parameters"
+                        )
+                    decl = replace(
+                        decl,
+                        params=tuple(
+                            (
+                                replace(p, qualifiers=("__restrict__",))
+                                if p.name in qualified
+                                else p
+                            )
+                            for p in decl.params
+                        ),
+                    )
                 body = self.statements_in_scope(fn["body"], fn)
                 definition = replace(
                     decl, body=self.control.finish_function(fn["name"], body)

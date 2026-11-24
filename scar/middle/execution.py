@@ -10,6 +10,7 @@ from scar.contract import (
     json_bytes,
     member,
     validate_resource_flow,
+    validate_access_contract,
     write_json,
     walk_operations as _nodes,
     control_regions,
@@ -212,6 +213,9 @@ def prepare(module, *, executable=True):
     prepared = deepcopy(module) if executable else dict(module)
     layouts = lifetimes = 0
     if executable:
+        access_roots = sum(
+            len(validate_access_contract(fn)) for fn in prepared["functions"]
+        )
         globals_ = {g["name"] for g in prepared["globals"]}
         layouts = sum(
             annotate_iteration_layouts(fn, globals_) for fn in prepared["functions"]
@@ -239,12 +243,16 @@ def prepare(module, *, executable=True):
     return prepared, dict(
         iteration_layouts=layouts,
         scoped_lifetimes=lifetimes,
+        invocation_access_roots=access_roots if executable else 0,
         resource_copies=flow["coverage"]["copies"],
         resource_coverage=flow["coverage"]["kind"],
     )
 
 
 def seal(module, out, *, status, graph_sha256, contract, logical_optimization):
+    if status == "READY":
+        for function in module["functions"]:
+            validate_access_contract(function)
     if status == "READY" and any(
         fn.get("execution_kind") == "python_protocol" for fn in module["functions"]
     ):

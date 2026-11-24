@@ -272,6 +272,42 @@ def _parameters(values):
     )
 
 
+def _object_pointer(type_):
+    """Recognize an object pointer through the type wrappers emitted by the printer."""
+
+    def wrapper(node):
+        if node.kind in TYPE_WRAPPERS:
+            return node.kind, node.element
+        if (
+            node.kind == "template"
+            and len(node.args) == 1
+            and isinstance(node.args[0], Type)
+        ):
+            for kind, alias in TYPE_WRAPPERS.items():
+                if node.name.removeprefix("::") == "std::" + alias:
+                    return kind, node.args[0]
+        return node.kind, None
+
+    def unqualified(node):
+        while True:
+            kind, inner = wrapper(node)
+            if kind not in {"const", "volatile"}:
+                return node, kind, inner
+            node = inner
+
+    _, kind, inner = unqualified(type_)
+    if kind != "ptr":
+        return False
+    pointee, kind, _ = unqualified(inner)
+    return not (
+        pointee.kind == "function"
+        or kind in {"ref", "rref"}
+        or pointee.kind == "template"
+        and pointee.name.removeprefix("::")
+        in {"scar::function", "scar::variadic_function"}
+    )
+
+
 def _capture(value):
     if isinstance(value, tuple):
         _tuple(identifier, _expr)(value)
@@ -514,6 +550,7 @@ _GRAMMAR = {
                 initializer=_optional(_expr),
                 attributes=_attrs,
                 definition=_optional(_choices("variadic")),
+                qualifiers=_sequence(_choices("__restrict__"), maximum=1),
             ),
             "alias": dict(name=identifier, type=_type),
             "static_assert": dict(initializer=_expr),
@@ -601,11 +638,24 @@ def _validate(node):
         if kind == "param":
             if node.definition == "variadic":
                 _require(
-                    not any((node.type, node.name, node.initializer, node.attributes)),
+                    not any(
+                        (
+                            node.type,
+                            node.name,
+                            node.initializer,
+                            node.attributes,
+                            node.qualifiers,
+                        )
+                    ),
                     "variadic marker cannot carry a parameter declaration",
                 )
             else:
                 _require(node.type is not None, "parameter requires a type")
+                if node.qualifiers:
+                    _require(
+                        _object_pointer(node.type),
+                        "restrict requires an object pointer parameter",
+                    )
         if kind == "function":
             if node.definition:
                 _require(

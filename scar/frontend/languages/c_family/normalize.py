@@ -501,12 +501,40 @@ class _Unit:
             }
         )
 
-    def signature(self, cursor):
+    def signature(self, cursor, *, definition=False):
         name = _symbol(cursor, self.unit_tag)
-        params = [
-            {"name": arg.spelling or f"arg{i}", "type": _param_type(arg, self.records)}
-            for i, arg in enumerate(cursor.get_arguments())
-        ]
+        params = []
+        for i, arg in enumerate(cursor.get_arguments()):
+            param = {
+                "name": arg.spelling or f"arg{i}",
+                "type": _param_type(arg, self.records),
+            }
+            # A function type can retain a qualification from a previous
+            # prototype. Only the ParmVarDecl in this definition binds a root.
+            if definition:
+                qualified = arg.type.get_canonical()
+                if (
+                    qualified.kind.name == "POINTER"
+                    and qualified.is_restrict_qualified()
+                    and qualified.get_pointee().kind.name
+                    not in {"FUNCTIONPROTO", "FUNCTIONNOPROTO"}
+                ):
+                    param["access_precondition"] = {
+                        "rule": "exclusive_modified_bytes",
+                        "scope": "invocation",
+                        "paths": "based_on_parameter",
+                        "readonly_when_accessed": qualified.get_pointee().is_const_qualified(),
+                        "basis": {
+                            "kind": "source_precondition",
+                            "rule_id": "clang.definition_pointer_restrict",
+                            "evidence": {
+                                "location": self.location(arg.location),
+                                "canonical_type": qualified.spelling,
+                                "restrict_qualified": True,
+                            },
+                        },
+                    }
+            params.append(param)
         kind = _kind(cursor)
         result = (
             "void"
@@ -585,7 +613,7 @@ class _Unit:
             return
         reader = _Body(self, cursor)
         try:
-            declaration = self.signature(cursor)
+            declaration = self.signature(cursor, definition=True)
         except _Unsupported as error:
             declaration = {
                 "name": name,

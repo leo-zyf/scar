@@ -4,6 +4,7 @@ from copy import deepcopy
 from scar.contract import (
     json_bytes,
     semantic_form as semantics,
+    validate_access_contract,
     walk_operations as _operations,
 )
 
@@ -24,6 +25,41 @@ def _abi(fn):
         [_abi_type(p["type"]) for p in fn["params"]],
         bool(fn.get("variadic")),
     ]
+
+
+def _parameter_access(function):
+    """Bind source preconditions to the accessed bytes of definition parameters."""
+    claims = []
+    for param in function["params"]:
+        if "access_precondition" not in param:
+            continue
+        precondition = param.pop("access_precondition")
+        if (
+            not isinstance(precondition, dict)
+            or set(precondition)
+            != {"rule", "scope", "paths", "basis", "readonly_when_accessed"}
+            or precondition["scope"] != "invocation"
+        ):
+            raise ValueError(
+                f"invalid access precondition on {function['name']}.{param['name']}"
+            )
+        claims.append(
+            {
+                "parameter": param["name"],
+                "region": "accessed_referent_bytes",
+                "rule": precondition["rule"],
+                "paths": precondition["paths"],
+                "basis": precondition["basis"],
+                "readonly_when_accessed": precondition["readonly_when_accessed"],
+            }
+        )
+    if claims:
+        function["access_contract"] = {
+            "semantics_version": 1,
+            "scope": "invocation",
+            "parameters": sorted(claims, key=lambda claim: claim["parameter"]),
+        }
+    validate_access_contract(function)
 
 
 def _typed_object_use(node, field, method):
@@ -200,6 +236,63 @@ def _discarded_scalar_result(
     )
 
 
+def _unqualified(spec):
+    while isinstance(spec, dict) and spec.get("kind") in {"const", "volatile"}:
+        spec = spec["of"]
+    return spec
+
+
+def _same_referent(source, target):
+    """Qualification conversions preserve type, indirections and array bounds."""
+    source, target = _unqualified(source), _unqualified(target)
+    if source == target:
+        return True
+    if not isinstance(source, dict) or not isinstance(target, dict):
+        return False
+    kind = source.get("kind")
+    if kind != target.get("kind"):
+        return False
+    if kind == "ptr":
+        return _same_referent(source["to"], target["to"])
+    if kind == "array" and source["shape"] == target["shape"]:
+        return _same_referent(source["of"], target["of"])
+    return False
+
+
+def _address_argument(value, source, dest):
+    """Express the existing address binding; produce no arithmetic or data copy."""
+    left, right = _unqualified(source), _unqualified(dest)
+    if left == right or not isinstance(left, dict) or not isinstance(right, dict):
+        return value
+    kinds = left.get("kind"), right.get("kind")
+    if not all(k in {"ref", "ptr"} for k in kinds):
+        return value
+    if not _same_referent(left["to"], right["to"]):
+        raise ValueError(
+            "callsite and target refer to different element types or bounds"
+        )
+    if kinds == ("ref", "ptr"):
+        value = dict(op="unary", operator="addr", value=value)
+    if left["to"] != right["to"]:
+        kind = "ref" if kinds == ("ref", "ref") else "ptr"
+        null_pointer = (
+            kind == "ptr"
+            and value.get("op") == "literal"
+            and value["value"] in (None, 0)
+        )
+        value = {
+            "op": "cast",
+            "mode": "static" if null_pointer else "qualification",
+            "conversion": "argument_qualification",
+            "source_type": {"kind": kind, "to": left["to"]},
+            "type": {"kind": kind, "to": right["to"]},
+            "value": value,
+        }
+    if kinds == ("ptr", "ref"):
+        value = dict(op="unary", operator="deref", value=value)
+    return value
+
+
 def _bind_call_arguments(functions, externs, globals_, records):
     """Make per-call reference/pointer ABI bindings explicit in executable IR."""
     declarations = {**externs, **functions}
@@ -242,18 +335,26 @@ def _bind_call_arguments(functions, externs, globals_, records):
             zip(node["parameter_types"], target["params"])
         ):
             dest = param["type"]
-            if not isinstance(source, dict) or not isinstance(dest, dict):
-                continue
-            if source.get("kind") == "ref" and dest.get("kind") == "ptr":
-                node["args"][index] = dict(
-                    op="unary", operator="addr", value=node["args"][index]
+            argument = node["args"][index]
+            try:
+                bound = _address_argument(argument, source, dest)
+            except ValueError as error:
+                issues.append(
+                    dict(
+                        code="argument_referent_type",
+                        symbol=node["callee"],
+                        parameter=index,
+                        source_type=source,
+                        target_type=dest,
+                        location=node.get("location"),
+                        detail=str(error),
+                    )
                 )
-            elif source.get("kind") == "ptr" and dest.get("kind") == "ref":
-                node["args"][index] = dict(
-                    op="unary", operator="deref", value=node["args"][index]
-                )
-            else:
                 continue
+            if bound is argument:
+                continue
+            node["args"][index] = bound
+            node["parameter_types"][index] = dest
             changes.append(
                 dict(
                     code="explicit_argument_binding",
@@ -261,7 +362,8 @@ def _bind_call_arguments(functions, externs, globals_, records):
                     parameter=index,
                     source_type=source,
                     target_type=dest,
-                    proof="the callsite and definition share an ABI address; preserve the referred storage",
+                    source_basis=node.get("parameter_type_basis", "callsite_signature"),
+                    proof="the callsite and target bind the same referent type and address; adapt only passing and cv qualification",
                 )
             )
     return changes, issues
@@ -368,6 +470,8 @@ def normalize(bound):
 
     module = deepcopy(bound)
     module, protocol_changes, issues = normalize_protocols(module)
+    for function in module["functions"]:
+        _parameter_access(function)
     module["artifact_analysis"] = analyze_artifacts(module)
     buffers = analyze_buffers(module, module["artifact_analysis"]["graph"])
     module["artifact_analysis"]["graph"] = validate_artifact_flow(buffers.pop("graph"))

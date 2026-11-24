@@ -1,4 +1,4 @@
-"""B1 qualification of source-declared external execution interfaces."""
+"""B1 qualification of target compilation and source execution interfaces."""
 
 import os
 from pathlib import Path
@@ -9,7 +9,7 @@ import stat
 import subprocess
 from tempfile import TemporaryDirectory
 
-from scar.contract import digest, json_bytes, walk_operations
+from scar.contract import digest, json_bytes, validate_access_contract, walk_operations
 
 _EXECUTION = set(
     "system popen fork vfork execl execle execlp execv execve execvp execvpe "
@@ -68,6 +68,79 @@ def _run(argv):
             f"runtime ABI qualification failed ({result.returncode}): {result.stderr.strip()}"
         )
     return result.stdout
+
+
+def _access_feature(cache):
+    """Compile a fixed feature probe; never execute an application or the probe."""
+    arguments = shlex.split(os.environ.get("CXX") or "c++")
+    compiler = shutil.which(arguments[0]) if arguments else None
+    if not compiler:
+        return dict(supported=False, reason="target C++ compiler unavailable")
+    source = Path(__file__).with_name("system_probe.cpp")
+    qualification = dict(
+        compiler=_file(compiler),
+        compiler_arguments=arguments[1:],
+        probe_sha256=digest(source.read_bytes()),
+        definition="SCAR_CXX_ACCESS_PROBE=1",
+        cxx_standard=20,
+        evidence="compile_only",
+        application_executed=False,
+        scope="qualification host; deployment compiler must support this parameter spelling",
+    )
+    key = digest(json_bytes(qualification))
+    if key not in cache:
+        with TemporaryDirectory(prefix="scar-cxx-access-") as build:
+            try:
+                result = subprocess.run(
+                    [
+                        compiler,
+                        *arguments[1:],
+                        "-std=c++20",
+                        "-Werror",
+                        "-pedantic-errors",
+                        "-DSCAR_CXX_ACCESS_PROBE=1",
+                        "-c",
+                        str(source),
+                        "-o",
+                        str(Path(build) / "probe.o"),
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+                qualification["supported"] = result.returncode == 0
+                if result.returncode:
+                    qualification["reason"] = (
+                        "target compiler rejected the parameter feature"
+                    )
+                    qualification["diagnostic"] = result.stderr[-4000:]
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                qualification.update(supported=False, reason=str(exc))
+        cache[key] = qualification
+    return cache[key]
+
+
+def parameter_access(module, *, cache=None):
+    """Bind only invocation-wide neutral proofs, not loop independence flags."""
+    functions = {}
+    for function in module["functions"]:
+        roots = validate_access_contract(function)
+        if roots:
+            functions[function["name"]] = dict(
+                contract_sha256=digest(json_bytes(function["access_contract"])),
+                parameters=list(roots),
+            )
+    if not functions:
+        return None
+    qualification = _access_feature(cache if cache is not None else {})
+    return dict(
+        semantics_version=1,
+        scope="invocation",
+        feature="gnu_restrict_parameter",
+        qualifier="__restrict__" if qualification["supported"] else None,
+        qualification=qualification,
+        functions=functions,
+    )
 
 
 def _qualify_glibc(module, declaration):

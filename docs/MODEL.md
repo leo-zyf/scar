@@ -4,6 +4,8 @@
 
 文本在公共存储层逐码点保存。普通 JSON 字节保持不变；包含代理码点的字符串通过 `$scar.wire.v1` 的 `text` 载荷保存独立码点的 UTF-8 编码。含保留键或代理键的真实字典使用 `map` 载荷转义，避免与编码记录混淆。各阶段统一通过 `json_bytes/json_loads` 和成员收据读写，不能用标准 JSON 解码替换该读取合同。存储无损不等于目标运行时的文本表示已经完整支持。
 
+函数可携带 `access_contract`：以形参声明为根，在 `scope=invocation` 内描述 `exclusive_modified_bytes`。经该根访问的字节若由任何途径修改，所有访问都必须沿该根派生；只读实参仍可共享存储。`readonly_when_accessed` 是另有来源依据的附加前提，不能从普通 `const T*` 或循环独立性推出。合同保存源规则及证据；中端校验和封存，后端通过合同摘要及编译器资格选择表示，不能把局部证明提升为整个调用的前提。
+
 构建子图通过根文件的 `build.graph` 收据独立存储。`BUILD_OPERATION` 是捕获的工具调用，`BUILD_ARTIFACT` 是具有路径及可选采集摘要的源文件、对象或可执行产物；`BUILD_INPUT/BUILD_OUTPUT` 边连接消费者和生产者，序号保留链接输入顺序。`LIBRARY_REQUEST` 只说明命令请求，`ELF_LIBRARY_DEPENDENCY` 只说明采集时 ELF 的直接依赖，均不等于运行时加载或已执行计算。工具和库事实也进入资源表。构建调用与应用运行操作属于不同图域，捕获到编译器执行不能替代应用程序执行证据。
 
 文件依赖通过独立的 `artifact_flow` 收据连接子图，格式为 `scar.artifact-flow`。`FILE_LOCATOR` 表示路径定位表达式，不能视作 inode 身份；`FILE_VERSION` 是某次捕获的字节快照；`FILE_VERSION_REQUIREMENT` 表示构建或运行操作所需、但尚未确定的读取版本。`BYTE_VALUE` 用 `bytes:sha256:<digest>` 表示与路径、文件对象无关的字节内容。`SOURCE_OPERATION` 引用原过程图与端口，`SOURCE_CAPTURE` 表示分析器读取，`BUILD_OPERATION`、`EXECUTION_IMAGE` 接到对应子图。`READS_CAPTURED_VERSION/HAS_CONTENT/REQUIRES_VERSION/BUILT_IMAGE_SOURCE` 分别连接这些实体。捕获时相同路径不证明历史版本相同，`CAPTURED_AT_SAME_LOCATOR` 明确禁止升级为版本相等。

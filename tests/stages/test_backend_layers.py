@@ -1232,3 +1232,203 @@ def test_product_identity_pool_and_shared_arrays_across_target_units(tmp_path):
                 comparison="signed_integer",
             )
         )
+
+
+def test_invocation_access_qualifies_only_sealed_definition_parameters(tmp_path):
+    from dataclasses import replace
+
+    from scar.backend.cpp20.lowering import Lowerer
+    from scar.backend.cpp20.model import Decl, Type, named, validate_node
+    from scar.contract import PHYSICAL, digest, json_bytes
+
+    pointer = dict(kind="ptr", to="i32")
+    claim = dict(
+        parameter="out",
+        rule="exclusive_modified_bytes",
+        region="accessed_referent_bytes",
+        paths="based_on_parameter",
+        readonly_when_accessed=False,
+        basis=dict(
+            kind="source_precondition", rule_id="test", evidence={"binding": "out"}
+        ),
+    )
+    read_claim = dict(
+        claim,
+        parameter="input",
+        readonly_when_accessed=True,
+        basis=dict(claim["basis"], evidence={"binding": "input"}),
+    )
+    access = dict(
+        semantics_version=1, scope="invocation", parameters=[read_claim, claim]
+    )
+    worker = dict(
+        name="store",
+        result="void",
+        params=[
+            dict(name="out", type=dict(kind="const", of=pointer)),
+            dict(name="input", type=dict(kind="ptr", to=dict(kind="const", of="i32"))),
+            dict(name="hint", type=pointer, elementwise_noalias=True),
+        ],
+        body=[
+            dict(op="block", body=[dict(op="decl", name="out", type="i32")]),
+            dict(
+                op="assign",
+                target=dict(
+                    op="unary", operator="deref", value=dict(op="var", name="out")
+                ),
+                value=dict(
+                    op="unary", operator="deref", value=dict(op="var", name="input")
+                ),
+            ),
+        ],
+        access_contract=access,
+    )
+    main = dict(
+        name="main",
+        params=[],
+        result="i32",
+        body=[dict(op="return", value=dict(op="literal", type="i32", value=0))],
+    )
+    roots = dict(
+        contract_sha256=digest(json_bytes(access)), parameters=["input", "out"]
+    )
+    decision = dict(
+        semantics_version=1,
+        scope="invocation",
+        feature="gnu_restrict_parameter",
+        qualifier="__restrict__",
+        functions={"store": roots},
+        qualification=dict(
+            supported=True,
+            evidence="compile_only",
+            application_executed=False,
+            cxx_standard=20,
+            definition="SCAR_CXX_ACCESS_PROBE=1",
+            compiler=dict(path="/offline/compiler", size=1, sha256="1" * 64),
+            compiler_arguments=[],
+            probe_sha256="2" * 64,
+        ),
+    )
+
+    def module(binding):
+        return dict(
+            entry="main", parameter_access_binding_sha256=digest(json_bytes(binding))
+        )
+
+    def lower(binding, *, worker_fn=worker, seal=None):
+        fields = module(binding) if seal is None else seal
+        return Lowerer(
+            dict(fields, functions=[main, worker_fn]), dict(parameter_access=binding)
+        )
+
+    scheduled = tmp_path / "scheduled"
+    revision = "3" * 64
+    physical = document(PHYSICAL, ir_sha256=revision, parameter_access=decision)
+    write_json(
+        scheduled / "scheduled-ir.json",
+        document(
+            "scar.scheduled-ir",
+            status="READY",
+            ir_sha256=revision,
+            module=module(decision),
+            physical=member(scheduled, "physical", physical),
+            functions=[member(scheduled, "functions", fn) for fn in (main, worker)],
+        ),
+    )
+    target, result = tmp_path / "target", tmp_path / "result"
+    env = dict(os.environ, PYTHONPATH=str(Path(scar.__file__).resolve().parents[1]))
+    for stage, source, destination in (
+        ("B2a", scheduled, target),
+        ("B2b", target, result),
+    ):
+        subprocess.run(
+            [
+                sys.executable,
+                "-B",
+                "-c",
+                _RUN_LAYER,
+                stage,
+                str(source),
+                str(destination),
+            ],
+            cwd=tmp_path,
+            env=env,
+            check=True,
+            capture_output=True,
+        )
+    include = result / "project/include"
+    source = result / "project/src/program.cpp"
+    body = source.read_text()
+    assert body.count("__restrict__") == 2
+    assert "__restrict__ v_out" in body and "__restrict__ v_input" in body
+    assert "__restrict__" not in (include / "scar/program.hpp").read_text()
+    subprocess.run(
+        [
+            "c++",
+            "-std=c++20",
+            "-Werror",
+            "-pedantic-errors",
+            "-I",
+            str(include),
+            "-c",
+            str(source),
+            "-o",
+            str(tmp_path / "program.o"),
+        ],
+        check=True,
+        capture_output=True,
+    )
+
+    with pytest.raises(ValueError, match="parameter access binding"):
+        Lowerer(dict(functions=[worker]), {})
+    with pytest.raises(ValueError, match="parameter access binding"):
+        lower(decision, seal=dict(parameter_access_binding_sha256="0" * 64))
+    for altered in (
+        dict(functions={"store": dict(roots, parameters=["hint", "input", "out"])}),
+        dict(functions={"store": dict(roots, contract_sha256="0" * 64)}),
+        dict(functions={"extra": roots, "store": roots}),
+        dict(qualification={"supported": False, "reason": "feature unavailable"}),
+        dict(qualification={"supported": True}),
+    ):
+        with pytest.raises(ValueError, match="parameter access"):
+            lower(dict(decision, **altered))
+    weak = dict(
+        access, parameters=[dict(read_claim, readonly_when_accessed=False), claim]
+    )
+    weak_decision = dict(
+        decision,
+        functions={"store": dict(roots, contract_sha256=digest(json_bytes(weak)))},
+    )
+    with pytest.raises(ValueError, match="const|readonly|read.only"):
+        lower(weak_decision, worker_fn=dict(worker, access_contract=weak))
+    region_only = {k: v for k, v in worker.items() if k != "access_contract"}
+    with pytest.raises(ValueError, match="parameter access binding"):
+        lower(decision, worker_fn=region_only)
+    unsupported = dict(
+        decision,
+        qualifier=None,
+        qualification=dict(supported=False, reason="compiler unavailable"),
+    )
+    for emitter in (
+        lower(unsupported),
+        Lowerer(dict(functions=[main, region_only], entry="main"), {}),
+    ):
+        units = emitter.units()
+        assert all(
+            not p.qualifiers
+            for u in units.values()
+            for d in u.declarations
+            for p in d.params
+        )
+
+    param = Decl("param", type=named("int"), name="n", qualifiers=("__restrict__",))
+    for invalid in (
+        param,
+        replace(param, name=None, type=None, definition="variadic"),
+        replace(param, type=Type("ptr", element=Type("function", result=named("int")))),
+        replace(
+            param, type=Type("ptr", element=named("int")), qualifiers=("restrict",)
+        ),
+    ):
+        with pytest.raises(ValueError):
+            validate_node(invalid, Decl)

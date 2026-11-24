@@ -304,6 +304,8 @@ def _declaration(node, parameter=False):
         alignment = f"alignas({node.alignment}) "
     if kind in {"variable", "field", "param"}:
         text = attributes + alignment + storage + _type_name(node.type)
+        if kind == "param" and node.qualifiers:
+            text += " " + " ".join(node.qualifiers)
         if node.name:
             text += " " + node.name
         if node.initializer is not None:

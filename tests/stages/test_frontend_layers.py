@@ -909,6 +909,106 @@ def test_fortran_capture_then_offline_normalization(tmp_path, monkeypatch):
     }
 
 
+def test_definition_parameter_access_preconditions_are_source_proven(
+    tmp_path, monkeypatch
+):
+    from scar.frontend.languages import c_family
+
+    declarations = """
+typedef double * Q writer;
+void add(writer z, const double * Q a, const double * Q b) { *z = *a + *b; }
+void plain(double * Q p);
+void plain(double * p) { double * Q local = p; *local = 1.0; }
+void nested(double * Q * p) {}
+"""
+    for language, suffix, dialect, qualifier in (
+        ("c", ".c", "c17", "restrict"),
+        ("c++", ".cpp", "c++17", "__restrict__"),
+    ):
+        source = tmp_path / ("arguments" + suffix)
+        source.write_text(
+            'extern "C" {' + declarations + "}" if language == "c++" else declarations
+        )
+        facts = c_family.parse_unit(
+            source,
+            ["-std=" + dialect, "-DQ=" + qualifier],
+            root=tmp_path,
+            language=language,
+        )
+        source.unlink()
+        unit = _offline(monkeypatch, c_family, facts)
+        assert not unit["diagnostics"]
+        by_name = {fn["name"]: fn["params"] for fn in unit["functions"]}
+        assert all(
+            "access_precondition" not in p
+            for name in ("plain", "nested")
+            for p in by_name[name]
+        )
+        assert all(
+            p["access_precondition"]["basis"]["evidence"]["restrict_qualified"]
+            for p in by_name["add"]
+        )
+        expected = {
+            p["name"]: {
+                k: v for k, v in p["access_precondition"].items() if k != "basis"
+            }
+            for p in by_name["add"]
+        }
+        assert {
+            n for n, fact in expected.items() if fact["readonly_when_accessed"]
+        } == {"a", "b"}
+
+    source = tmp_path / "arguments.f90"
+    source.write_text(
+        "subroutine add(z,a,b,t,v) bind(c)\nuse iso_c_binding\n"
+        "real(c_double), intent(out) :: z\nreal(c_double), intent(in) :: a(*), b(1)\n"
+        "real(c_double), target :: t\nreal(c_double), value :: v\n"
+        "z = a(1) + b(1) + t + v\nend subroutine\n"
+        "subroutine relay(x)\nreal(8), intent(in)::x(4)\n"
+        "call write_scalar(x(2))\ncall write_pair(x(1:4:2))\nend subroutine\n"
+    )
+    facts = fortran.parse_unit(source, (), root=tmp_path)
+    source.unlink()
+    unit = _offline(monkeypatch, fortran, facts)
+    assert not unit["diagnostics"]
+    add, relay = unit["functions"]
+    params = {p["name"]: p for p in add["params"]}
+    assert {n for n, p in params.items() if "access_precondition" in p} == set(expected)
+    assert all(
+        {k: v for k, v in params[n]["access_precondition"].items() if k != "basis"}
+        == claim
+        for n, claim in expected.items()
+    )
+    assert (
+        params["a"]["access_precondition"]["basis"]["evidence"]["array_form"]
+        == "assumed_size"
+    )
+    assert (
+        params["b"]["access_precondition"]["basis"]["evidence"]["array_form"]
+        == "explicit_shape"
+    )
+    assert (
+        not params["a"]["elementwise_noalias"]
+        and not params["b"]["elementwise_noalias"]
+    )
+    assert params["a"]["type"] == {"kind": "ptr", "to": {"kind": "const", "of": "f64"}}
+    (native,) = relay["params"]
+    assert native["intent"] == "in" and native["type"] == {"kind": "ptr", "to": "f64"}
+    assert native["access_precondition"]["readonly_when_accessed"] is False
+    scalar_call, packed, _ = relay["body"]
+    pair_call, scatter = packed["body"][-2:]
+    calls = [scalar_call["value"], pair_call["value"]]
+    assert [c["callee"] for c in calls] == ["write_scalar_", "write_pair_"]
+    assert all(
+        c["parameter_types"] == [native["type"]]
+        and c["parameter_type_basis"] == "actual_argument_abi"
+        for c in calls
+    )
+    assert (
+        scatter["op"] == "map" and scatter["body"][0]["target"]["base"]["name"] == "x"
+    )
+
+
 def test_clang_capture_locks_included_buffers_then_normalizes_offline(
     tmp_path, monkeypatch
 ):
