@@ -153,6 +153,103 @@ data=json.loads(sys.stdin.read())
     return json.loads(result.stdout)
 
 
+def test_binding_preserves_unit_scoped_provider_and_export_evidence(
+    tmp_path, monkeypatch
+):
+    from base64 import urlsafe_b64encode
+    from hashlib import sha256
+
+    from scar.frontend import build
+
+    source, installed, graph = (tmp_path / n for n in ("source", "installed", "graph"))
+    source.mkdir()
+    package = installed / "provider_sample"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text(
+        "from importlib import import_module\n"
+        "def __getattr__(name):\n"
+        "    if name == 'ops': return import_module(__name__ + '.ops')\n"
+        "    raise AttributeError(name)\n"
+    )
+    (package / "ops.py").write_text("from .kernel import apply, reduce\n")
+    kernel = package / "kernel.py"
+    kernel.write_text("def apply(x): return x\ndef reduce(x): return x\n")
+    kernel_hash = sha256(kernel.read_bytes()).hexdigest()
+    metadata = installed / "provider_sample-1.0.dist-info"
+    metadata.mkdir()
+    (metadata / "METADATA").write_text(
+        "Metadata-Version: 2.1\nName: provider-sample\nVersion: 1.0\n"
+    )
+    rows = []
+    for path in sorted(package.glob("*.py")):
+        raw = path.read_bytes()
+        checksum = urlsafe_b64encode(sha256(raw).digest()).decode().rstrip("=")
+        rows.append(f"{path.relative_to(installed)},sha256={checksum},{len(raw)}\n")
+    (metadata / "RECORD").write_text("".join(rows))
+    monkeypatch.syspath_prepend(str(installed))
+    entry = source / "entry.py"
+    entry.write_text(
+        "import provider_sample\nimport sibling\nprovider_sample.ops.apply(1)\nsibling.run()\n"
+    )
+    (source / "sibling.py").write_text(
+        "import provider_sample\ndef run(): return provider_sample.ops.reduce(2)\n"
+    )
+    build(entry, graph)
+    source.rename(tmp_path / "hidden-source")
+    installed.rename(tmp_path / "hidden-provider")
+    bound = _layer(
+        "binding",
+        """from pathlib import Path
+from scar.contract import GRAPH, open_product
+from scar.middle.binding import bind
+path, _, graph = open_product(Path(data), "graph.json", GRAPH)
+program, issues, _ = bind(graph, path.parent)
+assert not issues
+print(json.dumps(program))
+""",
+        str(graph),
+    )
+    functions = {fn["name"]: fn for fn in bound["functions"]}
+    root = functions["__main__"]["python_scope"]["provider_sources"]
+    caller = functions["py:sibling:run"]["python_scope"]
+    assert "provider_sources" not in caller
+    child = functions[caller["initializer"]]["python_scope"]["provider_sources"]
+    for name in ("provider_sample", "provider_sample.ops"):
+        assert root[name]["provider_id"] == child[name]["provider_id"]
+    assert (
+        root["provider_sample"]["provider_id"]
+        != root["provider_sample.ops"]["provider_id"]
+    )
+    assert set(root["provider_sample.ops"]["exports"]) == {"apply"}
+    assert set(child["provider_sample.ops"]["exports"]) == {"reduce"}
+
+    issue = _layer(
+        "normalization",
+        """from scar.middle.normalization.protocols import normalize_protocols
+_, _, (issue,) = normalize_protocols(data)
+print(json.dumps(issue))
+""",
+        bound,
+    )
+    assert issue["code"] == "python.import_semantics"
+    summary = issue["source_evidence"]["modules"]
+    assert summary["provider_sample"]["exports"]["ops.apply"]["unresolved"] == [
+        "unbound"
+    ]
+    scoped = summary["provider_sample.ops"]
+    assert scoped["provider_id"] == root["provider_sample.ops"]["provider_id"]
+    export = scoped["exports"]["apply"]
+    assert not export["unresolved"]
+    (definition,) = export["candidates"]
+    assert definition == dict(
+        module="provider_sample.kernel",
+        member="provider_sample/kernel.py",
+        name="apply",
+        line=1,
+        sha256=kernel_hash,
+    )
+
+
 def test_execution_scopes_automatic_for_initializers_before_sealing():
     index = dict(op="var", name="i", type="i64")
 
@@ -233,6 +330,198 @@ print(json.dumps(module))
         ),
     )
     return module["functions"][0]
+
+
+def test_materialization_forwarding_retains_mask_order_and_requires_ownership():
+    def var(name):
+        return dict(op="var", name=name)
+
+    def cell(name):
+        return dict(op="index", base=var(name), indices=[var("i")])
+
+    def assign(target, value):
+        return dict(op="assign", target=target, value=value)
+
+    def mapping(body, site):
+        return dict(
+            op="map",
+            index="i",
+            extent=var("n"),
+            independent=False,
+            body=body,
+            site=site,
+        )
+
+    def selected(statement):
+        return dict(op="if", condition=cell("mask"), then=[statement], **{"else": []})
+
+    def buffer(name, dtype):
+        return dict(
+            op="buffer",
+            name=name,
+            type=dtype,
+            extent=var("n"),
+            storage="compiler_temporary",
+        )
+
+    read = dict(op="unary", operator="deref", value=var("limit"))
+    mask = mapping(
+        [
+            assign(
+                cell("mask"),
+                dict(op="binary", operator="lt", left=cell("values"), right=read),
+            )
+        ],
+        "mask-stage",
+    )
+    function = _canonical_function(
+        dict(
+            name="clamp",
+            result="void",
+            params=[
+                dict(name="n", type="i64"),
+                dict(
+                    name="values",
+                    type=dict(kind="ptr", to="f64"),
+                    elementwise_noalias=True,
+                ),
+                dict(
+                    name="limit", type=dict(kind="ptr", to=dict(kind="const", of="f64"))
+                ),
+            ],
+            body=[
+                dict(
+                    op="block",
+                    body=[
+                        buffer("mask", "bool"),
+                        mask,
+                        buffer("scratch", "f64"),
+                        mapping(
+                            [selected(assign(cell("scratch"), read))], "copy-stage"
+                        ),
+                        mapping(
+                            [selected(assign(cell("values"), cell("scratch")))],
+                            "commit-stage",
+                        ),
+                    ],
+                )
+            ],
+        )
+    )
+
+    def rewrite(fn):
+        return _layer(
+            "rewrites",
+            "from scar.middle.rewrites import optimize\nchanges=optimize(data)\nprint(json.dumps(dict(function=data,changes=changes)))",
+            fn,
+        )
+
+    result = rewrite(function)
+    (change,) = result["changes"]
+    assert change["rule"] == "pointwise_materialization_forwarding"
+    body = result["function"]["body"][0]["body"]
+    assert len(body) == 3 and body[1] == mask
+    assert body[2]["body"][0]["then"][0]["value"] == read
+    assert body[2]["independent"] is True
+    # The load stays conditional: zero extents and false masks do not dereference.
+    assert body[2]["body"][0]["condition"] == cell("mask")
+
+    cases = []
+    missing_alias_proof = deepcopy(function)
+    missing_alias_proof["params"][1]["elementwise_noalias"] = False
+    cases.append(missing_alias_proof)
+    for kind in (
+        "arithmetic",
+        "escape",
+        "different-mask",
+        "shifted-index",
+        "allocation",
+        "conversion",
+        "effect",
+        "mask-escape",
+        "mask-write",
+        "nondominating-mask",
+        "pointer-shadow",
+        "pointer-rebind",
+        "self-broadcast",
+    ):
+        unsafe = deepcopy(function)
+        steps = unsafe["body"][0]["body"]
+        source = steps[3]["body"][0]["then"][0]
+        if kind == "arithmetic":
+            source["value"] = dict(
+                op="binary",
+                operator="add",
+                left=read,
+                right=dict(op="literal", type="f64", value=1.0),
+            )
+        elif kind == "escape":
+            steps.append(
+                dict(
+                    op="expr",
+                    value=dict(op="call", callee="opaque", args=[var("scratch")]),
+                )
+            )
+        elif kind == "different-mask":
+            steps[4]["body"][0]["condition"] = dict(
+                op="unary", operator="not", value=cell("mask")
+            )
+        elif kind == "shifted-index":
+            steps[4]["body"][0]["then"][0]["value"]["indices"] = [
+                dict(op="literal", type="i64", value=0)
+            ]
+        elif kind == "allocation":
+            del steps[2]["storage"]
+        elif kind == "conversion":
+            steps[2]["type"] = "f32"
+        elif kind == "effect":
+            steps[3]["body"][0]["then"].insert(
+                0, dict(op="expr", value=dict(op="call", callee="opaque", args=[]))
+            )
+        elif kind == "mask-escape":
+            steps.append(
+                dict(
+                    op="expr",
+                    value=dict(
+                        op="call",
+                        callee="opaque",
+                        args=[dict(op="unary", operator="addr", value=cell("mask"))],
+                    ),
+                )
+            )
+        elif kind == "mask-write":
+            steps.append(
+                assign(cell("mask"), dict(op="literal", type="bool", value=True))
+            )
+        elif kind == "nondominating-mask":
+            steps.append(steps.pop(1))
+        elif kind in {"pointer-shadow", "pointer-rebind"}:
+            unsafe["params"].append(dict(name="input", type=dict(kind="ptr", to="f64")))
+            source["value"] = cell("input")
+            address = dict(
+                op="unary",
+                operator="addr",
+                value=dict(
+                    op="index",
+                    base=var("input"),
+                    indices=[dict(op="literal", type="i64", value=1)],
+                ),
+            )
+            rebound = (
+                dict(
+                    op="decl",
+                    name="values",
+                    type=dict(kind="ptr", to="f64"),
+                    init=address,
+                )
+                if kind == "pointer-shadow"
+                else assign(var("values"), address)
+            )
+            steps.insert(0, rebound)
+        else:
+            source["value"] = dict(op="unary", operator="deref", value=var("values"))
+        cases.append(unsafe)
+    assert all(not rewrite(fn)["changes"] for fn in cases)
 
 
 def test_mpi_contracts_preserve_lifetimes_without_guessing_user_symbols():

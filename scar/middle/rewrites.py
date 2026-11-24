@@ -1,6 +1,6 @@
 """Local equivalence rules and legality proofs for pointwise iteration domains."""
 
-from scar.contract import semantic_form as semantics
+from scar.contract import control_regions, semantic_form as semantics
 
 
 def _fold(expr, changes):
@@ -368,11 +368,249 @@ def _bounded_coordinates(fn, changes):
     sequence(fn["body"], {}, {})
 
 
+def _forward_materializations(fn, changes):
+    """Elide a private pointwise copy stage, retaining the frozen mask stage.
+
+    Only value-only compiler temporaries qualify, never source allocations.
+    The producer contains no arithmetic or conversion: moving its loads across
+    disjoint stores therefore preserves floating-environment evaluation order.
+    """
+    nodes = list(_nodes(fn["body"]))
+    params = {p["name"]: p for p in fn["params"]}
+    private = set(fn.get("state_contract", {}).get("private_scalars", ()))
+    bindings = {}
+    uses = {}
+    changed = set(fn.get("state_contract", {}).get("escaped", ()))
+    for node in nodes:
+        op = node["op"]
+        if op in {"decl", "buffer", "runtime_array", "map", "each"}:
+            name = node["index"] if op == "map" else node["name"]
+            bindings.setdefault(name, []).append(node)
+        target = node.get("target") if op in {"assign", "update"} else None
+        if op == "unary" and node["operator"] in {
+            "addr",
+            "preinc",
+            "postinc",
+            "predec",
+            "postdec",
+        }:
+            target = node["value"]
+        if target and target.get("op") == "var" and target.get("scope") != "global":
+            changed.add(target["name"])
+        if node["op"] == "var" and node.get("scope") != "global":
+            uses[node["name"]] = uses.get(node["name"], 0) + 1
+    if any(n["op"] in {"goto", "label"} for n in nodes):
+        return
+
+    def plain(spec):
+        if isinstance(spec, dict) and spec.get("kind") == "const":
+            return spec["of"]
+        return spec
+
+    def temporary(name):
+        declarations = bindings.get(name, ())
+        if len(declarations) != 1 or name in params:
+            return None
+        node = declarations[0]
+        return (
+            node
+            if node["op"] == "buffer" and node.get("storage") == "compiler_temporary"
+            else None
+        )
+
+    def domain(value):
+        if value["op"] == "literal":
+            return (
+                value["type"]
+                if value["type"] in ("i32", "i64") and type(value["value"]) is int
+                else None
+            )
+        if value["op"] == "var" and value.get("scope") != "global":
+            scalar = (
+                fn.get("state_contract", {}).get("scalars", {}).get(value["name"], {})
+            )
+            if (
+                value["name"] in private
+                and scalar.get("initialized")
+                and scalar.get("type") in ("i32", "i64")
+            ):
+                return scalar["type"]
+        if value["op"] == "binary" and value["operator"] in {"mul", "add", "sub"}:
+            left, right = domain(value["left"]), domain(value["right"])
+            return left if left and left == right else None
+        return None
+
+    def guarded_assignment(mapping):
+        if mapping["op"] != "map" or len(mapping["body"]) != 1:
+            return None
+        branch = mapping["body"][0]
+        if (
+            branch["op"] != "if"
+            or branch.get("else")
+            or len(branch["then"]) != 1
+            or branch["then"][0]["op"] != "assign"
+        ):
+            return None
+        return branch, branch["then"][0]
+
+    def mask_cell(value):
+        if value["op"] == "unary" and value["operator"] == "not":
+            value = value["value"]
+        return (
+            value
+            if value["op"] == "index" and value["base"].get("op") == "var"
+            else None
+        )
+
+    # A frozen mask has one complete producer and only direct condition reads.
+    # Taking its element address or passing it by reference cannot be mistaken
+    # for reading a boolean value, even when the buffer itself has a unique name.
+    mask_sources, mask_uses = {}, {}
+    for node in nodes:
+        if node["op"] == "map" and len(node["body"]) == 1:
+            assignment = node["body"][0]
+            if assignment["op"] == "assign" and _indexed(
+                assignment["target"], node["index"]
+            ):
+                base = assignment["target"]["base"]
+                owner = temporary(base["name"])
+                if (
+                    base.get("scope") != "global"
+                    and owner is not None
+                    and owner["type"] == "bool"
+                    and semantics(owner["extent"]) == semantics(node["extent"])
+                ):
+                    mask_sources.setdefault(base["name"], []).append(node)
+                    mask_uses[base["name"]] = mask_uses.get(base["name"], 0) + 1
+        if node["op"] == "if" and (cell := mask_cell(node["condition"])) is not None:
+            base = cell["base"]
+            if base.get("scope") != "global":
+                mask_uses[base["name"]] = mask_uses.get(base["name"], 0) + 1
+
+    def mask(value, index, dominating):
+        cell = mask_cell(value)
+        if cell is None or not _indexed(cell, index):
+            return False
+        name = cell["base"]["name"]
+        owner = temporary(name)
+        producers = mask_sources.get(name, ())
+        return (
+            owner is not None
+            and cell["base"].get("scope") != "global"
+            and len(producers) == 1
+            and id(owner) in dominating
+            and id(producers[0]) in dominating
+            and mask_uses.get(name) == uses.get(name)
+        )
+
+    def parameter(name):
+        return (
+            params.get(name, {}) if name not in bindings and name not in changed else {}
+        )
+
+    def copy_type(value, index, destination):
+        op = value["op"]
+        if op == "literal":
+            return value["type"]
+        if op == "var" and value.get("scope") != "global":
+            name = value["name"]
+            if name in private:
+                return plain(fn["state_contract"]["scalars"][name]["type"])
+        base = None
+        if _indexed(value, index):
+            base = value["base"]
+        elif op == "unary" and value["operator"] == "deref":
+            base = value["value"]
+        if base and base["op"] == "var" and base.get("scope") != "global":
+            if base["name"] == destination and not _indexed(value, index):
+                return None
+            spec = parameter(base["name"]).get("type", {})
+            if isinstance(spec, dict) and spec.get("kind") == "ptr":
+                return plain(spec["to"])
+        return None
+
+    def sequence(body, dominating=frozenset()):
+        dominating = set(dominating)
+        position = 0
+        while position < len(body):
+            candidate = body[position : position + 3]
+            if len(candidate) == 3:
+                buffer, producer, consumer = candidate
+                temp = buffer.get("name")
+                first, last = guarded_assignment(producer), guarded_assignment(consumer)
+                if (
+                    temporary(temp) is buffer
+                    and buffer["type"] in {"bool", "i32", "i64", "f32", "f64"}
+                    and first
+                    and last
+                    and uses.get(temp) == 2
+                    and producer["index"] == consumer["index"]
+                    and domain(buffer["extent"])
+                    and semantics(buffer["extent"])
+                    == semantics(producer["extent"])
+                    == semantics(consumer["extent"])
+                ):
+                    index = producer["index"]
+                    source_guard, source = first
+                    dest_guard, dest = last
+                    target = dest["target"]
+                    output = (
+                        parameter(target["base"]["name"])
+                        if _indexed(target, index)
+                        and target["base"].get("scope") != "global"
+                        else {}
+                    )
+                    spec = output.get("type", {})
+                    if (
+                        _indexed(source["target"], index)
+                        and source["target"]["base"].get("scope") != "global"
+                        and source["target"]["base"]["name"] == temp
+                        and semantics(dest["value"]) == semantics(source["target"])
+                        and semantics(source_guard["condition"])
+                        == semantics(dest_guard["condition"])
+                        and mask(source_guard["condition"], index, dominating)
+                        and output.get("elementwise_noalias") is True
+                        and isinstance(spec, dict)
+                        and spec.get("kind") == "ptr"
+                        and spec["to"] == buffer["type"]
+                        and copy_type(source["value"], index, output.get("name"))
+                        == buffer["type"]
+                    ):
+                        # Keep the source value inside the mask. A zero extent
+                        # or an entirely false mask must never evaluate a load.
+                        forwarded = {**dest, "value": source["value"]}
+                        body[position : position + 3] = [
+                            {
+                                **consumer,
+                                "independent": True,
+                                "body": [{**dest_guard, "then": [forwarded]}],
+                            }
+                        ]
+                        changes.append(
+                            dict(
+                                rule="pointwise_materialization_forwarding",
+                                site=consumer.get("site"),
+                                temporary=temp,
+                                element_type=buffer["type"],
+                                removed_traversals=1,
+                                proof="value-only unescaped compiler temporary; matching frozen mask and index domain; same-type loads across disjoint pointwise stores; no arithmetic reordered",
+                            )
+                        )
+            node = body[position]
+            for owner, field, _ in control_regions(node):
+                sequence(owner[field], dominating)
+            dominating.add(id(node))
+            position += 1
+
+    sequence(fn["body"])
+
+
 def optimize(fn):
     changes = []
     fn["body"] = _fold(fn["body"], changes)
     _bounded_coordinates(fn, changes)
     _share_extents(fn, changes)
+    _forward_materializations(fn, changes)
     params = {p["name"]: p for p in fn["params"]}
     # Only immutable scalar coefficients can be shared throughout the region.
     params[None] = {

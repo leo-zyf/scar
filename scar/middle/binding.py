@@ -2,6 +2,7 @@
 
 from collections import defaultdict
 from scar.contract import (
+    digest,
     json_bytes,
     read_member,
     semantic_form as semantics,
@@ -9,6 +10,40 @@ from scar.contract import (
     walk_operations as _operations,
     validate_text_profiles,
 )
+
+
+def _provider_sources(records):
+    """Keep the source identity independent of this unit's export queries."""
+    sources = {}
+    for module, record in records.items():
+        if record.get("module") != module:
+            raise ValueError(
+                f"provider record does not identify requested module {module}"
+            )
+        if record.get("status") not in {"verified_distribution", "verified_stdlib"}:
+            sources[module] = record
+            continue
+        identity = {
+            key: record[key]
+            for key in (
+                "module",
+                "status",
+                "origin",
+                "sha256",
+                "hash_basis",
+                "distribution",
+                "version",
+                "member",
+                "loader",
+                "interpreter",
+                "platform",
+                "canonical_module",
+            )
+            if key in record
+        }
+        sources[module] = dict(record, provider_id=digest(json_bytes(identity)))
+    return sources
+
 
 _SITE_OPERATIONS = {
     "map",
@@ -678,6 +713,11 @@ def bind(graph, folder):
                 body = _definition(fn)
                 if protocol:
                     body["execution_kind"] = "python_protocol"
+                    scope = body.get("python_scope", {})
+                    if scope.get("kind") == "module" and (
+                        providers := unit.get("source_facts", {}).get("providers")
+                    ):
+                        scope["provider_sources"] = _provider_sources(providers)
                 if name in functions and semantics(functions[name]) != semantics(body):
                     issue(
                         "conflicting_definition",

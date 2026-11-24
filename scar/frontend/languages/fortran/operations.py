@@ -1069,7 +1069,13 @@ class Body:
         selected = index(var(mv), at)
         prefix, test, _ = element(mask)
         steps = [
-            {"op": "buffer", "name": mv, "type": "bool", "extent": extent},
+            {
+                "op": "buffer",
+                "name": mv,
+                "type": "bool",
+                "extent": extent,
+                "storage": "compiler_temporary",
+            },
             mapping([*prefix, assign(selected, test)]),
         ]
         for include, assignments in arms:
@@ -1089,6 +1095,7 @@ class Body:
                             "name": scratch,
                             "type": dtype,
                             "extent": extent,
+                            "storage": "compiler_temporary",
                         },
                         mapping(
                             [

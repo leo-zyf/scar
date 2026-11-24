@@ -1132,3 +1132,65 @@ def test_graph_target_ports_and_lexical_regions(tmp_path):
         (final, "read"),
         (outer, "address"),
     ]
+
+
+def test_contract_json_preserves_codepoints_and_mapping_keys(tmp_path):
+    import pytest
+
+    from scar.contract import (
+        GRAPH,
+        document,
+        json_bytes,
+        json_loads,
+        member,
+        open_product,
+        read_member,
+        write_json,
+    )
+
+    tag = "$scar.wire.v1"
+    emoji, pair = "\U0001f600", "\ud83d\ude00"
+    ordinary = {"text": ["a\0b", "科学", "é", emoji, r"\ud800", tag], "n": -0.0}
+    old_bytes = (
+        json.dumps(
+            ordinary, separators=(",", ":"), sort_keys=True, allow_nan=False
+        ).encode("ascii")
+        + b"\n"
+    )
+    assert json_bytes(ordinary) == old_bytes
+    assert json_loads(old_bytes) == ordinary
+    assert json_bytes(emoji) != json_bytes(pair)
+    colliding_keys = {emoji: 1, pair: 2, "\udc80": 3, "\ud800": 4}
+    assert json_bytes(colliding_keys) == json_bytes(
+        dict(reversed(colliding_keys.items()))
+    )
+    values = [
+        colliding_keys,
+        pair + "\0" + emoji + "\udfff",
+        "\udcc3\udca9",
+        {tag: ["text", "eda0bdedb880"]},
+        {tag: ["map", []], pair: {tag: True}},
+    ]
+    receipt = member(tmp_path, "values", values)
+    assert read_member(tmp_path, receipt) == values
+    product = document(GRAPH, values=values, member=receipt)
+    write_json(tmp_path / "graph.json", product)
+    assert open_product(tmp_path, "graph.json", GRAPH)[2] == product
+    assert (
+        json.loads((tmp_path / "graph.json").read_bytes().decode("utf-8"))["schema"]
+        == GRAPH
+    )
+
+    for corrupt in (
+        {tag: ["text", "eda0Bdedb880"]},
+        {tag: ["text", "c0af"]},
+        {tag: ["text", "f09f9880"]},
+        {tag: ["text", "eda0bd"], "extra": 0},
+        {tag: ["map", [[tag, 1], [tag, 2]]]},
+        {tag: ["map", [["z", 1], [tag, 2]]]},
+        {tag: ["map", [[0, 1]]]},
+        {tag: ["map", [["ordinary", 1]]]},
+        {tag: ["invalid", None]},
+    ):
+        with pytest.raises(ValueError, match="SCAR wire"):
+            json_loads(json.dumps(corrupt))

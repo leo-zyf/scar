@@ -1,6 +1,5 @@
 """Join existing subgraphs without reparsing source or asserting unobserved history."""
 
-import json
 import posixpath
 
 from scar.contract import (
@@ -9,6 +8,7 @@ from scar.contract import (
     digest,
     document,
     json_bytes,
+    json_loads,
     validate_artifact_flow,
 )
 from .processes import link_observations
@@ -439,7 +439,7 @@ def artifact_graph(units, payloads, build, images, root):
     if any(e["source"] not in nodes or e["target"] not in nodes for e in edges):
         raise ValueError("artifact graph has an unbound endpoint")
     # Stable order and duplicate removal keep this cross-unit index compact.
-    edges = [json.loads(value) for value in sorted({json_bytes(e) for e in edges})]
+    edges = [json_loads(value) for value in sorted({json_bytes(e) for e in edges})]
     return validate_artifact_flow(
         link_observations(
             document(

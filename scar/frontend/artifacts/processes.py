@@ -1,9 +1,8 @@
 """F5 joins sealed launch observations to source ports and process invocations."""
 
-import json
 import posixpath
 
-from scar.contract import digest, json_bytes
+from scar.contract import digest, json_bytes, json_loads
 
 
 def link_observations(flow, build, units, root):
@@ -126,7 +125,7 @@ def link_observations(flow, build, units, root):
     return dict(
         flow,
         nodes=list(nodes.values()),
-        edges=[json.loads(raw) for raw in sorted({json_bytes(edge) for edge in edges})],
+        edges=[json_loads(raw) for raw in sorted({json_bytes(edge) for edge in edges})],
         process_observations=dict(
             provider=observation.get("provider"),
             sha256=observation["sha256"],

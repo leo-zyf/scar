@@ -2868,6 +2868,72 @@ end subroutine legacy_text
     assert _run([executable], tmp_path, input=b"7\n") == expected
 
 
+def test_conditional_copy_materialization_is_removed_through_all_stages(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    caller = source / "caller.c"
+    caller.write_text(
+        "#include <stdio.h>\nextern void clip_(int*, double*, const double*);\n"
+        "int main(void) {\nint n=5; double x[5]={-2.0,0.5,4.0,-0.0,9.0};\n"
+        "const double limit=0.5; clip_(&n,x,&limit);\n"
+        'for(int i=0;i<5;++i) printf("%a\\n",x[i]);\n'
+        "n=0; clip_(&n,x,&limit); return 0; }\n"
+    )
+    kernel = source / "clip.f90"
+    kernel.write_text(
+        "subroutine clip(n,x,limit)\nimplicit none\n"
+        "integer,intent(in)::n\nreal(8),intent(inout)::x(n)\n"
+        "real(8),intent(in)::limit\nwhere (x<limit)\nx=limit\n"
+        "end where\nend subroutine\n"
+    )
+    _run(["gcc", "-std=c99", "-c", caller, "-o", source / "caller.o"], source)
+    _run(["gfortran", "-c", kernel, "-o", source / "clip.o"], source)
+    _run(
+        ["gfortran", source / "caller.o", source / "clip.o", "-o", source / "original"],
+        source,
+    )
+    expected = _run([source / "original"], source)
+    request = tmp_path / "request.json"
+    request.write_text(
+        json.dumps(
+            dict(
+                source_root=str(source),
+                entry="main",
+                units=[
+                    dict(path="caller.c", language="c", flags=["-std=c99"]),
+                    dict(path="clip.f90", language="fortran", flags=["-std=f2008"]),
+                ],
+            )
+        )
+    )
+    graph, plan, delivery = (tmp_path / name for name in ("graph", "plan", "delivery"))
+    _stage(tmp_path, "frontend", "build", "--manifest", request, "--out", graph)
+    shutil.rmtree(source)
+    _stage(tmp_path, "middle", "plan", "--graph", graph, "--out", plan)
+    report = json.loads((plan / "plan.json").read_bytes())
+    changes = [
+        c
+        for c in report["changes"]
+        if c["rule"] == "pointwise_materialization_forwarding"
+    ]
+    assert len(changes) == 1 and changes[0]["removed_traversals"] == 1
+    shutil.rmtree(graph)
+    result = _stage(
+        tmp_path,
+        "backend",
+        "compile",
+        "--ir",
+        plan,
+        "--physical",
+        "serial",
+        "--out",
+        delivery,
+    )
+    assert result["status"] == "COMPILED"
+    shutil.rmtree(plan)
+    assert _run([result["executable"]], tmp_path) == expected
+
+
 def test_fixed_form_program_emits_cpp20(tmp_path):
     data = b"      PROGRAM LEGACY\n      WRITE (*,'(I4)') 8\n      END\n"
     source = tmp_path / "legacy.f"

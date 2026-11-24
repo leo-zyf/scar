@@ -3,7 +3,6 @@
 from copy import deepcopy
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
-import json
 import posixpath
 
 from scar.contract import (
@@ -12,6 +11,7 @@ from scar.contract import (
     digest,
     document,
     json_bytes,
+    json_loads,
     product_items,
     validate_artifact_flow,
     walk_operations,
@@ -2502,10 +2502,10 @@ def analyze(module):
 
     graph["nodes"] = list(nodes.values())
     graph["edges"] = [
-        json.loads(encoded) for encoded in sorted({json_bytes(edge) for edge in edges})
+        json_loads(encoded) for encoded in sorted({json_bytes(edge) for edge in edges})
     ]
     graph["launch_environments"] = [
-        json.loads(encoded)
+        json_loads(encoded)
         for encoded in sorted({json_bytes(row) for row in launch_environments})
     ]
     graph.setdefault("coverage", {})["normal_path_file_state"] = dict(

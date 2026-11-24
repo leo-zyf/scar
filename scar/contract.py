@@ -38,17 +38,105 @@ def document(schema, **fields):
     return dict(schema=schema, schema_version=VERSION, **fields)
 
 
-def json_bytes(value):
-    return (
-        json.dumps(
-            value,
-            ensure_ascii=True,
-            separators=(",", ":"),
-            sort_keys=True,
-            allow_nan=False,
-        ).encode()
-        + b"\n"
+_WIRE_TAG = "$scar.wire.v1"
+_SURROGATE = re.compile(r"[\ud800-\udfff]")
+
+
+def json_value(value):
+    """Escape surrogate code points and reserved mapping keys into ordinary JSON."""
+    if isinstance(value, str) and _SURROGATE.search(value):
+        return {_WIRE_TAG: ["text", value.encode("utf-8", "surrogatepass").hex()]}
+    if isinstance(value, dict):
+        if _WIRE_TAG in value or any(
+            isinstance(key, str) and _SURROGATE.search(key) for key in value
+        ):
+            pairs = [[json_value(key), json_value(value[key])] for key in sorted(value)]
+            return {_WIRE_TAG: ["map", pairs]}
+        result = value
+        for key, child in value.items():
+            encoded = json_value(child)
+            if encoded is not child:
+                if result is value:
+                    result = value.copy()
+                result[key] = encoded
+        return result
+    if isinstance(value, (list, tuple)):
+        result = value
+        for index, child in enumerate(value):
+            encoded = json_value(child)
+            if encoded is not child:
+                if result is value:
+                    result = list(value)
+                result[index] = encoded
+        return result
+    return value
+
+
+def _json_text(value):
+    return json.dumps(
+        value, ensure_ascii=True, separators=(",", ":"), sort_keys=True, allow_nan=False
     )
+
+
+def json_bytes(value):
+    """Encode a canonical SCAR product while preserving each text code point."""
+    text = _json_text(value)
+    # ASCII JSON exposes every possible surrogate and every reserved key here.
+    if "\\ud" in text or _WIRE_TAG in text:
+        encoded = json_value(value)
+        if encoded is not value:
+            text = _json_text(encoded)
+    return text.encode("ascii") + b"\n"
+
+
+def _wire_object(pairs):
+    fields = dict(pairs)
+    if _WIRE_TAG not in fields:
+        return fields
+    payload = fields[_WIRE_TAG]
+    if len(pairs) != 1 or not isinstance(payload, list) or len(payload) != 2:
+        raise ValueError("invalid SCAR wire envelope")
+    kind, content = payload
+    if kind == "text" and isinstance(content, str):
+        try:
+            raw = bytes.fromhex(content)
+            value = raw.decode("utf-8", "surrogatepass")
+        except ValueError as error:
+            raise ValueError("invalid SCAR wire text encoding") from error
+        if raw.hex() != content or not _SURROGATE.search(value):
+            raise ValueError("noncanonical SCAR wire text")
+        return value
+    if kind == "map" and isinstance(content, list):
+        result = {}
+        previous = None
+        needs_escape = False
+        for pair in content:
+            if not isinstance(pair, list) or len(pair) != 2:
+                raise ValueError("invalid SCAR wire map entry")
+            key, value = pair
+            if not isinstance(key, str) or (previous is not None and key <= previous):
+                raise ValueError("SCAR wire map keys must be unique and sorted")
+            needs_escape = (
+                needs_escape or key == _WIRE_TAG or bool(_SURROGATE.search(key))
+            )
+            result[key] = value
+            previous = key
+        if not needs_escape:
+            raise ValueError("redundant SCAR wire map envelope")
+        return result
+    raise ValueError("invalid SCAR wire envelope payload")
+
+
+def json_loads(data):
+    """Decode ordinary JSON and validated SCAR text and mapping envelopes."""
+    if isinstance(data, str):
+        marked = _WIRE_TAG in data or "\\u00" in data
+    else:
+        # Escaped ASCII key characters and UTF-16/32 inputs need a decoded-key check.
+        marked = b"$scar.wire.v1" in data or b"\\u00" in data or b"\x00" in data
+    if marked:
+        return json.loads(data, object_pairs_hook=_wire_object)
+    return json.loads(data)
 
 
 def digest(data):
@@ -1000,7 +1088,7 @@ def read_blob(folder, receipt):
 
 
 def read_member(folder, receipt):
-    return json.loads(read_blob(folder, receipt))
+    return json_loads(read_blob(folder, receipt))
 
 
 def copy_member(source_folder, receipt, destination, group):
@@ -1090,7 +1178,7 @@ def open_product(path, filename, schema):
     path = Path(path)
     path = path / filename if path.is_dir() else path
     data = path.read_bytes()
-    product = json.loads(data)
+    product = json_loads(data)
     if (product.get("schema"), product.get("schema_version")) != (schema, VERSION):
         raise ValueError(f"{path} must contain {schema} v{VERSION}")
     return path, digest(data), product

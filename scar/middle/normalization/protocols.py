@@ -407,8 +407,11 @@ class _Frame:
             self.env[name] = _Value(kind, None).at(name)
             self.locals[name] = kind
 
-    def fail(self, node, field, message):
-        raise _Unclosed(self.name, node, field, message)
+    def fail(self, node, field, message, *, source_evidence=None):
+        error = _Unclosed(self.name, node, field, message)
+        if source_evidence:
+            error.issue["source_evidence"] = source_evidence
+        raise error
 
     def scalar(self, value, node):
         if not values.runtime(value.kind):
@@ -678,6 +681,65 @@ class _Frame:
         scope[name] = variable
         steps.append(dict(op="assign", target=variable.value, value=value.value))
 
+    @property
+    def provider_sources(self):
+        initializer = self.project.functions.get(self.scope.get("initializer"), {})
+        scope = initializer.get("python_scope", {})
+        if scope.get("kind") == "module" and scope.get("module") == self.module:
+            return scope.get("provider_sources", {})
+        return {}
+
+    def _import_evidence(self, module):
+        """Summarize where a name could come from when initialization is unclosed."""
+        sources = {}
+        for name, record in self.provider_sources.items():
+            if name != module and not name.startswith(module + "."):
+                continue
+            row = {
+                k: record[k]
+                for k in (
+                    "status",
+                    "provider_id",
+                    "member",
+                    "sha256",
+                    "resolution",
+                    "reason",
+                )
+                if k in record
+            }
+            exports = {}
+            for member, evidence in record.get("exports", {}).items():
+                exports[member] = dict(
+                    candidates=[
+                        {
+                            **{
+                                k: candidate[k]
+                                for k in ("module", "member", "name", "line", "sha256")
+                                if k in candidate
+                            },
+                            **(
+                                {"conditional_paths": True}
+                                if candidate.get("conditions")
+                                or any(
+                                    route.get("conditions")
+                                    for route in candidate.get("alternate_paths", ())
+                                )
+                                else {}
+                            ),
+                        }
+                        for candidate in evidence.get("candidates", ())
+                    ],
+                    unresolved=sorted(
+                        {u["reason"] for u in evidence.get("unresolved", ())}
+                    ),
+                )
+            if exports:
+                row["exports"] = exports
+            sources[name] = row
+        return (
+            dict(scope="source_candidates_only", modules=sources) if sources else None
+        )
+
     def import_origin(self, node):
         """Resolve the requested module independently of its execution contract."""
         module = node["module"]
@@ -692,6 +754,34 @@ class _Frame:
             self.fail(
                 node, "import_identity", f"invalid resolution record for {module}"
             )
+        # A per-site identity and its sealed unit must agree independently of
+        # which subset of exports either record was asked to describe.
+        identities = [(root, source)]
+        if exact:
+            identities.append((module, resolved))
+        for requested, evidence in identities:
+            stored = self.provider_sources.get(requested)
+            if (
+                stored
+                and evidence
+                and any(
+                    stored.get(key) != evidence.get(key)
+                    for key in (
+                        "module",
+                        "status",
+                        "origin",
+                        "sha256",
+                        "distribution",
+                        "version",
+                        "member",
+                    )
+                )
+            ):
+                self.fail(
+                    node,
+                    "import_identity",
+                    f"site and unit disagree about the source of {requested}",
+                )
         if exact and resolved.get("module") != module:
             self.fail(
                 node,
@@ -839,6 +929,7 @@ class _Frame:
                     node,
                     "import_semantics",
                     f"{mod} resolves to {identity} at {origin.get('origin')}. Its initialization, effects and exported bindings have no execution contract.",
+                    source_evidence=self._import_evidence(mod),
                 )
             self.store(node["binding"], value, steps)
             return
