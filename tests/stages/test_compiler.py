@@ -199,8 +199,22 @@ def test_generated_content_joins_parser_snapshots_without_inventing_read_history
         "worker: worker.c values.h\n\tgcc -std=c99 -MMD -MF worker.d -O2 worker.c -o $@\n"
     )
     trace = tmp_path / "events.json"
+    observation = tmp_path / "processes.json"
+    process_tree = tmp_path / "process-tree.log"
     _run(
         [
+            "strace",
+            "--seccomp-bpf",
+            "-f",
+            "-qq",
+            "-ttt",
+            "-s",
+            "4096",
+            "-e",
+            "trace=clone,clone3,fork,vfork,execve,execveat",
+            "-o",
+            process_tree,
+            "--",
             "bear",
             "intercept",
             "--force-preload",
@@ -208,6 +222,13 @@ def test_generated_content_joins_parser_snapshots_without_inventing_read_history
             trace,
             "--",
             sys.executable,
+            "-B",
+            "-m",
+            "scar.frontend.languages.python.process_capture",
+            "--source-root",
+            source,
+            "--out",
+            observation,
             "driver.py",
         ],
         source,
@@ -229,7 +250,14 @@ def test_generated_content_joins_parser_snapshots_without_inventing_read_history
                         source="driver.py",
                     )
                 ],
-                build_trace=dict(provider="bear-3-intercept", path=trace.name),
+                build_trace=dict(
+                    provider="bear-3-intercept",
+                    path=trace.name,
+                    process_observation=dict(path=observation.name),
+                    process_tree=dict(
+                        provider="strace-process-v1", path=process_tree.name
+                    ),
+                ),
             )
         )
     )
@@ -249,11 +277,48 @@ def test_generated_content_joins_parser_snapshots_without_inventing_read_history
     assert any(
         edge["kind"] == "PROCESS_HANDLE_TEMPLATE" for edge in source_flow["edges"]
     )
-    # The index records source requests, not correspondence to captured events.
+    # Source templates remain distinct from the particular observed launch.
     assert (
         source_flow["coverage"]["process_build_invocation_matching"]
-        == "not_established"
+        == "partial_observed"
     )
+    assert source_flow["coverage"]["observed_source_launch_bindings"] == 1
+    (binding,) = source_flow["process_observations"]["launch_bindings"]
+    assert (
+        binding["status"] == "BOUND"
+        and binding["source_operation"] == launch["operation"]
+    )
+    indexed = {node["id"]: node for node in source_flow["nodes"]}
+    intent = indexed[binding["intent"]]
+    child = indexed[binding["invocation"]]
+    spawn = next(
+        edge
+        for edge in source_flow["edges"]
+        if edge["kind"] == "OBSERVED_PROCESS_START"
+    )
+    if "instrumentation_mapping" in spawn:
+        mapping = spawn["instrumentation_mapping"]
+        assert intent["child_pid"] == mapping["published_pid"]
+        assert child["pid"] == mapping["reported_pid"]
+    else:
+        assert intent["child_pid"] == child["pid"]
+    assert child["ppid"] == intent["parent_pid"]
+    reached, pending = set(), [launch["operation"]]
+    successors = {}
+    for edge in source_flow["edges"]:
+        successors.setdefault(edge["source"], []).append(edge["target"])
+    while pending:
+        node = pending.pop()
+        if node not in reached:
+            reached.add(node)
+            pending.extend(successors.get(node, ()))
+    assert any(indexed[node]["kind"] == "EXECUTION_IMAGE" for node in reached)
+    wrong_pid = json.loads(json.dumps(source_flow))
+    next(node for node in wrong_pid["nodes"] if node["id"] == binding["intent"])[
+        "child_pid"
+    ] += 1
+    with pytest.raises(ValueError, match="PID"):
+        validate_artifact_flow(wrong_pid)
     broken = json.loads(json.dumps(source_flow))
     broken["source_processes"][0]["operands"]["command"] = "missing:source:operation"
     with pytest.raises(ValueError, match="process operand"):
@@ -262,6 +327,8 @@ def test_generated_content_joins_parser_snapshots_without_inventing_read_history
     assert any(node["id"] == value for node in source_flow["nodes"])
     shutil.rmtree(source)
     trace.unlink()
+    observation.unlink()
+    process_tree.unlink()
     logical = _stage(
         tmp_path, "middle", "plan", "--graph", graph, "--out", plan, returncode=2
     )

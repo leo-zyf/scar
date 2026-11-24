@@ -79,6 +79,7 @@ def validate_artifact_flow(flow):
         "BUFFER_VERSION",
         "BYTE_EXPRESSION",
         "COMMAND_REQUEST",
+        "PROCESS_INTENT",
     }
     records = {}
     for node in flow["nodes"]:
@@ -206,6 +207,83 @@ def validate_artifact_flow(flow):
             raise ValueError(
                 "source handle templates do not prove dynamic process identity"
             )
+    for relation in flow["edges"]:
+        source, target = records[relation["source"]], records[relation["target"]]
+        if relation["kind"] == "OBSERVED_LAUNCH_INTENT" and (
+            source.get("operation") != "process_launch"
+            or source["kind"] != "SOURCE_OPERATION"
+            or target["kind"] != "PROCESS_INTENT"
+            or (target.get("caller") or {}).get("source_code_matches_snapshot")
+            is not True
+            or relation.get("source_sha256") != target["caller"].get("source_sha256")
+        ):
+            raise ValueError(
+                "source launch attribution requires captured source identity"
+            )
+        if relation["kind"] == "OBSERVED_PROCESS_START" and (
+            source["kind"] != "PROCESS_INTENT"
+            or source.get("launch_outcome") != "started"
+            or type(source.get("child_pid")) is not int
+            or source["child_pid"] <= 0
+            or target["kind"] != "BUILD_OPERATION"
+            or target.get("ppid") != source.get("parent_pid")
+            or target.get("trace_sha256") != source.get("trace_sha256")
+        ):
+            raise ValueError("observed process start requires an actual child PID")
+        if relation["kind"] == "OBSERVED_PROCESS_START":
+            mapping = relation.get("instrumentation_mapping")
+            if mapping is None:
+                if (
+                    target["pid"] != source["child_pid"]
+                    or relation.get("evidence")
+                    != "observed_child_pid_and_process_identity"
+                ):
+                    raise ValueError("process PID equality is not established")
+            else:
+                tree = flow.get("process_observations", {}).get("process_tree", {})
+                if (
+                    relation.get("evidence")
+                    != "observed_child_pid_and_kernel_wrapper_mapping"
+                    or mapping.get("provider") != "strace-process-v1"
+                    or mapping.get("sha256") != tree.get("sha256")
+                    or not isinstance(mapping.get("sha256"), str)
+                    or not re.fullmatch("[0-9a-f]{64}", mapping["sha256"])
+                    or mapping.get("published_pid") != source["child_pid"]
+                    or mapping.get("reported_pid") != target["pid"]
+                    or mapping.get("wrapper_executable")
+                    != target.get("instrumentation_reporter")
+                ):
+                    raise ValueError(
+                        "instrumented PID mapping lacks its kernel evidence"
+                    )
+        if relation["kind"] == "INTENT_PARENT_INVOCATION" and (
+            source["kind"] != "BUILD_OPERATION"
+            or target["kind"] != "PROCESS_INTENT"
+            or source.get("pid") != target.get("parent_pid")
+            or source.get("trace_sha256") != target.get("trace_sha256")
+        ):
+            raise ValueError("process intent parent disagrees with its capture")
+        if relation["kind"] == "REPORTED_PROCESS_PARENT" and (
+            source["kind"] != "BUILD_OPERATION"
+            or target["kind"] != "BUILD_OPERATION"
+            or source.get("pid") != target.get("ppid")
+            or source.get("trace_sha256") != target.get("trace_sha256")
+        ):
+            raise ValueError("observed process ancestry disagrees with its capture")
+    for binding in flow.get("process_observations", {}).get("launch_bindings", ()):
+        if records.get(binding["intent"], {}).get("kind") != "PROCESS_INTENT":
+            raise ValueError("process observation requires its intent record")
+        for field, kind in (
+            ("source_operation", "SOURCE_OPERATION"),
+            ("invocation", "BUILD_OPERATION"),
+        ):
+            reference = binding.get(field)
+            if reference is not None and records.get(reference, {}).get("kind") != kind:
+                raise ValueError("process observation references an absent endpoint")
+        if binding.get("status") == "BOUND" and (
+            binding.get("source_operation") is None or binding.get("invocation") is None
+        ):
+            raise ValueError("bound launch observation requires both endpoints")
     return flow
 
 

@@ -11,6 +11,7 @@ from scar.contract import (
     json_bytes,
     validate_artifact_flow,
 )
+from .processes import link_observations
 
 
 def artifact_graph(units, payloads, build, images, root):
@@ -331,17 +332,41 @@ def artifact_graph(units, payloads, build, images, root):
                     invocation_id=row["invocation_id"],
                     **{
                         field: row[field]
-                        for field in ("arguments", "directory")
+                        for field in (
+                            "arguments",
+                            "directory",
+                            "executable",
+                            "pid",
+                            "ppid",
+                            "started",
+                            "finished",
+                            "status",
+                            "signal",
+                            "instrumentation_reporter",
+                        )
                         if field in row
                     },
                     evidence="captured_build_trace",
                     trace_sha256=build["trace_sha256"],
+                    process_id_domain="bear_reported",
                 )
         requirements = set()
         for relation in build["edges"]:
             kind, source, target = (
                 relation[key] for key in ("kind", "source", "target")
             )
+            if kind == "PROCESS_PARENT":
+                if source not in build_refs or target not in build_refs:
+                    raise ValueError(
+                        "process parent edge references an absent invocation"
+                    )
+                edge(
+                    "REPORTED_PROCESS_PARENT",
+                    build_refs[source],
+                    build_refs[target],
+                    evidence="captured_ppid_and_lifetime",
+                )
+                continue
             if kind == "COMPILES":
                 profile = build["compilation_profiles"][relation["profile"]]
                 for reader in profiles.get(digest(json_bytes(profile)), ()):
@@ -416,24 +441,29 @@ def artifact_graph(units, payloads, build, images, root):
     # Stable order and duplicate removal keep this cross-unit index compact.
     edges = [json.loads(value) for value in sorted({json_bytes(e) for e in edges})]
     return validate_artifact_flow(
-        document(
-            ARTIFACT_FLOW,
-            nodes=list(nodes.values()),
-            edges=edges,
-            source_effects=source_sites,
-            source_processes=source_processes,
-            open_fields=pending,
-            coverage=dict(
-                source_effect_sites=len(source_sites),
-                source_process_sites=len(source_processes),
-                process_execution_events="not_observed",
-                process_instance_binding="source_templates_only",
-                process_build_invocation_matching="not_established",
-                parser_snapshot_reads=sum(
-                    e["kind"] == "READS_CAPTURED_VERSION" for e in edges
+        link_observations(
+            document(
+                ARTIFACT_FLOW,
+                nodes=list(nodes.values()),
+                edges=edges,
+                source_effects=source_sites,
+                source_processes=source_processes,
+                open_fields=pending,
+                coverage=dict(
+                    source_effect_sites=len(source_sites),
+                    source_process_sites=len(source_processes),
+                    process_execution_events="not_observed",
+                    process_instance_binding="source_templates_only",
+                    process_build_invocation_matching="not_established",
+                    parser_snapshot_reads=sum(
+                        e["kind"] == "READS_CAPTURED_VERSION" for e in edges
+                    ),
+                    historical_read_versions="not_observed",
+                    path_to_inode_aliasing="not_inferred",
                 ),
-                historical_read_versions="not_observed",
-                path_to_inode_aliasing="not_inferred",
             ),
+            build,
+            units,
+            root,
         )
     )

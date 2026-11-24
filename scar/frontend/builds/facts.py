@@ -4,6 +4,8 @@ import hashlib
 import io
 import json
 import os
+from collections import Counter, defaultdict
+from datetime import datetime, timezone
 from pathlib import Path
 import re
 import shutil
@@ -13,6 +15,8 @@ import subprocess
 from tempfile import TemporaryDirectory
 
 from scar.contract import digest
+
+from .process_tree import decode_process_tree, wrapper_mappings
 
 _ENVIRONMENT = {
     "PATH",
@@ -90,7 +94,7 @@ def _started(row):
     pid, ppid = _integer(row["pid"]), _integer(row.get("ppid", 0))
     if pid <= 0 or ppid < 0:
         raise ValueError("invalid process identity")
-    return dict(
+    record = dict(
         executable=executable,
         arguments=argv,
         directory=directory,
@@ -102,6 +106,10 @@ def _started(row):
             if k in _ENVIRONMENT or k.startswith(_PREFIXES)
         },
     )
+    reporter = environment.get("INTERCEPT_REPORT_COMMAND")
+    if isinstance(reporter, str) and "\0" not in reporter and os.path.isabs(reporter):
+        record["instrumentation_reporter"] = reporter
+    return record
 
 
 def _invocations(raw, facts):
@@ -183,6 +191,337 @@ def _invocations(raw, facts):
         facts["invocations"].append(row)
     if not starts:
         _issue(facts, "empty_build_capture", "no process start was observed")
+
+
+def _timestamp_ns(value):
+    """Decode Bear's timezone-qualified ISO clock without a floating point roundtrip."""
+    match = re.fullmatch(
+        r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?" r"(Z|[+-]\d{2}:\d{2})",
+        value,
+    )
+    if match is None:
+        raise ValueError("expected a timezone-qualified ISO process timestamp")
+    seconds, fraction, zone = match.groups()
+    stamp = datetime.fromisoformat(seconds + zone.replace("Z", "+00:00"))
+    elapsed = stamp - datetime(1970, 1, 1, tzinfo=timezone.utc)
+    return (elapsed.days * 86400 + elapsed.seconds) * 10**9 + int(
+        (fraction or "").ljust(9, "0")
+    )
+
+
+def _process_parents(facts):
+    """Only a unique, closed observed lifetime can identify a process parent."""
+    by_pid, intervals, invalid_pids = defaultdict(list), {}, set()
+    for row in facts["invocations"]:
+        try:
+            start = _timestamp_ns(row["started"])
+            finish = (
+                _timestamp_ns(row["finished"]) if row["finished"] is not None else None
+            )
+            if finish is not None and finish < start:
+                raise ValueError("process exit precedes its start")
+            intervals[row["id"]] = (start, finish)
+            by_pid[row["pid"]].append(row)
+        except (TypeError, ValueError):
+            invalid_pids.add(row["pid"])
+            facts.setdefault("process_diagnostics", []).append(
+                dict(code="invalid_process_timestamp", invocation_id=row["id"])
+            )
+
+    def parents(pid, timestamp, child=None):
+        if pid in invalid_pids:
+            return []
+        return [
+            row
+            for row in by_pid[pid]
+            if row["id"] != child
+            and intervals[row["id"]][0] <= timestamp
+            and (
+                intervals[row["id"]][1] is None or timestamp <= intervals[row["id"]][1]
+            )
+        ]
+
+    for row in facts["invocations"]:
+        if row["id"] not in intervals:
+            continue
+        choices = parents(row["ppid"], intervals[row["id"]][0], row["id"])
+        if len(choices) == 1 and intervals[choices[0]["id"]][1] is not None:
+            row["parent_invocation_id"] = choices[0]["id"]
+    return intervals, parents
+
+
+def _process_event(event, limit):
+    """Validate one audit intent; retaining a location does not prove its binding."""
+
+    def integer(value, minimum=0):
+        if type(value) is not int or not minimum <= value < 1 << 64:
+            raise ValueError("invalid process observation integer")
+        return value
+
+    def text(value, *, nullable=False, absolute=False):
+        if nullable and value is None:
+            return value
+        if (
+            not isinstance(value, str)
+            or "\0" in value
+            or absolute
+            and not os.path.isabs(value)
+        ):
+            raise ValueError("invalid process observation text or path")
+        return value
+
+    def unresolved(value):
+        if not isinstance(value, list):
+            raise ValueError("invalid unresolved process fields")
+        return [text(item) for item in value]
+
+    sequence = integer(event["sequence"])
+    if event["kind"] != "PROCESS_LAUNCH_INTENT" or sequence >= limit:
+        raise ValueError("invalid process observation kind or sequence")
+    result = dict(
+        kind=event["kind"],
+        sequence=sequence,
+        parent_pid=integer(event["parent_pid"], 1),
+        thread_id=integer(event["thread_id"]),
+        wall_time_ns=integer(event["wall_time_ns"]),
+        monotonic_ns=integer(event["monotonic_ns"]),
+        executable=text(event["executable"], nullable=True),
+        cwd=text(event["cwd"], nullable=True, absolute=True),
+        caller=None,
+        unresolved=unresolved(event["unresolved"]),
+    )
+    child = event.get("child_pid")
+    outcome = event.get("launch_outcome", "unobserved")
+    if outcome not in {"unobserved", "started"}:
+        raise ValueError("invalid observed launch outcome")
+    if child is not None:
+        child = integer(child, 1)
+    if (outcome == "started") != (child is not None):
+        raise ValueError("observed launch outcome disagrees with its child PID")
+    result.update(child_pid=child, launch_outcome=outcome)
+    arguments = event["arguments"]
+    if arguments is not None and (not isinstance(arguments, list) or not arguments):
+        raise ValueError("invalid process observation argument vector")
+    result["arguments"] = (
+        [text(arg) for arg in arguments] if arguments is not None else None
+    )
+    caller = event["caller"]
+    if caller is not None:
+        path = text(caller["path"])
+        if (
+            not path
+            or os.path.isabs(path)
+            or any(p in {"", ".", ".."} for p in path.split("/"))
+        ):
+            raise ValueError("caller path must be source-root-relative")
+        location = caller["location"]
+        if location["file"] != path:
+            raise ValueError("caller location disagrees with its source path")
+        coordinates = {"file": path, "line": integer(location["line"], 1)}
+        for field in ("end_line", "column", "end_column"):
+            value = location[field]
+            coordinates[field] = None if value is None else integer(value, 1)
+        if (
+            coordinates["end_line"] is not None
+            and coordinates["end_line"] < coordinates["line"]
+        ):
+            raise ValueError("caller location has a reversed line range")
+        if type(caller["source_code_matches_snapshot"]) is not bool:
+            raise ValueError("invalid caller code snapshot evidence")
+        verified = caller["source_code_matches_snapshot"]
+        for key in ("source_sha256", "code_sha256"):
+            if caller[key] is None and not verified:
+                continue
+            if not isinstance(caller[key], str) or not re.fullmatch(
+                "[0-9a-f]{64}", caller[key]
+            ):
+                raise ValueError("invalid caller content digest")
+        result["caller"] = dict(
+            path=path,
+            file=text(caller["file"], absolute=True),
+            location=coordinates,
+            function=text(caller["function"]),
+            qualname=text(caller["qualname"], nullable=not verified),
+            first_line=integer(caller["first_line"], 1),
+            bytecode_offset=integer(caller["bytecode_offset"]),
+            source_sha256=caller["source_sha256"],
+            code_sha256=caller["code_sha256"],
+            source_code_matches_snapshot=caller["source_code_matches_snapshot"],
+            unresolved=unresolved(caller["unresolved"]),
+        )
+    return result
+
+
+def _process_observation(raw, facts, intervals, parents, tree=None):
+    """Join intent and execution only when the same capture proves a unique match."""
+    result = dict(sha256=digest(raw), bindings=[], unresolved=[], diagnostics=[])
+    if tree is not None:
+        result["process_tree"] = {
+            key: tree[key] for key in ("provider", "sha256", "diagnostics", "coverage")
+        }
+    facts["process_observation"] = result
+    try:
+        envelope = json.loads(raw)
+        if (
+            envelope["schema"] != "scar.process-observation"
+            or type(envelope["schema_version"]) is not int
+            or envelope["schema_version"] != 1
+            or envelope["provider"] != "python-audit"
+            or not isinstance(envelope["events"], list)
+            or not isinstance(envelope["source_root"], str)
+            or "\0" in envelope["source_root"]
+            or not os.path.isabs(envelope["source_root"])
+            or os.path.normpath(envelope["source_root"]) != facts["root"]
+        ):
+            raise ValueError("unsupported process observation envelope or source root")
+        for name in ("collector_pid", "event_limit", "dropped_events"):
+            value = envelope[name]
+            if (
+                type(value) is not int
+                or not (1 if name == "collector_pid" else 0) <= value < 1 << 64
+            ):
+                raise ValueError("invalid process observation envelope count")
+        interpreter = envelope["interpreter"]
+        for key in ("implementation", "version", "executable"):
+            if (
+                not isinstance(interpreter[key], str)
+                or not interpreter[key]
+                or "\0" in interpreter[key]
+            ):
+                raise ValueError("invalid process observation interpreter")
+        if not os.path.isabs(interpreter["executable"]):
+            raise ValueError("interpreter executable must be absolute")
+        result.update(
+            {
+                k: envelope[k]
+                for k in (
+                    "schema",
+                    "schema_version",
+                    "provider",
+                    "collector_pid",
+                    "source_root",
+                    "event_limit",
+                    "dropped_events",
+                )
+            }
+        )
+        result["interpreter"] = {
+            k: interpreter[k] for k in ("implementation", "version", "executable")
+        }
+        result["events"] = []
+        for event in envelope["events"]:
+            try:
+                result["events"].append(_process_event(event, envelope["event_limit"]))
+            except (KeyError, TypeError, ValueError, AttributeError):
+                result["diagnostics"].append(dict(code="invalid_process_intent"))
+        if len(envelope["events"]) > envelope["event_limit"]:
+            raise ValueError("process observation exceeds its declared event limit")
+    except (KeyError, TypeError, ValueError, AttributeError) as error:
+        result["events"] = []
+        result["diagnostics"].append(
+            dict(code="invalid_process_observation", detail=str(error))
+        )
+        return
+
+    def key(row, process=False):
+        if (
+            row["executable"] is None
+            or row["arguments"] is None
+            or (row["cwd"] if not process else row["directory"]) is None
+            or not process
+            and row["child_pid"] is None
+        ):
+            return None
+        return (
+            row["ppid"] if process else row["parent_pid"],
+            row["pid"] if process else row["child_pid"],
+            row["executable"],
+            tuple(row["arguments"]),
+            row["directory"] if process else row["cwd"],
+        )
+
+    invocations, proposals = defaultdict(list), []
+    sequences = Counter(event["sequence"] for event in result["events"])
+    for row in facts["invocations"]:
+        # Re-keying uses directory only; do not equate argv[0] with executable.
+        invocations[key(row, True)].append(row)
+    for event in result["events"]:
+        sequence, match = event["sequence"], key(event)
+        choices = invocations.get(match, []) if match is not None else []
+        reason = "no_matching_execution"
+        parent = parents(event["parent_pid"], event["wall_time_ns"])
+        if result["diagnostics"]:
+            reason = "invalid_observation_events"
+        elif result["dropped_events"]:
+            reason = "incomplete_intent_observation"
+        elif sequences[sequence] != 1:
+            reason = "duplicate_intent_sequence"
+        elif event["launch_outcome"] != "started" or event["child_pid"] is None:
+            reason = "unobserved_child_pid"
+        elif match is None:
+            reason = "unresolved_launch_key"
+        elif len(parent) != 1 or intervals[parent[0]["id"]][1] is None:
+            reason = "unproven_parent_lifetime"
+        else:
+            eligible = [
+                (child, None)
+                for child in choices
+                if child["id"] in intervals
+                and event["wall_time_ns"]
+                <= intervals[child["id"]][0]
+                <= intervals[parent[0]["id"]][1]
+                and child.get("parent_invocation_id") == parent[0]["id"]
+            ]
+            if tree is not None:
+                eligible.extend(
+                    wrapper_mappings(
+                        tree, event, parent[0], facts["invocations"], intervals
+                    )
+                )
+            if len(eligible) == 1:
+                child, mapping = eligible[0]
+                proposals.append(
+                    dict(
+                        sequence=sequence,
+                        invocation_id=child["id"],
+                        parent_invocation_id=parent[0]["id"],
+                        evidence=(
+                            "observed_child_pid_and_kernel_wrapper_mapping"
+                            if mapping is not None
+                            else "observed_child_pid_and_process_identity"
+                        ),
+                        **(
+                            {"instrumentation_mapping": mapping}
+                            if mapping is not None
+                            else {}
+                        ),
+                    )
+                )
+                continue
+            reason = (
+                "ambiguous_execution_lifetime"
+                if eligible
+                else "inconsistent_process_time" if choices else "no_matching_execution"
+            )
+        result["unresolved"].append(
+            dict(
+                sequence=sequence,
+                reason=reason,
+                candidates=[row["id"] for row in choices],
+            )
+        )
+    observations = Counter(row["invocation_id"] for row in proposals)
+    for binding in proposals:
+        if observations[binding["invocation_id"]] == 1:
+            result["bindings"].append(binding)
+        else:
+            result["unresolved"].append(
+                dict(
+                    sequence=binding["sequence"],
+                    reason="duplicate_child_process_observation",
+                    candidates=[binding["invocation_id"]],
+                )
+            )
 
 
 class _Files:
@@ -446,7 +785,14 @@ def _libraries(outputs, files):
             )
 
 
-def capture_build(raw: bytes, *, root: Path, provider: str) -> dict:
+def capture_build(
+    raw: bytes,
+    *,
+    root: Path,
+    provider: str,
+    process_observation: bytes | None = None,
+    process_tree: bytes | None = None,
+) -> dict:
     """Decode an already locked capture without replaying any observed command."""
     facts = dict(
         provider=provider,
@@ -466,7 +812,16 @@ def capture_build(raw: bytes, *, root: Path, provider: str) -> dict:
         )
         return facts
     _invocations(raw, facts)
+    intervals, parents = _process_parents(facts)
+    if process_observation is not None:
+        tree = decode_process_tree(process_tree) if process_tree is not None else None
+        _process_observation(process_observation, facts, intervals, parents, tree)
     files = _Files(facts)
+    if process_tree is not None:
+        files.utility("strace")
+    for row in facts["invocations"]:
+        if reporter := row.get("instrumentation_reporter"):
+            files.capture(reporter, "tool")
     bear, version = files.utility("bear")
     if bear and re.fullmatch(r"3\.\d+\.\d+(?:[-+][\w.-]+)?", version):
         _compilations(raw, bear, files)

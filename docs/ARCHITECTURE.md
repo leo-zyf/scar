@@ -155,4 +155,6 @@ CI 从安装后的 wheel 验证三阶段及层间隔离，检查 Black、LLVM �
 
 构建输入首先经过独立的发现子流水线：锁定 Bear 3 原始事件字节 → `builds/facts.py` 解码命令并快照命名文件 → `builds/normalize.py` 离线生成编译配置、镜像归属与构建依赖子图。它为 F0 解析请求补全单元任务；构建格式规范化不等于 F2 的程序操作规范化。所有单元随后严格沿同一 F1 语言事实 → F2 中立操作 → F3 构图 → F4 状态分析进入 F5 封存。M1 校验构建子图收据和诊断，后端只读取统一执行 IR，不重放原构建命令。Bear、readelf 仅在前端使用。
 
+可选进程证据沿同一层级交接：`languages/python/process_capture.py` 独立运行，仅在启动审计和指定构造函数的局部返回处记录有限事件；`builds/process_tree.py` 只解码进程系统调用日志，`builds/facts.py` 合并实际 PID 与工具包装映射，F2 转交事实；`artifacts/processes.py` 在 F5 连接源操作端口，不回读源码、不执行采集。进程事件不授权删除构建或文件操作；消费者版本及阶段前移仍由中端另证。局部返回机制参见 [CPython monitoring](https://docs.python.org/3/library/sys.monitoring.html)，包装 PID 的区别来自 [Bear 3.1.3](https://github.com/rizsotto/Bear/blob/3.1.3/source/intercept/source/report/wrapper/EventReporter.cc)。
+
 库证据分为显式链接需求、现有 ELF 的 `DT_NEEDED` 和运行时实际加载；前两者不能证明第三者，也不能证明该库已经是最快实现。文件和工具摘要说明采集时内容，不假称历史构建时内容；未记录的旧对象、未闭合的生成文件和命令依赖必须保留边界。Bear 原始环境只提取编译、库搜索及并行控制白名单，完整环境不进入图包。不能将 `make -n` 当成绝不执行的静态解析器：GNU Make 的递归调用与部分展开仍会执行。[Bear](https://github.com/rizsotto/Bear/tree/3.1.3) · [GNU Make](https://www.gnu.org/software/make/manual/html_node/Instead-of-Execution.html)

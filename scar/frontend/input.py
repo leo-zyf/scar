@@ -23,6 +23,15 @@ class SourceRequest:
     build_trace: dict | None = None
 
 
+def _capture_bytes(manifest, receipt, label):
+    if not isinstance(receipt, dict) or not isinstance(receipt.get("path"), str):
+        raise ValueError(label + " requires its captured file path")
+    data = (manifest.parent / receipt["path"]).resolve(strict=True).read_bytes()
+    if receipt.get("sha256", digest(data)) != digest(data):
+        raise ValueError(label + " lock changed")
+    return data
+
+
 def with_entry_abi(profile, entry_abi):
     if (
         entry_abi
@@ -173,10 +182,7 @@ def read_request(path: Path) -> SourceRequest:
         trace = spec["build_trace"]
         if not isinstance(trace, dict) or trace.get("provider") != "bear-3-intercept":
             raise ValueError("expected the bear-3-intercept build trace provider")
-        trace_path = (manifest.parent / trace["path"]).resolve(strict=True)
-        raw = trace_path.read_bytes()
-        if trace.get("sha256", digest(raw)) != digest(raw):
-            raise ValueError("build trace lock changed")
+        raw = _capture_bytes(manifest, trace, "build trace")
         targets = spec.get("targets")
         if targets is not None and (
             not isinstance(targets, list)
@@ -186,6 +192,16 @@ def read_request(path: Path) -> SourceRequest:
         ):
             raise ValueError("build targets must be distinct nonempty output paths")
         build_trace = dict(provider=trace["provider"], raw=raw, targets=targets)
+        for field in ("process_observation", "process_tree"):
+            if field in trace:
+                if field == "process_tree" and (
+                    not isinstance(trace[field], dict)
+                    or trace[field].get("provider") != "strace-process-v1"
+                ):
+                    raise ValueError(
+                        "expected the strace-process-v1 process tree provider"
+                    )
+                build_trace[field] = _capture_bytes(manifest, trace[field], field)
     locks = spec.get("source_lock", {}).get("files", {})
     python_names = {p["path"] for p in profiles if p["language"].lower() == "python"}
     scripts = [image["source"] for image in images or () if "source" in image]

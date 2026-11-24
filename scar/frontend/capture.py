@@ -86,7 +86,11 @@ def capture_project(request):
 
         trace = request.build_trace
         facts = capture_build(
-            trace["raw"], root=request.root, provider=trace["provider"]
+            trace["raw"],
+            root=request.root,
+            provider=trace["provider"],
+            process_observation=trace.get("process_observation"),
+            process_tree=trace.get("process_tree"),
         )
         build = normalize_build(
             facts,

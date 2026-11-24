@@ -76,6 +76,8 @@ M1 保留 `state_evidence`，包含图身份、状态表、访问和版本关系
 
 F5 的 `artifact_flow.source_processes` 把这些源进程操作、命令候选、标准流路由及接收者引用接入跨单元索引；操作数使用全局 `SOURCE_OPERATION` ID。`PROCESS_HANDLE_TEMPLATE` 只连接有条件的句柄来源模板，不证明动态实例相同；构建事件仍保留自己的 argv、cwd 和捕获依据，源请求与事件之间尚未证明的对应关系单独报告。
 
+`PROCESS_INTENT` 是一次捕获的启动意图，只有正常构造返回才带已发布的子 PID；它不是进程完成证明。F1 另核对同次捕获的执行身份与生命周期，F5 用源码快照、代码摘要和指令位置关联到源端口。`OBSERVED_LAUNCH_INTENT/OBSERVED_PROCESS_START` 分别连接这两段证据；PID 只在采集批次内有意义，不是 CodeID、对象身份或数据版本。Bear 报告 PID 与 Python 发布 PID 分属显式域；包装关系须有独立的成功 exec 和 fork 证据，不能用命令相似性代替。捕获工具引入的包装层只保留为证据映射，不成为待优化的程序操作。
+
 资源使用独立类型化表，含 CPU、物理核、逻辑 CPU、NUMA 内存、缓存容量、存储和可见加速设备。拓扑边表示资源归属及可达性。时间成本记录在后端物理计划中，包含测量、估计、线程范围与选择理由。硬件能力的观测和软件操作的合法性分别保留来源。
 
 `CPU_POOL` 表达同一进程可使用的 CPU 集合及共享时间配额，通过 `CPU_POOL_MEMBER` 指向具体逻辑 CPU。`capacity_upper_bound_cores` 保留按 quota/period 推导的持续核时间上界，不是瞬时并发上限或计算吞吐；原始 quota 和 period 同时保留。资源 `capacity` 的单位明确为保守 worker 预算。cgroup 路径只作为限额证据，不展开为待优化的操作节点。未知约束保留 `issues`，工具并发回退为一；无争用和最佳并行度均不能由核数直接推出。

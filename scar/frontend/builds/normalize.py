@@ -520,6 +520,15 @@ def normalize_build(facts, *, targets=None, entry="main", require_root=True):
                 except ValueError as error:
                     issue("dependency_grammar", str(error), path=path)
 
+    for row in facts.get("invocations", []):
+        if parent := row.get("parent_invocation_id"):
+            source, target = (
+                "build:invocation:" + parent,
+                "build:invocation:" + row["id"],
+            )
+            if source in nodes and target in nodes:
+                edge("PROCESS_PARENT", source, target, evidence="unique_pid_lifetime")
+
     selected = []
     if targets:
         for target in targets:
@@ -705,6 +714,10 @@ def normalize_build(facts, *, targets=None, entry="main", require_root=True):
             "generated_input_history": "not_observed",
         },
     }
+    if "process_observation" in facts:
+        graph["process_observation"] = facts["process_observation"]
+    if "process_diagnostics" in facts:
+        graph["process_diagnostics"] = facts["process_diagnostics"]
     return {
         "profiles": [profile_table[i] for i in used],
         "images": images,

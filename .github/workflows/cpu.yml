@@ -28,7 +28,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            gcc g++ gfortran make bear cmake binutils libclang1-18 clang-format-18 \
+            gcc g++ gfortran make bear strace cmake binutils libclang1-18 clang-format-18 \
             libopenmpi-dev openmpi-bin
           python -m pip install build
       - name: Provision pinned C++20 CPU array SDK
@@ -46,6 +46,27 @@ jobs:
           python -m venv "$RUNNER_TEMP/scar-verify"
           verify="$RUNNER_TEMP/scar-verify/bin/python"
           wheel=("$packages"/*.whl)
+          python - "${wheel[0]}" <<'PY'
+          from pathlib import Path
+          import sys
+          from zipfile import ZipFile
+
+          sources = {
+              p.as_posix(): p.read_bytes()
+              for p in Path("scar").rglob("*")
+              if p.suffix in {".py", ".cpp", ".hpp"}
+          }
+          with ZipFile(sys.argv[1]) as package:
+              members = {
+                  name
+                  for name in package.namelist()
+                  if name.startswith("scar/") and Path(name).suffix in {".py", ".cpp", ".hpp"}
+              }
+              if members != sources.keys():
+                  raise SystemExit("wheel source members differ from the active source tree")
+              if any(package.read(name) != data for name, data in sources.items()):
+                  raise SystemExit("wheel contains stale source bytes")
+          PY
           "$verify" -m pip install "${wheel[0]}[cpu,test]"
       - name: Verify source format
         run: |
