@@ -534,6 +534,226 @@ def test_reference_binding_and_opaque_call_use_the_referred_state():
     assert read["incoming"]["memory"] == later["outgoing"]["memory"]
 
 
+def test_local_opaque_regions_preserve_state_connections_and_loop_structure():
+    from scar.frontend.state_flow import state_flow
+
+    def var(name):
+        return dict(op="var", name=name)
+
+    def number(value):
+        return dict(op="literal", type="i64", value=value)
+
+    fn = dict(
+        name="observed",
+        result="i64",
+        params=[dict(name="source", type="i64"), dict(name="stop", type="bool")],
+        body=[
+            dict(op="decl", name="stable", type="i64", init=number(5), site="stable"),
+            dict(op="decl", name="total", type="i64", init=number(0)),
+            dict(op="decl", name="item", type="i64", init=number(-1)),
+            {
+                "op": "try",
+                "site": "protected",
+                "body": [
+                    dict(op="assign", target=var("total"), value=number(2)),
+                ],
+                "handlers": [
+                    dict(
+                        op="exception_handler",
+                        binding=None,
+                        body=[
+                            dict(op="assign", target=var("total"), value=number(99)),
+                        ],
+                        cleanup=[],
+                    )
+                ],
+                "finally": [],
+            },
+            dict(op="expr", value=var("total"), site="after_protected"),
+            dict(op="expr", value=var("stable"), site="stable_read"),
+            dict(
+                op="for",
+                protocol="iterator",
+                range=var("source"),
+                target=var("item"),
+                site="loop",
+                body=[
+                    dict(
+                        op="assign",
+                        target=var("total"),
+                        value=var("item"),
+                        site="body_write",
+                    ),
+                    dict(
+                        op="with_context",
+                        resources=[],
+                        body=[
+                            {
+                                "op": "if",
+                                "condition": var("stop"),
+                                "then": [dict(op="break")],
+                                "else": [],
+                            },
+                        ],
+                        effects=["STATE"],
+                    ),
+                ],
+            ),
+            dict(op="return", value=var("total"), site="result"),
+        ],
+    )
+    graph = function_graph(fn, "partial-regions")
+    flow = state_flow(graph["nodes"], graph["entry"], graph["accesses"])
+    sites = {n["site"]: i for i, n in enumerate(graph["nodes"]) if "site" in n}
+    slots = {s["name"]: key for key, s in graph["states"].items()}
+
+    def record(site, kind=None):
+        return next(
+            r
+            for r in flow["versions"]
+            if r["node"] == sites[site] and (kind is None or r["kind"] == kind)
+        )
+
+    protected = record("protected", "OPAQUE")
+    assert (
+        record("after_protected")["incoming"][slots["total"]]
+        == protected["outgoing"][slots["total"]]
+    )
+    assert (
+        record("stable_read")["incoming"][slots["stable"]]
+        == record("stable")["outgoing"][slots["stable"]]
+    )
+    assert slots["stable"] not in protected["outgoing"]
+    assert {
+        r["phase"]
+        for r in flow["versions"]
+        if r["node"] == sites["loop"] and r["kind"] == "OPAQUE"
+    } == {"iterator_setup", "iterator_advance"}
+    assert any(
+        r["kind"] == "LOOP_CARRY" and r["domain"] == slots["total"]
+        for r in flow["versions"]
+    )
+    assert any(
+        t.get("possible") and t["target"] == sites["loop"] and t["phase"] == "exit"
+        for t in flow["transfers"]
+    )
+    assert len([n for n in graph["nodes"] if n["op"] == "for"]) == 1
+    assert flow["coverage"]["complete"] is False and flow["versions"]
+
+    cell = dict(op="var", name="shared", cell=dict(owner="outer", name="shared"))
+    fn["body"] = [
+        dict(op="expr", value=cell, site="before"),
+        dict(
+            op="expr",
+            value=dict(op="call", callee="callback", args=[], parameter_types=[]),
+            site="call",
+        ),
+        dict(op="return", value=cell, site="after"),
+    ]
+    graph = function_graph(fn, "cell-sharing")
+    flow = state_flow(graph["nodes"], graph["entry"], graph["accesses"])
+    records = {r["node"]: r for r in flow["versions"]}
+    before, call, after = [records[h["port"]] for h in graph["entry"]]
+    assert before["incoming"]["memory"] != after["incoming"]["memory"]
+    assert after["incoming"]["memory"] == call["outgoing"]["memory"]
+    fn["body"] = [dict(op="return", value=cell)]
+    graph = function_graph(fn, "read-only-cell")
+    flow = state_flow(graph["nodes"], graph["entry"], graph["accesses"])
+    assert flow["introduced_states"]["memory"]["kind"] == "shared_memory"
+    assert "memory" not in graph["states"]
+
+
+def test_coordinate_rewrite_invalidates_condition_writes_before_branch():
+    def var(name):
+        return dict(op="var", name=name)
+
+    def number(value):
+        return dict(op="literal", type="i64", value=value)
+
+    coordinate = dict(op="binary", operator="mod", left=var("i"), right=var("n"))
+    function = dict(
+        name="fill",
+        params=[dict(name="a", type=dict(kind="ptr", to="i64"))],
+        result="void",
+        body=[
+            dict(op="decl", name="n", type="i64", init=number(4)),
+            dict(op="decl", name="saved", type="i64", init=var("n")),
+            {
+                "op": "if",
+                "condition": dict(op="unary", operator="predec", value=var("n")),
+                "then": [
+                    dict(
+                        op="map",
+                        site="fill/map",
+                        index="i",
+                        extent=var("saved"),
+                        independent=True,
+                        body=[
+                            dict(
+                                op="assign",
+                                target=dict(
+                                    op="index", base=var("a"), indices=[var("i")]
+                                ),
+                                value=coordinate,
+                            )
+                        ],
+                    )
+                ],
+                "else": [],
+            },
+        ],
+    )
+    function = _canonical_function(function)
+    for mutating in (True, False):
+        incoming = deepcopy(function)
+        if not mutating:
+            incoming["body"][-1]["condition"] = dict(
+                op="literal", type="bool", value=True
+            )
+        output = _layer(
+            "rewrites",
+            """from scar.middle.rewrites import optimize
+changes=optimize(data)
+print(json.dumps(dict(function=data,changes=changes)))
+""",
+            incoming,
+        )
+        rules = {c["rule"] for c in output["changes"]}
+        assert ("bounded_integer_coordinate" in rules) is not mutating
+        value = output["function"]["body"][-1]["then"][0]["body"][0]["value"]
+        n = 3 if mutating else 4
+        actual = [i if value["op"] == "var" else i % n for i in range(4)]
+        assert actual == ([0, 1, 2, 0] if mutating else [0, 1, 2, 3])
+
+    incoming = deepcopy(function)
+    loop = incoming["body"].pop()["then"][0]
+    incoming["body"] += [
+        dict(op="label", name="again"),
+        loop,
+        {
+            "op": "if",
+            "condition": dict(
+                op="binary", operator="eq", left=var("n"), right=number(4)
+            ),
+            "then": [
+                dict(op="assign", target=var("n"), value=number(3)),
+                dict(op="goto", name="again"),
+            ],
+            "else": [],
+        },
+    ]
+    output = _layer(
+        "rewrites",
+        """from scar.middle.rewrites import optimize
+changes=optimize(data)
+print(json.dumps(dict(function=data,changes=changes)))
+""",
+        incoming,
+    )
+    # The second visit has n=3 although the source-order initialization used 4.
+    assert not any(c["rule"] == "bounded_integer_coordinate" for c in output["changes"])
+
+
 def test_iteration_bindings_and_reachable_loop_predecessors():
     from scar.frontend.state_flow import state_flow
 

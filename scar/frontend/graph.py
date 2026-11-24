@@ -2,7 +2,7 @@
 
 from scar.contract import digest, json_bytes
 
-_REGIONS = {"body", "then", "else", "init"}
+_REGIONS = {"body", "then", "else", "init", "handlers", "cleanup", "finally"}
 _CONTROL = {
     "for",
     "each",
@@ -12,9 +12,23 @@ _CONTROL = {
     "do_while",
     "switch",
     "block",
+    "try",
+    "exception_handler",
+    "with_context",
     "return",
     "break",
     "continue",
+}
+
+_WRITE_PORT = {
+    "assign": "target",
+    "assign_many": "targets",
+    "for": "target",
+    "unbind": "targets",
+    "exception_handler": "binding",
+    "python_import": "binding",
+    "python_define": "target",
+    "python_define_class": "target",
 }
 
 _CALLS = {
@@ -146,6 +160,7 @@ def function_graph(function, revision):
                     node=number,
                     domain=slot,
                     mode=mode,
+                    storage=duration,
                     lexical=domains[slot]["kind"] == "local"
                     and duration in {"auto", "register"},
                 )
@@ -256,16 +271,21 @@ def function_graph(function, revision):
             field = value[key]
             if key == "args" and op in _CALLS:
                 row[key] = arguments(value, scope, number)
+            elif op == "with_context" and key == "resources":
+                row[key] = [
+                    {
+                        port: encode(
+                            operand, scope, "write" if port == "binding" else "read"
+                        )
+                        for port, operand in resource.items()
+                    }
+                    for resource in field
+                ]
             elif key in _REGIONS and isinstance(field, list):
                 inner = scope if key == "init" else scope.copy()
                 row[key] = [encode(child, inner) for child in field]
             else:
-                access = (
-                    "write"
-                    if op in {"assign", "for", "python_import"}
-                    and key in {"target", "binding"}
-                    else "read"
-                )
+                access = "write" if key == _WRITE_PORT.get(op) else "read"
                 if op == "update" and key == "target":
                     access = "write" if value["operator"] == "set" else "read_write"
                 if (
@@ -295,8 +315,12 @@ def function_graph(function, revision):
                     and value.get("conversion") == "array_decay"
                 ):
                     access = "address"
-                if (op == "select" and key in {"then", "else"}) or (
-                    op == "binary"
+                if (
+                    op == "unpack"
+                    and key == "items"
+                    or op == "select"
+                    and key in {"then", "else"}
+                    or op == "binary"
                     and value.get("operator") == "comma"
                     and key == "right"
                 ):

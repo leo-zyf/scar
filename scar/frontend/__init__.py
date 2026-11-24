@@ -127,6 +127,11 @@ def _unit(job):
         graph["state_flow"] = state_flow(
             graph["nodes"], graph["entry"], graph["accesses"]
         )
+        for identity, state in graph["state_flow"]["introduced_states"].items():
+            if graph["states"].setdefault(identity, state) != state:
+                raise ValueError(
+                    f"state analysis introduced a conflicting domain: {identity}"
+                )
     receipt = member(out, "units", payload)
     return dict(
         path=profile["path"],

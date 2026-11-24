@@ -5,6 +5,9 @@ from collections import defaultdict
 
 def state_flow(nodes, entry, accesses):
     boundaries = []
+    opaque = set()
+    protocol_regions = set()
+    unstructured = []
     bound_loops = {
         edge["node"]
         for edge in accesses
@@ -21,16 +24,21 @@ def state_flow(nodes, entry, accesses):
             )
         ):
             boundaries.append((port, "conservative_iterator_protocol"))
+            protocol_regions.add(port)
+            if op == "with_context":
+                opaque.add(port)
         elif op in {"map", "each"} and port not in bound_loops:
             # An older F3 shard can bind a same-named extent to the inner
             # variable. That lexical distinction is absent from these facts.
             boundaries.append((port, "conservative_iteration_binding"))
+            opaque.add(port)
         elif (
             op == "decl"
             and row.get("storage") in {"static", "thread_local"}
             and "init" in row
         ):
             boundaries.append((port, "conservative_static_initialization"))
+            opaque.add(port)
         elif op in {
             "goto",
             "switch",
@@ -45,17 +53,22 @@ def state_flow(nodes, entry, accesses):
             "await",
         }:
             boundaries.append((port, "conservative_cfg"))
-    if boundaries:
-        return {
-            "status": boundaries[0][1],
-            "boundaries": [p for p, _ in boundaries],
-            "versions": [],
-        }
+            if op == "goto":
+                unstructured.append(port)
+            elif op not in {"raise", "throw"}:
+                opaque.add(port)
 
     by_node = defaultdict(list)
     escaped = {edge["domain"] for edge in accesses if edge["mode"] == "address"}
+    shared = escaped | {
+        edge["domain"]
+        for edge in accesses
+        if edge.get("storage") in {"static", "thread_local"}
+    }
     for effect in accesses:
         by_node[effect["node"]].append(effect)
+    source_domains = {effect["domain"] for effect in accesses}
+    introduced_states = {}
     records, cache = [], {}
     regions = {"body", "then", "else", "init"}
 
@@ -79,7 +92,9 @@ def state_flow(nodes, entry, accesses):
             # An escaped local or global is also covered by the shared memory
             # token, so an opaque call invalidates reaching reads through it.
             domains = {domain}
-            if domain in escaped or domain.startswith("global/"):
+            if domain in shared or domain.startswith(
+                ("global/", "activation/", "external/")
+            ):
                 domains.add("memory")
             mode = effect["mode"]
             if mode in {"read", "read_write", "unknown"}:
@@ -93,6 +108,9 @@ def state_flow(nodes, entry, accesses):
         if key in cache:
             return cache[key]
         reads, writes = direct_effects(port)
+        if port in opaque or port in protocol_regions:
+            reads.add("memory")
+            writes.add("memory")
         for field, value in nodes[port].items():
             if field in regions and isinstance(value, list) and not nested:
                 continue
@@ -106,26 +124,29 @@ def state_flow(nodes, entry, accesses):
     def version(env, domain):
         return env.get(domain, "entry")
 
-    def apply(env, port, phase, use, change):
+    def apply(env, port, phase, use, change, *, uncertain=False):
         if not use and not change:
             return
+        if "memory" in use | change and "memory" not in source_domains:
+            introduced_states["memory"] = dict(name="memory", kind="shared_memory")
         before = {d: version(env, d) for d in sorted(use | change)}
         token = f"{port}/{phase}"
         after = {d: token for d in sorted(change)}
         records.append(
             dict(
-                kind="ACCESS",
+                kind="OPAQUE" if uncertain else "ACCESS",
                 node=port,
                 phase=phase,
                 read=sorted(use),
+                may_write=sorted(change),
                 incoming=before,
                 outgoing=after,
             )
         )
         env.update(after)
 
-    # A compound statement summary cannot turn a conditional expression write
-    # into a definite clobber. The F3 ports remain available for a finer pass.
+    # Conditional writes kill equality facts but do not assert that a write
+    # definitely occurred. These are may-def epochs, not logical value IDs.
     for port, row in enumerate(nodes):
         op = row["op"]
         if op == "binary" and row.get("operator") in {"land", "lor"}:
@@ -137,11 +158,30 @@ def state_flow(nodes, entry, accesses):
         else:
             continue
         if any(footprint(child, True)[1] for child in ports(conditional)):
-            return dict(
-                status="conservative_conditional_effects",
-                boundaries=[port],
-                versions=[],
-            )
+            boundaries.append((port, "conservative_conditional_effects"))
+
+    if unstructured:
+        reads, writes = {"memory"}, {"memory"}
+        for port in ports(entry):
+            used, changed = footprint(port, True)
+            reads.update(used)
+            writes.update(changed)
+        apply({}, unstructured[0], "function_summary", reads, writes, uncertain=True)
+        return dict(
+            status="conservative_cfg",
+            boundaries=unstructured,
+            versions=records,
+            transfers=[],
+            introduced_states=introduced_states,
+            control_scope="function_summary",
+            access_granularity="function_may_access",
+            coverage=dict(
+                complete=False,
+                unexpanded_regions=list(ports(entry)),
+                unresolved_protocols=sorted(protocol_regions),
+                unstructured_control=unstructured,
+            ),
+        )
 
     transfers = []
 
@@ -184,10 +224,7 @@ def state_flow(nodes, entry, accesses):
                     and edge["mode"] in {"bind", "write"}
                 ):
                     slots.add(edge["domain"])
-            for key in regions:
-                region = nodes[node].get(key)
-                if isinstance(region, list):
-                    pending.extend(ports(region))
+            pending.extend(ports(nodes[node]))
         return slots
 
     def constant(handle):
@@ -203,16 +240,21 @@ def state_flow(nodes, entry, accesses):
 
     def loop_region(port, row, env, outer):
         op = row["op"]
+        iterator = op == "for" and (
+            "iterator" in row or row.get("protocol") in {"iterator", "async_iterator"}
+        )
         initializers = row.get("init", [])
         initializer_slots = lexical_slots(initializers)
         env = sequence(initializers, env, outer)
         if env is None:
             return None
-        evaluate(row, ("extent", "range"), env)
+        evaluate(row, ("extent", "range", "iterator"), env)
+        if iterator:
+            apply(env, port, "iterator_setup", {"memory"}, {"memory"}, uncertain=True)
         test = constant(row.get("condition"))
         counted = op in {"map", "each"}
         extent = constant(row.get("extent")) if counted else None
-        if op == "for" and row.get("condition") is None:
+        if op == "for" and not iterator and row.get("condition") is None:
             test = True
         if (counted and extent is not None and extent <= 0) or (
             not counted and op != "do_while" and test is not None and not test
@@ -230,6 +272,10 @@ def state_flow(nodes, entry, accesses):
         for field in ("condition", "body", "step"):
             for child in ports(row.get(field)):
                 changed.update(footprint(child, True)[1])
+        if iterator:
+            changed.add("memory")
+            for child in ports(row.get("target")):
+                changed.update(footprint(child, True)[1])
         iteration_bindings = {
             access["domain"]
             for access in by_node[port]
@@ -244,7 +290,13 @@ def state_flow(nodes, entry, accesses):
         header = env.copy()
         for domain in changed:
             header[domain] = f"{port}/header"
-        if not counted and op != "do_while":
+        if iterator:
+            # next() may mutate shared state both before yielding and before
+            # raising StopIteration. The target binding only follows a yield.
+            apply(
+                header, port, "iterator_advance", {"memory"}, {"memory"}, uncertain=True
+            )
+        elif not counted and op != "do_while":
             evaluate(row, ("condition",), header)
         frame = {
             "port": port,
@@ -252,13 +304,16 @@ def state_flow(nodes, entry, accesses):
             "continue": [],
             "latch": (
                 "step"
-                if op == "for"
+                if op == "for" and not iterator
                 else "condition" if op in {"while", "do_while"} else "advance"
             ),
         }
         iteration = header.copy()
         if counted:
             apply(iteration, port, "iteration", *direct_effects(port))
+        elif iterator:
+            for child in ports(row.get("target")):
+                apply(iteration, child, "iteration", *footprint(child, True))
         fallthrough = sequence(row["body"], iteration, frame)
         for path in [fallthrough, *frame["continue"], *frame["break"]]:
             if path is not None:
@@ -267,7 +322,9 @@ def state_flow(nodes, entry, accesses):
         latch = join(port, "latch", [fallthrough, *frame["continue"]])
         back = latch
         normal = None
-        if counted:
+        if iterator:
+            normal = header
+        elif counted:
             # An unknown cardinality admits the empty domain; a known positive
             # one must execute the body before the range is exhausted.
             normal = join(port, "exhausted", [env if extent is None else None, latch])
@@ -309,6 +366,46 @@ def state_flow(nodes, entry, accesses):
                 finished.pop(domain, None)
         return finished
 
+    def possible_transfers(port, loop, env):
+        """Summarize exits of an opaque region without flattening nested loops."""
+
+        def visit(current, break_depth=0, continue_depth=0):
+            row = nodes[current]
+            op = row["op"]
+            if op in {"return", "raise", "throw"}:
+                yield current, "return"
+            elif op == "break" and not break_depth:
+                yield current, op
+            elif op == "continue" and not continue_depth:
+                yield current, op
+            break_depth += op in {"switch", "for", "while", "do_while", "map", "each"}
+            continue_depth += op in {"for", "while", "do_while", "map", "each"}
+            for child in ports(row):
+                yield from visit(child, break_depth, continue_depth)
+
+        for current, kind in visit(port):
+            if kind == "return":
+                transfers.append(
+                    dict(
+                        node=current, target=None, phase="function_exit", possible=True
+                    )
+                )
+            elif loop is not None:
+                loop[kind].append(env.copy())
+                transfers.append(
+                    dict(
+                        node=current,
+                        target=loop["port"],
+                        phase="exit" if kind == "break" else loop["latch"],
+                        possible=True,
+                    )
+                )
+
+    def opaque_region(port, env, loop):
+        apply(env, port, "region_summary", *footprint(port, True), uncertain=True)
+        possible_transfers(port, loop, env)
+        return env
+
     def sequence(seq, env, loop):
         for handle in seq:
             if env is None:
@@ -316,7 +413,9 @@ def state_flow(nodes, entry, accesses):
             port = handle["port"]
             row = nodes[port]
             op = row["op"]
-            if op == "block":
+            if port in opaque:
+                env = opaque_region(port, env, loop)
+            elif op == "block":
                 env = sequence(row["body"], env, loop)
             elif op == "if":
                 apply(env, port, "condition", *footprint(port, False))
@@ -334,9 +433,9 @@ def state_flow(nodes, entry, accesses):
                 env = join(port, "join", [left, right])
             elif op in {"map", "each", "for", "while", "do_while"}:
                 env = loop_region(port, row, env, loop)
-            elif op in {"break", "continue", "return"}:
+            elif op in {"break", "continue", "return", "raise", "throw"}:
                 apply(env, port, "effect", *footprint(port, True))
-                if op == "return":
+                if op in {"return", "raise", "throw"}:
                     transfers.append(
                         dict(node=port, target=None, phase="function_exit")
                     )
@@ -357,14 +456,19 @@ def state_flow(nodes, entry, accesses):
         return env
 
     sequence(entry, {}, None)
-    if boundaries:
-        return dict(
-            status=boundaries[0][1], boundaries=[p for p, _ in boundaries], versions=[]
-        )
     return dict(
-        status="structured",
+        status=boundaries[0][1] if boundaries else "structured",
+        boundaries=list(dict.fromkeys(p for p, _ in boundaries)),
+        boundary_details=[dict(node=p, reason=reason) for p, reason in boundaries],
         control_scope="normal_completion",
         access_granularity="statement_may_access",
+        coverage=dict(
+            complete=not boundaries,
+            unexpanded_regions=sorted(opaque),
+            unresolved_protocols=sorted(protocol_regions),
+            unstructured_control=[],
+        ),
         versions=records,
         transfers=transfers,
+        introduced_states=introduced_states,
     )

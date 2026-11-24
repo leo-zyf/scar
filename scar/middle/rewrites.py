@@ -259,6 +259,25 @@ def _bounded_coordinates(fn, changes):
             env.pop(name, None)
             epochs[name] = epochs.get(name, 0) + 1
 
+    def invalidate_effects(value, env):
+        """Kill may-written facts before entering a control continuation."""
+        invalidate(env, writes(value))
+        if any(
+            node["op"]
+            in {
+                "call",
+                "indirect_call",
+                "object_dispatch",
+                "library_call",
+                "goto",
+                "label",
+            }
+            or set(node.get("effects", ())) & {"STATE", "OPAQUE"}
+            or node.get("state_writes")
+            for node in _nodes(value)
+        ):
+            env.clear()
+
     def expression(value, env, bounds):
         if isinstance(value, list):
             return [expression(v, env, bounds) for v in value]
@@ -293,7 +312,10 @@ def _bounded_coordinates(fn, changes):
         for statement in body:
             op = statement["op"]
             if op in {"for", "while", "do_while", "each", "map"}:
-                invalidate(env, writes(statement))
+                # A body may run after init/condition effects and on any later
+                # iteration after step/body effects. Never carry an earlier
+                # scalar alias through any of those possible writes.
+                invalidate_effects(statement, env)
                 inner = env.copy()
                 domains = bounds.copy()
                 if op == "map":
@@ -320,10 +342,13 @@ def _bounded_coordinates(fn, changes):
                     if extent is not None and pure:
                         domains[statement["index"]] = extent
                 sequence(statement["body"], inner, domains)
-                invalidate(env, writes(statement))
+                invalidate_effects(statement, env)
             elif op == "block":
                 sequence(statement["body"], env, bounds)
             elif op == "if":
+                # The condition precedes both arms. This includes may-effects
+                # inside short-circuit or selected expressions.
+                invalidate_effects(statement["condition"], env)
                 sequence(statement["then"], env.copy(), bounds)
                 sequence(statement.get("else", []), env.copy(), bounds)
                 env.clear()
@@ -332,20 +357,13 @@ def _bounded_coordinates(fn, changes):
                 replacement = expression(statement, env, bounds)
                 statement.clear()
                 statement.update(replacement)
+                invalidate_effects(statement, env)
                 if op == "decl":
                     name = statement["name"]
                     invalidate(env, {name})
                     value = term(statement.get("init", {}), env)
                     if value is not None:
                         env[name] = value
-                else:
-                    invalidate(env, writes(statement))
-                if any(
-                    n["op"]
-                    in {"call", "indirect_call", "object_dispatch", "library_call"}
-                    for n in _nodes(statement)
-                ):
-                    env.clear()
 
     sequence(fn["body"], {}, {})
 

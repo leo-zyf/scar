@@ -740,3 +740,87 @@ def test_clang_capture_locks_included_buffers_then_normalizes_offline(
     assert override["body"][0]["value"]["right"] == dict(
         op="literal", type="i32", value=7
     )
+
+
+def test_graph_target_ports_and_lexical_regions(tmp_path):
+    from collections import defaultdict
+
+    from scar.frontend.graph import function_graph
+
+    entry = tmp_path / "entry.py"
+    entry.write_text("""def bound(items, manager, obj, key):
+    a, (b, c) = items
+    with manager as (x, y):
+        obj[key] = a
+    try:
+        a += b
+    except ValueError as err:
+        del c
+    else:
+        del b
+    finally:
+        del a
+    return x
+""")
+    (facts,) = python.capture_project(entry, tmp_path).units
+    function = next(
+        f
+        for f in python.normalize_unit(facts)["functions"]
+        if f["name"] == "py:entry:bound"
+    )
+    graph = function_graph(function, "bindings")
+    modes, domains = defaultdict(list), defaultdict(set)
+    for access in graph["accesses"]:
+        node = graph["nodes"][access["node"]]
+        if node["op"] in {"var", "index"}:
+            name = node.get("name", node["op"])
+            modes[name].append(access["mode"])
+            domains[name].add(access["domain"])
+    assert modes == {
+        "a": ["write", "read", "read_write", "write"],
+        "b": ["write", "read", "write"],
+        "c": ["write", "write"],
+        "err": ["write", "write"],  # handler entry and its mandatory cleanup
+        "x": ["write", "read"],
+        "y": ["write"],
+        "items": ["read"],
+        "manager": ["read"],
+        "obj": ["read"],
+        "key": ["read"],
+        "index": ["write"],
+    }
+    assert all(len(bindings) == 1 for bindings in domains.values())
+    assert domains["index"] == {"memory"}
+
+    # Typed declarations can shadow the outer slot inside independent regions.
+    slot = dict(op="var", name="slot")
+    local = dict(op="decl", name="slot", type="i32")
+    read = dict(op="expr", value=slot)
+    handler = dict(op="exception_handler", body=[], cleanup=[local, read])
+    protected = dict(
+        op="try", body=[], handlers=[handler], **{"finally": [local, read]}
+    )
+    graph = function_graph(
+        dict(
+            name="scopes",
+            body=[
+                {**local, "storage": "static"},
+                protected,
+                dict(op="return", value=dict(op="unary", operator="addr", value=slot)),
+            ],
+        ),
+        "bindings",
+    )
+    declarations = [e for e in graph["accesses"] if e["mode"] == "declare"]
+    assert [(e["storage"], e["lexical"]) for e in declarations] == [
+        ("static", False),
+        ("auto", True),
+        ("auto", True),
+    ]
+    outer, cleanup, final = (e["domain"] for e in declarations)
+    uses = [e for e in graph["accesses"] if e["mode"] != "declare"]
+    assert [(e["domain"], e["mode"]) for e in uses] == [
+        (cleanup, "read"),
+        (final, "read"),
+        (outer, "address"),
+    ]
