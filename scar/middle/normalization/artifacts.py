@@ -153,6 +153,7 @@ def analyze(module):
     nodes = {node["id"]: node for node in graph["nodes"]}
     edges, materializations, boundaries, templates = graph["edges"], [], [], []
     file_transitions = []
+    launch_environments = list(graph.get("launch_environments", ()))
     source_operations = {
         str(node["graph_id"]) + "/" + str(node["port"]): node["id"]
         for node in nodes.values()
@@ -402,7 +403,7 @@ def analyze(module):
         return_value = _UNKNOWN
         return_exits = []
 
-        def location_node(key, label, site=None):
+        def location_node(key, label, site=None, *, operand=None):
             location = dict(
                 path=label[1] if label is not None else None,
                 cwd=label[0] if label is not None else "unresolved.cwd",
@@ -412,10 +413,11 @@ def analyze(module):
             )
             return add(
                 "FILE_LOCATOR",
-                [location, site if key is None else None],
+                [location, [site, operand] if key is None else None],
                 **location,
                 identity_scope="normal_directory_name",
                 inode_aliases="unresolved",
+                **({"operand": operand} if key is None and operand else {}),
             )
 
         def parent_directory(source, target, producer):
@@ -535,10 +537,13 @@ def analyze(module):
                 if not stream.closed:
                     stream.unresolved.add(reason)
 
-        def locate(path, site):
+        def locate(path, site, *, operand=None):
             key = directories.file(path, site)
             locator = location_node(
-                key, directories.label(key) if key is not None else None, site
+                key,
+                directories.label(key) if key is not None else None,
+                site,
+                operand=operand,
             )
             if key is None:
                 boundaries.append(
@@ -795,7 +800,7 @@ def analyze(module):
             )
 
         def copy_file(interface, args, site):
-            source_key, _ = locate(args[0], site)
+            source_key, source_locator = locate(args[0], site, operand=["args", 0])
             destination_directory = directories.directory(
                 args[1], site, known_only=True
             )
@@ -807,7 +812,7 @@ def analyze(module):
                 target_key = destination_directory, source_key[1]
                 target = location_node(target_key, directories.label(target_key), site)
             else:
-                target_key, target = locate(args[1], site)
+                target_key, target = locate(args[1], site, operand=["args", 1])
             source_version = file_versions.get(source_key)
             if interface == "fs.copy_file" and destination_directory is not None:
                 invalidate("copy_file_destination_is_directory", site)
@@ -823,15 +828,33 @@ def analyze(module):
                 return _UNKNOWN
             if source_version is not None:
                 requires(source_version, site, role="copy_source")
-            if (
+            ambiguous = (
                 interface != "fs.copy_file"
                 and destination_directory is None
                 and target_key not in file_versions
-            ):
-                # A string names either a directory or a file. A content
-                # version at that exact locator is our only closed file-kind
-                # evidence here; no directory is inferred from its spelling.
-                invalidate("copy_destination_kind_unproven", site)
+            )
+            targets = [(target_key, target, "resolved_target")]
+            if ambiguous:
+                # Resolve the two source-defined outcomes separately. Exploring
+                # the directory arm must not assert directory identity in the
+                # current filesystem state.
+                alternate = directories.clone()
+                directory = alternate.directory(args[1], site)
+                child_key = (
+                    (directory, source_key[1])
+                    if directory is not None and source_key is not None
+                    else None
+                )
+                child = location_node(
+                    child_key,
+                    alternate.label(child_key) if child_key is not None else None,
+                    site,
+                    operand=["resolved_destination", "source_basename"],
+                )
+                targets = [
+                    (target_key, target, "destination_is_not_directory"),
+                    (child_key, child, "destination_is_directory"),
+                ]
                 boundaries.append(
                     dict(
                         symbol=symbol,
@@ -839,13 +862,10 @@ def analyze(module):
                         source=site,
                         interface=interface,
                         reason="directory_or_file_unproven",
+                        representation="conditional_target_alternatives",
                     )
                 )
-                return _UNKNOWN
-            if source_key is None or target_key is None or source_version is None:
-                invalidate("copy_source_version_unproven", site)
-                return _UNKNOWN
-            if source_key == target_key:
+            if source_key is not None and source_key == target_key:
                 invalidate("copy_source_destination_alias", site)
                 boundaries.append(
                     dict(
@@ -856,77 +876,131 @@ def analyze(module):
                     )
                 )
                 return _UNKNOWN
-            invalidate("copy_may_alias_another_file", site, retain=(source_key,))
             if live_process_effects:
-                return _UNKNOWN
-            value = nodes[source_version]["value"]
-            version = add(
-                "FILE_VERSION_TEMPLATE",
-                [site, source_version, target, context],
-                locator=target,
-                value=value,
-                producer=site,
-                completion=site,
-                source_version=source_version,
-                interface=interface,
-                copy_contract=dict(
-                    semantics_version=1,
-                    follow_symlinks=(
-                        args[2] if len(args) > 2 and type(args[2]) is bool else None
-                    ),
-                    metadata={
-                        "fs.copy_file": "content_only",
-                        "fs.copy": "mode",
-                        "fs.copy2": "stat",
-                    }[interface],
-                    failures="preserve_source_interface",
-                ),
-                filesystem_epoch=filesystem_epoch,
-                instance_scope="per_successful_dynamic_invocation",
-                valid_at="successful_copy_return",
-                historical_instance="unresolved",
-                value_status="conditional_file_content",
-                unresolved_fields=[],
-                requires=[
-                    "source_and_destination_are_regular_byte_files",
-                    "source_and_destination_are_distinct_inodes",
-                    "source_version_remains_current_through_copy",
-                    "exclusive_file_writer",
-                    "normal_completion",
-                    "no_unmodeled_concurrent_effects",
-                    "preserve_interface_metadata_and_failure_effects",
-                ],
-            )
-            edges.extend(
-                [
-                    dict(
-                        kind="COPIES_FILE_VERSION",
-                        source=source_version,
-                        target=version,
-                        conditional=True,
-                        interface=interface,
-                    ),
-                    dict(
-                        kind="PRODUCES_VERSION_IF_NORMAL", source=site, target=version
-                    ),
-                    dict(kind="LOCATED_BY", source=version, target=target),
-                ]
-            )
-            if value is not None:
-                edges.append(dict(kind="HAS_CONTENT", source=version, target=value))
-            file_versions[target_key] = version
-            templates.append(
-                dict(
-                    symbol=symbol,
-                    version=version,
-                    context=context,
-                    value=value,
-                    source_sites=[site],
-                    source_version=source_version,
-                    derivation="copy",
-                    interface=interface,
+                source_version = None
+            source_requirement = None
+            if source_version is None:
+                source_requirement = add(
+                    "FILE_VERSION_REQUIREMENT",
+                    [site, source_locator, "copy_source", context],
+                    locator=source_locator,
+                    value=None,
+                    consumer=site,
+                    role="runtime_copy_source",
+                    operand=["args", 0],
+                    instance_scope="per_successful_dynamic_copy",
+                    historical_instance="not_established",
+                    version_status="required_during_copy",
+                    requires=["source_readable_regular_file", "normal_completion"],
                 )
+                edges.append(
+                    dict(
+                        kind="REQUIRES_RUNTIME_FILE_VERSION",
+                        source=source_requirement,
+                        target=site,
+                        conditional=True,
+                    )
+                )
+            invalidate(
+                "copy_may_alias_another_file",
+                site,
+                retain=(source_key,) if source_version is not None else (),
             )
+            value = nodes[source_version]["value"] if source_version else None
+            for key, locator, case in targets:
+                version = add(
+                    "FILE_VERSION_TEMPLATE",
+                    [
+                        site,
+                        source_version or source_requirement,
+                        locator,
+                        case,
+                        context,
+                    ],
+                    locator=locator,
+                    value=value,
+                    producer=site,
+                    completion=site,
+                    source_version=source_version,
+                    source_requirement=source_requirement,
+                    interface=interface,
+                    destination_case=case,
+                    copy_contract=dict(
+                        semantics_version=1,
+                        follow_symlinks=(
+                            args[2] if len(args) > 2 and type(args[2]) is bool else None
+                        ),
+                        metadata={
+                            "fs.copy_file": "content_only",
+                            "fs.copy": "mode",
+                            "fs.copy2": "stat",
+                        }[interface],
+                        failures="preserve_source_interface",
+                    ),
+                    filesystem_epoch=filesystem_epoch,
+                    instance_scope="per_successful_dynamic_invocation",
+                    valid_at="successful_copy_return",
+                    historical_instance="unresolved",
+                    value_status="conditional_copy_content",
+                    unresolved_fields=(
+                        (["destination_kind"] if ambiguous else [])
+                        + (["source_version"] if source_requirement else [])
+                    ),
+                    requires=[
+                        case,
+                        "source_and_destination_are_regular_byte_files",
+                        "source_and_destination_are_distinct_inodes",
+                        "source_version_remains_current_through_copy",
+                        "exclusive_file_writer",
+                        "normal_completion",
+                        "no_unmodeled_concurrent_effects",
+                        "preserve_interface_metadata_and_failure_effects",
+                    ],
+                )
+                edges.extend(
+                    [
+                        dict(
+                            kind=(
+                                "COPIES_FILE_VERSION"
+                                if source_version
+                                else "COPIES_REQUIRED_FILE_VERSION"
+                            ),
+                            source=source_version or source_requirement,
+                            target=version,
+                            conditional=True,
+                            interface=interface,
+                            destination_case=case,
+                        ),
+                        dict(
+                            kind="PRODUCES_VERSION_IF_NORMAL",
+                            source=site,
+                            target=version,
+                            conditional=True,
+                            destination_case=case,
+                        ),
+                        dict(kind="LOCATED_BY", source=version, target=locator),
+                    ]
+                )
+                if value is not None:
+                    edges.append(dict(kind="HAS_CONTENT", source=version, target=value))
+                if not ambiguous and key is not None and not live_process_effects:
+                    file_versions[key] = version
+                templates.append(
+                    dict(
+                        symbol=symbol,
+                        version=version,
+                        context=context,
+                        value=value,
+                        source_sites=[site],
+                        source_version=source_version,
+                        source_requirement=source_requirement,
+                        derivation="copy",
+                        destination_case=case,
+                        interface=interface,
+                    )
+                )
+            if ambiguous or source_key is None or target_key is None:
+                return _UNKNOWN
             return (
                 posixpath.join(args[1], source_key[1])
                 if destination_directory is not None and interface != "fs.copy_file"
@@ -1416,10 +1490,60 @@ def analyze(module):
             # A closed scalar expression need not imply filesystem effects.
             # Unknown calls can still reach a stream or an aliased file.
             if op in {"process_spawn", "process_request"}:
+                site = operation(node)
+                visible = sorted(set(file_versions.values()))
+                launch_environments.append(
+                    dict(
+                        id="launch-environment:"
+                        + digest(
+                            json_bytes([site, context, filesystem_epoch, visible])
+                        ),
+                        operation=site,
+                        source_site=node.get("site"),
+                        owner_image=module.get("current_image"),
+                        symbol=symbol,
+                        activation=root_activation,
+                        context=context,
+                        image_id=node.get("image_id"),
+                        target_binding=(
+                            "declared_image" if op == "process_spawn" else "unbound"
+                        ),
+                        argument_ports=(
+                            [["argv", i] for i in range(len(node.get("argv", ())))]
+                            if op == "process_spawn"
+                            else [["command"]]
+                        ),
+                        cwd_policy=node.get("cwd"),
+                        directory=(
+                            directories.cwd if node.get("cwd") == "inherit" else None
+                        ),
+                        filesystem_epoch=filesystem_epoch,
+                        visible_versions=visible,
+                        prior_live_process_effects=live_process_effects,
+                        availability="before_launch_on_the_normal_control_path",
+                        historical_instance="not_established",
+                        requires=[
+                            "source_call_reached_and_spawn_success",
+                            "preserve_worker_argv_and_cwd_protocol",
+                            "shared_parent_child_filesystem_namespace",
+                            "no_intervening_alias_or_external_writes_through_child_read",
+                        ],
+                    )
+                )
+                edges.extend(
+                    dict(
+                        kind="AVAILABLE_BEFORE_LAUNCH_IF_NORMAL",
+                        source=version,
+                        target=site,
+                        conditional=True,
+                        establishes_child_read=False,
+                    )
+                    for version in visible
+                )
                 live_process_effects = True
                 fact_epoch_clean = False
                 environment.clear()
-                invalidate("unmodeled_live_process", operation(node), changes_cwd=True)
+                invalidate("unmodeled_live_process", site, changes_cwd=True)
             elif op in {"call", "indirect_call", "library_call"}:
                 call_origin_writes(node)
                 fact_epoch_clean = False
@@ -2004,6 +2128,10 @@ def analyze(module):
     graph["nodes"] = list(nodes.values())
     graph["edges"] = [
         json.loads(encoded) for encoded in sorted({json_bytes(edge) for edge in edges})
+    ]
+    graph["launch_environments"] = [
+        json.loads(encoded)
+        for encoded in sorted({json_bytes(row) for row in launch_environments})
     ]
     graph.setdefault("coverage", {})["normal_path_file_state"] = dict(
         scope="bounded_normal_path_call_contexts",

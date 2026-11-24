@@ -89,6 +89,90 @@ def _storage(t):
     return None
 
 
+def _stream_kind(t, names):
+    """Track an object (including its reference) or a single pointer to it."""
+    t = _plain(t)
+    kind = "object"
+    if isinstance(t, dict) and t.get("kind") in {"ptr", "ref"}:
+        kind = "pointer" if t["kind"] == "ptr" else "object"
+        t = _plain(t.get("to"))
+    if (
+        isinstance(t, dict)
+        and t.get("kind") == "library"
+        and t.get("provider") == "cxx_standard"
+        and t.get("name") in names
+        and t.get("args", [])[:1] == ["char"]
+    ):
+        return kind
+    return None
+
+
+def _stream_effect(node):
+    effect = node.get("artifact_effect")
+    if not isinstance(effect, dict) or effect.get("semantics_version") != 1:
+        return None
+    contract = effect.get("contract", {})
+    if contract.get("source_profile") != "cxx_standard_ifstream_char_v1":
+        return None
+    op, interface = node["op"], effect.get("interface")
+    argc = len(node.get("args", []))
+    roles, defaults = {}, {}
+    if op == "library_construct":
+        if (
+            interface != "stream.open"
+            or _stream_kind(node.get("type"), {"basic_ifstream"}) != "object"
+            or node.get("provider", "cxx_standard") != "cxx_standard"
+        ):
+            return None
+        name, handle, result = (
+            "std::basic_ifstream::basic_ifstream",
+            "result",
+            "stream_object",
+        )
+    elif (
+        op == "library_call"
+        and node.get("provider") == "cxx_standard"
+        and isinstance(node.get("receiver"), dict)
+    ):
+        roles["stream"] = ["receiver"]
+        handle = "receiver"
+        method = node.get("name")
+        if (method, interface) == ("getline", "stream.getline_into"):
+            name, result = "std::basic_istream::getline", "receiver_reference"
+        elif (method, interface) in {
+            ("open", "stream.open"),
+            ("close", "stream.close"),
+        }:
+            name, result = "std::basic_ifstream::" + method, "void"
+        else:
+            return None
+    else:
+        return None
+    if interface == "stream.open" and argc in {1, 2}:
+        roles["path"] = ["args", 0]
+        if argc == 2:
+            roles["mode"] = ["args", 1]
+        else:
+            defaults["mode"] = dict(kind="ios_openmode", flag="in")
+    elif interface == "stream.getline_into" and argc in {2, 3}:
+        roles.update(dst=["args", 0], count=["args", 1])
+        if argc == 3:
+            roles["delimiter"] = ["args", 2]
+        else:
+            defaults["delimiter"] = dict(kind="widen_newline")
+    elif interface != "stream.close" or argc:
+        return None
+    if (
+        effect.get("operands") != roles
+        or effect.get("defaults", {}) != defaults
+        or contract.get("source_interface") != name
+        or contract.get("handle") != handle
+        or contract.get("result") != result
+    ):
+        return None
+    return effect
+
+
 @dataclass(frozen=True)
 class _Value:
     ref: str | None = None
@@ -100,9 +184,28 @@ class _Value:
     null: bool = False
     expression: str | None = None
     format: str | None = None
+    stream: str | None = None
+    stream_pointer: bool = False
 
 
 _UNKNOWN = _Value()
+
+
+@dataclass(frozen=True)
+class _Stream:
+    """Possible file associations and the preceding stream state operations."""
+
+    locators: frozenset = frozenset()
+    states: frozenset = frozenset()
+    unresolved: bool = True
+
+    @classmethod
+    def join(cls, values):
+        return cls(
+            frozenset.union(*(item.locators for item in values)),
+            frozenset.union(*(item.states for item in values)),
+            any(item.unresolved for item in values),
+        )
 
 
 @dataclass
@@ -112,6 +215,8 @@ class _State:
     escaped: set = field(default_factory=set)
     arrays: set = field(default_factory=set)
     exposed_names: set = field(default_factory=set)
+    streams: dict = field(default_factory=dict)
+    escaped_streams: set = field(default_factory=set)
 
     def copy(self):
         return _State(
@@ -120,6 +225,8 @@ class _State:
             self.escaped.copy(),
             self.arrays.copy(),
             self.exposed_names.copy(),
+            self.streams.copy(),
+            self.escaped_streams.copy(),
         )
 
 
@@ -182,7 +289,7 @@ class _Graph:
 
 def _effect(node, externs):
     if node.get("op") != "call":
-        return None
+        return _stream_effect(node)
     name = node.get("callee")
     effect = node.get("artifact_effect")
     expected = _LIBC.get(name)
@@ -250,6 +357,12 @@ class _Function:
         for i, p in enumerate(fn["params"]):
             if _storage(p["type"]):
                 self.declare(p, state, ("params", i), "parameter")
+            elif kind := _stream_kind(p["type"], {"basic_ifstream", "basic_istream"}):
+                identity = self.op(p, ("params", i))
+                state.names[(None, p["name"])] = _Value(
+                    stream=identity, stream_pointer=kind == "pointer"
+                )
+                state.escaped_streams.add(identity)
         usedglobals = {
             n["name"]
             for n in walk_operations(fn["body"])
@@ -361,6 +474,11 @@ class _Function:
         if len(states) == 1:
             return result
         result.escaped = set().union(*(s.escaped for s in states))
+        result.escaped_streams = set().union(*(s.escaped_streams for s in states))
+        result.streams = {
+            key: _Stream.join([s.streams.get(key, _Stream()) for s in states])
+            for key in set().union(*(s.streams for s in states))
+        }
         result.exposed_names = set().union(*(s.exposed_names for s in states))
         result.arrays = set.intersection(*(s.arrays for s in states))
         for key in set().union(*(s.names for s in states)):
@@ -486,11 +604,19 @@ class _Function:
         elif op == "array_decay":
             key = "value" if "value" in node else "base"
             value = self.expr(node.get(key), state, (*path, key), need)
+        elif op == "library_value" and node.get("mode") == "qualify":
+            inner = self.expr(node["value"], state, (*path, "value"), need)
+            if inner.stream and node.get("provider") == "cxx_standard":
+                value = inner
         elif op == "cast":
             inner = self.expr(node["value"], state, (*path, "value"), need)
             target = node.get("type")
             target = _plain(target)
-            if _storage(target) == "pointer" and (
+            if inner.stream and _stream_kind(
+                target, {"basic_ifstream", "basic_istream", "basic_ios"}
+            ) == ("pointer" if inner.stream_pointer else "object"):
+                value = inner
+            elif _storage(target) == "pointer" and (
                 inner.locator
                 or inner.text is not None
                 or inner.null
@@ -516,6 +642,10 @@ class _Function:
                     value = inner
                 else:
                     state.exposed_names.add(key)
+                    if inner.stream_pointer:
+                        state.names[key] = _UNKNOWN
+                    elif inner.stream:
+                        value = _Value(stream=inner.stream, stream_pointer=True)
             elif (
                 base.get("op") == "index"
                 and len(base.get("indices", ())) == 1
@@ -523,6 +653,10 @@ class _Function:
                 and base["indices"][0].get("value") == 0
             ):
                 value = self.simple(base["base"], state)
+        elif op == "unary" and node.get("operator") == "deref":
+            inner = self.expr(node["value"], state, (*path, "value"))
+            if inner.stream and inner.stream_pointer:
+                value = _Value(stream=inner.stream)
         elif op == "select" or (
             op == "binary" and node.get("operator") in {"land", "lor"}
         ):
@@ -543,11 +677,18 @@ class _Function:
                 merged.escaped,
             )
             state.exposed_names = merged.exposed_names
+            state.streams, state.escaped_streams = (
+                merged.streams,
+                merged.escaped_streams,
+            )
         elif op in _CALLS:
             args = node.get("args", [])
             effect = _effect(node, self.externs)
+            receiver = _UNKNOWN
             if "receiver" in node:
-                self.expr(node["receiver"], state, (*path, "receiver"))
+                receiver = self.expr(
+                    node["receiver"], state, (*path, "receiver"), bool(effect)
+                )
             if "target" in node:
                 self.expr(node["target"], state, (*path, "target"))
             vals = self.unordered(
@@ -562,14 +703,37 @@ class _Function:
                     self.known_ref(arg, state, x, (*path, "args", i))
                     for i, (arg, x) in enumerate(zip(args, vals))
                 ]
-                value = self.transfer(node, effect, vals, state, path)
+                if "source_profile" in effect["contract"] and op != "call":
+                    value = self.stream_transfer(
+                        node, effect, receiver, vals, state, path
+                    )
+                else:
+                    value = self.transfer(node, effect, vals, state, path)
             else:
                 if not (
                     op == "library_call"
                     and node.get("provider") == "cxx_standard"
-                    and node.get("name") == "c_str"
+                    and (
+                        node.get("name") == "c_str"
+                        or receiver.stream
+                        and node.get("name")
+                        in {"good", "eof", "bad", "fail", "is_open"}
+                    )
                     and not args
                 ):
+                    passed_streams = {v.stream for v in [receiver, *vals] if v.stream}
+                    for part in walk_operations(
+                        [args, node.get("receiver"), node.get("target")]
+                    ):
+                        if part["op"] == "var" and (
+                            stream := self.simple(part, state).stream
+                        ):
+                            passed_streams.add(stream)
+                    state.escaped_streams.update(passed_streams)
+                    for stream in state.escaped_streams:
+                        state.streams[stream] = _Stream(
+                            states=frozenset({self.op(node, path)})
+                        )
                     passed = {x.locator for x in vals if x.locator}
                     for part in walk_operations(
                         [args, node.get("receiver"), node.get("target")]
@@ -640,11 +804,13 @@ class _Function:
             key = (target.get("scope"), target["name"])
             state.names[key] = (
                 (_Value(locator=value.locator) if value.locator else value)
-                if plain
+                if plain and not (value.stream_pointer and key in state.exposed_names)
                 else _UNKNOWN
             )
             if key[0] == "global" and value.locator:
                 state.escaped.add(value.locator)
+            if key[0] == "global" and value.stream:
+                state.escaped_streams.add(value.stream)
             return
         addr = self.simple(target.get("base", target.get("value", {})), state)
         possible = {addr.locator} if addr.locator else set(state.versions)
@@ -655,6 +821,203 @@ class _Function:
             self.forget_bindings(state, state.exposed_names)
         if value.locator:
             state.escaped.add(value.locator)
+        if value.stream:
+            state.escaped_streams.add(value.stream)
+
+    def destination(self, dest, state, node, site):
+        loc = dest.locator
+        aliases = self.external | state.escaped
+        self.unknown(
+            state,
+            site,
+            aliases - {loc} if loc in aliases else (() if loc else state.versions),
+            "destination_alias",
+        )
+        if loc is None:
+            self.forget_bindings(state, state.exposed_names)
+            loc = self.g.node(
+                "BUFFER_LOCATOR",
+                [self.symbol, site, "unresolved_destination"],
+                symbol=self.symbol,
+                site=node.get("site"),
+                storage="unresolved_region",
+                capacity_bytes=None,
+                address_identity="runtime_pointer_may_alias",
+            )
+            self.external.add(loc)
+        return loc
+
+    def stream_transfer(self, node, effect, receiver, values, state, path):
+        g, site = self.g, self.op(node, path)
+        g.calls += 1
+        interface, contract = effect["interface"], effect["contract"]
+        ports, roles = {}, {}
+        for role, port in effect["operands"].items():
+            operand = node[port[0]]
+            if port == ["receiver"]:
+                roles[role] = receiver
+            else:
+                operand = operand[port[1]]
+                roles[role] = values[port[1]]
+            ports[role] = self.op(operand, (*path, *port))
+        constructed = contract["handle"] == "result"
+        handle = (
+            site
+            if constructed
+            else (None if receiver.stream_pointer else receiver.stream)
+        )
+        before = (
+            _Stream(unresolved=False)
+            if constructed
+            else state.streams.get(handle, _Stream())
+        )
+        g.edge("USES_STREAM_OBJECT", handle if not constructed else None, site)
+        for previous in sorted(before.states):
+            g.edge("REACHES_STREAM_STATE", previous, site, conditional=True)
+        after = frozenset({site})
+        if handle is None:
+            for possible, incoming in state.streams.items():
+                for previous in sorted(incoming.states):
+                    g.edge(
+                        "REACHES_STREAM_STATE",
+                        previous,
+                        site,
+                        role="possible_receiver",
+                        stream_object=possible,
+                        conditional=True,
+                    )
+                states = incoming.states | after
+                if interface in {"stream.open", "stream.close"}:
+                    state.streams[possible] = _Stream(states=states)
+                else:
+                    state.streams[possible] = replace(incoming, states=states)
+        if interface == "stream.open":
+            locator = g.node(
+                "FILE_LOCATOR",
+                [self.symbol, site, "open_path"],
+                identity_scope="path_operand_at_open",
+                symbol=self.symbol,
+                operation=site,
+                operand=effect["operands"]["path"],
+                operand_port=ports["path"],
+                operand_value=roles["path"].ref,
+                path=roles["path"].text,
+                cwd="process_cwd_at_open",
+                inode_aliases="unresolved",
+                stream_object=handle,
+                defaults=effect.get("defaults", {}),
+                contract=contract,
+                obligations=effect.get("obligations", []),
+            )
+            for role, v in roles.items():
+                g.edge("OPEN_OPERAND", ports[role], locator, role=role)
+                g.edge("OPEN_OPERAND_VALUE", v.ref, locator, role=role)
+            g.edge(
+                "MAY_ASSOCIATE_FILE",
+                site,
+                locator,
+                conditional=True,
+                requires=["filebuf_open_succeeds"],
+            )
+            if handle:
+                # Reopening an already open filebuf can fail and leave the old file associated.
+                state.streams[handle] = _Stream(
+                    before.locators | {locator}, after, before.unresolved
+                )
+            return _Value(stream=handle) if constructed else _UNKNOWN
+        if interface == "stream.close":
+            for locator in sorted(before.locators):
+                g.edge(
+                    "MAY_CLOSE_FILE",
+                    site,
+                    locator,
+                    conditional=True,
+                    requires=["filebuf_close_succeeds"],
+                )
+            if handle:
+                state.streams[handle] = _Stream(states=after)
+            return _UNKNOWN
+
+        locators = set(before.locators)
+        if before.unresolved:
+            locators.add(
+                g.node(
+                    "FILE_LOCATOR",
+                    [self.symbol, site, "stream_association"],
+                    identity_scope="unresolved_stream_association",
+                    symbol=self.symbol,
+                    operation=site,
+                    operand=effect["operands"]["stream"],
+                    operand_port=ports["stream"],
+                    stream_object=handle,
+                    path=None,
+                    cwd=None,
+                    inode_aliases="unresolved",
+                )
+            )
+        expression = g.node(
+            "BYTE_EXPRESSION",
+            [self.symbol, site, interface],
+            symbol=self.symbol,
+            operation=site,
+            interface=interface,
+            source_interface=contract["source_interface"],
+            stream_object=handle,
+            operand_ports=ports,
+            inputs={role: v.ref for role, v in roles.items()},
+            integer_inputs={
+                role: v.integer for role, v in roles.items() if v.integer is not None
+            },
+            defaults=effect.get("defaults", {}),
+            contract=contract,
+            obligations=effect.get("obligations", []),
+            result_extent="depends_on_count_delimiter_eof_and_stream_state",
+        )
+        g.edge("EVALUATES_BYTE_EXPRESSION", site, expression)
+        for role, v in roles.items():
+            g.edge("OPERAND_PORT", ports[role], expression, role=role)
+            g.edge(
+                "BUFFER_OPERAND" if role == "dst" else "BYTE_INPUT",
+                v.ref,
+                expression,
+                role=role,
+            )
+        for locator in sorted(locators):
+            requirement = g.node(
+                "FILE_VERSION_REQUIREMENT",
+                [self.symbol, site, locator, "getline"],
+                locator=locator,
+                consumer=site,
+                value=None,
+                role="runtime_stream_read",
+                operand=effect["operands"]["stream"],
+                stream_object=handle,
+                instance_scope="per_dynamic_extraction",
+                historical_instance="not_established",
+                version_status="backing_bytes_required",
+                acquisition="filebuf_fill_or_prior_read_ahead",
+                requires=[
+                    "file_still_associated",
+                    "sentry_allows_input",
+                    "file_bytes_consulted",
+                ],
+            )
+            g.edge("REQUIRES_RUNTIME_FILE_VERSION", requirement, site, conditional=True)
+            g.edge("SUPPLIES_STREAM_BYTES", requirement, expression, conditional=True)
+        if handle:
+            state.streams[handle] = replace(before, states=after)
+        count = roles["count"].integer
+        if count is None or count > 0:
+            loc = self.destination(roles["dst"], state, node, site)
+            self.version(
+                state,
+                loc,
+                site,
+                "conditional_stream_write",
+                _Value(expression=expression),
+                [state.versions[loc].ref] if loc in state.versions else [],
+            )
+        return _Value(stream=handle)
 
     def transfer(self, node, effect, values, state, path):
         g = self.g
@@ -791,29 +1154,7 @@ class _Function:
             self.forget_bindings(state, state.exposed_names)
         if (cap and limit == 0) or (count and length == 0):
             return dest if api in {"strncpy", "memcpy", "memmove"} else _UNKNOWN
-        loc = dest.locator
-        self.unknown(
-            state,
-            site,
-            (
-                (state.escaped | self.external) - {loc}
-                if loc in self.external | state.escaped
-                else (set(state.versions) if not loc else ())
-            ),
-            "destination_alias",
-        )
-        if loc is None:
-            self.forget_bindings(state, state.exposed_names)
-            loc = g.node(
-                "BUFFER_LOCATOR",
-                [self.symbol, site, "unresolved_destination"],
-                symbol=self.symbol,
-                site=node.get("site"),
-                storage="unresolved_region",
-                capacity_bytes=None,
-                address_identity="runtime_pointer_may_alias",
-            )
-            self.external.add(loc)
+        loc = self.destination(dest, state, node, site)
         capacity = g.nodes[loc].get("capacity_bytes")
         impossible = type(capacity) is int and (
             (length is not None and length > capacity)
@@ -855,6 +1196,7 @@ class _Function:
     def sequence(self, body, state, path, breaks, continues, scoped=False):
         shadows = {}
         local_allocations = set()
+        local_streams = set()
         former_arrays = state.arrays.copy()
         start_breaks = len(breaks) if breaks is not None else 0
         start_continues = len(continues) if continues is not None else 0
@@ -923,6 +1265,43 @@ class _Function:
                                 inputs=[previous.ref, state.versions[loc].ref],
                             )
                 else:
+                    declared = _plain(stmt["type"])
+                    if (
+                        isinstance(declared, dict)
+                        and declared.get("kind") in {"ref", "rref"}
+                        and _stream_kind(
+                            declared["to"],
+                            {"basic_ifstream", "basic_istream", "basic_ios"},
+                        )
+                        == "pointer"
+                    ):
+                        # A reference to a mutable pointer can rebind its target.
+                        state.exposed_names.add(key)
+                        for part in walk_operations(initial):
+                            if part["op"] == "var":
+                                source = (part.get("scope"), part["name"])
+                                state.exposed_names.add(source)
+                                if state.names.get(source, _UNKNOWN).stream_pointer:
+                                    state.names[source] = _UNKNOWN
+                        init = _UNKNOWN
+                    if (
+                        not persistent
+                        and _stream_kind(stmt["type"], {"basic_ifstream"}) == "object"
+                        and _plain(stmt["type"]).get("kind") == "library"
+                    ):
+                        if not init.stream:
+                            identity = self.op(stmt, here)
+                            default_constructed = not initial or (
+                                initial.get("op") == "library_construct"
+                                and not initial.get("args")
+                            )
+                            init = _Value(stream=identity)
+                            state.streams[identity] = _Stream(
+                                states=frozenset({identity}),
+                                unresolved=not default_constructed,
+                            )
+                        if scoped:
+                            local_streams.add(init.stream)
                     state.names[key] = (
                         _UNKNOWN
                         if persistent
@@ -1029,8 +1408,14 @@ class _Function:
                     )
                     for loc in local_allocations:
                         s.versions.pop(loc, None)
+                    for identity in local_streams:
+                        s.streams.pop(identity, None)
+                    s.escaped_streams.difference_update(local_streams)
                     for key, val in s.names.items():
-                        if val.locator in local_allocations:
+                        if (
+                            val.locator in local_allocations
+                            or val.stream in local_streams
+                        ):
                             s.names[key] = _UNKNOWN
         return state
 
@@ -1059,6 +1444,20 @@ class _Function:
                 head.names[key] = _UNKNOWN
         for loc, last in state.versions.items():
             self.version(head, loc, marker, "loop_header", inputs=[last.ref])
+        for handle, incoming in state.streams.items():
+            for previous in sorted(incoming.states):
+                self.g.edge(
+                    "REACHES_STREAM_STATE",
+                    previous,
+                    marker,
+                    role="loop_entry",
+                    stream_object=handle,
+                    conditional=True,
+                )
+            # An earlier visit can refill, close, or rebind this stream.
+            head.streams[handle] = replace(
+                incoming, states=frozenset({marker}), unresolved=True
+            )
         headrefs = {loc: v.ref for loc, v in head.versions.items()}
         if node["op"] != "do_while":
             for key in ("condition", "range", "extent"):
@@ -1080,6 +1479,16 @@ class _Function:
             for loc, key in headrefs.items():
                 if loc in back.versions:
                     self.g.edge("LOOP_BACKEDGE", back.versions[loc].ref, key)
+            for handle in state.streams.keys() & back.streams.keys():
+                for previous in sorted(back.streams[handle].states - {marker}):
+                    self.g.edge(
+                        "REACHES_STREAM_STATE",
+                        previous,
+                        marker,
+                        role="loop_backedge",
+                        stream_object=handle,
+                        conditional=True,
+                    )
         exits = (
             [*loop_breaks, back]
             if node["op"] == "do_while"

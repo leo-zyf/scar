@@ -1484,6 +1484,7 @@ class _Body:
                     declaration,
                     self.expression,
                     lambda t: _type(t, cursor, self.unit.records),
+                    owns=self.unit.facts.owns,
                 )
             except standard_library.BindingError as error:
                 raise _Unsupported(cursor, "library.call", str(error)) from error

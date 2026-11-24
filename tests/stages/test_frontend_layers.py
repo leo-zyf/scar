@@ -901,9 +901,17 @@ def test_clang_capture_locks_included_buffers_then_normalizes_offline(
         b"extern int threshold;\r\n"
     )
     entry.write_text(
-        '#include "config.h"\n'
+        '#include "config.h"\n#include <fstream>\n'
         "static int positive(int threshold) { return threshold > ::threshold; }\n"
         "int main() { Derived d; const Base& b = d; int n = 3; return evaluate(positive, b.score(n)); }\n"
+        'extern "C" void read_paths(const char* path, std::istream& erased,\n'
+        "                         std::ifstream* other, std::ios::openmode mode) {\n"
+        "  char line[32]; std::ifstream file(path); std::ifstream& alias = file;\n"
+        "  alias.getline(line, 32); file.close(); other->open(path, mode);\n"
+        "  other->getline(line, 32, ','); other->close(); other->open(path);\n"
+        "  std::string text; std::getline(erased, text); erased.getline(line, 32);\n"
+        "  std::ofstream output; output.open(path); output.close();\n"
+        "}\n"
     )
     locks = {f.name: sha256(f.read_bytes()).hexdigest() for f in (entry, header)}
     options = dict(root=tmp_path, language="c++", source_hashes=locks)
@@ -956,6 +964,61 @@ def test_clang_capture_locks_included_buffers_then_normalizes_offline(
     assert override["body"][0]["value"]["right"] == dict(
         op="literal", type="i32", value=7
     )
+    from scar.contract import walk_operations
+
+    streams = [
+        op
+        for statement in functions["read_paths"]["body"]
+        for op in walk_operations(statement)
+    ]
+    events = [n for n in streams if "artifact_effect" in n]
+    effects = [n["artifact_effect"] for n in events]
+    assert [effect["interface"] for effect in effects] == [
+        "stream.open",
+        "stream.getline_into",
+        "stream.close",
+        "stream.open",
+        "stream.getline_into",
+        "stream.close",
+        "stream.open",
+    ]
+    assert all(
+        e["contract"]["source_profile"] == "cxx_standard_ifstream_char_v1"
+        for e in effects
+    )
+    create, read, close, reopen, delimited, _, implicit_mode = effects
+    assert create["contract"]["handle"] == "result" and create["operands"] == {
+        "path": ["args", 0]
+    }
+    assert (
+        create["defaults"]
+        == implicit_mode["defaults"]
+        == {"mode": {"kind": "ios_openmode", "flag": "in"}}
+    )
+    assert reopen["operands"] == {
+        "stream": ["receiver"],
+        "path": ["args", 0],
+        "mode": ["args", 1],
+    }
+    assert read["operands"] == {
+        "stream": ["receiver"],
+        "dst": ["args", 0],
+        "count": ["args", 1],
+    }
+    assert read["defaults"] == {"delimiter": {"kind": "widen_newline"}}
+    assert events[1]["receiver"] == {"op": "var", "name": "alias"}
+    assert delimited["operands"] == {**read["operands"], "delimiter": ["args", 2]}
+    assert events[4]["receiver"]["operator"] == "deref"
+    assert (
+        close["operands"] == {"stream": ["receiver"]}
+        and close["contract"]["result"] == "void"
+    )
+    assert all(n["effects"] == "unknown" for n in events)
+    assert [
+        n["name"]
+        for n in streams
+        if n["op"] == "library_call" and "artifact_effect" not in n
+    ] == ["getline", "getline", "open", "close"]
 
 
 def test_graph_target_ports_and_lexical_regions(tmp_path):

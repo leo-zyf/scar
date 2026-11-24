@@ -325,6 +325,66 @@ def test_constant_file_proof_preserves_control_and_handle_boundaries():
         item["field"] == "copy_destination_kind"
         for item in analysis([start, write, close, copy2])["boundaries"]
     )
+    alternatives = analysis([start, write, close, copy2, *read])["graph"]
+    versions = {node["id"]: node for node in alternatives["nodes"]}
+    copies = [
+        edge for edge in alternatives["edges"] if edge["kind"] == "COPIES_FILE_VERSION"
+    ]
+    assert {edge["destination_case"] for edge in copies} == {
+        "destination_is_not_directory",
+        "destination_is_directory",
+    }
+    assert {
+        versions[versions[edge["target"]]["locator"]]["path"] for edge in copies
+    } == {"./copy.h", "./copy.h/out.h"}
+    assert not any(
+        edge.get("role") == "open_read" for edge in alternatives["edges"]
+    ), "an unselected destination arm must not become the current file version"
+    unknown_source = analysis([copy2])["graph"]
+    assert (
+        sum(
+            edge["kind"] == "COPIES_REQUIRED_FILE_VERSION"
+            for edge in unknown_source["edges"]
+        )
+        == 2
+    )
+    assert not any(
+        edge["kind"] == "COPIES_FILE_VERSION" for edge in unknown_source["edges"]
+    )
+    unknown_paths = deepcopy(copy2)
+    unknown_paths["value"]["args"] = [
+        dict(op="var", name=name, type="text") for name in ("source", "target")
+    ]
+    dynamic = analysis([unknown_paths])["graph"]
+    locators = [node for node in dynamic["nodes"] if node["kind"] == "FILE_LOCATOR"]
+    unresolved = [node for node in locators if node.get("operand")]
+    assert len(unresolved) == 3 and len({node["id"] for node in unresolved}) == 3
+    launch = dict(
+        op="expr",
+        value=dict(
+            op="process_spawn",
+            image_id="worker",
+            argv=[literal("./worker")],
+            cwd="inherit",
+        ),
+    )
+    handoff = analysis([start, write, close, copied, launch, *read])["graph"]
+    (environment,) = handoff["launch_environments"]
+    assert environment["image_id"] == "worker"
+    assert environment["argument_ports"] == [["argv", 0]]
+    assert len(environment["visible_versions"]) == 2
+    assert environment["historical_instance"] == "not_established"
+    assert environment["directory"] is not None
+    assert (
+        sum(
+            edge["kind"] == "AVAILABLE_BEFORE_LAUNCH_IF_NORMAL"
+            for edge in handoff["edges"]
+        )
+        == 2
+    )
+    assert not any(
+        edge.get("role") == "open_read" for edge in handoff["edges"]
+    ), "spawn still invalidates unqualified filesystem state after recording its input"
     parameters = [dict(name=name, type="text") for name in ("source", "destination")]
     source, destination = [dict(op="var", **item) for item in parameters]
     helper_copy, helper_read = deepcopy(copied), deepcopy(read)
@@ -497,6 +557,170 @@ def test_constant_file_proof_preserves_control_and_handle_boundaries():
         dict(functions=[], protocol_analysis=dict(prefix_fragments=[prefix])),
     )
     assert not negative["constant_materializations"]
+
+
+def test_projection_import_keeps_verified_class_and_shared_registry_effects():
+    root = "/captured/site-packages/"
+
+    def provider(module, member, checksum):
+        return dict(
+            status="verified_distribution",
+            distribution="matplotlib",
+            version="3.11.2",
+            module=module,
+            member=member,
+            origin=root + member,
+            sha256=checksum,
+            proof_scope="installed_file_with_digest",
+        )
+
+    package = provider(
+        "matplotlib",
+        "matplotlib/__init__.py",
+        "37abb78e74e9e0085a4e306a919606ffa8ff3c263def80ae2f4d938cfa79cd32",
+    )
+    pyplot = provider(
+        "matplotlib.pyplot",
+        "matplotlib/pyplot.py",
+        "2c27b5739ad10034f22866cc7647ce968c56f9625cf0f7a288b800e94917ea51",
+    )
+    projection = provider(
+        "mpl_toolkits.mplot3d",
+        "mpl_toolkits/mplot3d/__init__.py",
+        "7c7f4774c7c532f8db216ab2da08d09e6da6dda7b50af2e2b87e8bc0a1e8d242",
+    )
+    selected = provider(
+        "mpl_toolkits.mplot3d.axes3d",
+        "mpl_toolkits/mplot3d/axes3d.py",
+        "6823b0e69fe54255ee82de392aeefac5e2813f23204eec8b1ad540a0357aee35",
+    )
+    selected.update(
+        name="Axes3D",
+        conditions=[],
+        decorators=[],
+        via=[
+            dict(
+                kind=kind,
+                module=source["module"],
+                member=source["member"],
+                sha256=source["sha256"],
+                name="Axes3D",
+            )
+            for kind, source in (("from", projection), ("definition", selected))
+        ],
+    )
+    projection["exports"] = dict(
+        Axes3D=dict(status="source_candidates", unresolved=[], candidates=[selected])
+    )
+    first = dict(
+        op="python_import",
+        module="matplotlib.pyplot",
+        source_provider=package,
+        import_resolution=pyplot,
+        provider="python_package",
+        request=dict(form="import", level=0, module="matplotlib.pyplot"),
+        alias="plt",
+        binding=dict(op="var", name="py:test:plt", scope="global"),
+        effects=["CTRL", "STATE", "IO"],
+    )
+    imported = dict(
+        op="python_import",
+        module="mpl_toolkits.mplot3d",
+        member="Axes3D",
+        source_provider=dict(
+            module="mpl_toolkits",
+            status="namespace",
+            loader="namespace",
+            proof_scope="ordered_search_locations",
+            locations=[root + "mpl_toolkits"],
+        ),
+        import_resolution=projection,
+        provider="python_package",
+        request=dict(
+            form="from", level=0, module="mpl_toolkits.mplot3d", fromlist=["Axes3D"]
+        ),
+        binding=dict(op="var", name="py:test:Axes3D", scope="global"),
+        effects=["CTRL", "STATE", "IO"],
+        site="source/axes-import",
+    )
+    alias = deepcopy(imported)
+    alias["binding"]["name"] = "py:test:Alias"
+    alias["site"] = "source/alias-import"
+    namespace, source, route = (deepcopy(imported) for _ in range(3))
+    namespace["source_provider"]["locations"] = ["/other/mpl_toolkits"]
+    source["import_resolution"]["exports"]["Axes3D"]["candidates"][0]["sha256"] = (
+        "0" * 64
+    )
+    route["import_resolution"]["exports"]["Axes3D"]["candidates"][0]["via"][0][
+        "module"
+    ] = "unrelated"
+    results = _layer(
+        "normalization",
+        """from scar.middle.normalization.protocols import _Project,_Frame,_Unclosed
+from scar.contract import walk_operations
+results=[]
+for imports in data:
+    project=_Project({})
+    frame=_Frame(project,dict(name='entry',params=[],body=[],python_scope=dict(kind='module',module='test')),())
+    steps=[]
+    issue=None
+    try:
+        for node in imports:
+            frame.imported(node,steps)
+    except _Unclosed as error:
+        issue=error.issue['code']
+    results.append(dict(issue=issue,operations=list(walk_operations(steps)),
+        bindings={name:dict(kind=value.kind,value=value.value) for name,value in project.names.items()},
+        requirement=project.graphics.requirement()))
+print(json.dumps(results))
+""",
+        [
+            [first, imported, alias],
+            [imported],
+            [first, namespace],
+            [first, source],
+            [first, route],
+        ],
+    )
+    positive = results[0]
+    assert positive["issue"] is None
+    imports = [
+        node
+        for node in positive["operations"]
+        if node["op"] == "graphics_projection_import"
+    ]
+    assert (
+        len(imports) == 2
+        and sum(node["op"] == "graphics_context" for node in positive["operations"])
+        == 1
+    )
+    assert imports[0]["context"] == imports[1]["context"]
+    assert {node["site"] for node in imports} == {
+        "source/axes-import",
+        "source/alias-import",
+    }
+    for node in imports:
+        assert node["may_raise"] and set(node["effects"]) == {"IO", "MEM", "STATE"}
+        assert {
+            "module.registry",
+            "graphics.projection_registry",
+            "graphics.class.shared_state",
+        } <= set(node["writes"])
+        assert node["initialization"] == "import_once"
+        assert node["projection_registration"] == "preserve_source_import_closure"
+        assert node["import_binding"]["initial_registry"] == "pristine_or_verified"
+    assert (
+        positive["bindings"]["py:test:Axes3D"] == positive["bindings"]["py:test:Alias"]
+    )
+    assert positive["bindings"]["py:test:Axes3D"]["kind"] == "graphics_class"
+    assert positive["requirement"]["profile"] == "pyplot-3.11.2"
+    assert "graphics_projection_import" in positive["requirement"]["operations"]
+    assert [item["issue"] for item in results[1:]] == [
+        "python.graphics_context",
+        "python.graphics_provider",
+        "python.graphics_import_binding",
+        "python.graphics_import_binding",
+    ]
 
 
 def test_immutable_products_preserve_types_identity_and_activation_boundaries():
@@ -2115,4 +2339,236 @@ def test_iteration_bindings_and_reachable_loop_predecessors():
     assert (
         state_flow(graph["nodes"], graph["entry"], graph["accesses"])["status"]
         == "conservative_iterator_protocol"
+    )
+
+
+def test_native_stream_input_ports_preserve_conditional_buffer_versions():
+    from scar.contract import ARTIFACT_FLOW
+
+    stream = dict(
+        kind="library", provider="cxx_standard", name="basic_ifstream", args=["char"]
+    )
+    pointer = dict(kind="ptr", to="char")
+
+    def var(name):
+        return dict(op="var", name=name)
+
+    def scalar(n):
+        return dict(op="literal", type="i64", value=n)
+
+    def member(site, name, args, interface, api, roles, defaults, **contract):
+        constructor = name is None
+        return dict(
+            op="library_construct" if constructor else "library_call",
+            **(
+                {"type": stream}
+                if constructor
+                else {"name": name, "receiver": var("alias")}
+            ),
+            site=site,
+            provider="cxx_standard",
+            args=args,
+            artifact_effect=dict(
+                semantics_version=1,
+                interface=interface,
+                operands=roles,
+                defaults=defaults,
+                contract=dict(
+                    semantics_version=1,
+                    source_profile="cxx_standard_ifstream_char_v1",
+                    source_interface=api,
+                    handle="result" if constructor else "receiver",
+                    **contract,
+                ),
+                obligations=["existing_stream_locale_and_state"],
+            ),
+        )
+
+    opened = member(
+        "opened",
+        None,
+        [var("path")],
+        "stream.open",
+        "std::basic_ifstream::basic_ifstream",
+        {"path": ["args", 0]},
+        {"mode": {"kind": "ios_openmode", "flag": "in"}},
+        result="stream_object",
+        success_condition="filebuf_open_succeeds",
+        effective_mode="mode_or_in",
+        filesystem_effect="depends_on_effective_mode",
+    )
+
+    def extract(site, count, delim=None):
+        args = [dict(op="array_decay", value=var("line")), scalar(count)]
+        roles = dict(stream=["receiver"], dst=["args", 0], count=["args", 1])
+        if delim is not None:
+            roles["delimiter"] = ["args", 2]
+            args.append(scalar(delim))
+        return member(
+            site,
+            "getline",
+            args,
+            "stream.getline_into",
+            "std::basic_istream::getline",
+            roles,
+            {} if delim is not None else {"delimiter": {"kind": "widen_newline"}},
+            result="receiver_reference",
+            delimiter="extract_without_storing",
+            count_unit="char_elements_including_terminator_space",
+            success_condition="input_sentry_and_extraction_state",
+        )
+
+    close = member(
+        "closed",
+        "close",
+        [],
+        "stream.close",
+        "std::basic_ifstream::close",
+        {"stream": ["receiver"]},
+        {},
+        result="void",
+        success_condition="filebuf_close_succeeds",
+    )
+    forged = dict(extract("forged", 8), provider="other_library")
+
+    def addr(value):
+        return dict(op="unary", operator="addr", value=value)
+
+    def deref(value):
+        return dict(op="unary", operator="deref", value=value)
+
+    def read_at(site, receiver):
+        return dict(op="expr", value=dict(extract(site, 8), receiver=receiver))
+
+    stream_pointer = dict(kind="ptr", to=stream)
+    indirect = deref(deref(var("pp")))
+    body = [
+        dict(
+            op="decl", name="line", type={"kind": "array", "of": "char", "shape": [8]}
+        ),
+        dict(op="decl", name="source", type=stream, init=opened),
+        dict(
+            op="decl",
+            name="alias",
+            type=dict(kind="ref", to=stream),
+            init=var("source"),
+        ),
+        *[
+            dict(op="expr", value=v)
+            for v in (
+                extract("first", 8),
+                extract("second", 0, 59),
+                close,
+                extract("after", 8),
+                forged,
+            )
+        ],
+        dict(op="decl", name="a", type=stream, init=dict(opened, site="open_a")),
+        dict(op="decl", name="b", type=stream, init=dict(opened, site="open_b")),
+        dict(op="decl", name="p", type=stream_pointer, init=addr(var("a"))),
+        read_at("one_pointer", deref(var("p"))),
+        dict(
+            op="decl",
+            name="pp",
+            type=dict(kind="ptr", to=stream_pointer),
+            init=addr(var("p")),
+        ),
+        dict(op="assign", target=var("p"), value=addr(var("b"))),
+        read_at("two_pointers", indirect),
+        dict(op="expr", value=dict(close, site="unknown_close", receiver=indirect)),
+        read_at("after_unknown_close", var("a")),
+    ]
+    flow = _layer(
+        "normalization",
+        """from scar.contract import validate_artifact_flow
+from scar.middle.normalization.buffers import analyze_buffers
+graph=analyze_buffers(data['module'],data['flow'])['graph']
+validate_artifact_flow(graph)
+print(json.dumps(graph))
+""",
+        dict(
+            module=dict(
+                functions=[
+                    dict(
+                        name="read_records",
+                        params=[dict(name="path", type=pointer)],
+                        body=body,
+                    )
+                ]
+            ),
+            flow=document(ARTIFACT_FLOW, nodes=[], edges=[]),
+        ),
+    )
+    nodes = {r["id"]: r for r in flow["nodes"]}
+    by_site = {
+        r["site"]: r["id"]
+        for r in nodes.values()
+        if r["kind"] == "CANONICAL_OPERATION" and r["site"]
+    }
+    edges = flow["edges"]
+    expr = {
+        nodes[r["operation"]]["site"]: r
+        for r in nodes.values()
+        if r["kind"] == "BYTE_EXPRESSION"
+    }
+    assert set(expr) == {
+        "first",
+        "second",
+        "after",
+        "one_pointer",
+        "two_pointers",
+        "after_unknown_close",
+    }
+    assert {expr[site]["stream_object"] for site in ("first", "second", "after")} == {
+        by_site["opened"]
+    }
+    assert expr["one_pointer"]["stream_object"] == by_site["open_a"]
+    assert expr["two_pointers"]["stream_object"] is None
+    assert expr["after_unknown_close"]["stream_object"] == by_site["open_a"]
+    assert expr["first"]["defaults"]["delimiter"] == {"kind": "widen_newline"}
+    assert expr["second"]["integer_inputs"] == {"count": 0, "delimiter": 59}
+    assert expr["first"]["obligations"] == ["existing_stream_locale_and_state"]
+    first, second, after = [
+        next(
+            nodes[e["source"]]
+            for e in edges
+            if e["kind"] == "SUPPLIES_STREAM_BYTES"
+            and e["target"] == expr[site]["id"]
+            and e["conditional"]
+        )
+        for site in ("first", "second", "after")
+    ]
+    locator = nodes[first["locator"]]
+    assert locator["path"] is None and locator["operand"] == ["args", 0]
+    assert nodes[locator["operand_port"]]["operation"] == "var"
+    assert nodes[locator["operand_value"]]["kind"] == "BUFFER_VERSION"
+    assert first["id"] != second["id"] and second["locator"] == first["locator"]
+    assert first["value"] is None and first["historical_instance"] == "not_established"
+    assert (
+        after["locator"] != first["locator"] and nodes[after["locator"]]["path"] is None
+    )
+    assert any(
+        e["kind"] == "MAY_CLOSE_FILE"
+        and e["source"] == by_site["closed"]
+        and e["target"] == first["locator"]
+        for e in edges
+    )
+    for site in ("two_pointers", "after_unknown_close"):
+        requirements = [
+            nodes[e["source"]]
+            for e in edges
+            if e["kind"] == "SUPPLIES_STREAM_BYTES" and e["target"] == expr[site]["id"]
+        ]
+        assert requirements and all(
+            nodes[r["locator"]]["identity_scope"] == "unresolved_stream_association"
+            for r in requirements
+        )
+    writes = [r for r in nodes.values() if r.get("form") == "conditional_stream_write"]
+    assert {r["expression"] for r in writes} == {
+        r["id"] for s, r in expr.items() if s != "second"
+    }
+    assert all(nodes[r["locator"]]["name"] == "line" for r in writes)
+    assert not any(
+        e["kind"] == "HAS_C_STRING_PAYLOAD" and e["source"] in {r["id"] for r in writes}
+        for e in edges
     )

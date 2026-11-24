@@ -4,17 +4,21 @@
 
 构建子图通过根文件的 `build.graph` 收据独立存储。`BUILD_OPERATION` 是捕获的工具调用，`BUILD_ARTIFACT` 是具有路径及可选采集摘要的源文件、对象或可执行产物；`BUILD_INPUT/BUILD_OUTPUT` 边连接消费者和生产者，序号保留链接输入顺序。`LIBRARY_REQUEST` 只说明命令请求，`ELF_LIBRARY_DEPENDENCY` 只说明采集时 ELF 的直接依赖，均不等于运行时加载或已执行计算。工具和库事实也进入资源表。构建调用与应用运行操作属于不同图域，捕获到编译器执行不能替代应用程序执行证据。
 
-文件依赖通过独立的 `artifact_flow` 收据连接子图，格式为 `scar.artifact-flow`。`FILE_LOCATOR` 表示路径定位表达式，不能视作 inode 身份；`FILE_VERSION` 是某次捕获的字节快照；`FILE_VERSION_REQUIREMENT` 表示工具需要读取、但历史字节尚未观测的版本。`BYTE_VALUE` 用 `bytes:sha256:<digest>` 表示与路径、文件对象无关的字节内容。`SOURCE_OPERATION` 引用原过程图与端口，`SOURCE_CAPTURE` 表示分析器读取，`BUILD_OPERATION`、`EXECUTION_IMAGE` 接到对应子图。`READS_CAPTURED_VERSION/HAS_CONTENT/REQUIRES_VERSION/BUILT_IMAGE_SOURCE` 分别连接这些实体。捕获时相同路径不证明历史版本相同，`CAPTURED_AT_SAME_LOCATOR` 明确禁止升级为版本相等。
+文件依赖通过独立的 `artifact_flow` 收据连接子图，格式为 `scar.artifact-flow`。`FILE_LOCATOR` 表示路径定位表达式，不能视作 inode 身份；`FILE_VERSION` 是某次捕获的字节快照；`FILE_VERSION_REQUIREMENT` 表示构建或运行操作所需、但尚未确定的读取版本。`BYTE_VALUE` 用 `bytes:sha256:<digest>` 表示与路径、文件对象无关的字节内容。`SOURCE_OPERATION` 引用原过程图与端口，`SOURCE_CAPTURE` 表示分析器读取，`BUILD_OPERATION`、`EXECUTION_IMAGE` 接到对应子图。`READS_CAPTURED_VERSION/HAS_CONTENT/REQUIRES_VERSION/BUILT_IMAGE_SOURCE` 分别连接这些实体。捕获时相同路径不证明历史版本相同，`CAPTURED_AT_SAME_LOCATOR` 明确禁止升级为版本相等。
 
 F2 的 `artifact_effect` 保留接口、操作数字段路径、默认值和未闭合义务；路径在 F3 图中沿端口边下降，而不是重新遍历 AST。流句柄的静态站点代表每次成功调用的实例模板，别名与条件候选单独保存，不把循环中的多次打开当作同一动态对象。M2 的 `FILE_VERSION_TEMPLATE` 进一步连接已正规化的写入／关闭操作与已证明的字节值；值相同可以跨文件副本连接，但文件内容还受普通字节文件、独占写入和并发效果条件约束。对特殊设备成功写入不等于产生同样的可读文件内容。
 
 `DIRECTORY_TEMPLATE` 表示正常路径上的目录身份；`DIRECTORY_PARENT` 和 `LOCATES_DIRECTORY` 分别连接父身份和定位表达式，均保留条件。新建目录可证明父关系，现存目录可能含符号链接，不能按字符串推定父目录。文件或目录在分支合流时用 `form: phi` 及输入版本引用表达；只有所有正常路径的字节值相同才保留共同内容，不返回的路径不参与合流。
+
+复制目标类型未定时，M2 分别保存“目标非目录”与“目标为目录、追加源 basename”两个条件版本；未选择的分支不进入当前文件版本表。未知源版本通过读取要求连接，不能假借采集快照。`launch_environments` 保存启动前的目录身份、参数端口和可见版本，随后仍保留进程的文件系统失效屏障；该快照不证明子程序实际读取，更不证明某次历史 PID 的版本。
 
 未闭合协议的 `closed_fragments` 和 `prefix_fragments` 是分析产物，按内容收据放入 `analysis/`。前缀保留控制端口及尚未完成语句的求值边界，不能把分支体提升为无条件事件。M4 不把这些片段封为可执行函数。常量文件分析也分别报告值证明、物理存储义务和未实施变换，不以内容哈希匹配替代消费者版本证明。
 
 M2 沿已闭合调用的形参、局部赋值和返回值传播标量事实；每个静态调用端口只有一个可放宽的输入元组，递归或循环不会产生无限上下文。事实须符合目的类型的精确表示范围，静态／线程局部初始化不代表每次调用的当前值。条件调用摘要带形参匹配及调用可达条件，不能当成实际调用记录。
 
 C 字节缓冲使用 `BUFFER_LOCATOR/BUFFER_VERSION/BYTE_EXPRESSION` 表达区域、写入版本和格式化／复制依赖。分支产生合流，循环保留头部与回边。`COMMAND_REQUEST` 引用所读缓冲版本，分别保存已知字节、格式前缀和未闭合字段；已知 `mkdir ` 前缀不能证明目录参数或 shell 效果。F2 的接口合同来自编译器捕获的真实库声明，M2 不凭函数拼写重建绑定。命令请求不是执行授权，也不自动成为可删除操作。
+
+标准字节输入流通过已核验的类型和重载保留打开、`getline_into`、关闭的原端口。M2 将每次读取要求经流状态、解码和分隔符合同连接到条件缓冲写版本。打开不代表成功，`ifstream` 的附加模式可能写文件；预读也使 getline 调用数不能等同于物理读取次数。
 
 程序镜像是一个独立链接与全局状态的命名空间。显式多镜像输入用 `images` 描述各镜像的 `id`、`entry`、交付文件名 `output` 和编译配置，`root_image` 指定交付入口。F0 先应用各镜像自己的 ABI，再去重编译配置；图中 `images[].units` 是共享单元表的索引。同一编译配置可供多个镜像使用，但不同镜像中的同名 `main`、全局变量和记录不会合并。该归属由输入构建清单声明，目前不从子进程命令字符串猜测。
 

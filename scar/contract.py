@@ -489,6 +489,33 @@ def validate_artifact_flow(flow):
             raise ValueError("artifact edge references an absent node")
         if not isinstance(relation.get("kind"), str) or not relation["kind"]:
             raise ValueError("artifact edge requires its relationship kind")
+        if relation["kind"] in {"COPIES_FILE_VERSION", "COPIES_REQUIRED_FILE_VERSION"}:
+            source, target = (records[relation[key]] for key in ("source", "target"))
+            required = relation["kind"] == "COPIES_REQUIRED_FILE_VERSION"
+            if (
+                source["kind"]
+                not in (
+                    {"FILE_VERSION_REQUIREMENT"}
+                    if required
+                    else {"FILE_VERSION", "FILE_VERSION_TEMPLATE"}
+                )
+                or target["kind"] != "FILE_VERSION_TEMPLATE"
+                or target.get("source_requirement" if required else "source_version")
+                != source["id"]
+                or relation.get("conditional") is not True
+                or (
+                    "destination_case" in relation
+                    and relation["destination_case"]
+                    not in {
+                        "resolved_target",
+                        "destination_is_not_directory",
+                        "destination_is_directory",
+                    }
+                )
+            ):
+                raise ValueError(
+                    "copy relation requires its conditional source version"
+                )
         if relation["kind"] == "DIRECTORY_PARENT" and (
             records[relation["source"]]["kind"] != "DIRECTORY_TEMPLATE"
             or records[relation["target"]]["kind"] != "DIRECTORY_TEMPLATE"
@@ -513,6 +540,31 @@ def validate_artifact_flow(flow):
     for effect in flow.get("source_effects", ()):
         if records.get(effect["operation"], {}).get("kind") != "SOURCE_OPERATION":
             raise ValueError("artifact effect requires its source operation")
+    for environment in flow.get("launch_environments", ()):
+        if (
+            records.get(environment.get("operation"), {}).get("kind")
+            not in {"SOURCE_OPERATION", "CANONICAL_OPERATION"}
+            or environment.get("target_binding") not in {"declared_image", "unbound"}
+            or (
+                environment.get("target_binding") == "declared_image"
+                and (
+                    not isinstance(environment.get("image_id"), str)
+                    or not environment["image_id"]
+                )
+            )
+            or environment.get("historical_instance") != "not_established"
+            or (
+                environment.get("directory") is not None
+                and records.get(environment["directory"], {}).get("kind")
+                != "DIRECTORY_TEMPLATE"
+            )
+            or any(
+                records.get(version, {}).get("kind")
+                not in {"FILE_VERSION", "FILE_VERSION_TEMPLATE"}
+                for version in environment.get("visible_versions", ())
+            )
+        ):
+            raise ValueError("launch environment requires conditional operation state")
     processes = {}
     for process in flow.get("source_processes", ()):
         operation = records.get(process.get("operation"), {})

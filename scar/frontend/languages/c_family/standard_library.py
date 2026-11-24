@@ -271,7 +271,175 @@ def public_field(declaration):
     )
 
 
-def bind_call(cursor, declaration, expression, lower_type):
+def _stream_family(source, owns):
+    """Identify the captured public char stream specialization, including its traits."""
+    source = source.get_canonical()
+    if source.kind.name == "POINTER":
+        source = source.get_pointee().get_canonical()
+    owner = source.get_declaration()
+    if (
+        owner.spelling not in {"basic_ifstream", "basic_istream"}
+        or _namespace(owner) != ("std",)
+        or owns(owner.location)
+        or source.get_num_template_arguments() != 2
+    ):
+        return None
+    char, traits = (
+        source.get_template_argument_type(i).get_canonical() for i in (0, 1)
+    )
+    declaration = traits.get_declaration()
+    if (
+        char.kind.name in {"CHAR_S", "CHAR_U"}
+        and not char.is_const_qualified()
+        and not char.is_volatile_qualified()
+        and declaration.spelling == "char_traits"
+        and _namespace(declaration) == ("std",)
+        and not owns(declaration.location)
+        and traits.get_num_template_arguments() == 1
+        and traits.get_template_argument_type(0).get_canonical() == char
+    ):
+        return owner.spelling
+    return None
+
+
+def _file_receiver(cursor, owns):
+    # Inherited getline sees a basic_istream subobject. Follow only Clang's
+    # transparent receiver conversions, never a call's arguments or operator body.
+    while cursor is not None:
+        family = _stream_family(cursor.type, owns)
+        if family == "basic_ifstream":
+            return True
+        if family != "basic_istream" or cursor.kind.name not in {
+            "UNEXPOSED_EXPR",
+            "PAREN_EXPR",
+        }:
+            break
+        children = [c for c in cursor.get_children() if c.kind.is_expression()]
+        cursor = children[0] if len(children) == 1 else None
+    return False
+
+
+def _ifstream_effect(declaration, receiver, argc, lower_type, owns):
+    kind, name = declaration.kind.name, declaration.spelling
+    constructor = kind == "CONSTRUCTOR"
+    if not (
+        constructor
+        and name == "basic_ifstream"
+        or kind == "CXX_METHOD"
+        and name in {"open", "close", "getline"}
+    ):
+        return None
+    family = "basic_istream" if name == "getline" else "basic_ifstream"
+    if (
+        owns(declaration.location)
+        or _stream_family(declaration.semantic_parent.type, owns) != family
+        or not constructor
+        and not _file_receiver(receiver, owns)
+    ):
+        return None
+    definition = declaration.get_definition()
+    if definition is not None and owns(definition.location):
+        return None
+    params = [p.type.get_canonical() for p in declaration.get_arguments()]
+    result = declaration.result_type.get_canonical()
+    contract = dict(
+        semantics_version=1,
+        source_profile="cxx_standard_ifstream_char_v1",
+        source_interface=f"std::{family}::{name}",
+        handle="result" if constructor else "receiver",
+        result="stream_object" if constructor else "void",
+    )
+    operands = {} if constructor else {"stream": ["receiver"]}
+    defaults = {}
+    obligations = [
+        "defined_execution",
+        "stream_object_identity",
+        "stream_state_and_exception_mask",
+    ]
+    if constructor or name == "open":
+        if (
+            len(params) != 2
+            or argc not in {1, 2}
+            or result.kind.name != "VOID"
+            or params[0].kind.name != "POINTER"
+            or lower_type(params[0])
+            != {"kind": "ptr", "to": {"kind": "const", "of": "char"}}
+            or params[1].kind.name != "ENUM"
+            or lower_type(params[1]) != _library_type("ios_openmode")
+        ):
+            return None
+        interface = "stream.open"
+        operands["path"] = ["args", 0]
+        if argc == 2:
+            operands["mode"] = ["args", 1]
+        else:
+            defaults["mode"] = {"kind": "ios_openmode", "flag": "in"}
+        contract.update(
+            effective_mode="mode_or_in",
+            filesystem_effect="depends_on_effective_mode",
+            success_condition="filebuf_open_succeeds",
+            failure="failbit_or_exception",
+        )
+        obligations.extend(
+            [
+                "terminated_path_and_execution_cwd",
+                "effective_open_mode",
+                "filebuf_open_success",
+            ]
+        )
+    elif name == "close":
+        if params or argc or result.kind.name != "VOID":
+            return None
+        interface = "stream.close"
+        contract.update(
+            success_condition="filebuf_close_succeeds", failure="failbit_or_exception"
+        )
+        obligations.append("associated_filebuf_and_close_status")
+    else:
+        if (
+            argc != len(params)
+            or argc not in {2, 3}
+            or params[0].kind.name != "POINTER"
+            or lower_type(params[0]) != {"kind": "ptr", "to": "char"}
+            or params[1].kind.name not in {"SCHAR", "SHORT", "INT", "LONG", "LONGLONG"}
+            or argc == 3
+            and lower_type(params[2]) != "char"
+            or result.kind.name != "LVALUEREFERENCE"
+            or _stream_family(result.get_pointee(), owns) != "basic_istream"
+        ):
+            return None
+        interface = "stream.getline_into"
+        operands.update(dst=["args", 0], count=["args", 1])
+        if argc == 3:
+            operands["delimiter"] = ["args", 2]
+        else:
+            defaults["delimiter"] = {"kind": "widen_newline"}
+        contract.update(
+            result="receiver_reference",
+            delimiter="extract_without_storing",
+            count_unit="char_elements_including_terminator_space",
+            termination="nul_if_count_positive",
+            gcount="characters_extracted_including_consumed_delimiter",
+            success_condition="input_sentry_and_extraction_state",
+        )
+        obligations.extend(
+            [
+                "active_filebuf_association",
+                "locale_and_codecvt",
+                "destination_capacity_and_count",
+            ]
+        )
+    return dict(
+        semantics_version=1,
+        interface=interface,
+        operands=operands,
+        defaults=defaults,
+        obligations=obligations,
+        contract=contract,
+    )
+
+
+def bind_call(cursor, declaration, expression, lower_type, *, owns):
     """Use the resolved declaration for the interface and preserve explicit argument order."""
     if declaration is None and cursor.type.get_canonical().kind.name == "RECORD":
         args = list(cursor.get_arguments())
@@ -330,6 +498,7 @@ def bind_call(cursor, declaration, expression, lower_type):
     # Clang materializes omitted default parameters as expressions with no source
     # location. The bound library supplies those defaults in the target call.
     arguments = [a for a in cursor.get_arguments() if a.location.file]
+    receiver = None
     if kind in {"CXX_METHOD", "CONVERSION_FUNCTION"}:
         if declaration.is_static_method():
             raise BindingError(
@@ -370,4 +539,7 @@ def bind_call(cursor, declaration, expression, lower_type):
         for parameter in list(declaration.get_arguments())[: len(arguments)]
     ]
     op["effects"] = "unknown"
+    effect = _ifstream_effect(declaration, receiver, len(arguments), lower_type, owns)
+    if effect is not None:
+        op["artifact_effect"] = effect
     return op
