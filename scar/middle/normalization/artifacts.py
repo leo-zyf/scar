@@ -351,6 +351,9 @@ def analyze(module):
     def evaluate_fragment(fragment, incoming=None, call_chain=()):
         function, completion = fragment["function"], fragment["completion"]
         symbol, streams, environment, ordinal = fragment["symbol"], [], {}, 0
+        # Activation-local source identity survives scalar-cache invalidation;
+        # it does not establish a value without an existing qualified fact.
+        stable_origins = {}
         bindings = fragment.get("bindings", ())
         context = [
             symbol,
@@ -571,15 +574,72 @@ def analyze(module):
                         if isinstance(operand, list) and index < len(operand)
                         else None
                     )
-                stable = (
-                    isinstance(operand, dict)
-                    and operand.get("op") == "var"
-                    and operand.get("scope") == "global"
-                    and operand.get("name") in stable_globals
-                )
+                origin = stable_origin(operand)
+                stable = origin is not None and origin[1] == facts.get("type")
                 if value is not _UNKNOWN or fact_epoch_clean or stable:
                     return candidate
             return value
+
+        def stable_origin(value):
+            if not isinstance(value, dict) or value.get("op") != "var":
+                return None
+            slot = value.get("scope"), value["name"]
+            kind = value.get("type")
+            if (
+                slot[0] == "global"
+                and slot[1] in stable_globals
+                and isinstance(kind, str)
+            ):
+                return slot[1], kind
+            origin = stable_origins.get(slot)
+            return origin if origin is not None and kind in (None, origin[1]) else None
+
+        def kill_origin(target):
+            if not isinstance(target, dict) or target.get("op") != "var":
+                stable_origins.clear()
+                return
+            slot = target.get("scope"), target["name"]
+            stable_origins.pop(slot, None)
+            if slot[0] == "global":
+                for alias, origin in list(stable_origins.items()):
+                    if origin[0] == slot[1]:
+                        del stable_origins[alias]
+
+        def copy_origin(target, source, kind=None):
+            origin = stable_origin(source)
+            kill_origin(target)
+            if (
+                origin is not None
+                and target.get("scope") != "global"
+                and (kind or target.get("type") or origin[1]) == origin[1]
+            ):
+                stable_origins[target.get("scope"), target["name"]] = origin
+
+        def call_origin_writes(node):
+            callee = functions.get(node.get("callee"), {})
+            types = node.get("parameter_types")
+            if types is None and callee:
+                types = [
+                    parameter.get("type") for parameter in callee.get("params", ())
+                ]
+            modes = node.get("parameter_modes")
+            for index, argument in enumerate(node.get("args", ())):
+                spec = (
+                    types[index] if types is not None and index < len(types) else None
+                )
+                by_reference = (
+                    modes is not None
+                    and index < len(modes)
+                    and modes[index] == "reference"
+                )
+                if types is None or by_reference or isinstance(spec, dict):
+                    target = argument
+                    if (
+                        argument.get("op") == "unary"
+                        and argument.get("operator") == "addr"
+                    ):
+                        target = argument["value"]
+                    kill_origin(target)
 
         def finish(stream, closing):
             stream.closed = True
@@ -857,6 +917,15 @@ def analyze(module):
             if not isinstance(node, dict):
                 return _UNKNOWN
             op = node["op"]
+            if (
+                op == "update"
+                or op == "unary"
+                and node.get("operator") in {"preinc", "postinc", "predec", "postdec"}
+            ):
+                target = node.get("target", node.get("value"))
+                kill_origin(target)
+                if isinstance(target, dict) and target.get("op") == "var":
+                    environment.pop((target.get("scope"), target["name"]), None)
             if op == "literal":
                 return exact_scalar(node["value"], node.get("type"))
             if op == "var":
@@ -875,6 +944,7 @@ def analyze(module):
                     if len(args) == len(callee.get("params", ()))
                     else args
                 )
+                call_origin_writes(node)
                 if summaries[callee["name"]] is not None and len(args) == len(
                     callee.get("params", ())
                 ):
@@ -1307,6 +1377,7 @@ def analyze(module):
                 environment.clear()
                 invalidate("unmodeled_live_process", operation(node), changes_cwd=True)
             elif op in {"call", "indirect_call", "library_call"}:
+                call_origin_writes(node)
                 fact_epoch_clean = False
                 environment.clear()
                 invalidate(
@@ -1359,6 +1430,7 @@ def analyze(module):
                     live_process_effects=live_process_effects,
                     return_value=return_value,
                     context=context,
+                    stable_origins=stable_origins,
                 ),
                 {id(_UNKNOWN): _UNKNOWN},
             )
@@ -1368,6 +1440,7 @@ def analyze(module):
         def restore(saved):
             nonlocal environment, streams, file_versions, filesystem_epoch, last_file_operation
             nonlocal fact_epoch_clean, live_process_effects, return_value, directories, cwd
+            nonlocal stable_origins
             copied = deepcopy(
                 {k: v for k, v in saved.items() if k != "directories"},
                 {id(_UNKNOWN): _UNKNOWN},
@@ -1380,6 +1453,7 @@ def analyze(module):
                 copied["live_process_effects"],
             )
             return_value = copied["return_value"]
+            stable_origins = copied["stable_origins"]
             directories = saved["directories"].clone()
             directories.create, directories.parent_edge = (
                 directory_node,
@@ -1522,6 +1596,11 @@ def analyze(module):
                     else _UNKNOWN
                 ),
                 context=context,
+                stable_origins={
+                    key: origin
+                    for key, origin in left["stable_origins"].items()
+                    if right["stable_origins"].get(key) == origin
+                },
             )
 
         def normal_join(states, site, operation_kind):
@@ -1651,10 +1730,23 @@ def analyze(module):
                     "unsupported",
                 }:
                     effects = opaque = True
-                if op in {"decl", "assign", "update"}:
-                    target = item if op == "decl" else item.get("target", {})
+                if op in {"decl", "assign", "update"} or (
+                    op == "unary"
+                    and item.get("operator")
+                    in {"preinc", "postinc", "predec", "postdec"}
+                ):
+                    target = (
+                        item
+                        if op == "decl"
+                        else item.get("target", item.get("value", {}))
+                    )
                     if op == "decl" or target.get("op") == "var":
                         environment[target.get("scope"), target["name"]] = _UNKNOWN
+                        kill_origin({**target, "op": "var"})
+                    else:
+                        stable_origins.clear()
+                elif op in {"call", "indirect_call", "library_call"}:
+                    call_origin_writes(item)
             if effects or changes_cwd or namespace:
                 invalidate(
                     "structured_loop_effect_havoc",
@@ -1664,6 +1756,7 @@ def analyze(module):
                 )
             if opaque:
                 environment.clear()
+                stable_origins.clear()
                 fact_epoch_clean = False
             boundaries.append(
                 dict(
@@ -1689,6 +1782,7 @@ def analyze(module):
                 op = statement["op"]
                 if op == "decl":
                     if statement.get("storage") in {"static", "thread_local", "extern"}:
+                        kill_origin({**statement, "op": "var"})
                         # An initializer is not the current value on every call.
                         # Its first-evaluation effects also need their own guard.
                         environment[statement.get("scope"), statement["name"]] = (
@@ -1707,6 +1801,11 @@ def analyze(module):
                         if "init" in statement
                         else _UNKNOWN
                     )
+                    copy_origin(
+                        {**statement, "op": "var"},
+                        statement.get("init"),
+                        statement.get("type"),
+                    )
                 elif op == "assign":
                     value = expression(statement["value"])
                     target = statement["target"]
@@ -1714,8 +1813,12 @@ def analyze(module):
                         environment[target.get("scope"), target["name"]] = stored(
                             value, target.get("type")
                         )
+                        copy_origin(target, statement["value"], target.get("type"))
                     elif isinstance(value, _Stream):
+                        stable_origins.clear()
                         value.unresolved.add("escaped_stream")
+                    else:
+                        stable_origins.clear()
                 elif op == "expr":
                     expression(statement["value"])
                     value = statement["value"]
@@ -1740,16 +1843,25 @@ def analyze(module):
                         for item in statement["body"]
                         if item["op"] == "decl"
                     }
+                    origin_shadows = {key: stable_origins.get(key) for key in shadows}
                     flow = sequence(statement["body"])
                     environment.update(shadows)
+                    for key, origin in origin_shadows.items():
+                        if origin is None:
+                            stable_origins.pop(key, None)
+                        else:
+                            stable_origins[key] = origin
                     if flow != "normal":
                         return flow
                 elif op == "return":
                     if statement.get("value"):
                         returned = expression(statement["value"])
                         if isinstance(returned, _Stream):
-                            returned.unresolved.add("escaped_returned_stream")
-                            invalidate("escaped_returned_stream", operation(statement))
+                            if not returned.closed:
+                                returned.unresolved.add("escaped_returned_stream")
+                                invalidate(
+                                    "escaped_returned_stream", operation(statement)
+                                )
                         else:
                             return_value = exact_scalar(
                                 returned, function.get("result")

@@ -456,6 +456,160 @@ def test_constant_file_proof_preserves_control_and_handle_boundaries():
     assert not negative["constant_materializations"]
 
 
+def test_file_versions_preserve_stable_aliases_and_closed_writer_returns():
+    def literal(value, kind="text"):
+        return dict(op="literal", type=kind, value=value)
+
+    def variable(name, scope=None, kind="text"):
+        return dict(op="var", name=name, scope=scope, type=kind)
+
+    def host(interface, *args, **extra):
+        return dict(op="host_call", interface=interface, args=list(args), **extra)
+
+    def effect(value):
+        return dict(op="expr", value=value)
+
+    stream_type = dict(kind="handle", resource="text_stream")
+    stream = variable("stream", kind=stream_type)
+
+    def writer(path, fact=None, closed=True):
+        opened = host(
+            "stream.open",
+            path,
+            literal("w"),
+            literal("utf-8"),
+            literal("universal"),
+        )
+        if fact is not None:
+            opened["argument_facts"] = dict(args=[dict(type="text", exact=fact)])
+        return [
+            dict(op="decl", name="stream", type=stream_type, init=opened),
+            effect(host("stream.write", stream, literal("constant\n"))),
+            *([effect(host("stream.close", stream))] if closed else []),
+        ]
+
+    code = """from scar.middle.normalization.artifacts import analyze
+from scar.contract import validate_artifact_flow
+results=[analyze(module) for module in data]
+for result in results:
+    validate_artifact_flow(result['graph'])
+print(json.dumps(results))
+"""
+    aliases = [
+        dict(op="decl", name="first", type="text", init=variable("left", "global")),
+        dict(op="decl", name="spare", type="text", init=variable("right", "global")),
+        dict(op="decl", name="unrelated", type="i64", init=literal(0, "i64")),
+        dict(op="decl", name="alias", type="text"),
+        dict(op="assign", target=variable("alias"), value=variable("first")),
+    ]
+    no_file = dict(
+        name="numeric",
+        params=[],
+        result="unit",
+        body=[dict(op="while", condition=variable("again", kind="bool"), body=[])],
+    )
+
+    def alias_module(barrier, rebound=()):
+        return dict(
+            protocol_analysis=dict(single_bind_globals=["left", "right"]),
+            functions=[
+                dict(
+                    name="main",
+                    params=[],
+                    result="unit",
+                    body=[
+                        *aliases,
+                        effect(dict(op="call", callee=barrier, args=[])),
+                        *rebound,
+                        *writer(variable("alias"), "left.txt"),
+                        *writer(variable("spare"), "right.txt"),
+                    ],
+                ),
+                no_file,
+            ],
+        )
+
+    rebound = dict(
+        op="assign", target=variable("alias"), value=variable("mutable", "global")
+    )
+    modules = [alias_module(name) for name in ("numeric", "opaque")]
+    modules += [
+        alias_module("numeric", [rebound]),
+        alias_module(
+            "numeric",
+            [
+                dict(
+                    op="if",
+                    condition=variable("flag", kind="bool"),
+                    then=[rebound],
+                    **{"else": []},
+                )
+            ],
+        ),
+        alias_module(
+            "numeric",
+            [
+                dict(
+                    op="while", condition=variable("again", kind="bool"), body=[rebound]
+                )
+            ],
+        ),
+    ]
+
+    def returned_writer(closed):
+        return dict(
+            functions=[
+                dict(
+                    name="main",
+                    params=[],
+                    result="unit",
+                    body=[
+                        effect(
+                            dict(
+                                op="call", callee="writer", site="main/writer", args=[]
+                            )
+                        ),
+                        effect(
+                            host("fs.copy_file", literal("source"), literal("copy"))
+                        ),
+                    ],
+                ),
+                dict(
+                    name="writer",
+                    params=[],
+                    result=stream_type,
+                    body=[
+                        *writer(literal("source"), closed=closed),
+                        dict(op="return", value=stream),
+                    ],
+                ),
+            ]
+        )
+
+    results = _layer(
+        "normalization", code, [*modules, returned_writer(True), returned_writer(False)]
+    )
+    for index, result in enumerate(results[: len(modules)]):
+        names = {
+            node["name"]
+            for node in result["graph"]["nodes"]
+            if node["kind"] == "FILE_LOCATOR"
+        }
+        assert "right.txt" in names
+        assert ("left.txt" in names) == (index < 2)
+    closed, opened = results[-2:]
+    assert any(
+        edge["kind"] == "COPIES_FILE_VERSION" for edge in closed["graph"]["edges"]
+    )
+    assert all(row["normal_path_closed"] for row in closed["file_state_transitions"])
+    assert not any(
+        edge["kind"] == "COPIES_FILE_VERSION" for edge in opened["graph"]["edges"]
+    )
+    assert any(
+        not row["normal_path_closed"] for row in opened["file_state_transitions"]
+    )
+
+
 def test_directory_targets_and_file_phis_follow_summarized_loop_exit():
     def literal(value):
         return dict(
