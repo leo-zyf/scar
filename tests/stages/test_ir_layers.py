@@ -456,6 +456,114 @@ def test_constant_file_proof_preserves_control_and_handle_boundaries():
     assert not negative["constant_materializations"]
 
 
+def test_directory_targets_and_file_phis_follow_summarized_loop_exit():
+    def literal(value):
+        return dict(
+            op="literal",
+            type={str: "text", int: "i64", type(None): "unit"}[type(value)],
+            value=value,
+        )
+
+    def host(interface, *args):
+        return dict(op="host_call", interface=interface, args=list(args))
+
+    def effect(interface, *args):
+        return dict(op="expr", value=host(interface, *args))
+
+    stream = dict(op="var", name="stream")
+
+    def writer(path, contents):
+        return [
+            dict(
+                op="decl",
+                name="stream",
+                init=host(
+                    "stream.open",
+                    literal(path),
+                    literal("w"),
+                    literal("utf-8"),
+                    literal("universal"),
+                ),
+            ),
+            effect("stream.write", stream, literal(contents)),
+            effect("stream.close", stream),
+        ]
+
+    reader = dict(op="var", name="reader")
+    module = dict(
+        functions=[
+            dict(
+                name="main",
+                result="unit",
+                params=[dict(name=name, type="bool") for name in ("again", "flag")],
+                body=[
+                    dict(
+                        op="while",
+                        condition=dict(op="var", name="again", type="bool"),
+                        body=[*writer("loop-only", "iteration"), dict(op="break")],
+                    ),
+                    effect("fs.mkdir", literal("out"), literal(0o777), literal(None)),
+                    {
+                        "op": "if",
+                        "condition": dict(op="var", name="flag", type="bool"),
+                        "then": writer("input", "left"),
+                        "else": writer("input", "right"),
+                    },
+                    effect("fs.copy2", literal("input"), literal("out")),
+                    effect("process.chdir", literal("out")),
+                    dict(
+                        op="decl",
+                        name="reader",
+                        init=host(
+                            "stream.open",
+                            literal("input"),
+                            literal("r"),
+                            literal("utf-8"),
+                            literal("universal"),
+                        ),
+                    ),
+                    effect("stream.read", reader, literal(-1)),
+                    effect("stream.close", reader),
+                ],
+            )
+        ]
+    )
+    result = _layer(
+        "normalization",
+        """from scar.middle.normalization.artifacts import analyze
+from scar.contract import validate_artifact_flow
+result=analyze(data)
+validate_artifact_flow(result['graph'])
+print(json.dumps(result))
+""",
+        module,
+    )
+    graph = result["graph"]
+    nodes = {node["id"]: node for node in graph["nodes"]}
+    (directory,) = [
+        node
+        for node in nodes.values()
+        if node["kind"] == "DIRECTORY_TEMPLATE" and node["form"] == "created"
+    ]
+    assert directory["parent"] is not None
+    (copy,) = [edge for edge in graph["edges"] if edge["kind"] == "COPIES_FILE_VERSION"]
+    source, target = nodes[copy["source"]], nodes[copy["target"]]
+    assert source["form"] == "phi" and len(set(source["incoming_versions"])) == 2
+    assert source["value"] is None and target["value"] is None
+    copied_locator = nodes[target["locator"]]
+    assert copied_locator["directory"] == directory["id"]
+    assert copied_locator["name"] == "input"
+    (read,) = [edge for edge in graph["edges"] if edge.get("role") == "stream_read"]
+    assert read["source"] == target["id"]
+    assert any(
+        row.get("iterations") == "not_unrolled"
+        and row["condition"] == "structured_loop_normal_exit"
+        for row in result["boundaries"]
+    )
+    assert sum(node.get("operation") == "while" for node in nodes.values()) == 1
+    assert not any(node.get("literal_text") == "iteration" for node in nodes.values())
+
+
 def test_scalar_file_facts_respect_destination_types_and_persistent_state():
     code = """from scar.middle.normalization.values import result_summaries, apply_result, _UNKNOWN
 from scar.middle.normalization.artifacts import analyze

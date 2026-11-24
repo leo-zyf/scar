@@ -10,6 +10,7 @@
 #include <dirent.h>
 #include <fcntl.h>
 #include <filesystem>
+#include <limits>
 #include <linux/if_alg.h>
 #include <list>
 #include <memory>
@@ -410,27 +411,162 @@ inline std::string process_getcwd() {
   return cwd;
 }
 
+struct stream_options {
+  std::string path, mode, encoding, newline;
+};
+
+// Decode one transport read at a time. A failed read consumes its raw bytes,
+// while an incomplete scalar retained by the preceding read stays pending.
+class utf8_input {
+  std::string pending_;
+  bool cr_ = false;
+
+  [[noreturn]] static void invalid(std::string_view input, std::size_t begin,
+                                   std::size_t end, const char *reason) {
+    std::string message = "'utf-8' codec can't decode ";
+    if (end == begin + 1) {
+      constexpr char hex[] = "0123456789abcdef";
+      const auto c = static_cast<unsigned char>(input[begin]);
+      message += "byte 0x";
+      message += hex[c >> 4];
+      message += hex[c & 15];
+      message += " in position " + std::to_string(begin);
+    } else {
+      message += "bytes in position " + std::to_string(begin) + "-" +
+                 std::to_string(end - 1);
+    }
+    throw program_error("unicode_decode_error", message + ": " + reason);
+  }
+
+public:
+  struct chunk {
+    std::string text;
+    std::size_t characters = 0;
+  };
+
+  chunk decode(std::string bytes, bool final) {
+    bytes.insert(0, pending_);
+    chunk result;
+    result.text.reserve(bytes.size());
+    bool cr = cr_;
+    std::size_t i = 0;
+    while (i < bytes.size()) {
+      const auto lead = static_cast<unsigned char>(bytes[i]);
+      unsigned width = 1;
+      if (lead >= 0x80) {
+        if (lead < 0xc2 || lead > 0xf4)
+          invalid(bytes, i, i + 1, "invalid start byte");
+        width = lead < 0xe0 ? 2 : lead < 0xf0 ? 3 : 4;
+        for (unsigned j = 1; j < width && j < bytes.size() - i; ++j) {
+          const auto next = static_cast<unsigned char>(bytes[i + j]);
+          // At a split after ED A0..BF, defer the surrogate decision until
+          // the next read, including a zero-byte final read.
+          const bool surrogate =
+              lead == 0xed && next >= 0xa0 && (final || bytes.size() - i != 2);
+          if ((next & 0xc0) != 0x80 ||
+              (j == 1 && ((lead == 0xe0 && next < 0xa0) || surrogate ||
+                          (lead == 0xf0 && next < 0x90) ||
+                          (lead == 0xf4 && next >= 0x90))))
+            invalid(bytes, i, i + j, "invalid continuation byte");
+        }
+        if (bytes.size() - i < width) {
+          if (final)
+            invalid(bytes, i, bytes.size(), "unexpected end of data");
+          break;
+        }
+      }
+      if (cr && lead != '\n') {
+        result.text.push_back('\n');
+        ++result.characters;
+      }
+      cr = lead == '\r';
+      if (!cr) {
+        result.text.append(bytes, i, width);
+        ++result.characters;
+      }
+      i += width;
+    }
+    if (cr && final) {
+      result.text.push_back('\n');
+      ++result.characters;
+      cr = false;
+    }
+    pending_.assign(bytes, i);
+    cr_ = cr;
+    return result;
+  }
+};
+
 class stream_state {
   std::FILE *file_;
   bool reading_, line_buffered_;
+  std::optional<stream_options> origin_;
+  utf8_input decoder_;
+  std::string decoded_;
+  std::size_t cursor_ = 0;
+  double bytes_per_char_ = 0;
+  static constexpr std::size_t chunk_size = 8192;
+
   std::FILE *file() const {
     if (!file_)
       throw std::invalid_argument("I/O operation on closed file.");
     return file_;
   }
-  int byte() {
-    int c = std::fgetc(file_);
-    if (c == EOF && std::ferror(file_))
-      throw std::ios_base::failure("text stream read failed");
-    return c;
+  std::size_t read_once(char *dst, std::size_t capacity) {
+    ssize_t count;
+    do {
+      count = ::read(::fileno(file_), dst, capacity);
+    } while (count < 0 && errno == EINTR);
+    if (count < 0)
+      os_error("read text stream");
+    return static_cast<std::size_t>(count);
+  }
+
+  bool refill(std::int64_t hint) {
+    const double estimated = std::max(bytes_per_char_, 1.0) * hint;
+    auto amount = chunk_size;
+    if (estimated > chunk_size &&
+        estimated < static_cast<double>(std::numeric_limits<ssize_t>::max()))
+      amount = static_cast<std::size_t>(estimated);
+    // Reserve the requested capacity without touching unused virtual pages,
+    // then use one raw read so a pipe can return while its writer is open.
+    std::unique_ptr<char[]> raw;
+    try {
+      raw = std::make_unique_for_overwrite<char[]>(amount);
+    } catch (const std::bad_alloc &) {
+      throw program_error("memory_error", "");
+    }
+    const auto received = read_once(raw.get(), amount);
+    auto chunk = decoder_.decode(std::string(raw.get(), received), !received);
+    bytes_per_char_ =
+        chunk.characters ? static_cast<double>(received) / chunk.characters : 0;
+    decoded_ = std::move(chunk.text);
+    cursor_ = 0;
+    return received || !decoded_.empty();
+  }
+
+  std::string read_all() {
+    std::array<char, chunk_size> raw;
+    std::string remaining;
+    while (auto count = read_once(raw.data(), raw.size()))
+      remaining.append(raw.data(), count);
+    auto chunk = decoder_.decode(std::move(remaining), true);
+    if (cursor_ < decoded_.size())
+      chunk.text.insert(0, decoded_, cursor_);
+    decoded_.clear();
+    cursor_ = 0;
+    return std::move(chunk.text);
   }
 
 public:
-  stream_state(std::FILE *f, bool reading)
+  stream_state(std::FILE *f, bool reading,
+               std::optional<stream_options> origin = std::nullopt)
       : file_(f), reading_(reading),
-        line_buffered_(!reading && ::isatty(::fileno(f))) {}
+        line_buffered_(!reading && ::isatty(::fileno(f))),
+        origin_(std::move(origin)) {}
   stream_state(const stream_state &) = delete;
   void require_open() const { static_cast<void>(file()); }
+  const std::optional<stream_options> &origin() const { return origin_; }
   ~stream_state() {
     if (file_)
       std::fclose(file_);
@@ -461,37 +597,47 @@ public:
     file();
     if (!reading_)
       throw program_error("unsupported_operation", "not readable");
+    if (count < 0 && !line)
+      return read_all();
+    if (!count && (!line || !decoded_.empty()))
+      return {};
     std::string result;
-    while (count != 0) {
-      int c = byte();
-      if (c == EOF)
-        break;
-      if (c == '\r') {
-        const int next = byte();
-        if (next != EOF && next != '\n' && std::ungetc(next, file_) == EOF)
-          throw std::ios_base::failure("text stream pushback failed");
-        c = '\n';
+    for (;;) {
+      while (cursor_ == decoded_.size()) {
+        if (line) {
+          decoded_.clear();
+          cursor_ = 0;
+        }
+        if (!refill(line ? 0 : count))
+          return result;
       }
-      char scalar[4]{static_cast<char>(c)};
-      const auto width = utf8_width(c);
-      for (unsigned k = 1; k < width; ++k) {
-        int next = byte();
-        if (next == EOF)
-          throw std::invalid_argument("truncated UTF-8 scalar");
-        scalar[k] = static_cast<char>(next);
-      }
-      utf8_scalar({scalar, width});
-      result.append(scalar, width);
-      if (line && c == '\n')
+      if (!count)
         break;
-      if (count > 0)
-        --count;
+      auto end = decoded_.size();
+      if (line) {
+        const auto newline = decoded_.find('\n', cursor_);
+        if (newline != decoded_.npos)
+          end = newline + 1;
+      }
+      const auto begin = cursor_;
+      if (count < 0)
+        cursor_ = end;
+      else
+        while (cursor_ < end && count) {
+          cursor_ += utf8_width(static_cast<unsigned char>(decoded_[cursor_]));
+          --count;
+        }
+      result.append(decoded_, begin, cursor_ - begin);
+      if (!count || (line && result.back() == '\n'))
+        break;
     }
     return result;
   }
 };
 using text_stream = std::shared_ptr<stream_state>;
-inline text_stream adopt_text_stream(descriptor &fd, const char *mode) {
+inline text_stream
+adopt_text_stream(descriptor &fd, const char *mode,
+                  std::optional<stream_options> origin = std::nullopt) {
   auto *f = ::fdopen(fd.get(), mode);
   if (!f)
     os_error("fdopen");
@@ -500,7 +646,7 @@ inline text_stream adopt_text_stream(descriptor &fd, const char *mode) {
     void operator()(std::FILE *file) const { std::fclose(file); }
   };
   std::unique_ptr<std::FILE, close_file> owner(f);
-  auto s = std::make_shared<stream_state>(f, mode[0] == 'r');
+  auto s = std::make_shared<stream_state>(f, mode[0] == 'r', std::move(origin));
   owner.release();
   return s;
 }
@@ -514,11 +660,13 @@ inline text_stream stream_enter(const text_stream &value) {
   stream(value).require_open();
   return value;
 }
-struct stream_options {
-  std::string path, mode, encoding, newline;
-};
 inline text_stream stream_open(const stream_options &o) {
-  if (o.encoding != "utf-8" || o.newline != "universal")
+  auto encoding = o.encoding;
+  for (auto &c : encoding)
+    if (c >= 'A' && c <= 'Z')
+      c += 'a' - 'A';
+  if ((encoding != "utf-8" && encoding != "utf8" && encoding != "utf_8") ||
+      o.newline != "universal")
     throw std::invalid_argument(
         "unsupported text stream encoding or newline policy");
   const auto &m = o.mode;
@@ -550,7 +698,7 @@ inline text_stream stream_open(const stream_options &o) {
   if (S_ISDIR(status_of(fd.get()).st_mode))
     throw std::system_error(EISDIR, std::generic_category(),
                             "open text stream");
-  return adopt_text_stream(fd, mode);
+  return adopt_text_stream(fd, mode, o);
 }
 struct stream_data {
   text_stream handle;

@@ -369,7 +369,9 @@ class _ModuleGraph:
             end_line=getattr(node, "end_lineno", 1),
             end_column=getattr(node, "end_col_offset", 0) + 1,
         )
-        if isinstance(node, ast.BinOp) and 0 < result["line"] <= len(self.source_lines):
+        if isinstance(node, (ast.BinOp, ast.Call)) and 0 < result["line"] <= len(
+            self.source_lines
+        ):
             result.update(
                 diagnostic_file=self.diagnostic_file,
                 source_line=self.source_lines[result["line"] - 1].strip(),

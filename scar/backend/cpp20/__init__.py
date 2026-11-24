@@ -386,11 +386,14 @@ def _lower_image(path, revision, scheduled, destination):
     lowerer.used_sdk_headers.add("exceptions.hpp")
     if "format.hpp" in lowerer.used_sdk_headers:
         lowerer.used_sdk_headers.add("array.hpp")
+    if "array_io.hpp" in lowerer.used_sdk_headers:
+        lowerer.used_sdk_headers.update({"array.hpp", "host.hpp", "text.hpp"})
     if "host.hpp" in lowerer.used_sdk_headers:
         lowerer.used_sdk_headers.add("exceptions.hpp")
     for name in sorted(lowerer.used_sdk_headers):
         if name not in {
             "array.hpp",
+            "array_io.hpp",
             "host.hpp",
             "exceptions.hpp",
             "format.hpp",
@@ -555,6 +558,7 @@ def _print_image(path, product, directory, runtime, jobs, image=None):
     for header in product.get("sdk_headers", ()):
         if header["output"] not in {
             "include/scar/array.hpp",
+            "include/scar/array_io.hpp",
             "include/scar/host.hpp",
             "include/scar/exceptions.hpp",
             "include/scar/format.hpp",
@@ -598,7 +602,7 @@ def _print_image(path, product, directory, runtime, jobs, image=None):
     ):
         raise ValueError("target declares an unused or unsupported native operator SDK")
     if (
-        local_headers & {"scar/array.hpp", "scar/format.hpp"}
+        local_headers & {"scar/array.hpp", "scar/array_io.hpp", "scar/format.hpp"}
         and "XTensor" not in libraries
     ):
         raise ValueError("target array header requires a sealed XTensor SDK")

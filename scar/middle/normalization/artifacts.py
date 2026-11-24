@@ -24,6 +24,7 @@ from .values import (
     evidence_scalar,
     _UNKNOWN,
 )
+from .file_state import Directories
 
 _FILE_FREE_OPERATIONS = {
     "literal",
@@ -171,7 +172,13 @@ def analyze(module):
                     effects.add("FILE")
                 elif interface not in {"path.join", "time.wall", "time.sleep"}:
                     effects.add("OPAQUE")
-            elif op in {"text_print", "process_spawn", "process_request"}:
+            elif op in {
+                "text_print",
+                "process_spawn",
+                "process_request",
+                "array_text_read",
+                "array_source_open",
+            }:
                 effects.add("FILE")
             elif op in {
                 "call",
@@ -362,13 +369,85 @@ def analyze(module):
         state = incoming or {}
         fact_epoch_clean = state.get("fact_epoch_clean", True)
         live_process_effects = state.get("live_process_effects", False)
-        cwd = state.get("cwd", ("invocation.cwd", "."))
         file_versions, filesystem_epoch = dict(
             state.get("file_versions", {})
         ), state.get("epoch", 0)
         last_file_operation, operation_ids = state.get("last_operation"), {}
         root_activation = state.get("root_activation", digest(json_bytes(context)))
         return_value = _UNKNOWN
+        return_exits = []
+
+        def location_node(key, label, site=None):
+            location = dict(
+                path=label[1] if label is not None else None,
+                cwd=label[0] if label is not None else "unresolved.cwd",
+                activation=root_activation,
+                directory=key[0] if key is not None else None,
+                name=key[1] if key is not None else None,
+            )
+            return add(
+                "FILE_LOCATOR",
+                [location, site if key is None else None],
+                **location,
+                identity_scope="normal_directory_name",
+                inode_aliases="unresolved",
+            )
+
+        def parent_directory(source, target, producer):
+            edges.append(
+                dict(
+                    kind="DIRECTORY_PARENT",
+                    source=source,
+                    target=target,
+                    conditional=True,
+                    producer=producer,
+                    requires=[
+                        "normal_completion",
+                        "no_unmodeled_namespace_interference",
+                    ],
+                )
+            )
+
+        def directory_node(form, key, parent, location, producer, incoming, label):
+            locator = (
+                location_node(location, label, producer)
+                if location is not None
+                else None
+            )
+            identity = add(
+                "DIRECTORY_TEMPLATE",
+                [root_activation, context, form, key],
+                form=form,
+                parent=parent,
+                locator=locator,
+                producer=producer,
+                instance_scope="per_normal_dynamic_activation",
+                aliases="unresolved",
+                requires=["normal_completion", "no_unmodeled_namespace_interference"],
+                **({"incoming_directories": list(incoming)} if incoming else {}),
+            )
+            if parent is not None:
+                parent_directory(identity, parent, producer)
+            if locator is not None:
+                edges.append(
+                    dict(
+                        kind="LOCATES_DIRECTORY",
+                        source=locator,
+                        target=identity,
+                        conditional=True,
+                    )
+                )
+            return identity
+
+        directories = (
+            state["directories"].clone()
+            if "directories" in state
+            else Directories(directory_node, parent_directory, root_activation)
+        )
+        # Rebind graph callbacks to this activation, rather than retaining a
+        # caller's context when a directory state crosses a call boundary.
+        directories.create, directories.parent_edge = directory_node, parent_directory
+        cwd = directories.cwd
 
         def operation(node):
             nonlocal ordinal
@@ -402,7 +481,9 @@ def analyze(module):
                 )
             last_file_operation = site
 
-        def invalidate(reason, site=None, *, changes_cwd=False, retain=()):
+        def invalidate(
+            reason, site=None, *, changes_cwd=False, changes_namespace=False, retain=()
+        ):
             nonlocal filesystem_epoch, cwd
             filesystem_epoch += 1
             if site is not None:
@@ -422,32 +503,17 @@ def analyze(module):
             for key in list(file_versions):
                 if key not in retain:
                     del file_versions[key]
-            if changes_cwd:
-                cwd = None
+            if changes_cwd or changes_namespace:
+                directories.forget(site, changes_cwd=changes_cwd)
+                cwd = directories.cwd
             for stream in streams:
                 if not stream.closed:
                     stream.unresolved.add(reason)
 
         def locate(path, site):
-            key = None
-            # Resolving '..' through symlinks requires directory identity,
-            # not string normalization. Keep it as a field-level boundary.
-            if type(path) is str and "\0" not in path and ".." not in path.split("/"):
-                if posixpath.isabs(path):
-                    key = (None, posixpath.normpath(path))
-                elif cwd is not None:
-                    key = (cwd[0], posixpath.normpath(posixpath.join(cwd[1], path)))
-            location = dict(
-                path=key[1] if key is not None else None,
-                cwd=key[0] if key is not None else "unresolved.cwd",
-                activation=root_activation,
-            )
-            locator = add(
-                "FILE_LOCATOR",
-                [location, site if key is None else None],
-                **location,
-                identity_scope="normal_path_expression",
-                inode_aliases="unresolved",
+            key = directories.file(path, site)
+            locator = location_node(
+                key, directories.label(key) if key is not None else None, site
             )
             if key is None:
                 boundaries.append(
@@ -604,6 +670,12 @@ def analyze(module):
             if (
                 stream.path_key is not None
                 and not stream.unresolved
+                - {
+                    "nonconstant_write",
+                    "nonconstant_print",
+                    "prior_file_content",
+                    "branch_dependent_stream_state",
+                }
                 and not live_process_effects
             ):
                 file_versions[stream.path_key] = version
@@ -642,11 +714,38 @@ def analyze(module):
 
         def copy_file(interface, args, site):
             source_key, _ = locate(args[0], site)
-            target_key, target = locate(args[1], site)
+            destination_directory = directories.directory(
+                args[1], site, known_only=True
+            )
+            if (
+                interface != "fs.copy_file"
+                and destination_directory is not None
+                and source_key is not None
+            ):
+                target_key = destination_directory, source_key[1]
+                target = location_node(target_key, directories.label(target_key), site)
+            else:
+                target_key, target = locate(args[1], site)
             source_version = file_versions.get(source_key)
+            if interface == "fs.copy_file" and destination_directory is not None:
+                invalidate("copy_file_destination_is_directory", site)
+                boundaries.append(
+                    dict(
+                        symbol=symbol,
+                        field="copy_destination_kind",
+                        source=site,
+                        interface=interface,
+                        reason="known_directory_cannot_complete_regular_file_copy",
+                    )
+                )
+                return _UNKNOWN
             if source_version is not None:
                 requires(source_version, site, role="copy_source")
-            if interface != "fs.copy_file" and target_key not in file_versions:
+            if (
+                interface != "fs.copy_file"
+                and destination_directory is None
+                and target_key not in file_versions
+            ):
                 # A string names either a directory or a file. A content
                 # version at that exact locator is our only closed file-kind
                 # evidence here; no directory is inferred from its spelling.
@@ -746,11 +845,15 @@ def analyze(module):
                     interface=interface,
                 )
             )
-            return args[1]
+            return (
+                posixpath.join(args[1], source_key[1])
+                if destination_directory is not None and interface != "fs.copy_file"
+                else args[1]
+            )
 
         def expression(node):
             nonlocal fact_epoch_clean, live_process_effects, cwd
-            nonlocal file_versions, filesystem_epoch, last_file_operation
+            nonlocal file_versions, filesystem_epoch, last_file_operation, directories
             if not isinstance(node, dict):
                 return _UNKNOWN
             op = node["op"]
@@ -843,12 +946,18 @@ def analyze(module):
                             fact_epoch_clean=fact_epoch_clean,
                             live_process_effects=live_process_effects,
                             root_activation=root_activation,
+                            directories=directories,
                         ),
                         (*call_chain, symbol),
                     )
                     cwd, file_versions = (
                         child_state["cwd"],
                         child_state["file_versions"],
+                    )
+                    directories = child_state["directories"]
+                    directories.create, directories.parent_edge = (
+                        directory_node,
+                        parent_directory,
                     )
                     filesystem_epoch = child_state["epoch"]
                     last_file_operation = child_state["last_operation"]
@@ -929,6 +1038,59 @@ def analyze(module):
                     if all(type(part) is str for part in parts)
                     else _UNKNOWN
                 )
+            if op == "array_text_read":
+                stream = expression(node["source"])
+                site = operation(node)
+                ordered(site)
+                if isinstance(stream, _Stream) and not stream.closed:
+                    if stream.last_operation != site:
+                        edges.append(
+                            dict(
+                                kind="STREAM_ORDER_IF_NORMAL",
+                                source=stream.last_operation,
+                                target=site,
+                            )
+                        )
+                    stream.last_operation = site
+                    version = file_versions.get(stream.path_key)
+                    if (
+                        version is not None
+                        and not stream.unresolved
+                        and not live_process_effects
+                    ):
+                        requires(
+                            version,
+                            site,
+                            role="array_text_read",
+                            range="runtime_stream_position",
+                        )
+                    else:
+                        boundaries.append(
+                            dict(
+                                symbol=symbol,
+                                field="file_read_version",
+                                source=site,
+                                reason="array_reader_source_version_unproven",
+                            )
+                        )
+                else:
+                    boundaries.append(
+                        dict(
+                            symbol=symbol,
+                            field="file_read_version",
+                            source=site,
+                            reason="array_reader_stream_identity_unproven",
+                        )
+                    )
+                return _UNKNOWN
+            if op == "array_source_open":
+                expression(node["source"])
+                invalidate(
+                    "unqualified_path_or_network_resolver",
+                    operation(node),
+                    changes_namespace=True,
+                )
+                return _UNKNOWN
             if op == "host_call":
                 args = [
                     exact(node, "args", expression(arg), i)
@@ -942,13 +1104,46 @@ def analyze(module):
                         else _UNKNOWN
                     )
                 if interface == "process.chdir":
-                    key, _ = locate(args[0], site)
                     ordered(site)
-                    cwd = key
+                    cwd = directories.chdir(args[0], site)
                     return None
                 if interface == "process.getcwd":
                     ordered(site)
-                    return cwd[1] if cwd is not None and cwd[0] is None else _UNKNOWN
+                    value = directories.getcwd()
+                    return value if value is not None else _UNKNOWN
+                if interface in {"fs.mkdir", "fs.makedirs", "fs.copy_tree"}:
+                    ordered(site)
+                    path = args[1] if interface == "fs.copy_tree" else args[0]
+                    allowed = (
+                        interface == "fs.makedirs" and len(args) > 2 and args[2] is True
+                    )
+                    if (
+                        interface == "fs.makedirs"
+                        and len(args) > 2
+                        and type(args[2]) is not bool
+                    ):
+                        invalidate(
+                            "directory_creation_policy_unproven",
+                            site,
+                            changes_namespace=True,
+                        )
+                        return _UNKNOWN
+                    created = directories.mkdir(path, site, existing_allowed=allowed)
+                    if created is None:
+                        boundaries.append(
+                            dict(
+                                symbol=symbol,
+                                field="directory_identity",
+                                source=site,
+                                reason="directory_path_unproven",
+                            )
+                        )
+                    return path if interface == "fs.copy_tree" else None
+                if interface == "fs.remove_tree":
+                    invalidate(
+                        "directory_namespace_removed", site, changes_namespace=True
+                    )
+                    return None
                 if interface in {"fs.copy_file", "fs.copy", "fs.copy2"}:
                     ordered(site)
                     return copy_file(interface, args, site)
@@ -962,6 +1157,11 @@ def analyze(module):
                         # distinct-storage relationship has actually been proved.
                         invalidate("file_open_may_write_alias", site)
                     stream = _Stream(site, args[0], args[1], site)
+                    if (
+                        directories.directory(args[0], site, known_only=True)
+                        is not None
+                    ):
+                        stream.unresolved.add("path_is_known_directory")
                     stream.path_key, stream.locator = locate(args[0], site)
                     stream.last_operation = site
                     ordered(site)
@@ -969,7 +1169,12 @@ def analyze(module):
                         stream.unresolved.add("possible_overlapping_file_handle")
                     if live_process_effects:
                         stream.unresolved.add("unmodeled_live_process")
-                    if args[2:] != ["utf-8", "universal"]:
+                    if (
+                        not isinstance(args[2], str)
+                        or args[2].lower().replace("_", "-")
+                        not in {"utf-8", "utf8", "u8", "utf", "cp65001"}
+                        or args[3] != "universal"
+                    ):
                         stream.unresolved.add("text_encoding")
                     streams.append(stream)
                     if args[1] in {"r", "rt"} and stream.path_key in file_versions:
@@ -1042,7 +1247,11 @@ def analyze(module):
                 if "filesystem" in node.get("writes", ()) or "stream.state" in node.get(
                     "writes", ()
                 ):
-                    invalidate("unresolved_filesystem_effect", site)
+                    invalidate(
+                        "unresolved_filesystem_effect",
+                        site,
+                        changes_namespace=interface.startswith("fs."),
+                    )
                 elif interface.startswith("process.") and node.get("writes"):
                     invalidate("external_process_effect", site, changes_cwd=True)
                 elif {"stdin.state", "stdout.state", "stderr.state"}.intersection(
@@ -1138,6 +1347,342 @@ def analyze(module):
                 )
             return exact_scalar(value, spec)
 
+        def snapshot():
+            saved = deepcopy(
+                dict(
+                    environment=environment,
+                    streams=streams,
+                    file_versions=file_versions,
+                    epoch=filesystem_epoch,
+                    last_operation=last_file_operation,
+                    fact_epoch_clean=fact_epoch_clean,
+                    live_process_effects=live_process_effects,
+                    return_value=return_value,
+                    context=context,
+                ),
+                {id(_UNKNOWN): _UNKNOWN},
+            )
+            saved["directories"] = directories.clone()
+            return saved
+
+        def restore(saved):
+            nonlocal environment, streams, file_versions, filesystem_epoch, last_file_operation
+            nonlocal fact_epoch_clean, live_process_effects, return_value, directories, cwd
+            copied = deepcopy(
+                {k: v for k, v in saved.items() if k != "directories"},
+                {id(_UNKNOWN): _UNKNOWN},
+            )
+            environment, streams = copied["environment"], copied["streams"]
+            file_versions, filesystem_epoch = copied["file_versions"], copied["epoch"]
+            last_file_operation = copied["last_operation"]
+            fact_epoch_clean, live_process_effects = (
+                copied["fact_epoch_clean"],
+                copied["live_process_effects"],
+            )
+            return_value = copied["return_value"]
+            directories = saved["directories"].clone()
+            directories.create, directories.parent_edge = (
+                directory_node,
+                parent_directory,
+            )
+            cwd = directories.cwd
+
+        def join_states(left, right, joining):
+            domain, left_map, right_map = Directories.join(
+                left["directories"], right["directories"], joining
+            )
+
+            def remapped(files, mapping):
+                result = {}
+                for (directory, name), version in files.items():
+                    directory = mapping.get(directory, directory)
+                    if directory is not None:
+                        key = directory, name
+                        if key in result and result[key] != version:
+                            result[key] = None
+                        else:
+                            result[key] = version
+                return {
+                    key: version
+                    for key, version in result.items()
+                    if version is not None
+                }
+
+            remapped_alternatives = [
+                remapped(state["file_versions"], mapping)
+                for state, mapping in ((left, left_map), (right, right_map))
+            ]
+            # An unchanged object remains known even if a separate cwd phi
+            # selects it on just one arm. Do not globally rename that object
+            # into the selected cwd value.
+            alternatives = [dict(saved["file_versions"]) for saved in (left, right)]
+            for original, extra in zip(alternatives, remapped_alternatives):
+                for key, version in extra.items():
+                    original.setdefault(key, version)
+            files = {}
+            for key in alternatives[0].keys() & alternatives[1].keys():
+                incoming_versions = [alternative[key] for alternative in alternatives]
+                if incoming_versions[0] == incoming_versions[1]:
+                    files[key] = incoming_versions[0]
+                    continue
+                contents = [nodes[version]["value"] for version in incoming_versions]
+                value = contents[0] if contents[0] == contents[1] else None
+                locator = location_node(key, domain.label(key), joining)
+                version = add(
+                    "FILE_VERSION_TEMPLATE",
+                    [joining, key, incoming_versions, context],
+                    form="phi",
+                    incoming_versions=incoming_versions,
+                    locator=locator,
+                    value=value,
+                    producer=joining,
+                    completion=joining,
+                    instance_scope="per_normal_control_join",
+                    valid_at="normal_control_join",
+                    historical_instance="unresolved",
+                    value_status=(
+                        "conditional_file_content"
+                        if value is not None
+                        else "unresolved_content"
+                    ),
+                    unresolved_fields=(
+                        [] if value is not None else ["branch_dependent_content"]
+                    ),
+                    requires=[
+                        "selected_branch_normal_completion",
+                        "no_external_filesystem_interference",
+                        "preserve_observable_io_effects",
+                    ],
+                )
+                files[key] = version
+                edges.extend(
+                    dict(
+                        kind="PHI_FILE_VERSION",
+                        source=source,
+                        target=version,
+                        conditional=True,
+                        alternative=index,
+                    )
+                    for index, source in enumerate(incoming_versions)
+                )
+                edges.append(dict(kind="LOCATED_BY", source=version, target=locator))
+                if value is not None:
+                    edges.append(dict(kind="HAS_CONTENT", source=version, target=value))
+                templates.append(
+                    dict(
+                        symbol=symbol,
+                        context=context,
+                        version=version,
+                        value=value,
+                        source_sites=[joining],
+                        derivation="phi",
+                    )
+                )
+            by_identity = [
+                {stream.identity: stream for stream in state["streams"]}
+                for state in (left, right)
+            ]
+            merged_streams = {}
+            for identity in by_identity[0].keys() | by_identity[1].keys():
+                a, b = by_identity[0].get(identity), by_identity[1].get(identity)
+                item = deepcopy(a if a is not None else b, {id(_UNKNOWN): _UNKNOWN})
+                if a is not None and b is not None and not identical(a, b):
+                    item.unresolved.add("branch_dependent_stream_state")
+                    item.closed = a.closed and b.closed
+                elif (a is None or b is None) and not item.closed:
+                    item.unresolved.add("conditional_open_stream_instance")
+                item.last_operation = joining
+                merged_streams[identity] = item
+            env = {}
+            for key in left["environment"].keys() | right["environment"].keys():
+                a, b = left["environment"].get(key, _UNKNOWN), right["environment"].get(
+                    key, _UNKNOWN
+                )
+                if (
+                    isinstance(a, _Stream)
+                    and isinstance(b, _Stream)
+                    and a.identity == b.identity
+                ):
+                    env[key] = merged_streams[a.identity]
+                else:
+                    env[key] = a if identical(a, b) else _UNKNOWN
+            return dict(
+                environment=env,
+                streams=list(merged_streams.values()),
+                file_versions=files,
+                directories=domain,
+                epoch=max(left["epoch"], right["epoch"]),
+                last_operation=joining,
+                fact_epoch_clean=left["fact_epoch_clean"] and right["fact_epoch_clean"],
+                live_process_effects=left["live_process_effects"]
+                or right["live_process_effects"],
+                return_value=(
+                    left["return_value"]
+                    if identical(left["return_value"], right["return_value"])
+                    else _UNKNOWN
+                ),
+                context=context,
+            )
+
+        def normal_join(states, site, operation_kind):
+            nonlocal last_file_operation
+            joining = add(
+                "CANONICAL_OPERATION",
+                [site, operation_kind, context],
+                symbol=symbol,
+                site=site,
+                operation=operation_kind,
+                instance_scope="per_normal_dynamic_control_join",
+            )
+            for saved in states:
+                if saved["last_operation"] is not None:
+                    edges.append(
+                        dict(
+                            kind="NORMAL_CONTROL_COMPLETION",
+                            source=saved["last_operation"],
+                            target=joining,
+                            conditional=True,
+                            context=saved["context"],
+                        )
+                    )
+            merged = states[0]
+            for other in states[1:]:
+                merged = join_states(merged, other, joining)
+            restore(merged)
+            last_file_operation = joining
+
+        def conditional(statement):
+            nonlocal context
+            condition = expression(statement["condition"])
+            site, before_context = operation(statement), context
+            ordered(site)
+            before, results = snapshot(), []
+            arms = (
+                ("then",)
+                if condition is True
+                else ("else",) if condition is False else ("then", "else")
+            )
+            for arm in arms:
+                restore(before)
+                context = [*before_context, dict(control=site, arm=arm)]
+                flow = sequence(statement.get(arm, ()))
+                results.append((flow, snapshot()))
+            context = before_context
+            if any(flow == "unresolved" for flow, _ in results):
+                restore(before)
+                invalidate("unclosed_branch_control", site, changes_cwd=True)
+                return "unresolved"
+            normal = [saved for flow, saved in results if flow == "normal"]
+            if normal:
+                normal_join(normal, site, "if_join")
+                return "normal"
+            restore(before)
+            return (
+                "return" if any(flow == "return" for flow, _ in results) else "noreturn"
+            )
+
+        def loop_summary(statement):
+            nonlocal fact_epoch_clean, live_process_effects, return_value
+            site = operation(statement)
+            ordered(site)
+            effects, opaque, namespace, changes_cwd, returns = (
+                False,
+                False,
+                False,
+                False,
+                False,
+            )
+            for item in walk_operations(statement):
+                op = item["op"]
+                returns |= op == "return"
+                if op == "host_call":
+                    interface = item["interface"]
+                    effects |= (
+                        interface.startswith("fs.")
+                        and interface not in {"fs.exists", "fs.is_file", "fs.is_dir"}
+                        or interface
+                        in {
+                            "stream.write",
+                            "stream.close",
+                            "stream.flush",
+                            "console.input",
+                        }
+                        or interface == "stream.open"
+                        and (
+                            len(item.get("args", ())) < 2
+                            or item["args"][1].get("value") not in {"r", "rt"}
+                        )
+                    )
+                    namespace |= interface.startswith("fs.") and interface not in {
+                        "fs.exists",
+                        "fs.is_file",
+                        "fs.is_dir",
+                        "fs.copy_file",
+                        "fs.copy",
+                        "fs.copy2",
+                    }
+                    changes_cwd |= interface == "process.chdir"
+                    if interface.startswith("process.") and interface not in {
+                        "process.getcwd",
+                        "process.chdir",
+                        "process.stdout",
+                    }:
+                        effects = opaque = True
+                elif op == "text_print":
+                    effects = True
+                elif op in {"process_spawn", "process_request"}:
+                    effects = opaque = True
+                    live_process_effects = True
+                elif op == "array_source_open":
+                    effects = namespace = True
+                elif op != "array_text_read" and "filesystem" in item.get("writes", ()):
+                    effects = namespace = True
+                elif op == "call" and item.get("callee") in functions:
+                    risk = file_effects[item["callee"]]
+                    effects |= bool(risk)
+                    opaque |= bool(risk)
+                elif op in {
+                    "call",
+                    "indirect_call",
+                    "library_call",
+                    "object_dispatch",
+                    "object_construct",
+                    "object_destroy",
+                    "unsupported",
+                }:
+                    effects = opaque = True
+                if op in {"decl", "assign", "update"}:
+                    target = item if op == "decl" else item.get("target", {})
+                    if op == "decl" or target.get("op") == "var":
+                        environment[target.get("scope"), target["name"]] = _UNKNOWN
+            if effects or changes_cwd or namespace:
+                invalidate(
+                    "structured_loop_effect_havoc",
+                    site,
+                    changes_cwd=opaque or changes_cwd,
+                    changes_namespace=namespace,
+                )
+            if opaque:
+                environment.clear()
+                fact_epoch_clean = False
+            boundaries.append(
+                dict(
+                    symbol=symbol,
+                    field="loop_effect_summary",
+                    source=site,
+                    operation=statement["op"],
+                    iterations="not_unrolled",
+                    condition="structured_loop_normal_exit",
+                    file_havoc=effects,
+                    namespace_havoc=namespace,
+                    cwd_havoc=opaque or changes_cwd,
+                )
+            )
+            if returns:
+                return_value = _UNKNOWN
+                return_exits.append(snapshot())
+            return "noreturn" if statement.get("noreturn") is True else "normal"
+
         def sequence(body):
             nonlocal fact_epoch_clean, return_value
             for statement in body:
@@ -1173,6 +1718,20 @@ def analyze(module):
                         value.unresolved.add("escaped_stream")
                 elif op == "expr":
                     expression(statement["value"])
+                    value = statement["value"]
+                    if value.get("noreturn") is True or (
+                        value.get("op") == "call"
+                        and functions.get(value.get("callee"), {}).get("noreturn")
+                    ):
+                        return "noreturn"
+                elif op == "if":
+                    flow = conditional(statement)
+                    if flow != "normal":
+                        return flow
+                elif op in {"for", "while", "do_while", "map", "each"}:
+                    flow = loop_summary(statement)
+                    if flow != "normal":
+                        return flow
                 elif op == "block":
                     shadows = {
                         (item.get("scope"), item["name"]): environment.get(
@@ -1197,7 +1756,11 @@ def analyze(module):
                             )
                     else:
                         return_value = None
+                    return_exits.append(snapshot())
                     return "return"
+                elif op in {"raise", "throw"}:
+                    expression(statement)
+                    return "noreturn"
                 else:
                     # Preserve loops/branch/cleanup boundaries. Their writes
                     # cannot be lifted out as unconditional prefix actions.
@@ -1214,8 +1777,17 @@ def analyze(module):
             return "normal"
 
         flow = sequence(function["body"])
-        if flow == "normal" and function.get("result") in {"unit", "void"}:
-            return_value = None
+        if flow == "normal":
+            if function.get("result") in {"unit", "void"}:
+                return_value = None
+            return_exits.append(snapshot())
+        if flow != "unresolved" and return_exits:
+            normal_join(
+                return_exits,
+                fragment.get("call_site") or symbol,
+                "function_return_join",
+            )
+            flow = "return"
         for stream in streams:
             if not stream.closed or stream.unresolved:
                 boundaries.append(
@@ -1246,6 +1818,7 @@ def analyze(module):
                 live_process_effects=live_process_effects,
                 fact_epoch_clean=fact_epoch_clean,
                 root_activation=root_activation,
+                directories=directories,
             ),
             return_value,
             flow in {"normal", "return"}
@@ -1253,7 +1826,12 @@ def analyze(module):
         )
 
     while pending:
-        evaluate_fragment(pending.popleft())
+        fragment = pending.popleft()
+        if fragment["completion"] == "complete" and "FILE" not in file_effects.get(
+            fragment["symbol"], ()
+        ):
+            continue
+        evaluate_fragment(fragment)
 
     graph["nodes"] = list(nodes.values())
     graph["edges"] = [
@@ -1265,7 +1843,9 @@ def analyze(module):
         interprocedural_file_state="conditional_scalar_parameter_state_transitions",
         context_limit="one_per_root_activation_and_static_call_site",
         recursive_components="opaque_state_barrier",
-        directory_kind="not_inferred_from_path_spelling",
+        directory_kind="normal_creation_and_resolved_directory_identity",
+        branch_state="normal_exit_intersection_and_version_phi",
+        loop_state="normal_exit_effect_havoc_without_unrolling",
         read_value="not_constant_folded",
     )
     validate_artifact_flow(graph)

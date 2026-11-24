@@ -5,6 +5,7 @@ from pathlib import Path
 from scar.contract import (
     IR,
     PHYSICAL,
+    array_rank_domain,
     digest,
     document,
     file_receipt,
@@ -28,6 +29,8 @@ _ARRAY_OPERATIONS = {
     "array_unary",
     "array_view",
     "array_size",
+    "array_rank",
+    "array_extent",
     "array_reshape",
     "array_broadcast_copy",
     "array_load",
@@ -66,6 +69,15 @@ def _observed_operators(module):
                     observed.setdefault(family, set()).add(op)
                 if isinstance(op, str) and op in _ARRAY_OPERATIONS:
                     observed.setdefault("ndarray", set()).add(op)
+                if op in {"array_text_read", "array_source_open"}:
+                    observed.setdefault(
+                        (
+                            "text_array_io"
+                            if op == "array_text_read"
+                            else "text_array_source"
+                        ),
+                        set(),
+                    ).add(op)
                 if (
                     op in ("process_spawn", "process_request")
                     or op == "host_call"
@@ -105,6 +117,72 @@ def _ndarray_binding(requirement, observed):
         array_sdk(required=True),
         device="cpu",
         selection="fixed semantic provider; no global performance optimum claimed",
+    )
+
+
+def _text_array_binding(requirement, observed, module):
+    import ctypes
+    import platform
+
+    profile = "numpy-2.5.5-whitespace-f64-v1"
+    if (
+        not isinstance(requirement, dict)
+        or requirement.keys() - {"operations", "profile"}
+        or requirement.get("profile", profile) != profile
+        or not isinstance(requirement.get("operations", []), list)
+        or observed.union(requirement.get("operations", ())) - {"array_text_read"}
+    ):
+        raise ValueError("requires the registered whitespace binary64 text parser")
+    for node in walk_operations(
+        [module.get(key, ()) for key in ("functions", "globals", "records")]
+    ):
+        if node["op"] != "array_text_read":
+            continue
+        if node.get("source_origin") != {"kind": "named_text_file"}:
+            raise ValueError(
+                "text input requires a proven borrowed named UTF-8 file stream; unresolved source/diagnostic identity cannot select this provider"
+            )
+        parser = node.get("parser", {})
+        if (
+            parser.get("profile") != profile
+            or parser.get("encoding") != "unicode"
+            or parser.get("delimiter") != "whitespace_runs"
+            or parser.get("comments") != "#"
+            or type(parser.get("ndmin")) is not int
+            or parser["ndmin"] != 0
+            or node.get("source", {}).get("type")
+            != dict(kind="handle", resource="text_stream")
+            or set(node.get("effects", ())) != {"IO", "STATE", "VAL", "MEM"}
+            or array_rank_domain(node.get("type")) != (0, 1, 2)
+            or node["type"]["element"] != "f64"
+        ):
+            raise ValueError("unregistered text parsing contract")
+        location, warning = node.get("location", {}), node.get("warning", {})
+        if (
+            not isinstance(location.get("diagnostic_file"), str)
+            or not location["diagnostic_file"]
+            or type(location.get("line")) is not int
+            or location["line"] <= 0
+            or warning.get("operation") != "loadtxt"
+            or not isinstance(warning.get("module"), str)
+            or not warning["module"]
+            or not isinstance(warning.get("source_line"), str)
+            or not warning["source_line"]
+        ):
+            raise ValueError("text input requires its captured warning site and line")
+    if platform.system() != "Linux":
+        raise ValueError("the registered text parser requires Linux locale APIs")
+    library = ctypes.CDLL(None)
+    if any(
+        not hasattr(library, name) for name in ("strtod_l", "newlocale", "freelocale")
+    ):
+        raise ValueError("native C-locale number conversion is unavailable")
+    return dict(
+        provider="scar-cpu-text-input",
+        profile=profile,
+        semantics_version=1,
+        source="borrowed_named_utf8_stream",
+        numeric_converter="system-libc:strtod_l:C",
     )
 
 
@@ -295,7 +373,9 @@ def _qualify(module, image_context=None):
             )
     for family, requirement in sorted(requested.items()):
         resolve = _OPERATOR_BINDINGS.get(family)
-        if process_requests and (resolve is not None or family in {"mpi", "process"}):
+        if (process_requests or "text_array_source" in observed) and (
+            resolve is not None or family in {"mpi", "process", "text_array_io"}
+        ):
             # Deployment cannot proceed. Report other unregistered families
             # below without probing any physical providers.
             continue
@@ -323,6 +403,16 @@ def _qualify(module, image_context=None):
                 continue
             except ValueError as exc:
                 detail = str(exc)
+        elif family == "text_array_io":
+            try:
+                bindings[family] = _text_array_binding(
+                    requirement, observed.get(family, set()), module
+                )
+                continue
+            except ValueError as exc:
+                detail = str(exc)
+        elif family == "text_array_source":
+            detail = "NumPy path resolution includes local/compressed alternatives and URL caching; no qualified native resolver is registered"
         elif resolve is None:
             detail = "no target implementation is registered for this operator family"
         elif family == "ndarray" and array_elements - {"f64"}:

@@ -753,6 +753,72 @@ print(snapshot[0] == 1.0)
     ]
 
 
+def test_text_array_input_preserves_runtime_rank_and_borrowed_streams(tmp_path):
+    entry = tmp_path / "input_arrays.py"
+    entry.write_text("""import numpy as np
+def read(path):
+    with open(path, encoding="UTF-8") as stream:
+        return np.loadtxt(stream)
+scalar = read("scalar.txt")
+row = read("row.txt")
+matrix = read("matrix.txt")
+print(scalar, scalar.ndim, scalar.size)
+print(row, row.ndim, row.size)
+print(matrix, matrix.ndim, matrix.size)
+matrix = matrix.reshape(-1)
+borrowed = matrix.reshape(2, -2)
+copied = matrix.copy()
+borrowed[0, 0] = 9.0
+print(matrix, copied, borrowed.shape, sep="\\n")
+with open("invalid.txt", encoding="utf-8") as stream:
+    try:
+        np.loadtxt(stream)
+    except ValueError as error:
+        print(str(error))
+    print(stream.readline(), end="")
+with open("unicode.txt", encoding="utf-8") as stream:
+    try:
+        np.loadtxt(stream)
+    except UnicodeError as error:
+        print(str(error))
+with open("empty.txt", encoding="UTF-8") as stream:
+    empty = np.loadtxt(stream)
+    print(empty, empty.ndim, empty.size)
+""")
+    for name, contents in {
+        "scalar": b"2.5\n",
+        "row": "1.25\u2003 2.5 # columns\n".encode(),
+        "matrix": b"# heading\n1.25  2.5 # row\n3.75 4.0\n",
+        "invalid": b"1 2\n3 wrong\n9 10\n",
+        "unicode": b"1 2\n\xff\n",
+        "empty": b"# no data\n",
+    }.items():
+        (tmp_path / (name + ".txt")).write_bytes(contents)
+    expected = subprocess.run(
+        [sys.executable, "-B", entry], cwd=tmp_path, capture_output=True, check=True
+    )
+    graph, plan, delivery = (tmp_path / name for name in ("graph", "plan", "delivery"))
+    _stage(tmp_path, "frontend", "build", "--entry", entry, "--out", graph)
+    entry.unlink()
+    _stage(tmp_path, "middle", "plan", "--graph", graph, "--out", plan)
+    ir = json.loads((plan / "exec-ir.json").read_bytes())
+    assert ir["module"]["operator_requirements"]["text_array_io"]["operations"] == [
+        "array_text_read"
+    ]
+    shutil.rmtree(graph)
+    result = _stage(tmp_path, "backend", "compile", "--ir", plan, "--out", delivery)
+    shutil.rmtree(plan)
+    actual = subprocess.run(
+        [result["executable"]], cwd=tmp_path, capture_output=True, check=True
+    )
+    assert (actual.stdout, actual.stderr) == (expected.stdout, expected.stderr)
+    assert b"UserWarning" in actual.stderr
+    selected = json.loads((delivery / "physical-plan.json").read_bytes())
+    assert selected["operator_backends"]["text_array_io"]["provider"] == (
+        "scar-cpu-text-input"
+    )
+
+
 def test_numeric_domains_broadcast_and_array_display(tmp_path):
     entry = tmp_path / "entry.py"
     entry.write_text("""import numpy as np

@@ -7,7 +7,7 @@ from .values import (
     SCALARS,
     Value,
     literal,
-    rank,
+    is_array,
     runtime,
     protocols,
     wire,
@@ -250,7 +250,7 @@ def display(frame, node, value, steps):
     """Prepare aggregates for the existing stream-print scalar contract."""
     if value.kind in {"list", "tuple"}:
         return _container(frame, node, value, steps)
-    if rank(value.kind) is not None:
+    if is_array(value.kind):
         return array_text(frame, node, value, steps)
     if value.kind == "numpy_bool":
         _numpy_major(frame, node)
@@ -274,7 +274,7 @@ def render(frame, node, value, conversion, source_spec, steps, discard=False):
             )
         value = Value(wire(value.kind), value.value, value.facts)
     source = value.kind
-    if rank(source) is not None:
+    if is_array(source):
         if conversion in {"repr", "ascii"}:
             frame.fail(
                 node,

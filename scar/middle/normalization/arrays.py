@@ -12,6 +12,8 @@ from .values import (
     Value,
     _UNKNOWN,
     array_kind,
+    is_array,
+    rank_domain,
     binding_targets,
     literal,
     protocols,
@@ -20,7 +22,11 @@ from .values import (
     wire,
 )
 
-_PROVIDED = {"array", "zeros", "float64", "linspace", "meshgrid"}
+_PROVIDED = {"array", "zeros", "float64", "linspace", "meshgrid", "loadtxt"}
+_TEXT_ARRAY_SOURCE = {
+    "numpy": "09295a80660f17925ae23765ce8cbd7ff7ceae968d5f2f89349f1cb74c0b9e11",
+    "numpy.lib._npyio_impl": "51eb4572baad1e8198f71b3488a3cbcdb81ac85aa3c15cc2708cd907198a1fb5",
+}
 _LINEAR_SPACE_SOURCE = {
     "numpy": "09295a80660f17925ae23765ce8cbd7ff7ceae968d5f2f89349f1cb74c0b9e11",
     "numpy._core": "837ce8aec8693095d2e1c7c306d385d1785a50be97a009935c64cae04e3555d2",
@@ -61,6 +67,8 @@ class LiteralState:
 
     def create(self, shape, items=None):
         self.next_token += 1
+        if shape is None:
+            return dict(array_allocation=self.next_token, literal_region=None)
         facts = dict(
             shape=tuple(shape),
             array_allocation=self.next_token,
@@ -178,7 +186,7 @@ class LiteralState:
                     else frame.env
                 )
                 value = scope.get(target["name"])
-                if value is None or rank(value.kind) is not None:
+                if value is None or is_array(value.kind):
                     self.invalidate(value)
         return self.next_token
 
@@ -242,13 +250,7 @@ def may_write_external(function, functions, active=()):
     return False
 
 
-def bind_copy(frame, node, source, steps):
-    """A bound copy method captures this handle before later name rebinding."""
-    captured = frame.effect(source.value, source.kind, steps, facts=source.facts)
-    return Value("array_copy_method", captured)
-
-
-def persist_copy(frame, target, method, steps):
+def persist_method(frame, target, method, steps):
     """Only a stored module binding requires a receiver beyond its initializer."""
     source = method.value
     slot = "@array-method/" + target["name"]
@@ -256,6 +258,274 @@ def persist_copy(frame, target, method, steps):
     captured = source.at(slot, scope="global")
     steps.append(dict(op="assign", target=captured.value, value=source.value))
     return Value(method.kind, captured)
+
+
+def member(frame, node, source, name, steps):
+    """Separate array identity from the currently known rank and extents."""
+    if not is_array(source.kind):
+        return None
+    if name in {"copy", "reshape"}:
+        captured = frame.effect(source.value, source.kind, steps, facts=source.facts)
+        return Value(
+            "array_copy_method" if name == "copy" else "array_reshape_method", captured
+        )
+    dimensions = rank(source.kind)
+    if name == "ndim":
+        if dimensions is not None:
+            return literal(dimensions)
+        domain = rank_domain(source.kind)
+        return _output(
+            frame,
+            "array_rank",
+            "i64",
+            steps,
+            value=source.value,
+            effects=["STATE"],
+            facts=(
+                {"range": (min(domain), max(domain))}
+                if domain is not None
+                else {"range": (0, (1 << 63) - 1)}
+            ),
+        )
+    if name == "size":
+        shape = _shape(source)
+        if shape is not None and all(type(n) is int for n in shape):
+            return literal(math.prod(shape))
+        return _output(
+            frame,
+            "array_size",
+            "i64",
+            steps,
+            value=source.value,
+            effects=["STATE"],
+            facts={"range": (0, (1 << 63) - 1)},
+        )
+    if name == "shape":
+        if dimensions is None:
+            frame.fail(
+                node,
+                "array_shape_rank",
+                "a runtime-length shape tuple needs a sequence contract",
+            )
+        shape = _shape(source)
+        return Value(
+            "tuple",
+            tuple(
+                (
+                    literal(extent)
+                    if extent is not None
+                    else _output(
+                        frame,
+                        "array_extent",
+                        "i64",
+                        steps,
+                        value=source.value,
+                        axis=literal(axis).value,
+                        effects=["STATE"],
+                        facts={"range": (0, (1 << 63) - 1)},
+                    )
+                )
+                for axis, extent in enumerate(shape)
+            ),
+        )
+    frame.fail(node, "array_member", f"no closed array member contract for {name}")
+
+
+def _reshape(frame, node, source, args, options, steps, discard):
+    if frame.project.providers.get("numpy", {}).get("version") != "2.5.5":
+        frame.fail(
+            node,
+            "array_reshape_profile",
+            "reshape requires its registered source dimension and error profile",
+        )
+    order, copy = options.pop("order", literal("C")), options.pop("copy", literal(None))
+    if (
+        options
+        or order.kind != "text"
+        or order.exact != "C"
+        or copy.kind != "unit"
+        or not args
+    ):
+        frame.fail(
+            node,
+            "array_reshape",
+            "reshape requires positional dimensions, C order and the default copy policy",
+        )
+    dims = (
+        args[0].value if len(args) == 1 and args[0].kind in {"list", "tuple"} else args
+    )
+    if any(value.kind != "i64" for value in dims):
+        frame.fail(node, "array_shape", "reshape dimensions need index-width integers")
+    shape = tuple(
+        value.exact if type(value.exact) is int and value.exact >= 0 else None
+        for value in dims
+    )
+    known = _shape(source)
+    negative = [
+        i
+        for i, value in enumerate(dims)
+        if type(value.exact) is int and value.exact < 0
+    ]
+    if (
+        known is not None
+        and all(type(n) is int for n in known)
+        and len(negative) == 1
+        and all(type(v.exact) is int for v in dims)
+    ):
+        product = math.prod(v.exact for v in dims if v.exact >= 0)
+        size = math.prod(known)
+        if product and size % product == 0:
+            shape = tuple(
+                size // product if i == negative[0] else value.exact
+                for i, value in enumerate(dims)
+            )
+    return _output(
+        frame,
+        "array_reshape",
+        array_kind(len(dims)),
+        steps,
+        facts=frame.project.array_state.reshaped(source, shape),
+        discard=discard,
+        value=source.value,
+        shape=[value.value for value in dims],
+        layout="C",
+        inference="numpy_single_negative_dimension",
+        effects=["STATE", "MEM"],
+        may_raise=True,
+    )
+
+
+def _load_text(frame, node, args, options, steps, discard):
+    profile = _implementation(frame, node, "loadtxt", _TEXT_ARRAY_SOURCE)
+    if not args and "fname" in options:
+        args = [options.pop("fname")]
+    if len(args) != 1 or "fname" in options:
+        frame.fail(
+            node,
+            "array_text_arguments",
+            "loadtxt requires one source and closed default parsing options",
+        )
+    defaults = {
+        "delimiter": None,
+        "comments": "#",
+        "converters": None,
+        "skiprows": 0,
+        "usecols": None,
+        "unpack": False,
+        "ndmin": 0,
+        "encoding": None,
+        "max_rows": None,
+        "quotechar": None,
+        "like": None,
+    }
+    dtype = options.pop("dtype", literal(None))
+    if not (
+        dtype.kind == "unit"
+        or dtype.kind == "dtype"
+        and dtype.value == "f64"
+        or dtype.kind == "builtin"
+        and dtype.value == "float"
+        or dtype.kind == "text"
+        and dtype.exact in {"float64", "f8", "d"}
+    ):
+        frame.fail(
+            node,
+            "array_dtype",
+            "the registered text reader requires source binary64 elements",
+        )
+    if set(options) - defaults.keys() or any(
+        value.exact is _UNKNOWN
+        or type(value.exact) is not type(defaults[key])
+        or value.exact != defaults[key]
+        for key, value in options.items()
+    ):
+        frame.fail(
+            node,
+            "array_text_options",
+            "nondefault text parsing needs its own source contract",
+        )
+    source = args[0]
+    owned = source.kind == "text"
+    if not owned and source.kind != "handle:text_stream":
+        frame.fail(
+            node,
+            "array_text_source",
+            "text arrays require a path or a qualified text stream",
+        )
+    if owned:
+        frame.project.require_operator(
+            "text_array_source",
+            "array_source_open",
+            profile="numpy-2.5.5-datasource-v1",
+        )
+        source = frame.effect(
+            dict(
+                op="array_source_open",
+                operator_family="text_array_source",
+                source=source.value,
+                resolution=dict(
+                    profile="numpy-2.5.5-datasource-v1",
+                    mode="rt",
+                    encoding="source_default",
+                    errors="strict",
+                    compressed_fallback=True,
+                    url_cache=True,
+                ),
+                type=wire("handle:text_stream"),
+                effects=["IO", "STATE", "MEM", "XFER"],
+                reads=["filesystem", "network", "process.cwd"],
+                writes=["filesystem", "network", "new.stream"],
+                may_raise=True,
+                **{key: node[key] for key in ("site", "location") if key in node},
+            ),
+            "handle:text_stream",
+            steps,
+        )
+    frame.project.require_operator(
+        "text_array_io", "array_text_read", profile="numpy-2.5.5-whitespace-f64-v1"
+    )
+    facts = frame.project.array_state.create(None)
+    kind = array_kind((0, 1, 2))
+    warning = dict(
+        operation="loadtxt",
+        module="__main__" if frame.scope.get("main") else frame.module,
+        source_line=node.get("location", {}).get("source_line", ""),
+    )
+    read = dict(
+        op="array_text_read",
+        operator_family="text_array_io",
+        source=source.value,
+        source_origin=source.facts.get("stream_origin", {"kind": "unresolved"}),
+        parser=dict(
+            profile="numpy-2.5.5-whitespace-f64-v1",
+            encoding="unicode",
+            delimiter="whitespace_runs",
+            comments="#",
+            ndmin=0,
+            source_implementation=profile["sha256"],
+        ),
+        type=wire(kind),
+        effects=["IO", "STATE", "VAL", "MEM"],
+        reads=["filesystem", "stream.state"],
+        writes=["new.array_storage", "stream.state"],
+        may_raise=True,
+        warning=warning,
+        text_profile=frame.scope.get("text_profile"),
+        **{key: node[key] for key in ("site", "location") if key in node},
+    )
+    if not owned:
+        return frame.effect(read, kind, steps, discard, facts=facts)
+    name = frame.temporary()
+    result = Value(kind, None, facts).at(name)
+    steps.append(dict(op="decl", name=name, type=wire(kind)))
+    steps.append(
+        dict(
+            op="resource_scope",
+            resource=source.value,
+            body=[dict(op="assign", target=result.value, value=read)],
+        )
+    )
+    return literal(None) if discard else result
 
 
 def _scalar_facts(op, lhs, rhs):
@@ -284,7 +554,7 @@ def _scalar_facts(op, lhs, rhs):
 def _output(frame, node, kind, steps, *, facts=None, discard=False, **fields):
     frame.project.array_ops.add(node)
     if (
-        rank(kind) is not None
+        is_array(kind)
         and node
         in {
             "array_create",
@@ -298,7 +568,9 @@ def _output(frame, node, kind, steps, *, facts=None, discard=False, **fields):
         and "array_allocation" not in (facts or {})
     ):
         facts = frame.project.array_state.create(
-            (facts or {}).get("shape", (None,) * rank(kind))
+            (facts or {}).get(
+                "shape", None if rank(kind) is None else (None,) * rank(kind)
+            )
         )
     return frame.effect(
         dict(op=node, type=wire(kind), **fields), kind, steps, discard, facts=facts
@@ -355,11 +627,15 @@ def provider_member(frame, node, name):
 
 def _shape(item):
     dimensions = rank(item.kind)
+    if is_array(item.kind) and dimensions is None:
+        return None
     return () if dimensions is None else item.facts.get("shape", (None,) * dimensions)
 
 
 def _broadcast(frame, node, lhs, rhs, *, inplace):
     left, right = _shape(lhs), _shape(rhs)
+    if left is None or right is None:
+        frame.fail(node, "array_rank", "broadcast needs resolved operand ranks")
     if inplace and len(right) > len(left):
         frame.fail(
             node,
@@ -453,9 +729,7 @@ def _power_path(frame, node, lhs, rhs):
 
 
 def _operand(frame, node, value):
-    return (
-        value.value if rank(value.kind) is not None else _as_float(frame, node, value)
-    )
+    return value.value if is_array(value.kind) else _as_float(frame, node, value)
 
 
 def _operation(frame, node, op, lhs, rhs, steps, *, inplace=False, discard=False):
@@ -509,10 +783,16 @@ def _operation(frame, node, op, lhs, rhs, steps, *, inplace=False, discard=False
 def binary(frame, node, op, lhs, rhs, steps, discard=False):
     """Select NumPy arithmetic from source operand identities, including scalar loads."""
     if all(
-        rank(v.kind) is None and v.kind not in {"numpy_f64", "numpy_bool"}
+        not is_array(v.kind) and v.kind not in {"numpy_f64", "numpy_bool"}
         for v in (lhs, rhs)
     ):
         return None
+    if any(is_array(v.kind) and rank(v.kind) is None for v in (lhs, rhs)):
+        frame.fail(
+            node,
+            "array_rank",
+            "array arithmetic requires resolved ranks or an explicit scalar/array result contract",
+        )
     if op in _COMPARISONS:
         if any(rank(v.kind) not in (None, 0) for v in (lhs, rhs)):
             frame.fail(
@@ -572,7 +852,7 @@ def binary(frame, node, op, lhs, rhs, steps, discard=False):
 
 def update(frame, node, lhs, rhs, steps):
     """Update the existing storage so live views observe the write."""
-    if rank(lhs.kind) is None:
+    if not is_array(lhs.kind):
         return False
     _operation(frame, node, node["operator"], lhs, rhs, steps, inplace=True)
     return True
@@ -581,6 +861,12 @@ def update(frame, node, lhs, rhs, steps):
 def scalar_unary(frame, node, item, steps, discard):
     op = {"uadd": "pos", "usub": "neg"}.get(node["operator"])
     n = rank(item.kind)
+    if is_array(item.kind) and n is None:
+        frame.fail(
+            node,
+            "array_rank",
+            "unary array results need a resolved zero-dimensional scalar protocol",
+        )
     if op is None or n is None and item.kind not in {"i64", "f64", "numpy_f64"}:
         frame.fail(
             node, "unary_contract", f"unclosed {node['operator']} on {item.kind}"
@@ -1044,10 +1330,10 @@ def _meshgrid(frame, node, args, keywords, steps, discard):
     first = len(steps)
     vectors, sizes, extents = [], [], []
     for item in args:
-        if rank(item.kind) is None:
+        if not is_array(item.kind):
             item = _literal_array(frame, node, item, steps, force=False)
         shape = _shape(item)
-        if all(type(n) is int for n in shape):
+        if shape is not None and all(type(n) is int for n in shape):
             count = math.prod(shape)
             size = literal(count)
         else:
@@ -1145,6 +1431,8 @@ def _meshgrid(frame, node, args, keywords, steps, discard):
 
 def construct(frame, node, target, args, keywords, steps, discard):
     options = dict(keywords)
+    if target.kind == "array_reshape_method":
+        return _reshape(frame, node, target.value, args, options, steps, discard)
     if target.kind == "array_copy_method":
         if args or options:
             frame.fail(
@@ -1164,6 +1452,8 @@ def construct(frame, node, target, args, keywords, steps, discard):
             effects=["MEM", "STATE", "XFER"],
         )
     name = target.value
+    if name == "loadtxt":
+        return _load_text(frame, node, args, options, steps, discard)
     if name == "linspace":
         return _linspace(frame, node, args, options, steps, discard)
     if name == "meshgrid":
@@ -1230,7 +1520,7 @@ def construct(frame, node, target, args, keywords, steps, discard):
             initialization="zero",
             effects=["MEM", "VAL"],
         )
-    if rank(source.kind) is not None:
+    if is_array(source.kind):
         return _output(
             frame,
             "array_copy",
@@ -1288,6 +1578,8 @@ def index(frame, node, steps, rhs=None, discard=False):
         if rhs.kind in {"tuple", "list"}:
             rhs = _literal_array(frame, node, rhs, steps, force=True)
         source_rank = rank(rhs.kind)
+        if is_array(rhs.kind) and source_rank is None:
+            frame.fail(node, "array_rank", "array assignment needs a resolved RHS rank")
         if source_rank is not None:
             actual = rhs.facts.get("shape", (None,) * source_rank)
             extra = max(0, source_rank - len(result))

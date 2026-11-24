@@ -60,6 +60,38 @@ def byte_value_id(sha256):
     return "bytes:sha256:" + sha256
 
 
+def array_rank_domain(spec):
+    """Validate an array wire type; None denotes an unbounded runtime rank."""
+    if (
+        not isinstance(spec, dict)
+        or set(spec) != {"kind", "element", "rank"}
+        or spec["kind"] != "ndarray"
+        or not isinstance(spec["element"], str)
+        or not spec["element"]
+    ):
+        raise ValueError("invalid array type record")
+    rank = spec["rank"]
+    if type(rank) is int and rank >= 0:
+        return (rank,)
+    if isinstance(rank, dict) and set(rank) == {"values"}:
+        domain = rank["values"]
+        if (
+            isinstance(domain, list)
+            and domain
+            and all(type(n) is int and n >= 0 for n in domain)
+            and domain == sorted(set(domain))
+        ):
+            return tuple(domain)
+    if (
+        isinstance(rank, dict)
+        and set(rank) == {"minimum"}
+        and type(rank["minimum"]) is int
+        and rank["minimum"] == 0
+    ):
+        return None
+    raise ValueError("invalid array rank domain")
+
+
 def validate_artifact_flow(flow):
     """Check typed artifact references without promoting snapshots to history."""
     if (flow.get("schema"), flow.get("schema_version")) != (ARTIFACT_FLOW, VERSION):
@@ -80,6 +112,7 @@ def validate_artifact_flow(flow):
         "BYTE_EXPRESSION",
         "COMMAND_REQUEST",
         "PROCESS_INTENT",
+        "DIRECTORY_TEMPLATE",
     }
     records = {}
     for node in flow["nodes"]:
@@ -103,6 +136,35 @@ def validate_artifact_flow(flow):
                     "literal artifact text disagrees with its content identity"
                 )
     for node in records.values():
+        if node["kind"] == "DIRECTORY_TEMPLATE":
+            if node.get("form") not in {
+                "entry",
+                "filesystem_root",
+                "created",
+                "existing",
+                "phi",
+                "symbolic_parent",
+            }:
+                raise ValueError("directory template requires its identity form")
+            for field, expected in (
+                ("parent", "DIRECTORY_TEMPLATE"),
+                ("locator", "FILE_LOCATOR"),
+            ):
+                if (
+                    node.get(field) is not None
+                    and records.get(node[field], {}).get("kind") != expected
+                ):
+                    raise ValueError(f"directory template requires its {field} node")
+            if node.get("producer") is not None and records.get(
+                node["producer"], {}
+            ).get("kind") not in {"SOURCE_OPERATION", "CANONICAL_OPERATION"}:
+                raise ValueError("directory template producer must be an operation")
+            incoming = node.get("incoming_directories", [])
+            if not isinstance(incoming, list) or any(
+                records.get(ref, {}).get("kind") != "DIRECTORY_TEMPLATE"
+                for ref in incoming
+            ):
+                raise ValueError("directory phi references an absent directory")
         if node["kind"] in {
             "FILE_VERSION",
             "FILE_VERSION_REQUIREMENT",
@@ -113,6 +175,18 @@ def validate_artifact_flow(flow):
             value = node.get("value")
             if value is not None and records.get(value, {}).get("kind") != "BYTE_VALUE":
                 raise ValueError("file version references an absent byte value")
+            if node.get("form") == "phi":
+                incoming = node.get("incoming_versions")
+                if (
+                    not isinstance(incoming, list)
+                    or len(incoming) < 2
+                    or any(
+                        records.get(ref, {}).get("kind")
+                        not in {"FILE_VERSION", "FILE_VERSION_TEMPLATE"}
+                        for ref in incoming
+                    )
+                ):
+                    raise ValueError("file phi requires its incoming version nodes")
         if node["kind"] == "BUFFER_VERSION":
             if records.get(node.get("locator"), {}).get("kind") != "BUFFER_LOCATOR":
                 raise ValueError("buffer version requires its storage locator")
@@ -138,6 +212,22 @@ def validate_artifact_flow(flow):
             raise ValueError("artifact edge references an absent node")
         if not isinstance(relation.get("kind"), str) or not relation["kind"]:
             raise ValueError("artifact edge requires its relationship kind")
+        if relation["kind"] == "DIRECTORY_PARENT" and (
+            records[relation["source"]]["kind"] != "DIRECTORY_TEMPLATE"
+            or records[relation["target"]]["kind"] != "DIRECTORY_TEMPLATE"
+            or relation.get("conditional") is not True
+        ):
+            raise ValueError(
+                "directory parent requires conditional directory identities"
+            )
+        if relation["kind"] == "LOCATES_DIRECTORY" and (
+            records[relation["source"]]["kind"] != "FILE_LOCATOR"
+            or records[relation["target"]]["kind"] != "DIRECTORY_TEMPLATE"
+            or relation.get("conditional") is not True
+        ):
+            raise ValueError(
+                "directory location requires its conditional locator relation"
+            )
         if (
             relation["kind"] == "CAPTURED_AT_SAME_LOCATOR"
             and relation.get("establishes_version_equality") is not False

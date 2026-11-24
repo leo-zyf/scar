@@ -85,7 +85,7 @@ def test_native_execution_calls_require_bindings_without_blocking_local_names():
 
 
 def test_unavailable_operator_bindings_stop_before_target_layers(tmp_path):
-    def execution(folder, *, family=None, tagged=False):
+    def execution(folder, *, family=None, tagged=False, source_open=False):
         function = dict(
             name="main",
             params=[],
@@ -102,6 +102,20 @@ def test_unavailable_operator_bindings_stop_before_target_layers(tmp_path):
                         operator_family="future",
                         type="unit",
                         effects=["STATE"],
+                    ),
+                ),
+            )
+        if source_open:
+            function["body"].insert(
+                0,
+                dict(
+                    op="expr",
+                    value=dict(
+                        op="array_source_open",
+                        type=dict(kind="handle", resource="text_stream"),
+                        source=dict(op="literal", type="text", value="input.txt"),
+                        resolution=dict(profile="numpy-2.5.5-datasource-v1"),
+                        effects=["IO", "STATE", "MEM", "XFER"],
                     ),
                 ),
             )
@@ -122,6 +136,7 @@ def test_unavailable_operator_bindings_stop_before_target_layers(tmp_path):
 
     required = execution(tmp_path / "required", family="future")
     tagged = execution(tmp_path / "tagged", tagged=True)
+    unbound_source = execution(tmp_path / "unbound-source", source_open=True)
     bundle = tmp_path / "bundle"
     plain_image = execution(bundle / "images/driver")
     required_image = execution(bundle / "images/solver", family="future")
@@ -157,7 +172,9 @@ sys.meta_path.insert(0, Boundary())
 from scar.cli import main
 raise SystemExit(main(['compile', '--ir', sys.argv[1], '--out', sys.argv[2], '--physical', 'serial']))
 """
-    for index, source in enumerate((required, tagged, bundle / "exec-ir.json")):
+    for index, source in enumerate(
+        (required, tagged, bundle / "exec-ir.json", unbound_source)
+    ):
         delivery = tmp_path / f"delivery-{index}"
         result = subprocess.run(
             [sys.executable, "-B", "-c", command, str(source), str(delivery)],
@@ -173,7 +190,9 @@ raise SystemExit(main(['compile', '--ir', sys.argv[1], '--out', sys.argv[2], '--
         report = json.loads(result.stdout)
         assert report["status"] == "INCOMPLETE"
         assert all(i["code"] == "missing_operator_binding" for i in report["issues"])
-        assert {i["requirement"] for i in report["issues"]} == {"future"}
+        assert {i["requirement"] for i in report["issues"]} == {
+            "text_array_source" if index == 3 else "future"
+        }
         assert not (delivery / "project").exists()
         assert not (delivery / "target-ir.json").exists()
         physical = json.loads((delivery / "physical-plan.json").read_bytes())

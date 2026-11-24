@@ -10,7 +10,9 @@
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <set>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -64,6 +66,74 @@ template <class T> class ndarray {
     return result;
   }
 
+  [[noreturn]] static void reshape_mismatch(array_shape layout,
+                                            std::size_t source_size) {
+    std::string axes;
+    for (auto extent : layout.extents) {
+      if (axes.empty() && extent < 0)
+        continue;
+      if (!axes.empty())
+        axes += ',';
+      axes += extent < 0 ? "newaxis" : std::to_string(extent);
+    }
+    if (layout.rank == 1 && !axes.empty())
+      axes += ',';
+    throw std::invalid_argument("cannot reshape array of size " +
+                                std::to_string(source_size) + " into shape (" +
+                                axes + ")");
+  }
+
+  static shape_type inferred_shape(array_shape layout, std::size_t size) {
+    if (layout.extents.size() != layout.rank)
+      throw std::invalid_argument("array shape rank mismatch");
+    if (layout.rank > 64)
+      throw std::invalid_argument(
+          "maximum supported dimension for an ndarray is currently 64, found " +
+          std::to_string(layout.rank));
+    constexpr auto limit =
+        static_cast<std::size_t>(std::numeric_limits<std::ptrdiff_t>::max());
+    shape_type dims;
+    dims.reserve(layout.rank);
+    std::size_t product = 1;
+    std::optional<std::size_t> unknown;
+    for (auto extent : layout.extents) {
+      if (extent < 0) {
+        if (unknown)
+          throw std::invalid_argument("can only specify one unknown dimension");
+        unknown = dims.size();
+        dims.push_back(0);
+      } else {
+        if (!std::in_range<std::size_t>(extent))
+          reshape_mismatch(layout, size);
+        const auto axis = static_cast<std::size_t>(extent);
+        if (axis && product > limit / axis)
+          reshape_mismatch(layout, size);
+        product *= axis;
+        dims.push_back(axis);
+      }
+    }
+    if (unknown) {
+      if (!product || size % product)
+        reshape_mismatch(layout, size);
+      dims[*unknown] = size / product;
+    } else if (size != product)
+      reshape_mismatch(layout, size);
+
+    // An empty view still requires representable strides along nonempty axes.
+    if (!size) {
+      std::size_t bytes = sizeof(T);
+      for (const auto extent : dims)
+        if (extent) {
+          if (bytes > limit / extent)
+            throw std::invalid_argument(
+                "array is too big; `arr.size * arr.dtype.itemsize` is "
+                "larger than the maximum possible size.");
+          bytes *= extent;
+        }
+    }
+    return dims;
+  }
+
   static std::size_t count(const shape_type &shape) {
     if (std::find(shape.begin(), shape.end(), 0) != shape.end())
       return 0;
@@ -94,8 +164,8 @@ template <class T> class ndarray {
         {std::move(data), 0, size, std::move(shape), std::move(strides)});
   }
 
-  void require_rank(std::size_t rank) const {
-    if (!region_ || rank != region_->shape.size())
+  void require_rank(std::optional<std::size_t> rank) const {
+    if (!region_ || (rank && *rank != region_->shape.size()))
       throw std::invalid_argument("array handle rank mismatch");
   }
 
@@ -146,18 +216,20 @@ public:
     return region_->shape;
   }
 
-  std::int64_t size(std::size_t rank) const {
+  std::int64_t size(std::optional<std::size_t> rank = std::nullopt) const {
     require_rank(rank);
     if (!std::in_range<std::int64_t>(region_->size))
       throw std::length_error("array size exceeds i64");
     return static_cast<std::int64_t>(region_->size);
   }
 
-  ndarray reshape(std::size_t rank, array_shape layout) const {
+  ndarray reshape(std::optional<std::size_t> rank, array_shape layout,
+                  bool infer_negative = false) const {
     require_rank(rank);
     const auto &src = *region_;
-    auto dims = shape(layout);
-    if (count(dims) != src.size)
+    auto dims =
+        infer_negative ? inferred_shape(layout, src.size) : shape(layout);
+    if (!infer_negative && count(dims) != src.size)
       throw std::invalid_argument("array reshape changes element count");
     if (src.size && !xt::do_strides_match(src.shape, src.strides,
                                           xt::layout_type::row_major, true))
@@ -168,7 +240,8 @@ public:
                     std::move(strides)});
   }
 
-  ndarray broadcast_copy(std::size_t rank, array_shape layout) const {
+  ndarray broadcast_copy(std::optional<std::size_t> rank,
+                         array_shape layout) const {
     require_rank(rank);
     auto dims = shape(layout);
     if (!xt::broadcastable(region_->shape, std::as_const(dims)))
@@ -214,18 +287,22 @@ public:
   }
 
   static ndarray literal(array_shape layout, std::initializer_list<T> values) {
-    auto dims = shape(layout);
+    return from_row_major(shape(layout), values);
+  }
+
+  static ndarray from_row_major(std::vector<std::size_t> dims,
+                                std::span<const T> values) {
     auto size = count(dims);
     if (size != values.size())
       throw std::invalid_argument("array literal element count mismatch");
     auto result = allocate(std::move(dims), size);
     if (size)
       xt::noalias(*result.region_->storage) =
-          xt::adapt(values.begin(), size, xt::no_ownership(), shape_type{size});
+          xt::adapt(values.data(), size, xt::no_ownership(), shape_type{size});
     return result;
   }
 
-  ndarray materialize(std::size_t rank, bool negate) const {
+  ndarray materialize(std::optional<std::size_t> rank, bool negate) const {
     require_rank(rank);
     auto result = allocate(region_->shape, region_->size);
     if (region_->size) {
@@ -313,16 +390,39 @@ std::int64_t array_size(const ndarray<T> &value, std::size_t rank) {
   return value.size(rank);
 }
 
+template <class T> std::int64_t array_size(const ndarray<T> &value) {
+  return value.size();
+}
+template <class T> std::int64_t array_rank(const ndarray<T> &value) {
+  return static_cast<std::int64_t>(value.dimensions().size());
+}
+template <class T>
+std::int64_t array_extent(const ndarray<T> &value, std::int64_t axis) {
+  const auto rank = array_rank(value);
+  if (axis < 0)
+    axis += rank;
+  if (axis < 0 || axis >= rank)
+    throw std::out_of_range("tuple index out of range");
+  const auto extent = value.dimensions()[static_cast<std::size_t>(axis)];
+  if (!std::in_range<std::int64_t>(extent))
+    throw std::overflow_error("array extent exceeds i64");
+  return static_cast<std::int64_t>(extent);
+}
+
 template <class T> struct array_shape_change {
   ndarray<T> value;
-  std::size_t source_rank;
+  std::optional<std::size_t> source_rank;
   array_shape shape;
+  bool infer_negative = false;
 };
 template <class T> ndarray<T> array_reshape(array_shape_change<T> input) {
-  return input.value.reshape(input.source_rank, input.shape);
+  return input.value.reshape(input.source_rank, input.shape,
+                             input.infer_negative);
 }
 template <class T>
 ndarray<T> array_broadcast_copy(array_shape_change<T> input) {
+  if (input.infer_negative)
+    throw std::invalid_argument("broadcast shape does not infer dimensions");
   return input.value.broadcast_copy(input.source_rank, input.shape);
 }
 
@@ -336,7 +436,7 @@ template <class T> ndarray<T> array_literal(array_elements<T> input) {
 
 template <class T> struct array_operand {
   ndarray<T> value;
-  std::size_t rank;
+  std::optional<std::size_t> rank;
   bool negate = false;
 };
 template <class T> ndarray<T> array_copy(array_operand<T> input) {

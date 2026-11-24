@@ -340,9 +340,10 @@ def _open(frame, node, target, args, keywords, steps, discard):
         node,
         "stream.open",
         _STREAM,
-        [path, mode, literal("utf-8"), literal("universal")],
+        [path, mode, literal(encoding_name), literal("universal")],
         steps,
         discard,
+        result_facts={"stream_origin": {"kind": "named_text_file"}},
     )
 
 

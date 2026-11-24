@@ -96,6 +96,8 @@ inline bool matches(const error_value &value, std::string_view category) {
     return actual == "index_error" || actual == "key_error";
   if (category == "arithmetic_error")
     return actual == "overflow_error" || actual == "zero_division_error";
+  if (actual == "unicode_decode_error")
+    return category == "unicode_error" || category == "value_error";
   if (actual == "unsupported_operation")
     return category == "os_error" || category == "value_error";
   if (actual == "unicode_error")

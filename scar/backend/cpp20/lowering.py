@@ -6,7 +6,7 @@ from graphlib import TopologicalSorter
 import math
 import re
 
-from scar.contract import digest, json_bytes
+from scar.contract import array_rank_domain, digest, json_bytes
 
 from .control import ControlFlow, ERROR_TYPE, TEXT_STREAM_TYPE
 from .libraries import Libraries
@@ -58,6 +58,8 @@ _ARRAY_EFFECTS = {
     "array_copy": {"MEM", "STATE", "XFER"},
     "array_view": {"STATE", "MEM"},
     "array_size": {"STATE"},
+    "array_rank": {"STATE"},
+    "array_extent": {"STATE"},
     "array_reshape": {"STATE", "MEM"},
     "array_broadcast_copy": {"MEM", "STATE", "XFER"},
     "array_load": {"STATE"},
@@ -184,17 +186,18 @@ def alignment(record):
     return value
 
 
-def ndarray_rank(spec):
-    if (
-        not isinstance(spec, dict)
-        or set(spec) != {"kind", "element", "rank"}
-        or spec["kind"] != "ndarray"
-        or spec["element"] != "f64"
-        or type(spec["rank"]) is not int
-        or spec["rank"] < 0
-    ):
+def ndarray_type_rank(spec):
+    domain = array_rank_domain(spec)
+    if spec["element"] != "f64":
         raise ValueError(f"unsupported ndarray type {spec!r}")
-    return spec["rank"]
+    return domain[0] if domain is not None and len(domain) == 1 else None
+
+
+def ndarray_rank(spec):
+    rank = ndarray_type_rank(spec)
+    if rank is None:
+        raise ValueError("this operation requires a fixed array rank")
+    return rank
 
 
 class Lowerer:
@@ -295,7 +298,7 @@ class Lowerer:
             self.used_sdk_headers.add("exceptions.hpp")
             return named("scar::error_value")
         if kind == "ndarray":
-            ndarray_rank(spec)
+            ndarray_type_rank(spec)
             if "array.hpp" not in self.used_sdk_headers:
                 schedule = self.operator_backends.get("ndarray", {})
                 packages = schedule.get("packages", {})
@@ -710,30 +713,7 @@ class Lowerer:
         self.use_sdk("text.hpp")
         table = Expr("braced")
         if kind == "text" and conversion == "repr":
-            from ...contract import validate_text_profiles
-
-            key = expr.get("unicode_profile")
-            profiles = self.module.get("text_profiles", {})
-            if not isinstance(key, str) or key not in profiles:
-                raise ValueError("text repr requires a sealed Unicode profile")
-            if key not in self.unicode_tables:
-                validate_text_profiles({key: profiles[key]})
-                values = tuple(
-                    integer(n)
-                    for interval in profiles[key]["nonprintable"]
-                    for n in interval
-                )
-                self.unicode_tables[key] = variable(
-                    "p_" + key,
-                    Type(
-                        "template",
-                        name="std::array",
-                        args=(named("std::uint32_t"), integer(len(values))),
-                    ),
-                    Expr("braced", args=values),
-                    storage=("inline", "constexpr"),
-                )
-            table = name("scar::generated_unicode::p_" + key)
+            table = self.unicode_table(expr.get("unicode_profile"))
 
         def string(value):
             return utf8_literal(value, "std::string_view")
@@ -752,6 +732,88 @@ class Lowerer:
                     Expr("braced", args=fields),
                     formatting,
                     table,
+                ),
+            ),
+        )
+
+    def unicode_table(self, key):
+        from ...contract import validate_text_profiles
+
+        profiles = self.module.get("text_profiles", {})
+        if not isinstance(key, str) or key not in profiles:
+            raise ValueError("operation requires a sealed Unicode profile")
+        if key not in self.unicode_tables:
+            validate_text_profiles({key: profiles[key]})
+            values = tuple(
+                integer(n)
+                for interval in profiles[key]["nonprintable"]
+                for n in interval
+            )
+            self.unicode_tables[key] = variable(
+                "p_" + key,
+                Type(
+                    "template",
+                    name="std::array",
+                    args=(named("std::uint32_t"), integer(len(values))),
+                ),
+                Expr("braced", args=values),
+                storage=("inline", "constexpr"),
+            )
+        return name("scar::generated_unicode::p_" + key)
+
+    def text_array_read(self, node):
+        source = node.get("source", {})
+        profile = "numpy-2.5.5-whitespace-f64-v1"
+        selected = self.operator_backends.get("text_array_io", {})
+        parser = node.get("parser", {})
+        if (
+            selected.get("provider") != "scar-cpu-text-input"
+            or selected.get("profile") != profile
+            or parser.get("profile") != profile
+            or source.get("type") != TEXT_STREAM_TYPE
+            or node.get("source_origin") != {"kind": "named_text_file"}
+            or set(node.get("effects", ())) != {"IO", "STATE", "VAL", "MEM"}
+        ):
+            raise ValueError("text arrays require a qualified borrowed stream parser")
+        if (
+            array_rank_domain(node.get("type")) != (0, 1, 2)
+            or node["type"]["element"] != "f64"
+        ):
+            raise ValueError(
+                "default text input requires a binary64 runtime rank domain"
+            )
+        self.type_name(node["type"])
+        self.use_sdk("array_io.hpp")
+        location, warning = node.get("location", {}), node.get("warning", {})
+        file, line = location.get(
+            "diagnostic_file", location.get("file")
+        ), location.get("line")
+        if (
+            not isinstance(file, str)
+            or not file
+            or type(line) is not int
+            or line <= 0
+            or warning.get("operation") != "loadtxt"
+        ):
+            raise ValueError("text arrays require their source diagnostic site")
+        site = Expr(
+            "braced",
+            args=(
+                utf8_literal(warning.get("module", file), "std::string_view"),
+                utf8_literal(file, "std::string_view"),
+                integer(line),
+                utf8_literal("loadtxt", "std::string_view"),
+                utf8_literal(warning.get("source_line", ""), "std::string_view"),
+            ),
+        )
+        return call(
+            "scar::text_array_read",
+            Expr(
+                "braced",
+                args=(
+                    self.expression(source),
+                    site,
+                    self.unicode_table(node.get("text_profile")),
                 ),
             ),
         )
@@ -789,7 +851,7 @@ class Lowerer:
                 or node.get("type") != "text"
             ):
                 raise ValueError("unsupported array display profile")
-            ndarray_rank(value.get("type"))
+            ndarray_type_rank(value.get("type"))
             self.type_name(value["type"])
             self.use_sdk("format.hpp")
             fields = tuple(
@@ -817,26 +879,48 @@ class Lowerer:
             # C++ list initialization captures operands once in their declared order.
             return Expr("braced", args=parts)
 
-        if op in {"array_size", "array_reshape", "array_broadcast_copy"}:
+        if op in {
+            "array_size",
+            "array_rank",
+            "array_extent",
+            "array_reshape",
+            "array_broadcast_copy",
+        }:
             value = node.get("value")
             source_type = value.get("type") if isinstance(value, dict) else None
-            source_rank = ndarray_rank(source_type)
+            source_rank = ndarray_type_rank(source_type)
             self.type_name(source_type)
             source = self.expression(value)
-            if op == "array_size":
+            if op in {"array_size", "array_rank", "array_extent"}:
                 if node.get("type") != "i64":
-                    raise ValueError("array_size requires an i64 result")
-                return call("scar::array_size", source, integer(source_rank))
+                    raise ValueError(f"{op} requires an i64 result")
+                if op == "array_extent":
+                    axis = node.get("axis")
+                    if not isinstance(axis, dict) or axis.get("type") != "i64":
+                        raise ValueError("array extent requires an i64 axis")
+                    return call("scar::array_extent", source, self.expression(axis))
+                if op == "array_size" and source_rank is not None:
+                    return call("scar::array_size", source, integer(source_rank))
+                return call("scar::" + op, source)
             result_rank = ndarray_rank(node.get("type"))
             if op == "array_reshape" and node.get("layout") != "C":
                 raise ValueError("array_reshape requires C layout")
             if op == "array_broadcast_copy" and (
-                node.get("broadcasting") != "trailing" or source_rank > result_rank
+                node.get("broadcasting") != "trailing"
+                or source_rank is None
+                or source_rank > result_rank
             ):
                 raise ValueError(
                     "array_broadcast_copy requires trailing broadcast to the declared rank"
                 )
             dims = node.get("shape")
+            inference = node.get("inference")
+            if (
+                inference not in (None, "numpy_single_negative_dimension")
+                or inference is not None
+                and op != "array_reshape"
+            ):
+                raise ValueError("unregistered array shape inference contract")
             if (
                 not isinstance(dims, (list, tuple))
                 or len(dims) != result_rank
@@ -845,7 +929,9 @@ class Lowerer:
                     and dim.get("op") == "literal"
                     and (
                         type(dim.get("value")) is not int
-                        or not 0 <= dim["value"] < 1 << 63
+                        or not (-(1 << 63) if inference else 0)
+                        <= dim["value"]
+                        < 1 << 63
                     )
                     for dim in dims
                 )
@@ -854,14 +940,31 @@ class Lowerer:
                     f"{op} requires one nonnegative i64 extent per result axis"
                 )
             shape = operands(dims, "i64")
+            if source_rank is None:
+                self.headers.add("optional")
             return call(
                 template("scar::" + op, self.type_name(source_type["element"])),
-                group(source, integer(source_rank), group(integer(result_rank), shape)),
+                (
+                    group(
+                        source,
+                        (
+                            integer(source_rank)
+                            if source_rank is not None
+                            else name("std::nullopt")
+                        ),
+                        group(integer(result_rank), shape),
+                        Expr("literal", value=bool(inference)),
+                    )
+                    if op == "array_reshape"
+                    else group(
+                        source, integer(source_rank), group(integer(result_rank), shape)
+                    )
+                ),
             )
 
         indexed = op in {"array_view", "array_load", "array_store"}
         ty = node["base"]["type"] if indexed else node["type"]
-        rank = ndarray_rank(ty)
+        rank = ndarray_type_rank(ty) if op == "array_copy" else ndarray_rank(ty)
         self.type_name(ty)
         elem = self.type_name(ty["element"])
         target = template("scar::" + op, elem)
@@ -896,7 +999,12 @@ class Lowerer:
         if op in {"array_copy", "array_unary"}:
             if node["value"].get("type") != ty:
                 raise ValueError(f"{op} changes dtype or rank")
-            args = (self.expression(node["value"]), integer(rank))
+            if rank is None:
+                self.headers.add("optional")
+            args = (
+                self.expression(node["value"]),
+                integer(rank) if rank is not None else name("std::nullopt"),
+            )
             if op == "array_unary":
                 operator = node.get("operator")
                 if operator not in ("neg", "pos"):
@@ -1065,6 +1173,8 @@ class Lowerer:
             return self.host_call(expr)
         if op == "process_spawn":
             return self.process_spawn(expr)
+        if op == "array_text_read":
+            return self.text_array_read(expr)
         if op == "scalar_power":
             values = (expr["base"], expr["exponent"])
             if (

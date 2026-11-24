@@ -14,7 +14,7 @@ def apply_binary(frame, node, operator, lhs, rhs, steps, discard=False):
     """Bind one operation after both operands have been evaluated in source order."""
     if operator in {"is", "isnot"} and any(
         item.kind in {"numpy_bool", "numpy_f64", "binary64_choice", "boolean_choice"}
-        or values.rank(item.kind) is not None
+        or values.is_array(item.kind)
         for item in (lhs, rhs)
     ):
         frame.fail(

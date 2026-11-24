@@ -40,6 +40,26 @@ def _join(paths):
         incoming = [path.get(name) for path in paths[1:]]
         if all(values.identical(v, first) for v in incoming):
             result[name] = first
+        elif values.is_array(first.kind) and all(
+            v is not None
+            and values.is_array(v.kind)
+            and isinstance(v.value, dict)
+            and isinstance(first.value, dict)
+            and v.value.get("op") == first.value.get("op") == "var"
+            and (v.value.get("name"), v.value.get("scope"))
+            == (first.value.get("name"), first.value.get("scope"))
+            for v in incoming
+        ):
+            kind = values.join_arrays([first.kind, *(v.kind for v in incoming)])
+            facts = {}
+            if "shape" in first.facts and all(
+                values.identical(v.facts.get("shape"), first.facts["shape"])
+                for v in incoming
+            ):
+                facts["shape"] = first.facts["shape"]
+            result[name] = _Value(
+                kind, {**first.value, "type": values.wire(kind)}, facts
+            )
         elif all(
             v is not None
             and v.kind == first.kind
@@ -53,6 +73,13 @@ def _join(paths):
                     min(lo for lo, _ in bounds),
                     max(hi for _, hi in bounds),
                 )
+            if "stream_origin" in first.facts and all(
+                values.identical(
+                    v.facts.get("stream_origin"), first.facts["stream_origin"]
+                )
+                for v in incoming
+            ):
+                facts["stream_origin"] = first.facts["stream_origin"]
             result[name] = _Value(first.kind, first.value, facts)
     return result
 
@@ -176,6 +203,7 @@ class _Project:
         self.array_ops = set()
         self.process_ops = set()
         self.process_requests = {}
+        self.required_operators = {}
         self.execution_images = []
         self.array_state = arrays.LiteralState()
         self.external_array_writes = {}
@@ -188,6 +216,20 @@ class _Project:
         self.active = []
         self.global_reads = {}
         self.shadow, self.single_bind_globals = _global_bindings(functions)
+
+    def require_operator(self, family, operation, **contract):
+        requirement = self.required_operators.setdefault(
+            family, dict(operations=set(), **contract)
+        )
+        if any(requirement.get(key) != value for key, value in contract.items()):
+            raise ValueError("conflicting logical operator requirements")
+        requirement["operations"].add(operation)
+
+    def operator_requirements(self):
+        return {
+            family: {**requirement, "operations": sorted(requirement["operations"])}
+            for family, requirement in self.required_operators.items()
+        }
 
     def global_read(self, name, value):
         for active in self.active:
@@ -375,9 +417,11 @@ class _Frame:
         if name in self.project.single_bind_globals:
             if value.kind in values.SCALARS:
                 facts = value.facts
-            elif values.rank(value.kind) is not None and "shape" in value.facts:
+            elif values.is_array(value.kind) and "shape" in value.facts:
                 # A fixed handle and immutable region layout do not prove content.
                 facts = {"shape": value.facts["shape"]}
+            elif "stream_origin" in value.facts:
+                facts = {"stream_origin": value.facts["stream_origin"]}
         return _Value(value.kind, value.value, facts)
 
     def ref(self, node):
@@ -529,8 +573,12 @@ class _Frame:
         previous = scope.get(name)
         if global_ and value.kind == "project_method" and not self.dynamic:
             value = objects.persist_method(self, target, value, steps)
-        if global_ and value.kind == "array_copy_method" and not self.dynamic:
-            value = arrays.persist_copy(self, target, value, steps)
+        if (
+            global_
+            and value.kind in {"array_copy_method", "array_reshape_method"}
+            and not self.dynamic
+        ):
+            value = arrays.persist_method(self, target, value, steps)
         if global_ and value.kind == "process_method" and not self.dynamic:
             value = processes.persist_method(self, target, value, steps)
         if not values.runtime(value.kind):
@@ -552,8 +600,8 @@ class _Frame:
                 self.fail(target, "rebind", f"symbolic identity of {name} changes")
             scope[name] = value
             return
-        if previous is not None and values.wire(previous.kind) != values.wire(
-            value.kind
+        if previous is not None and not values.storage_compatible(
+            previous.kind, value.kind
         ):
             self.fail(
                 target,
@@ -561,11 +609,15 @@ class _Frame:
                 f"{name} changes type from {previous.kind} to {value.kind}",
             )
         types = self.project.globals if global_ else self.locals
-        if name in types and values.wire(types[name]) != values.wire(value.kind):
+        if name in types and not values.storage_compatible(types[name], value.kind):
             self.fail(
                 target, "local_type", f"{name} has incompatible reaching value types"
             )
-        types[name] = value.kind
+        types[name] = (
+            values.join_arrays([types[name], value.kind])
+            if name in types and values.is_array(value.kind)
+            else value.kind
+        )
         variable = value.at(name, **({"scope": "global"} if global_ else {}))
         scope[name] = variable
         steps.append(dict(op="assign", target=variable.value, value=value.value))
@@ -871,8 +923,8 @@ class _Frame:
                 return arrays.provider_member(self, node, node["field"])
             if base.kind == "graphics_namespace":
                 return self.project.graphics.member(self, node, base, node["field"])
-            if values.rank(base.kind) is not None and node["field"] == "copy":
-                return arrays.bind_copy(self, node, base, steps)
+            if values.is_array(base.kind):
+                return arrays.member(self, node, base, node["field"], steps)
             if base.kind == "module":
                 slot = _slot(base.value, node["field"])
                 value = self.project.names.get(slot)
@@ -939,7 +991,11 @@ class _Frame:
             return self.invoke_project(
                 node, method, [receiver, *args], kwargs, steps, discard
             )
-        if target.kind in {"array_constructor", "array_copy_method"}:
+        if target.kind in {
+            "array_constructor",
+            "array_copy_method",
+            "array_reshape_method",
+        }:
             return arrays.construct(self, node, target, args, kwargs, steps, discard)
         process_call = processes.invoke(
             self, node, target, args, kwargs, steps, discard
@@ -1138,6 +1194,8 @@ class _Frame:
             if value.kind in values.SCALARS and value.exact is not values._UNKNOWN
             else {}
         )
+        if "stream_origin" in value.facts:
+            facts["stream_origin"] = value.facts["stream_origin"]
         if self.return_facts is None:
             self.return_facts = facts
         elif not values.identical(self.return_facts, facts):
@@ -1146,7 +1204,7 @@ class _Frame:
     def truth(self, value, node):
         if values.object_name(value.kind) is not None:
             return _literal(True)
-        if values.rank(value.kind) is not None:
+        if values.is_array(value.kind):
             self.fail(
                 node,
                 "array_truth",
@@ -1767,6 +1825,11 @@ def normalize_protocols(module):
         closed=contracts,
         single_bind_globals=sorted(project.single_bind_globals),
         status="INCOMPLETE" if issue else "READY",
+        **(
+            {"operator_requirements": project.operator_requirements()}
+            if project.required_operators
+            else {}
+        ),
         **({"first_gap": issue} if issue else {}),
         **(
             {"process_requirements": list(project.process_requests.values())}
@@ -1848,6 +1911,10 @@ def normalize_protocols(module):
             binding=(
                 "explicit_targets" if project.process_requests else "declared_images"
             ),
+        )
+    if project.required_operators:
+        module.setdefault("operator_requirements", {}).update(
+            project.operator_requirements()
         )
     if project.graphics.operations:
         module.setdefault("operator_requirements", {})[

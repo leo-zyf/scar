@@ -5,6 +5,8 @@ import math
 import posixpath
 import struct
 
+from scar.contract import array_rank_domain
+
 _NUMPY_SCALAR_TYPES = {"numpy_bool": "bool", "numpy_f64": "f64"}
 # These are compile-time sets of possible protocols, never runtime tags. A
 # consumer may erase the distinction only after proving one common operation.
@@ -20,12 +22,44 @@ _HANDLE_PREFIX = "handle:"
 _OBJECT_PREFIX = "object_ref:"
 
 
+def is_array(kind):
+    return kind.startswith(_ARRAY_PREFIX)
+
+
+def rank_domain(kind):
+    """Possible ranks: empty for a non-array, None for an unbounded runtime rank."""
+    if not is_array(kind):
+        return ()
+    suffix = kind[len(_ARRAY_PREFIX) :]
+    return None if suffix == "*" else tuple(map(int, suffix.split("|")))
+
+
 def rank(kind):
-    return int(kind[len(_ARRAY_PREFIX) :]) if kind.startswith(_ARRAY_PREFIX) else None
+    """Return a proven rank. Use is_array to distinguish arrays from scalars."""
+    domain = rank_domain(kind)
+    return domain[0] if domain is not None and len(domain) == 1 else None
 
 
 def array_kind(n):
-    return _ARRAY_PREFIX + str(n)
+    if n is None:
+        return _ARRAY_PREFIX + "*"
+    domain = (n,) if type(n) is int else tuple(sorted(set(n)))
+    if not domain or any(type(k) is not int or k < 0 for k in domain):
+        raise ValueError("array rank domain requires nonnegative integers")
+    return _ARRAY_PREFIX + "|".join(map(str, domain))
+
+
+def join_arrays(kinds):
+    domains = [rank_domain(kind) for kind in kinds]
+    return array_kind(
+        None
+        if any(domain is None for domain in domains)
+        else tuple(n for domain in domains for n in domain)
+    )
+
+
+def storage_compatible(left, right):
+    return wire(left) == wire(right) or is_array(left) and is_array(right)
 
 
 def object_kind(name):
@@ -57,9 +91,18 @@ def wire(kind):
         return "f64" if kind == "binary64_choice" else "bool"
     if kind in _NUMPY_SCALAR_TYPES:
         return _NUMPY_SCALAR_TYPES[kind]
-    n = rank(kind)
-    if n is not None:
-        return dict(kind="ndarray", element="f64", rank=n)
+    if is_array(kind):
+        n = rank(kind)
+        domain = rank_domain(kind)
+        return dict(
+            kind="ndarray",
+            element="f64",
+            rank=(
+                n
+                if n is not None
+                else {"values": list(domain)} if domain is not None else {"minimum": 0}
+            ),
+        )
     if (name := object_name(kind)) is not None:
         return dict(kind="object_ref", record=name)
     if kind.startswith(_HANDLE_PREFIX):
@@ -71,7 +114,9 @@ def from_wire(spec):
     if not isinstance(spec, dict):
         return spec
     if spec.get("kind") == "ndarray":
-        return array_kind(spec["rank"])
+        if spec.get("element") != "f64":
+            raise ValueError("unregistered array element protocol")
+        return array_kind(array_rank_domain(spec))
     if spec.get("kind") == "handle":
         return _HANDLE_PREFIX + spec["resource"]
     if spec.get("kind") == "object_ref":
@@ -83,7 +128,7 @@ def runtime(kind):
     return (
         kind in SCALARS
         or kind.startswith("handle:process:")
-        or rank(kind) is not None
+        or is_array(kind)
         or object_name(kind) is not None
         or kind
         in {

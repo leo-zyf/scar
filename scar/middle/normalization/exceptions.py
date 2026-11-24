@@ -21,6 +21,8 @@ _CLASSES = {
     "OverflowError": "overflow_error",
     "ArithmeticError": "arithmetic_error",
     "LookupError": "lookup_error",
+    "UnicodeError": "unicode_error",
+    "UnicodeDecodeError": "unicode_decode_error",
 }
 
 
@@ -29,6 +31,12 @@ def builtin(name):
 
 
 def construct(frame, node, target, args, kwargs, steps, discard=False):
+    if target.value == "unicode_decode_error":
+        frame.fail(
+            node,
+            "exception_arguments",
+            "constructing a UnicodeDecodeError requires its five-field byte-range contract",
+        )
     if (
         kwargs
         or len(args) > 1
