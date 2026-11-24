@@ -418,6 +418,11 @@ def bind(graph, folder):
     definitions = defaultdict(list)
     roots = {graph["entry"]}
     all_issues, records = [], {}
+    if build := graph.get("build"):
+        build_graph = read_member(folder, build["graph"])
+        if build_graph["diagnostics"] != build["diagnostics"]:
+            raise ValueError("build diagnostics disagree with the sealed build graph")
+        all_issues.extend(build_graph["diagnostics"])
     layout_issues = []
     active_objects = set()
     field_calls = defaultdict(set)

@@ -177,7 +177,7 @@ def _capture_inputs(request):
         if request.project_entry:
             project = scripts.capture(request.project_entry)
             sources.update(project.source_digests)
-            return project.profiles, project.units, images, sources
+            return project.profiles, project.units, images, sources, None
         indices = {json_bytes(profile): i for i, profile in enumerate(profiles)}
         images = []
         for image in request.images:
@@ -201,7 +201,27 @@ def _capture_inputs(request):
             )
     if images is not None:
         validate_images(images, request.root_image, unit_count=len(profiles))
-    return profiles, parsed_units, images, sources
+    return profiles, parsed_units, images, sources, None
+
+
+def _capture_build(request):
+    """Refine a locked build trace into explicit translation-unit tasks."""
+    from .builds.facts import capture_build
+    from .builds.normalize import normalize_build
+
+    trace = request.build_trace
+    facts = capture_build(trace["raw"], root=request.root, provider=trace["provider"])
+    capture = normalize_build(facts, targets=trace["targets"], entry=request.entry)
+    sources = dict(request.source_hashes)
+    for name, revision in capture["source_hashes"].items():
+        if sources.setdefault(name, revision) != revision:
+            raise ValueError(
+                f"build capture observed a different source revision: {name}"
+            )
+    profiles, images = capture["profiles"], capture["images"]
+    if images:
+        validate_images(images, capture["root_image"], unit_count=len(profiles))
+    return profiles, [None] * len(profiles), images or None, sources, capture
 
 
 def build(manifest, out, *, jobs=1):
@@ -212,7 +232,10 @@ def build(manifest, out, *, jobs=1):
         raise ValueError("expected a positive worker count")
     request, out = read_request(manifest), Path(out).resolve()
     root = request.root
-    profiles, parsed_units, images, sources = _capture_inputs(request)
+    profiles, parsed_units, images, sources, captured_build = (
+        _capture_build(request) if request.build_trace else _capture_inputs(request)
+    )
+    root_image = captured_build["root_image"] if captured_build else request.root_image
     snapshot_id = digest(json_bytes(sources))
     evidence = None
     entry_abi = request.entry_abi
@@ -221,7 +244,7 @@ def build(manifest, out, *, jobs=1):
 
         evidence = observe(request.manifest, root, request.observation)
         entry_abi = array_abi(request.entry, evidence)
-    if request.images is None and entry_abi:
+    if images is None and entry_abi:
         profiles = tuple(with_entry_abi(p, entry_abi) for p in profiles)
     out.mkdir(parents=True, exist_ok=True)
     work = [
@@ -237,7 +260,7 @@ def build(manifest, out, *, jobs=1):
         for p, parsed in zip(profiles, parsed_units)
     ]
     workers = min(jobs, len(work), cpu_availability().worker_budget)
-    if workers == 1:
+    if workers <= 1:
         units = list(map(_unit, work))
     else:
         with ProcessPoolExecutor(max_workers=workers) as pool:
@@ -249,7 +272,13 @@ def build(manifest, out, *, jobs=1):
                     f"compilation units observed different source revisions: {name}"
                 )
     resources, topology, platform = snapshot(root)
+    resource_records = [asdict(resource) for resource in resources]
+    if captured_build:
+        resource_records.extend(captured_build["software_resources"])
+    build_graph = captured_build["build_graph"] if captured_build else None
     diagnostics = [issue for unit in units for issue in unit["diagnostics"]]
+    if build_graph is not None:
+        diagnostics.extend(build_graph["diagnostics"])
     counts = Counter(d["code"] for d in diagnostics)
     totals = dict(
         units=len(units),
@@ -257,7 +286,7 @@ def build(manifest, out, *, jobs=1):
         qualified_definitions=sum(f["defined"] for u in units for f in u["functions"]),
         operations=sum(f["nodes"] for u in units for f in u["functions"]),
         diagnostic_sites=len(diagnostics),
-        resources=len(resources),
+        resources=len(resource_records),
     )
     graph = document(
         GRAPH,
@@ -266,16 +295,24 @@ def build(manifest, out, *, jobs=1):
         observation=evidence,
         units=units,
         source_revision=digest(json_bytes(sources)),
-        resources=[asdict(r) for r in resources],
+        resources=resource_records,
         platform=platform,
         topology=[
             dict(source=e.source, target=e.target, kind=e.value) for e in topology
         ],
         contract={"arithmetic": "preserve", "externally_visible_effects": "preserve"},
         coverage=dict(totals=totals, diagnostic_categories=dict(counts.most_common())),
+        **({"images": images, "root_image": root_image} if images is not None else {}),
         **(
-            {"images": images, "root_image": request.root_image}
-            if images is not None
+            {
+                "build": dict(
+                    graph=member(out, "build", build_graph),
+                    provider=request.build_trace["provider"],
+                    trace_sha256=digest(request.build_trace["raw"]),
+                    diagnostics=build_graph["diagnostics"],
+                )
+            }
+            if build_graph is not None
             else {}
         ),
     )

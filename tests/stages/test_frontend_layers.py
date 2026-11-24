@@ -12,6 +12,97 @@ import tokenize
 from scar.frontend.languages import fortran, python
 
 
+def test_build_normalization_uses_only_captured_artifact_facts(tmp_path, monkeypatch):
+    from scar.frontend.builds.normalize import normalize_build
+
+    root = str(tmp_path)
+    source, object_, executable = (
+        str(tmp_path / n) for n in ("unit.c", "unit.o", "app")
+    )
+    compile_args = [
+        "g++",
+        "-std=c++17",
+        "-Iinclude",
+        "-B",
+        "toolchain",
+        "-c",
+        "unit.c",
+        "-ounit.o",
+    ]
+    link_args = ["g++", "unit.o", "-lm", "-o", "app"]
+    facts = dict(
+        root=root,
+        provider="bear-3-intercept",
+        trace_sha256="a" * 64,
+        invocations=[
+            dict(
+                id=str(i),
+                executable="/usr/bin/g++",
+                directory=root,
+                arguments=args,
+                status=0,
+                environment={},
+            )
+            for i, args in enumerate((compile_args, link_args))
+        ],
+        compilations=[
+            dict(
+                arguments=compile_args,
+                directory=root,
+                file="unit.c",
+                canonical_file=source,
+                output="unit.o",
+            )
+        ],
+        files={
+            path: dict(sha256="b" * 64, size=1, kind=kind)
+            for path, kind in (
+                (source, "source"),
+                (object_, "object"),
+                (executable, "executable"),
+            )
+        },
+        libraries={executable: dict(needed=["libstdc++.so.6"], observed_at="capture")},
+        tools={},
+        issues=[],
+    )
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("F2 build normalization accessed the host")
+
+    for module, name in (
+        (builtins, "open"),
+        (Path, "open"),
+        (subprocess, "Popen"),
+        (shutil, "which"),
+    ):
+        monkeypatch.setattr(module, name, forbidden)
+    output = normalize_build(facts, targets=["app"])
+    assert not output["build_graph"]["diagnostics"]
+    (profile,) = output["profiles"]
+    assert profile["language"] == "c++"
+    assert "-ounit.o" not in profile["flags"]
+    assert str(tmp_path / "toolchain") in profile["flags"]
+    assert str(tmp_path / "include") in profile["flags"]
+    assert output["source_hashes"] == {"unit.c": "b" * 64}
+    resources = output["software_resources"]
+    assert {r["kind"] for r in resources} >= {
+        "LIBRARY_REQUEST",
+        "ELF_LIBRARY_DEPENDENCY",
+    }
+    graph = output["build_graph"]
+    identities = {n["id"] for n in graph["nodes"]} | {r["id"] for r in resources}
+    assert all(
+        e["source"] in identities and e["target"] in identities for e in graph["edges"]
+    )
+    link_args.insert(1, "unobserved.o")
+    incomplete = normalize_build(facts, targets=["app"])
+    assert any(
+        d["code"] == "build.missing_object_producer"
+        for d in incomplete["build_graph"]["diagnostics"]
+    )
+
+
 def _offline(monkeypatch, language, facts, *parser_methods):
     def forbidden(*args, **kwargs):
         raise AssertionError("normalization attempted to read source or invoke a tool")

@@ -6,7 +6,7 @@
 
 | 层 | 输入 | 处理与输出 | 实现 |
 | --- | --- | --- | --- |
-| F0 输入 | 入口、编译清单、锁定的源文件 | `SourceRequest`，校验方言、参数、源码摘要，保存输入缓冲并生成独立单元任务 | `input.py` |
+| F0 输入 | 入口、编译清单或锁定的构建记录 | `SourceRequest`；可选构建发现子流水线先恢复单元任务，随后校验源码摘要和输入缓冲 | `input.py`、`builds/` |
 | F1 事实捕获 | 单元任务 | `ParsedUnit`，持有已捕获的语法、作用域、类型、源码缓冲和实际 ABI。Clang 捕获的实际项目头文件也参与摘要 | `languages/*/facts.py` |
 | F2 正规化 | `ParsedUnit` | `NeutralUnit`，含类型化操作、过程、记录、全局状态、外部接口、转换依据和定位缺口 | `languages/*/normalize.py` 及同层操作模块 |
 | F3 构图 | `NeutralUnit` | 操作记录表、端口、控制区域、符号调用与状态域 | `graph.py` |
@@ -129,4 +129,6 @@ CI 从安装后的 wheel 验证三阶段及层间隔离，检查 Black、LLVM �
 
 这条镜像链路尚不等于官方 Python 驱动闭环。后续需要把进程协议绑定到明确目标及实例，接通两条独立文件链和退出/日志协议，再完成运行时构建与后处理的原生接口。无证据时不能用执行完毕代替文件版本证明，也不能把每镜像成本相加当作全工作流关键路径。
 
-构建系统适配尚未接入。已在本机验证 Bear 3.1.3 的原始事件能保留 C/Fortran 编译和链接，而 compilation database 仅保留翻译单元；后续前端必须保留生成文件、对象和链接依赖以及库版本证据。不能将 `make -n` 当成绝不执行的静态解析器：GNU Make 的递归调用与部分展开仍会执行。[Bear](https://github.com/rizsotto/Bear/tree/3.1.3) · [GNU Make](https://www.gnu.org/software/make/manual/html_node/Instead-of-Execution.html)
+构建输入首先经过独立的发现子流水线：锁定 Bear 3 原始事件字节 → `builds/facts.py` 解码命令并快照命名文件 → `builds/normalize.py` 离线生成编译配置、镜像归属与构建依赖子图。它为 F0 解析请求补全单元任务；构建格式规范化不等于 F2 的程序操作规范化。所有单元随后严格沿同一 F1 语言事实 → F2 中立操作 → F3 构图 → F4 状态分析进入 F5 封存。M1 校验构建子图收据和诊断，后端只读取统一执行 IR，不重放原构建命令。Bear、readelf 仅在前端使用。
+
+库证据分为显式链接需求、现有 ELF 的 `DT_NEEDED` 和运行时实际加载；前两者不能证明第三者，也不能证明该库已经是最快实现。文件和工具摘要说明采集时内容，不假称历史构建时内容；未记录的旧对象、未闭合的生成文件和命令依赖必须保留边界。Bear 原始环境只提取编译、库搜索及并行控制白名单，完整环境不进入图包。不能将 `make -n` 当成绝不执行的静态解析器：GNU Make 的递归调用与部分展开仍会执行。[Bear](https://github.com/rizsotto/Bear/tree/3.1.3) · [GNU Make](https://www.gnu.org/software/make/manual/html_node/Instead-of-Execution.html)

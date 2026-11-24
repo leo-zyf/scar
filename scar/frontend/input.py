@@ -20,6 +20,7 @@ class SourceRequest:
     observation: dict | None
     images: list[dict] | None = None
     root_image: str | None = None
+    build_trace: dict | None = None
 
 
 def with_entry_abi(profile, entry_abi):
@@ -144,8 +145,40 @@ def read_request(path: Path) -> SourceRequest:
             spec["units"] = [
                 dict(path=spec["source"], language="python", abi=spec.get("abi", {}))
             ]
-    images = None
-    if "images" in spec:
+    images, build_trace = None, None
+    if "build_trace" in spec:
+        if any(
+            key in spec
+            for key in (
+                "units",
+                "images",
+                "source",
+                "observe",
+                "entry_abi",
+                "root_image",
+            )
+        ):
+            raise ValueError(
+                "a build trace supplies its own compilation units and images"
+            )
+        trace = spec["build_trace"]
+        if not isinstance(trace, dict) or trace.get("provider") != "bear-3-intercept":
+            raise ValueError("expected the bear-3-intercept build trace provider")
+        trace_path = (manifest.parent / trace["path"]).resolve(strict=True)
+        raw = trace_path.read_bytes()
+        if trace.get("sha256", digest(raw)) != digest(raw):
+            raise ValueError("build trace lock changed")
+        targets = spec.get("targets")
+        if targets is not None and (
+            not isinstance(targets, list)
+            or not targets
+            or not all(isinstance(target, str) and target for target in targets)
+            or len(targets) != len(set(targets))
+        ):
+            raise ValueError("build targets must be distinct nonempty output paths")
+        build_trace = dict(provider=trace["provider"], raw=raw, targets=targets)
+        profiles, entry = (), {"entry": spec.get("entry", "main")}
+    elif "images" in spec:
         profiles, images, entry = _image_profiles(spec)
     else:
         profiles = tuple(_profiles(spec.get("units"), spec.get("language")))
@@ -197,4 +230,5 @@ def read_request(path: Path) -> SourceRequest:
         observation,
         images,
         spec.get("root_image"),
+        build_trace,
     )

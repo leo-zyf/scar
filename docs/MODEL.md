@@ -2,6 +2,8 @@
 
 公开产物使用 `schema_version=1`。图格式为 `scar.program-graph`，逻辑计划为 `scar.logical-plan`，执行 IR 为 `scar.execution-ir`。后端依次交接 `scar.scheduled-ir`、`scar.cpp20-target-ir`、`scar.cpp20-project` 和 `scar.cpp20-executable`；`scar.physical-plan` 保存调度成本与决策依据。图根文件按编译单元引用子图，同一源文件在不同宏、方言和参数下属于不同编译配置。
 
+构建子图通过根文件的 `build.graph` 收据独立存储。`BUILD_OPERATION` 是捕获的工具调用，`BUILD_ARTIFACT` 是具有路径及可选采集摘要的源文件、对象或可执行产物；`BUILD_INPUT/BUILD_OUTPUT` 边连接消费者和生产者，序号保留链接输入顺序。`LIBRARY_REQUEST` 只说明命令请求，`ELF_LIBRARY_DEPENDENCY` 只说明采集时 ELF 的直接依赖，均不等于运行时加载或已执行计算。工具和库事实也进入资源表。构建调用与应用运行操作属于不同图域，捕获到编译器执行不能替代应用程序执行证据。
+
 程序镜像是一个独立链接与全局状态的命名空间。显式多镜像输入用 `images` 描述各镜像的 `id`、`entry`、交付文件名 `output` 和编译配置，`root_image` 指定交付入口。F0 先应用各镜像自己的 ABI，再去重编译配置；图中 `images[].units` 是共享单元表的索引。同一编译配置可供多个镜像使用，但不同镜像中的同名 `main`、全局变量和记录不会合并。该归属由输入构建清单声明，目前不从子进程命令字符串猜测。
 
 多镜像执行包使用 `kind: "image_bundle"`，每个子镜像都有独立的完整包及其相对收据。中端、调度层和目标降级层分别用 `ir`、`scheduled`、`target` 引用下一层可独立消费的镜像产物；顶层仅在全部必需镜像闭合后为 `READY`。一个镜像自己的函数收据始终相对于该镜像包，不能相对于总包解释。既有单镜像格式仍表示同一种执行模型中的一个链接目标。

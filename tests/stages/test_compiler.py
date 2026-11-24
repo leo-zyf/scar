@@ -61,6 +61,80 @@ def _payloads(graph, document):
     ]
 
 
+def test_make_capture_preserves_mixed_profiles_and_independent_stages(tmp_path):
+    from scar.contract import read_member
+
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "constants.h").write_text("#define SERIES_INPUT 5\n")
+    (source / "caller.c").write_text(
+        '#include <stdio.h>\n#include "constants.h"\n'
+        "extern int triangle(int);\n"
+        'int main(void) { printf("%d\\n", triangle(SERIES_INPUT)); return 0; }\n'
+    )
+    (source / "series.f90").write_text(
+        "module integer_series\nuse iso_c_binding\nimplicit none\ncontains\n"
+        "function triangle(n) bind(C) result(v)\n"
+        "integer(c_int), value :: n\ninteger(c_int) :: v\n"
+        "v=n*(n+1)/2\nend function\nend module\n"
+    )
+    (source / "Makefile").write_text(
+        "hybrid: caller.o series.o\n\tgfortran -o $@ $^ -lm\n"
+        "caller.o: caller.c constants.h\n"
+        "\tgcc -std=c89 -MMD -MF caller.d -O1 -c $< -o $@\n"
+        "series.o: series.f90\n"
+        "\tgfortran -std=f2008 -J. -O1 -c $< -o $@\n"
+    )
+    trace = tmp_path / "events.json"
+    _run(
+        [
+            "bear",
+            "intercept",
+            "--force-preload",
+            "--output",
+            trace,
+            "--",
+            "make",
+            "-j2",
+            "hybrid",
+        ],
+        source,
+    )
+    expected = _run([source / "hybrid"], source)
+    assert expected == b"15\n"
+    manifest = tmp_path / "request.json"
+    manifest.write_text(
+        json.dumps(
+            dict(
+                source_root="source",
+                entry="main",
+                targets=["hybrid"],
+                build_trace=dict(provider="bear-3-intercept", path=trace.name),
+            )
+        )
+    )
+    graph, plan, delivery = (tmp_path / name for name in ("graph", "plan", "delivery"))
+    _stage(tmp_path, "frontend", "build", "--manifest", manifest, "--out", graph)
+    document = json.loads((graph / "graph.json").read_bytes())
+    profiles = {unit["path"]: unit for unit in document["units"]}
+    assert "-std=c89" in profiles["caller.c"]["flags"]
+    assert "-std=f2008" in profiles["series.f90"]["flags"]
+    assert not document["build"]["diagnostics"]
+    build_graph = read_member(graph, document["build"]["graph"])
+    assert build_graph["nodes"] and build_graph["edges"]
+    assert any(r["kind"] == "LIBRARY_REQUEST" for r in document["resources"])
+    assert any(r["kind"] == "ELF_LIBRARY_DEPENDENCY" for r in document["resources"])
+    assert len(document["images"]) == 1
+    shutil.rmtree(source)
+    trace.unlink()
+    manifest.unlink()
+    _stage(tmp_path, "middle", "plan", "--graph", graph, "--out", plan)
+    shutil.rmtree(graph)
+    result = _stage(tmp_path, "backend", "compile", "--ir", plan, "--out", delivery)
+    shutil.rmtree(plan)
+    assert _run([result["executable"]], tmp_path) == expected
+
+
 def test_python_project_protocols_preserve_initialization_and_effect_order(tmp_path):
     source = tmp_path / "source"
     source.mkdir()
