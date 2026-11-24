@@ -5,7 +5,13 @@ import math
 import struct
 
 _NUMPY_SCALAR_TYPES = {"numpy_bool": "bool", "numpy_f64": "f64"}
-SCALARS = {"bool", "i64", "f64", "text", "unit", *_NUMPY_SCALAR_TYPES}
+# These are compile-time sets of possible protocols, never runtime tags. A
+# consumer may erase the distinction only after proving one common operation.
+_SCALAR_CHOICES = {
+    "binary64_choice": frozenset({"f64", "numpy_f64"}),
+    "boolean_choice": frozenset({"bool", "numpy_bool"}),
+}
+SCALARS = {"bool", "i64", "f64", "text", "unit", *_NUMPY_SCALAR_TYPES, *_SCALAR_CHOICES}
 _UNKNOWN = object()
 _MIN, _MAX = -(1 << 63), (1 << 63) - 1
 _ARRAY_PREFIX = "ndarray:f64:"
@@ -29,7 +35,23 @@ def object_name(kind):
     return kind[len(_OBJECT_PREFIX) :] if kind.startswith(_OBJECT_PREFIX) else None
 
 
+def protocols(kind):
+    return _SCALAR_CHOICES.get(kind, frozenset({kind}))
+
+
+def choice(kinds):
+    """Join behavior domains without introducing a conversion or a tagged value."""
+    possible = frozenset(p for kind in kinds for p in protocols(kind))
+    if len(possible) == 1:
+        return next(iter(possible))
+    return next(
+        (k for k, members in _SCALAR_CHOICES.items() if members == possible), None
+    )
+
+
 def wire(kind):
+    if kind in _SCALAR_CHOICES:
+        return "f64" if kind == "binary64_choice" else "bool"
     if kind in _NUMPY_SCALAR_TYPES:
         return _NUMPY_SCALAR_TYPES[kind]
     n = rank(kind)

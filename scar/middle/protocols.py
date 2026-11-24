@@ -328,7 +328,7 @@ class _Frame:
             slot = _slot(self.module, name)
             result = self.env.get(name, self.project.names.get(slot))
             if result is None and slot not in self.project.shadow:
-                if name in {"print", "range", "int", "float", "abs"}:
+                if name in {"print", "range", "int", "float", "abs", "min", "max"}:
                     result = _Value("builtin", name)
                 else:
                     result = exceptions.builtin(name) or host_protocols.builtin(
@@ -367,7 +367,15 @@ class _Frame:
                     slot = _slot(self.module, name)
                     found = self.env.get(name, self.project.names.get(slot))
                     if found is None and slot not in self.project.shadow:
-                        if name in {"print", "range", "int", "float", "abs"}:
+                        if name in {
+                            "print",
+                            "range",
+                            "int",
+                            "float",
+                            "abs",
+                            "min",
+                            "max",
+                        }:
                             return _Value("builtin", name)
                         return exceptions.builtin(name) or host_protocols.builtin(
                             self, expr, name
@@ -810,6 +818,8 @@ class _Frame:
             )
         if target.kind in {"array_constructor", "array_copy_method"}:
             return arrays.construct(self, node, target, args, kwargs, steps, discard)
+        if target.kind == "builtin" and target.value in {"min", "max"}:
+            return scalars.extreme(self, node, target.value, args, kwargs, steps)
         if target.kind == "builtin" and target.value in {"int", "float", "abs"}:
             result = scalars.construct(self, node, target.value, args, kwargs)
             self.project.decisions.append(
@@ -999,11 +1009,11 @@ class _Frame:
         expr = self.scalar(value, node)
         if "exact" in value.facts:
             return _literal(bool(value.exact))
-        if value.kind in {"bool", "numpy_bool"}:
+        if value.kind in {"bool", "numpy_bool", "boolean_choice"}:
             return _Value("bool", value.value, value.facts)
         if value.kind == "unit":
             return _literal(False)
-        if value.kind not in {"i64", "f64", "numpy_f64", "text"}:
+        if value.kind not in {"i64", "f64", "numpy_f64", "binary64_choice", "text"}:
             self.fail(
                 node, "truth_contract", f"{value.kind} has no closed truth conversion"
             )
@@ -1014,7 +1024,13 @@ class _Frame:
                 operator="ne",
                 left=expr,
                 right=_literal(
-                    {"i64": 0, "f64": 0.0, "numpy_f64": 0.0, "text": ""}[value.kind]
+                    {
+                        "i64": 0,
+                        "f64": 0.0,
+                        "numpy_f64": 0.0,
+                        "binary64_choice": 0.0,
+                        "text": "",
+                    }[value.kind]
                 ).value,
                 type="bool",
             ),

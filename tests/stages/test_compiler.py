@@ -492,6 +492,100 @@ print(abs(True), abs(-3.5), abs(-9223372036854775807), abs(-0.0))
     assert (native.stdout, native.stderr) == (expected.stdout, expected.stderr)
 
 
+def test_scalar_selection_normalizes_shared_observations_without_runtime_tags(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    entry = source / "entry.py"
+    entry.write_text("""import numpy as np
+values = np.array([-2.0, 0.0, -0.0, 3.0])
+special = np.array([0.0, 1.0, -1.0]) / 0.0
+def clamp(value):
+    return max(0.0, value)
+for i in range(4):
+    selected = clamp(values[i])
+    print(f'{selected:.17g}', f'{min(values[i], 0.0):.17g}', abs(selected))
+    print(f'{min(False, values[i] > 0.0):>6}', not selected)
+for i in range(3):
+    print(f'{max(0.0, special[i]):.17g}', f'{max(special[i], 0.0):.17g}')
+    print(f'{min(0.0, special[i]):.17g}', f'{min(special[i], 0.0):.17g}')
+def stamp(label, value):
+    print(label, end='|')
+    return value
+print(max(stamp('first', values[0]), stamp('second', values[3]), stamp('third', values[1])))
+print(min(4, 2, 3), max(4, 2, 3))
+print(f'{max(0.0, -0.0):.17g}', f'{max(-0.0, 0.0):.17g}')
+""")
+    expected = subprocess.run(
+        [sys.executable, "-B", entry], capture_output=True, check=True
+    )
+    graph, plan, delivery = (tmp_path / name for name in ("graph", "plan", "delivery"))
+    _stage(tmp_path, "frontend", "build", "--entry", entry, "--out", graph)
+    shutil.rmtree(source)
+    _stage(tmp_path, "middle", "plan", "--graph", graph, "--out", plan)
+    report = json.loads((plan / "plan.json").read_bytes())
+    selections = [
+        n for n in report["normalizations"] if n["code"] == "scalar_selection"
+    ]
+    assert any(s["result"] == "binary64_choice" for s in selections)
+    ir = json.loads((plan / "exec-ir.json").read_bytes())
+    from scar.contract import walk_operations
+
+    functions = [
+        json.loads((plan / member["path"]).read_bytes()) for member in ir["functions"]
+    ]
+    selected = [n for n in walk_operations(functions) if n["op"] == "select"]
+    assert selected and all(
+        n["then"]["op"] in {"var", "literal"} and n["else"]["op"] in {"var", "literal"}
+        for n in selected
+    )
+    assert not any(n["op"].startswith("sum_") for n in walk_operations(functions))
+    shutil.rmtree(graph)
+    result = _stage(tmp_path, "backend", "compile", "--ir", plan, "--out", delivery)
+    shutil.rmtree(plan)
+    native = subprocess.run([result["executable"]], capture_output=True, check=True)
+    assert (native.stdout, native.stderr) == (expected.stdout, expected.stderr)
+    generated = (delivery / "project/src/program.cpp").read_text()
+    assert "std::variant" not in generated and "PyObject" not in generated
+
+
+def test_scalar_selection_keeps_observable_behavior_and_precision_boundaries(tmp_path):
+    for name, statement, issue in (
+        ("representation", "print(repr(max(0.0, value)))", "scalar_observation"),
+        ("division", "print(max(0.0, value) / 0.0)", "scalar_observation"),
+        ("promotion", "print(max(1, value))", "extreme_representation"),
+        (
+            "integer_rounding",
+            "print(max(value, 9007199254740993))",
+            "integer_precision",
+        ),
+        (
+            "exact_integer_rounding",
+            "print(max(np.array([9007199254740992.0])[0], 9007199254740993))",
+            "integer_precision",
+        ),
+        ("inplace_power", "values **= max(0.5, value)", "array_power_dispatch"),
+    ):
+        source = tmp_path / name
+        source.mkdir()
+        entry = source / "entry.py"
+        entry.write_text(
+            "import numpy as np\n"
+            "values = np.array([-1.0, 2.0])\n"
+            "for i in range(2):\n"
+            "    value = values[i]\n"
+            f"    {statement}\n"
+        )
+        graph, plan = source / "graph", source / "plan"
+        _stage(tmp_path, "frontend", "build", "--entry", entry, "--out", graph)
+        entry.unlink()
+        _stage(
+            tmp_path, "middle", "plan", "--graph", graph, "--out", plan, returncode=2
+        )
+        report = json.loads((plan / "plan.json").read_bytes())
+        assert report["status"] == "INCOMPLETE"
+        assert report["issues"][0]["code"] == "python." + issue
+
+
 def test_numpy_default_warnings_survive_source_removal(tmp_path):
     entry = tmp_path / "entry.py"
     entry.write_text("""import numpy as np

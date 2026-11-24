@@ -10,6 +10,8 @@ from .values import (
     _MIN,
     _MAX,
     _UNKNOWN,
+    choice,
+    protocols,
 )
 
 _NUMERIC = {"i64", "f64"}
@@ -31,7 +33,7 @@ def _binary64_bounds(item):
     """Enclose finite values after binary64 conversion. An unknown float has no bounds."""
     if item.exact is not _UNKNOWN:
         interval = (item.exact, item.exact)
-    elif item.kind in {"bool", "numpy_bool"}:
+    elif item.kind in {"bool", "numpy_bool", "boolean_choice"}:
         interval = (0, 1)
     elif item.kind == "i64":
         interval = item.bounds
@@ -67,7 +69,7 @@ def _absolute(frame, node, item):
                 "integer_range",
                 "abs() requires a signed 64-bit operand above INT64_MIN",
             )
-    elif item.kind in {"f64", "numpy_f64"}:
+    elif item.kind in {"f64", "numpy_f64", "binary64_choice"}:
         interval = _binary64_bounds(item)
     else:
         frame.fail(
@@ -116,7 +118,15 @@ def construct(frame, node, name, args, keywords):
     if not args:
         return literal(0 if name == "int" else 0.0)
     operand = args[0]
-    if operand.kind not in {"bool", "numpy_bool", "i64", "f64", "numpy_f64"}:
+    if operand.kind not in {
+        "bool",
+        "numpy_bool",
+        "boolean_choice",
+        "i64",
+        "f64",
+        "numpy_f64",
+        "binary64_choice",
+    }:
         detail = (
             "text parsing and its exceptions require a parsing contract"
             if operand.kind == "text"
@@ -156,7 +166,7 @@ def construct(frame, node, name, args, keywords):
         facts = _numeric_facts(low) if low == high else {"range": (low, high)}
         return Value("i64", dict(op="cast", type="i64", value=operand.value), facts)
 
-    if operand.kind in {"f64", "numpy_f64"}:
+    if operand.kind in {"f64", "numpy_f64", "binary64_choice"}:
         return Value("f64", operand.value, operand.facts)
     if operand.kind == "i64" and max(map(abs, operand.bounds)) > 1 << 53:
         exact = operand.exact
@@ -176,11 +186,115 @@ def construct(frame, node, name, args, keywords):
 
 
 def as_float(frame, node, item):
-    if item.kind in {"f64", "numpy_f64"}:
+    if item.kind in {"f64", "numpy_f64", "binary64_choice"}:
         return item.value
     if item.kind == "i64":
         return dict(op="cast", type="f64", value=item.value)
     frame.fail(node, "array_element", f"cannot convert {item.kind} to binary64")
+
+
+def comparison(frame, node, op, lhs, rhs):
+    """Compare shared scalar representations; keep the result's protocol set."""
+    possible = [protocols(v.kind) for v in (lhs, rhs)]
+    if op not in {"eq", "noteq", "lt", "lte", "gt", "gte"} or any(
+        not kinds <= {"bool", "numpy_bool", "i64", "f64", "numpy_f64"}
+        for kinds in possible
+    ):
+        frame.fail(
+            node,
+            "scalar_observation",
+            f"{op} has no common behavior contract for {lhs.kind} and {rhs.kind}",
+        )
+    if any("numpy_f64" in kinds for kinds in possible) and any(
+        item.kind == "i64" and max(map(abs, item.bounds)) > 1 << 53
+        for item in (lhs, rhs)
+    ):
+        # NumPy promotes this integer before comparing; Python's mixed
+        # comparison can instead preserve its exact mathematical value. Even
+        # two exact facts cannot be folded with the Python rule for both.
+        frame.fail(
+            node,
+            "integer_precision",
+            "a possible array-scalar comparison requires exact integer conversion",
+        )
+    operands = []
+    for item in (lhs, rhs):
+        spec = wire(item.kind)
+        if spec == "bool":
+            item = Value(
+                "i64",
+                dict(op="cast", type="i64", value=item.value),
+                (
+                    {"range": (0, 1)}
+                    if item.exact is _UNKNOWN
+                    else _numeric_facts(int(item.exact))
+                ),
+            )
+        else:
+            item = Value(spec, item.value, item.facts)
+        operands.append(item)
+    result = binary(frame, node, op, *operands)
+    result_kinds = {
+        "numpy_bool" if a.startswith("numpy_") or b.startswith("numpy_") else "bool"
+        for a in possible[0]
+        for b in possible[1]
+    }
+    return Value(choice(result_kinds), result.value, result.facts)
+
+
+def extreme(frame, node, name, args, keywords, steps):
+    """Select an existing argument in source order, without numeric promotion."""
+    if keywords or len(args) < 2:
+        frame.fail(
+            node,
+            "extreme_arguments",
+            f"{name} needs two or more scalar arguments; iterable/key/default protocols are not closed",
+        )
+    winner = args[0]
+    for item in args[1:]:
+        check = comparison(frame, node, "gt" if name == "max" else "lt", item, winner)
+        if type(check.exact) is bool:
+            if check.exact:
+                winner = item
+            continue
+        kind = choice((winner.kind, item.kind))
+        if kind is None:
+            frame.fail(
+                node,
+                "extreme_representation",
+                f"{name} selection needs a common lossless representation for {winner.kind} and {item.kind}",
+            )
+        facts = {}
+        if winner.kind == item.kind == "i64":
+            facts["range"] = (
+                min(winner.bounds[0], item.bounds[0]),
+                max(winner.bounds[1], item.bounds[1]),
+            )
+        winner = frame.effect(
+            dict(
+                op="select",
+                type=wire(kind),
+                condition=check.value,
+                then=item.value,
+                **{"else": winner.value},
+            ),
+            kind,
+            steps,
+            facts=facts,
+        )
+    frame.project.decisions.append(
+        dict(
+            code="scalar_selection",
+            symbol=frame.name,
+            location=node.get("location"),
+            operation=name,
+            source_types=[v.kind for v in args],
+            result=winner.kind,
+            representation=wire(winner.kind),
+            proof="arguments already evaluated in source order; strict comparison preserves the first winner on ties or unordered comparisons; select copies existing bits without promotion or a runtime source tag",
+        )
+    )
+    return winner
 
 
 def unary(frame, node, item):

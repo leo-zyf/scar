@@ -13,7 +13,8 @@ def _capture(frame, item, steps):
 def apply_binary(frame, node, operator, lhs, rhs, steps, discard=False):
     """Bind one operation after both operands have been evaluated in source order."""
     if operator in {"is", "isnot"} and any(
-        item.kind in {"numpy_bool", "numpy_f64"} or values.rank(item.kind) is not None
+        item.kind in {"numpy_bool", "numpy_f64", "binary64_choice", "boolean_choice"}
+        or values.rank(item.kind) is not None
         for item in (lhs, rhs)
     ):
         frame.fail(
@@ -24,6 +25,8 @@ def apply_binary(frame, node, operator, lhs, rhs, steps, discard=False):
     identity = objects.compare(operator, lhs, rhs)
     if identity is not None:
         return identity
+    if any(len(values.protocols(item.kind)) > 1 for item in (lhs, rhs)):
+        return scalars.comparison(frame, node, operator, lhs, rhs)
     result = arrays.binary(frame, node, operator, lhs, rhs, steps, discard)
     if result is not None:
         return result

@@ -8,7 +8,7 @@ from scar.contract import walk_operations
 
 from . import exceptions, scalars, text
 from .scalars import as_float as _as_float
-from .values import Value, _UNKNOWN, array_kind, literal, rank, runtime, wire
+from .values import Value, _UNKNOWN, array_kind, literal, protocols, rank, runtime, wire
 
 _PROVIDED = {"array", "zeros", "float64", "linspace"}
 _LINEAR_SPACE_SOURCE = {
@@ -371,6 +371,19 @@ def _power_path(frame, node, lhs, rhs):
     """The source numeric slot chooses a ufunc before broadcasting or conversion."""
     if rank(lhs.kind) is None or rank(rhs.kind) not in (None, 0):
         return "power"
+    possible = protocols(rhs.kind)
+    if len(possible) > 1:
+        paths = {
+            _power_path(frame, node, lhs, Value(kind, rhs.value, rhs.facts))
+            for kind in possible
+        }
+        if len(paths) == 1:
+            return paths.pop()
+        frame.fail(
+            node,
+            "array_power_dispatch",
+            "selected exponent protocols require different numerical kernels or warnings",
+        )
     revision = frame.project.providers.get("numpy", {}).get("version", "")
     match = re.match(r"^(\d+)\.(\d+)", revision)
     version = tuple(map(int, match.groups())) if match else ()

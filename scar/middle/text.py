@@ -3,7 +3,7 @@
 import re
 import unicodedata
 
-from .values import SCALARS, Value, literal, rank, runtime
+from .values import SCALARS, Value, literal, rank, runtime, protocols, wire
 
 SCALAR_FORMAT = dict(
     boolean_true="True",
@@ -248,11 +248,23 @@ def display(frame, node, value, steps):
         _numpy_major(frame, node)
         # The stream receives str(value); the original program binding keeps its kind.
         return Value("bool", value.value, value.facts)
+    if len(protocols(value.kind)) > 1:
+        # str() shares the same contract on these primitive protocol domains.
+        # The source binding is unchanged, and no cast or runtime tag is emitted.
+        return Value(wire(value.kind), value.value, value.facts)
     return value
 
 
 def render(frame, node, value, conversion, source_spec, steps, discard=False):
     spec = _spec(frame, node, source_spec)
+    if len(protocols(value.kind)) > 1:
+        if conversion in {"repr", "ascii"}:
+            frame.fail(
+                node,
+                "scalar_observation",
+                "representation observes a selected scalar's source protocol; no common representation contract is proven",
+            )
+        value = Value(wire(value.kind), value.value, value.facts)
     source = value.kind
     if rank(source) is not None:
         if conversion in {"repr", "ascii"}:
