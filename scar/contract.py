@@ -88,6 +88,67 @@ def validate_text_profiles(profiles):
     return profiles
 
 
+def validate_state_flow(graph):
+    """Check namespace/reference closure, without claiming effect completeness."""
+    states, flow = graph["states"], graph["state_flow"]
+    count = len(graph["nodes"])
+    definitions = {(domain, "entry") for domain in states}
+    references = []
+
+    def port(value):
+        if type(value) is not int or not 0 <= value < count:
+            raise ValueError("state flow references an undefined operation port")
+
+    def state(domain):
+        if not isinstance(domain, str) or domain not in states:
+            raise ValueError(f"state flow references an undefined state: {domain}")
+
+    def token(domain, value):
+        state(domain)
+        if not isinstance(value, str) or not value:
+            raise ValueError("state flow requires a nonempty epoch identity")
+        return domain, value
+
+    for record in flow["versions"]:
+        port(record["node"])
+        if record["kind"] not in {
+            "ACCESS",
+            "OPAQUE",
+            "MERGE",
+            "LOOP_ENTRY",
+            "LOOP_CARRY",
+        }:
+            raise ValueError("unknown state flow record type")
+        for domain in (*record.get("read", ()), *record.get("may_write", ())):
+            state(domain)
+        for domain, value in record.get("outgoing", {}).items():
+            definitions.add(token(domain, value))
+        for field in ("output", "header"):
+            if field in record:
+                definitions.add(token(record["domain"], record[field]))
+        references.extend(token(d, v) for d, v in record.get("incoming", {}).items())
+        references.extend(token(record["domain"], v) for v in record.get("inputs", ()))
+        references.extend(
+            token(record["domain"], record[k])
+            for k in ("initial", "next", "exit")
+            if record.get(k) is not None
+        )
+    if any(reference not in definitions for reference in references):
+        raise ValueError("state flow references an undefined epoch in its state domain")
+    for edge in flow.get("transfers", ()):
+        port(edge["node"])
+        if edge["target"] is not None:
+            port(edge["target"])
+    for field in ("unexpanded_regions", "unresolved_protocols", "unstructured_control"):
+        for node in flow.get("coverage", {}).get(field, ()):
+            port(node)
+    for domain, definition in flow.get("introduced_states", {}).items():
+        state(domain)
+        if states[domain] != definition:
+            raise ValueError("analysis state differs from its published definition")
+    return flow
+
+
 def semantic_form(value):
     """Compare operation products independently of diagnostic annotations."""
     if isinstance(value, dict):

@@ -52,7 +52,11 @@ F4 的版本是保守 may-def epoch，不是数据内容身份或动态迭代的
 
 `operator_requirements` 声明逻辑接口所需的实现，`operator_family` 将实际操作连到该要求。语义合同与目标实现资格分别成立；未找到等价原生实现必须保留拒绝，不允许用 Python 回调、空函数或省略输出替代。
 
+MPI 仍使用普通 `call/indirect_call`，由已绑定 provider 补充 `mpi_interface(s)` 和 `mpi_contract`。合同区分 communicator、request、阻塞／非阻塞／持久通信，数据区域遵从 datatype typemap 与 count，不简化成连续 `count*sizeof`。释放 request 不代表通信完成，非阻塞 Barrier 也只在其完成时提供同步。`operator_requirements.mpi` 使用 C API、版本 1 和实际接口集合；SDK 能力、源／部署头证据及链接库身份在后端分别核验。未证明 rank 分配和实际 MPI 线程支持前，B1 只限制 SCAR 自行新增的 rank 内计算线程为一，不把这个安全上限解释为最优值。
+
 变量的拼写不代表状态身份。全局引用带 `scope: "global"`，F3 分配 `global/<链接名>`；形式参数、局部声明和闭包单元具有各自的域。引用声明保留绑定自身的域，用 `alias_to` 指向被引用状态。引用初始化写绑定，之后通过引用的赋值写目标。隐式引用参数、构造和虚调用也记录借用，无法闭合的指针访问进入共享内存域；未知调用推进相应版本。
+
+操作声明的外部读写进入 `external/<状态名>` 并登记为 `external_state`，例如 cwd 的版本不能只出现在访问表。封存前机械校验操作端口、状态域以及按域区分的 epoch 定义／引用；这种引用闭合不等于全部效果或优化证明已闭合。
 
 M1 保留 `state_evidence`，包含图身份、状态表、访问和版本关系。M2 生成每个函数的 `state_contract`，列出帧内标量、初始化状态、可见逃逸及证据来源。M3/M4 必须使用这份合同；同名、相同类型或多次访问本身均不能证明值不变。重复声明、引用借用、静态/volatile 状态等不进入私有标量集合。M3 新增变量时同步更新合同；公共循环域的 `value_definitions` 保留定义表达式及被支配的使用位置，使 M4 能恢复多维因子，而不必重新分析来源或丢失数据关系。
 

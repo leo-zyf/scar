@@ -93,7 +93,7 @@ class ParsedUnit:
         self._tokens = {}
         self._macros = {}
         self._files = {}
-        digests = {}
+        digests, external_headers = {}, {}
 
         def register(filename):
             if filename not in self._files:
@@ -105,19 +105,26 @@ class ParsedUnit:
             filename = file.name
             register(filename)
             relative = self._files[filename]
-            if relative is None or relative in digests:
+            external = str((root / filename).resolve()) if relative is None else None
+            if relative in digests or external in external_headers:
                 return
             size = ctypes.c_size_t()
             address = api.conf.lib.clang_getFileContents(
                 translation_unit, file, ctypes.byref(size)
             )
             if not address:
+                if external is not None:
+                    external_headers[external] = dict(sha256=None, size=None)
+                    return
                 raise ValueError(
                     f"Clang source buffer unavailable for project file {relative}"
                 )
             # Hash the exact bytes used by Clang without a copy or second disk read.
             buffer = (ctypes.c_ubyte * size.value).from_address(address)
             actual = sha256(buffer).hexdigest()
+            if external is not None:
+                external_headers[external] = dict(sha256=actual, size=size.value)
+                return
             if (
                 source_hashes
                 and relative in source_hashes
@@ -132,6 +139,7 @@ class ParsedUnit:
         for inclusion in translation_unit.get_includes():
             capture(inclusion.include)
         self.source_digests = MappingProxyType(digests)
+        self.external_headers = MappingProxyType(external_headers)
         roots = []
         for cursor in translation_unit.cursor.get_children():
             kind = cursor_kind(cursor)

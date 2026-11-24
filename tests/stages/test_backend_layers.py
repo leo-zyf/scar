@@ -50,6 +50,17 @@ else:
 def test_native_execution_calls_require_bindings_without_blocking_local_names():
     from scar.backend.planning import _qualify
 
+    historical = dict(
+        functions=[dict(name="MPI_Finalize", body=[])],
+        externs=[dict(name="MPI_Finalize", provider="mpi")],
+        source_evidence=dict(
+            old_call=dict(op="call", operator_family="mpi", mpi_interface="MPI_Init"),
+            old_type=dict(kind="ndarray", element="f32", rank=1),
+        ),
+    )
+    requirements, bindings, issues = _qualify(historical)
+    assert requirements == bindings == {} and not issues
+
     declaration = dict(name="system", provider="libc", header="stdlib.h")
     module = dict(
         functions=[

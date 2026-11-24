@@ -260,8 +260,14 @@ def function_graph(function, revision):
         }:
             accesses.append(dict(node=number, domain="memory", mode="unknown"))
         for state in value.get("state_reads", ()):
+            domains.setdefault(
+                f"external/{state}", dict(name=state, kind="external_state")
+            )
             accesses.append(dict(node=number, domain=f"external/{state}", mode="read"))
         for state in value.get("state_writes", ()):
+            domains.setdefault(
+                f"external/{state}", dict(name=state, kind="external_state")
+            )
             accesses.append(dict(node=number, domain=f"external/{state}", mode="write"))
         # Declaration in a for initializer binds the condition, update and body.
         keys = (["init"] if "init" in value else []) + [

@@ -428,9 +428,21 @@ def bind(graph, folder):
     field_calls = defaultdict(set)
     constructor_initializers = {}
     text_profiles = {}
+    software_headers = {}
     python_classes = _PythonClasses()
     activation_edges = []
     for index, unit in enumerate(graph["units"]):
+        for source, receipt in (
+            unit.get("source_facts", {}).get("external_headers", {}).items()
+        ):
+            if software_headers.setdefault(source, receipt) != receipt:
+                all_issues.append(
+                    dict(
+                        code="source_header_revision",
+                        detail="translation units used different external header contents",
+                        file=source,
+                    )
+                )
         for identity, profile in validate_text_profiles(
             unit.get("source_facts", {}).get("text_profiles", {})
         ).items():
@@ -758,6 +770,7 @@ def bind(graph, folder):
                 resources=graph.get("resources", []),
                 topology=graph.get("topology", []),
                 platform=graph.get("platform", {}),
+                software_headers=software_headers,
             ),
         ),
         issues,

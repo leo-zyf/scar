@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 import sys
 
+import pytest
 import scar
 from scar.contract import document, GRAPH, member, write_json
 from scar.frontend.graph import function_graph
@@ -127,6 +128,70 @@ print(json.dumps(module))
         ),
     )
     return module["functions"][0]
+
+
+def test_mpi_contracts_preserve_lifetimes_without_guessing_user_symbols():
+    names = [
+        "MPI_Isend",
+        "MPI_Irecv",
+        "MPI_Send_init",
+        "MPI_Request_free",
+        "MPI_Ibarrier",
+        "MPI_Finalize",
+    ]
+    body = [dict(op="call", callee=name, args=[]) for name in names]
+    module = dict(
+        functions=[dict(name="worker", body=body)],
+        globals=[],
+        records=[],
+        externs=[dict(name=name, provider="mpi") for name in names],
+        operator_requirements=dict(ndarray=dict(operations=[])),
+    )
+    code = """from scar.middle.mpi import qualify
+changes,issues=qualify(data)
+print(json.dumps(dict(module=data,changes=changes,issues=issues)))
+"""
+    result = _layer("normalization", code, module)
+    assert not result["issues"]
+    qualified = result["module"]
+    assert (
+        qualified["operator_requirements"]["ndarray"]
+        == module["operator_requirements"]["ndarray"]
+    )
+    contracts = {
+        call["callee"]: call["mpi_contract"]["interfaces"][call["callee"]]
+        for call in qualified["functions"][0]["body"]
+    }
+    assert contracts["MPI_Isend"]["buffer_access"]["mode"] == "read"
+    assert contracts["MPI_Irecv"]["buffer_access"]["mode"] == "write"
+    assert contracts["MPI_Irecv"]["buffer_lifetime"] == "call_until_request_completion"
+    assert contracts["MPI_Send_init"]["communication_started_by_call"] is False
+    assert contracts["MPI_Request_free"]["operation_completion"] == "not_implied"
+    assert contracts["MPI_Ibarrier"]["synchronization"] == "on_request_completion"
+    assert (
+        contracts["MPI_Finalize"]["satisfies_pending_completion_obligations"] is False
+    )
+    assert all(
+        not call["mpi_contract"]["reorderable"]
+        for call in qualified["functions"][0]["body"]
+    )
+
+    shadowed = dict(
+        functions=[
+            dict(name="MPI_Finalize", body=[]),
+            dict(name="caller", body=[dict(op="call", callee="MPI_Finalize", args=[])]),
+        ],
+        externs=[dict(name="MPI_Finalize", provider="mpi")],
+        source_evidence=dict(historical=dict(provider="mpi")),
+    )
+    result = _layer("normalization", code, shadowed)
+    assert not result["issues"] and "mpi" not in result["module"].get(
+        "operator_requirements", {}
+    )
+    assert "operator_family" not in result["module"]["functions"][1]["body"][0]
+    forged = deepcopy(module)
+    forged["functions"][0]["body"][0]["mpi_interface"] = "MPI_Finalize"
+    assert _layer("normalization", code, forged)["issues"]
 
 
 def test_middle_layers_consume_only_preceding_products(tmp_path):
@@ -596,6 +661,8 @@ def test_local_opaque_regions_preserve_state_connections_and_loop_structure():
                             },
                         ],
                         effects=["STATE"],
+                        state_reads=["process.cwd"],
+                        state_writes=["process.cwd"],
                     ),
                 ],
             ),
@@ -633,12 +700,26 @@ def test_local_opaque_regions_preserve_state_connections_and_loop_structure():
         r["kind"] == "LOOP_CARRY" and r["domain"] == slots["total"]
         for r in flow["versions"]
     )
+    from scar.contract import validate_state_flow
+
+    states = graph["states"] | flow["introduced_states"]
+    sealed = dict(graph, states=states, state_flow=flow)
+    validate_state_flow(sealed)
+    damaged = deepcopy(sealed)
+    damaged["state_flow"]["versions"][0]["incoming"]["missing"] = "entry"
+    with pytest.raises(ValueError, match="undefined state"):
+        validate_state_flow(damaged)
     assert any(
         t.get("possible") and t["target"] == sites["loop"] and t["phase"] == "exit"
         for t in flow["transfers"]
     )
     assert len([n for n in graph["nodes"] if n["op"] == "for"]) == 1
     assert flow["coverage"]["complete"] is False and flow["versions"]
+    assert states["external/process.cwd"]["kind"] == "external_state"
+    assert all(
+        set(r.get("incoming", {})) | set(r.get("outgoing", {})) <= states.keys()
+        for r in flow["versions"]
+    )
 
     cell = dict(op="var", name="shared", cell=dict(owner="outer", name="shared"))
     fn["body"] = [

@@ -193,7 +193,74 @@ def _install_xtensor(folder, directory, binding):
     (vendor / "LICENSE").write_bytes(read_blob(folder, binding["notice"]))
 
 
-def _package(root, sources, openmp, libraries, jobs, image=None):
+def _validate_mpi_sdk(receipt):
+    if (
+        not isinstance(receipt, dict)
+        or receipt.get("provider") != "mpi-c"
+        or receipt.get("api") != "c"
+        or receipt.get("semantics_version") != 1
+        or not re.fullmatch(r"[0-9]+\.[0-9]+", str(receipt.get("standard_version")))
+        or not all(
+            isinstance(receipt.get(k), list) and receipt[k]
+            for k in ("libraries", "headers")
+        )
+    ):
+        raise ValueError("target requires a qualified MPI C SDK receipt")
+    for item in (*receipt["headers"], *receipt["libraries"]):
+        if not isinstance(item, dict) or not re.fullmatch(
+            r"[a-f0-9]{64}", str(item.get("sha256"))
+        ):
+            raise ValueError("invalid scheduled MPI SDK fingerprint")
+    if not any(h.get("relative") == "mpi.h" for h in receipt["headers"]):
+        raise ValueError("MPI SDK receipt omits the public header")
+    for header in receipt["headers"]:
+        index, relative = header.get("root_index"), header.get("relative")
+        if (
+            type(index) is not int
+            or index < 0
+            or not isinstance(relative, str)
+            or not re.fullmatch(r"[A-Za-z0-9_+.-]+(?:/[A-Za-z0-9_+.-]+)*", relative)
+            or any(part in {".", ".."} for part in relative.split("/"))
+        ):
+            raise ValueError("invalid scheduled MPI SDK header location")
+
+
+def _mpi_checks(receipt):
+    """Recheck FindMPI's effective include roots and ordered binary link inputs at build time."""
+    lines = [
+        f'if(NOT MPI_CXX_VERSION STREQUAL "{receipt["standard_version"]}")',
+        '    message(FATAL_ERROR "MPI C API version differs from its physical schedule")',
+        "endif()",
+        "list(LENGTH MPI_CXX_LIBRARIES scar_mpi_libraries)",
+        f'if(NOT scar_mpi_libraries EQUAL {len(receipt["libraries"])})',
+        '    message(FATAL_ERROR "MPI link inputs differ from their physical schedule")',
+        "endif()",
+        "function(scar_verify_mpi_file path expected)",
+        '    file(SHA256 "${path}" actual)',
+        "    if(NOT actual STREQUAL expected)",
+        '        message(FATAL_ERROR "MPI SDK fingerprint mismatch: ${path}")',
+        "    endif()",
+        "endfunction()",
+    ]
+    for header in receipt["headers"]:
+        index, relative = header["root_index"], header["relative"]
+        lines.extend(
+            (
+                f"list(GET MPI_CXX_INCLUDE_DIRS {index} scar_mpi_dir)",
+                f'scar_verify_mpi_file("${{scar_mpi_dir}}/{relative}" "{header["sha256"]}")',
+            )
+        )
+    for index, lib in enumerate(receipt["libraries"]):
+        lines.extend(
+            (
+                f"list(GET MPI_CXX_LIBRARIES {index} scar_mpi_library)",
+                f'scar_verify_mpi_file("${{scar_mpi_library}}" "{lib["sha256"]}")',
+            )
+        )
+    return lines
+
+
+def _package(root, sources, openmp, libraries, jobs, image=None, mpi=None):
     unknown = libraries - {
         "MPI",
         "Threads",
@@ -235,6 +302,10 @@ def _package(root, sources, openmp, libraries, jobs, image=None):
         f"    target_compile_options({target} PRIVATE -Werror -Kieee -Mnofma)",
         "endif()",
     ]
+    if "MPI" in libraries:
+        lines.extend(
+            ("set(MPI_ASSUME_NO_BUILTIN_MPI TRUE)", "set(MPI_CXX_SKIP_MPICXX TRUE)")
+        )
     for enabled, package in ((openmp, "OpenMP"), ("MPI" in libraries, "MPI")):
         if enabled:
             lines.extend(
@@ -244,6 +315,7 @@ def _package(root, sources, openmp, libraries, jobs, image=None):
                 )
             )
     if "MPI" in libraries:
+        lines.extend(_mpi_checks(mpi))
         lines.append(
             f"target_compile_definitions({target} PRIVATE OMPI_SKIP_MPICXX=1 MPICH_SKIP_MPICXX=1)"
         )
@@ -330,6 +402,12 @@ def _lower_image(path, revision, scheduled, destination):
         headers.append(
             dict(output="include/scar/" + name, blob=file_receipt(destination, sealed))
         )
+    operator_sdks = {}
+    mpi = physical.get("operator_backends", {}).get("mpi")
+    if mpi is not None or "MPI" in lowerer.libraries.links:
+        _validate_mpi_sdk(mpi)
+        lowerer.libraries.links.add("MPI")
+        operator_sdks["MPI"] = member(destination, "operator-sdk", mpi)
     metadata = dict(
         openmp=lowerer.openmp,
         runtime_libraries=sorted(lowerer.libraries.links),
@@ -337,11 +415,11 @@ def _lower_image(path, revision, scheduled, destination):
         record_field_offset_checks=lowerer.layout_scope,
     )
     if "XTensor" in lowerer.libraries.links:
-        metadata["operator_sdks"] = {
-            "XTensor": _seal_xtensor(
-                destination, physical["operator_backends"]["ndarray"]
-            )
-        }
+        operator_sdks["XTensor"] = _seal_xtensor(
+            destination, physical["operator_backends"]["ndarray"]
+        )
+    if operator_sdks:
+        metadata["operator_sdks"] = operator_sdks
     product = document(
         "scar.cpp20-target-ir",
         stage="B2a",
@@ -458,7 +536,7 @@ def _print_image(path, product, directory, runtime, jobs, image=None):
             raise ValueError("duplicate target SDK header")
         target.write_bytes(read_blob(path.parent, header["blob"]))
     sources = []
-    local_headers = set()
+    local_headers, sdk_headers = set(), set()
     for part in product["units"]:
         output = part["output"]
         if output != _HEADER and not re.fullmatch(
@@ -470,6 +548,7 @@ def _print_image(path, product, directory, runtime, jobs, image=None):
             raise ValueError(f"duplicate C++ translation unit {output!r}")
         tree = from_data(read_member(path.parent, part["tree"]))
         local_headers.update(name for kind, name in tree.includes if kind == "local")
+        sdk_headers.update(name for kind, name in tree.includes if kind == "system")
         file.write_text(print_unit(tree), encoding="utf-8")
         if output != _HEADER:
             sources.append(output)
@@ -481,8 +560,12 @@ def _print_image(path, product, directory, runtime, jobs, image=None):
         if not header.is_relative_to(include_root) or not header.is_file():
             raise ValueError(f"target package is missing local header {name!r}")
     libraries = set(product["runtime_libraries"])
+    if sdk_headers & {"mpi.h", "mpio.h"} and "MPI" not in libraries:
+        raise ValueError("target MPI header requires a qualified MPI SDK")
     bindings = product.get("operator_sdks", {})
-    if not isinstance(bindings, dict) or bindings.keys() - (libraries & {"XTensor"}):
+    if not isinstance(bindings, dict) or bindings.keys() - (
+        libraries & {"XTensor", "MPI"}
+    ):
         raise ValueError("target declares an unused or unsupported native operator SDK")
     if (
         local_headers & {"scar/array.hpp", "scar/format.hpp"}
@@ -491,7 +574,16 @@ def _print_image(path, product, directory, runtime, jobs, image=None):
         raise ValueError("target array header requires a sealed XTensor SDK")
     if "XTensor" in libraries:
         _install_xtensor(path.parent, directory, bindings.get("XTensor"))
-    _package(directory, sources, product["openmp"], libraries, jobs, image)
+    mpi = None
+    if "MPI" in libraries:
+        if "MPI" not in bindings:
+            raise ValueError(
+                "target lacks a qualified MPI SDK; regenerate it from its execution IR"
+            )
+        mpi = read_member(path.parent, bindings["MPI"])
+        _validate_mpi_sdk(mpi)
+        write_json(directory / "mpi-sdk.json", mpi)
+    _package(directory, sources, product["openmp"], libraries, jobs, image, mpi)
     return sources
 
 

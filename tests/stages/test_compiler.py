@@ -9,6 +9,7 @@ import subprocess
 import sys
 from ctypes import CDLL, c_double
 import runpy
+import shlex
 
 import pytest
 
@@ -133,6 +134,108 @@ def test_make_capture_preserves_mixed_profiles_and_independent_stages(tmp_path):
     result = _stage(tmp_path, "backend", "compile", "--ir", plan, "--out", delivery)
     shutil.rmtree(plan)
     assert _run([result["executable"]], tmp_path) == expected
+
+
+def test_mpi_calls_survive_independent_stages_and_two_rank_execution(
+    tmp_path, monkeypatch
+):
+    if os.geteuid() == 0:
+        monkeypatch.setenv("OMPI_ALLOW_RUN_AS_ROOT", "1")
+        monkeypatch.setenv("OMPI_ALLOW_RUN_AS_ROOT_CONFIRM", "1")
+    source = tmp_path / "source"
+    source.mkdir()
+    entry = source / "exchange.c"
+    entry.write_text("""#include <mpi.h>
+#include <stdio.h>
+int main(int argc, char **argv) {
+  int rank, size, provided, sent, received = -1, total = -1;
+  MPI_Request requests[2];
+  MPI_Status statuses[2];
+  MPI_Init_thread(&argc, &argv, MPI_THREAD_FUNNELED, &provided);
+  MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+  MPI_Comm_size(MPI_COMM_WORLD, &size);
+  sent = rank + 1;
+  MPI_Irecv(&received, 1, MPI_INT, (rank + 1) % size, 17, MPI_COMM_WORLD, &requests[0]);
+  MPI_Isend(&sent, 1, MPI_INT, (rank + size - 1) % size, 17, MPI_COMM_WORLD, &requests[1]);
+  MPI_Waitall(2, requests, statuses);
+  MPI_Allreduce(&received, &total, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
+  MPI_Barrier(MPI_COMM_WORLD);
+  if (rank == 0) printf("ranks=%d sum=%d\\n", size, total);
+  MPI_Finalize();
+  return total == size * (size + 1) / 2 ? 0 : 3;
+}
+""")
+    original = source / "original"
+    _run(["mpicc", "-std=c99", "-O2", entry, "-o", original], source)
+    expected = _run(["mpiexec", "-n", "2", original], source)
+    assert expected == b"ranks=2 sum=3\n"
+    includes = shlex.split(_run(["mpicc", "--showme:compile"], source).decode())
+    sdk = tmp_path / "sdk" / "include"
+    sdk.mkdir(parents=True)
+    mpi_header = next(
+        Path(flag[2:]) / "mpi.h"
+        for flag in includes
+        if flag.startswith("-I") and (Path(flag[2:]) / "mpi.h").is_file()
+    )
+    for name in ("mpi.h", "mpi_portable_platform.h"):
+        shutil.copy2(mpi_header.parent / name, sdk / name)
+    request = source / "request.json"
+    request.write_text(
+        json.dumps(
+            dict(
+                entry="main",
+                units=[
+                    dict(
+                        path=entry.name,
+                        language="c",
+                        flags=["-std=c99", "-I" + str(sdk), *includes],
+                    )
+                ],
+            )
+        )
+    )
+    graph, plan, delivery = (tmp_path / name for name in ("graph", "plan", "delivery"))
+    _stage(tmp_path, "frontend", "build", "--manifest", request, "--out", graph)
+    document = json.loads((graph / "graph.json").read_bytes())
+    headers = document["units"][0]["source_facts"]["external_headers"]
+    assert any(
+        Path(path).name == "mpi.h" and row["sha256"] for path, row in headers.items()
+    )
+    shutil.rmtree(source)
+    shutil.rmtree(sdk.parent)
+    _stage(tmp_path, "middle", "plan", "--graph", graph, "--out", plan)
+    ir = json.loads((plan / "exec-ir.json").read_bytes())
+    requirement = ir["module"]["operator_requirements"]["mpi"]
+    assert {"MPI_Isend", "MPI_Irecv", "MPI_Waitall", "MPI_Allreduce"} <= set(
+        requirement["interfaces"]
+    )
+    assert ir["module"]["resource_model"]["software_headers"] == headers
+    shutil.rmtree(graph)
+    result = _stage(
+        tmp_path,
+        "backend",
+        "compile",
+        "--ir",
+        plan,
+        "--out",
+        delivery,
+        "--physical",
+        "auto",
+    )
+    shutil.rmtree(plan)
+    physical = json.loads((delivery / "physical-plan.json").read_bytes())
+    binding = physical["operator_backends"]["mpi"]
+    assert binding["provider"] == "mpi-c"
+    assert binding["source_header_evidence"] == "matched"
+    assert binding["rank_selection"] == binding["transport_cost"] == "unmodeled"
+    assert physical["worker_limit"] == 1
+    assert physical["worker_policy"]["caps"]["mpi_intra_rank_limit"] == 1
+    assert (
+        physical["worker_policy"]["mpi"]["reason"]
+        == "rank_placement_and_provided_thread_level_unverified"
+    )
+    assert json.loads((delivery / "project/mpi-sdk.json").read_bytes()) == binding
+    assert _run(["mpiexec", "-n", "2", result["executable"]], tmp_path) == expected
 
 
 def test_python_project_protocols_preserve_initialization_and_effect_order(tmp_path):

@@ -222,6 +222,7 @@ def _state_contract(function, evidence):
 
 def normalize(bound):
     from .protocols import normalize_protocols
+    from .mpi import qualify as qualify_mpi
 
     module = deepcopy(bound)
     module, protocol_changes, issues = normalize_protocols(module)
@@ -268,6 +269,9 @@ def normalize(bound):
     )
     module["normalizations"] = protocol_changes + call_changes
     issues.extend(call_issues)
+    mpi_changes, mpi_issues = qualify_mpi(module)
+    module["normalizations"].extend(mpi_changes)
+    issues.extend(mpi_issues)
     for function in module["functions"]:
         evidence = module.get("state_evidence", {}).get(function["name"], {})
         function["state_contract"] = _state_contract(function, evidence)

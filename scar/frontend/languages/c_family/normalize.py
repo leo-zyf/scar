@@ -112,13 +112,13 @@ _SDK_FORWARD_HEADERS = {
 }
 
 
-def _provider(cursor):
+def _provider(cursor, facts=None):
     loc = cursor.location
     if not loc.file:
         return None
     path = PurePath(loc.file.name)
     if path.name in {"mpi.h", "mpio.h"} and (
-        loc.is_in_system_header or "openmpi" in path.parts
+        not facts.owns(loc) if facts is not None else loc.is_in_system_header
     ):
         return "mpi"
     if not loc.is_in_system_header:
@@ -227,8 +227,9 @@ def _template_id(cursor):
 
 
 class _RecordIndex(dict):
-    def __init__(self):
+    def __init__(self, facts=None):
         super().__init__()
+        self.facts = facts
         self.specializations = {}
 
     def observe(self, cursor):
@@ -322,7 +323,7 @@ def _type(original, cursor, records):
                 and record.spelling == "tm"
             ):
                 opaque.update(provider="libc", symbol="tm", complete=True)
-            if _provider(record) == "mpi":
+            if _provider(record, records.facts) == "mpi":
                 opaque.update(
                     provider="mpi",
                     symbol=(
@@ -367,7 +368,7 @@ class _Unit:
         self.functions = {}
         self.externs = {}
         self.globals = {}
-        self.records = _RecordIndex()
+        self.records = _RecordIndex(facts)
         self.templates = {}
         self.enums = {}
         self.pending_functions = {}
@@ -539,7 +540,7 @@ class _Unit:
         self.require(cursor)
         if name not in self.externs:
             signature = self.signature(cursor)
-            provider = _provider(cursor)
+            provider = _provider(cursor, self.facts)
             if provider:
                 signature["provider"] = provider
                 header = _public_header(cursor)
@@ -900,7 +901,7 @@ class _Body:
             )
         if declaration.linkage.name in {"INTERNAL", "EXTERNAL", "UNIQUE_EXTERNAL"}:
             name = _symbol(declaration, self.unit.unit_tag)
-            header_provider = _provider(declaration)
+            header_provider = _provider(declaration, self.unit.facts)
             if header_provider or (
                 not declaration.is_definition() and not declaration.get_definition()
             ):
@@ -956,7 +957,7 @@ class _Body:
             if (
                 i == 1
                 and declaration.spelling == "__assert_fail"
-                and _provider(declaration) == "libc"
+                and _provider(declaration, self.unit.facts) == "libc"
                 and self.unit.macro_at(cursor) == "assert"
                 and not list(arg.get_children())
                 and _kind(arg) == "UNEXPOSED_EXPR"

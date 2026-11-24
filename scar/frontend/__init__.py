@@ -12,6 +12,7 @@ from scar.contract import (
     json_bytes,
     member,
     validate_images,
+    validate_state_flow,
     write_json,
 )
 from scar.host import cpu_availability
@@ -75,6 +76,8 @@ def _unit(job):
     )
     if text_profiles := getattr(parsed, "text_profiles", None):
         source_facts["text_profiles"] = text_profiles
+    if external_headers := getattr(parsed, "external_headers", None):
+        source_facts["external_headers"] = dict(external_headers)
     revision = digest(json_bytes([revision, source_facts]))
     functions = [function_graph(f, revision) for f in unit.get("functions", [])]
     initializers = function_graph(
@@ -132,6 +135,7 @@ def _unit(job):
                 raise ValueError(
                     f"state analysis introduced a conflicting domain: {identity}"
                 )
+        validate_state_flow(graph)
     receipt = member(out, "units", payload)
     return dict(
         path=profile["path"],

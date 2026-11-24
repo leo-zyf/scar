@@ -41,7 +41,14 @@ def _observed_operators(module):
     # Collect tagged operations and the type-only dependencies of older
     # packages in one traversal of the sealed IR.
     observed, elements = {}, set()
-    pending = [module]
+    defined = {fn["name"] for fn in module.get("functions", ())}
+    external = [
+        decl for decl in module.get("externs", ()) if decl["name"] not in defined
+    ]
+    pending = [
+        module.get(key, ()) for key in ("functions", "globals", "records", "entry_abi")
+    ]
+    pending.append(external)
     while pending:
         node = pending.pop()
         if isinstance(node, dict):
@@ -68,6 +75,12 @@ def _observed_operators(module):
                 observed.setdefault("ndarray", set())
                 element = node.get("element")
                 elements.add(element if isinstance(element, str) else "unspecified")
+            if (
+                node.get("provider") == "mpi"
+                or "mpi_interface" in node
+                or "mpi_interfaces" in node
+            ):
+                observed.setdefault("mpi", set())
             pending.extend(node.values())
         elif isinstance(node, (tuple, list)):
             pending.extend(node)
@@ -236,7 +249,19 @@ def _qualify(module, image_context=None):
     bindings, issues = {}, _external_execution_boundaries(module)
     for family, requirement in sorted(requested.items()):
         resolve = _OPERATOR_BINDINGS.get(family)
-        if family == "process":
+        if family == "mpi":
+            from . import mpi
+
+            try:
+                requested[family], bindings[family] = mpi.qualify(
+                    module,
+                    requirement,
+                    explicit=family in module.get("operator_requirements", {}),
+                )
+                continue
+            except ValueError as exc:
+                detail = str(exc)
+        elif family == "process":
             try:
                 bindings[family] = _process_binding(
                     requirement, observed.get(family, set()), module, image_context
@@ -287,7 +312,24 @@ def _schedule_image(
     else:
         from .cpu import schedule
 
-        selected, physical = schedule(module, policy, workers)
+        mpi = bindings.get("mpi", {})
+        uses_mpi = bool(mpi.get("called_or_possible") or mpi.get("address_taken"))
+        selected, physical = schedule(module, policy, 1 if uses_mpi else workers)
+        if uses_mpi:
+            # No rank placement or guaranteed MPI thread level is sealed yet.
+            # The cap applies to SCAR's generated teams, including calibration.
+            worker_policy = physical["worker_policy"]
+            caps = worker_policy["caps"]
+            caps["mpi_intra_rank_limit"] = 1
+            if workers is None:
+                del caps["requested_worker_limit"]
+            else:
+                caps["requested_worker_limit"] = workers
+            worker_policy["mpi"] = dict(
+                scope="scar_generated_intra_rank_workers",
+                caller_limit=workers,
+                reason="rank_placement_and_provided_thread_level_unverified",
+            )
         physical.update(fields)
         functions = [
             member(destination, "scheduled-units", fn)
@@ -318,6 +360,8 @@ def _schedule_image(
 
 
 def schedule_ir(source, destination, *, policy="auto", workers=None):
+    if workers is not None and (type(workers) is not int or workers < 1):
+        raise ValueError("worker_limit must be a positive integer")
     path, revision, ir = open_product(source, "exec-ir.json", IR)
     if ir.get("status") != "READY":
         raise ValueError("incomplete execution IR; consult its logical plan")
