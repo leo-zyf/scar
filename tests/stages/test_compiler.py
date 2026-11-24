@@ -3259,5 +3259,31 @@ def test_cpp20_global_and_lexical_bindings(tmp_path):
     )
     exe = delivery["executable"]
     assert _run([exe], tmp_path) == b""
-    symbols = _run(["nm", "-g", "-P", "--defined-only", exe], tmp_path).splitlines()
-    assert any(symbol.startswith(b"n D ") for symbol in symbols)
+    # Whole-image linking can internalize a global in an executable. Verify its
+    # C ABI through a real external consumer, where the symbol is observable.
+    library = tmp_path / "bindings.so"
+    _run(
+        [
+            "c++",
+            "-std=c++20",
+            "-O3",
+            "-Werror",
+            "-fPIC",
+            "-shared",
+            "-fno-fast-math",
+            "-frounding-math",
+            "-ffp-contract=off",
+            "-I" + str(Path(delivery["header"]).parents[1]),
+            *delivery["sources"],
+            "-o",
+            library,
+        ],
+        tmp_path,
+    )
+    from ctypes import c_int
+
+    bindings = CDLL(str(library))
+    exported = c_int.in_dll(bindings, "n")
+    assert exported.value == 10
+    bindings.main.argtypes, bindings.main.restype = [], c_int
+    assert bindings.main() == 0 and exported.value == 13
