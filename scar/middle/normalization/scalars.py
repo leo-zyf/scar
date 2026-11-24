@@ -234,7 +234,7 @@ def math_call(frame, node, name, args, keywords, steps, discard=False):
             reject(
                 combine("eq", base.value, literal(0.0).value),
                 "ZeroDivisionError",
-                "float division by zero",
+                "division by zero" if version >= (3, 14) else "float division by zero",
             )
         facts = {}
         if (
