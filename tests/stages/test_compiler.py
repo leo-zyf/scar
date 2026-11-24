@@ -333,17 +333,17 @@ def test_generated_content_joins_parser_snapshots_without_inventing_read_history
     assert logical["status"] == "READY"
     report = json.loads((plan / "images/driver/plan.json").read_bytes())
     analysis = report["artifact_analysis"]
-    (materialization,) = analysis["constant_materializations"]
-    assert (
-        materialization["value"] == value
-        and materialization["transformation"] == "not_applied"
+    materializations = analysis["constant_materializations"]
+    assert materializations and all(
+        item["value"] == value and item["transformation"] == "not_applied"
+        for item in materializations
     )
     flow = validate_artifact_flow(
         read_member(plan / "images/driver", analysis["graph"])
     )
     nodes = {node["id"]: node for node in flow["nodes"]}
     assert nodes[value]["literal_text"].encode() == expected
-    assert nodes[materialization["version"]]["value"] == value
+    assert all(nodes[item["version"]]["value"] == value for item in materializations)
     assert any(
         node["kind"] == "FILE_VERSION" and node["value"] == value
         for node in nodes.values()
@@ -1654,6 +1654,101 @@ def test_python_protocol_closure_never_assumes_mutable_bindings_constant(tmp_pat
             assert process.returncode == 2 and report["blockers"] > 0
             ir = json.loads((plan / "exec-ir.json").read_bytes())
             assert ir["status"] == "INCOMPLETE" and not ir["functions"]
+
+
+def test_scalar_math_uses_native_intrinsics_and_preserves_error_regions(tmp_path):
+    entry = tmp_path / "calculation.py"
+    operands = {
+        **{
+            name: 0.25
+            for name in (
+                "acos",
+                "asin",
+                "atanh",
+                "cos",
+                "sin",
+                "tan",
+                "cosh",
+                "sinh",
+                "exp",
+                "exp2",
+                "expm1",
+                "asinh",
+                "atan",
+                "tanh",
+                "erf",
+                "erfc",
+                "log1p",
+            )
+        },
+        **{name: 2.0 for name in ("sqrt", "acosh", "log", "log2", "log10")},
+        "cbrt": 8.0,
+        "fabs": -0.0,
+    }
+    entry.write_text(
+        "import math\nfrom math import sqrt as root\n"
+        + "".join(
+            f"print(math.{name}({value!r}))\n" for name, value in operands.items()
+        )
+        + """def checked(value):
+    try:
+        print(root(value))
+    except ValueError as error:
+        print(str(error))
+def growth(value):
+    try:
+        print(math.exp(value))
+    except OverflowError as error:
+        print(str(error))
+def logarithm(value, base):
+    try:
+        print(math.log(value, base))
+    except ValueError as error:
+        print(str(error))
+    except ZeroDivisionError as error:
+        print(str(error))
+checked(-1.0)
+checked(-0.0)
+checked(4.0)
+growth(1.0)
+growth(1000.0)
+logarithm(8.0, 2.0)
+logarithm(0.0, 2.0)
+logarithm(2.0, 1.0)
+large = 1e308
+infinity = large * large
+missing = infinity - infinity
+print(math.isfinite(infinity), math.isinf(infinity), math.isnan(missing))
+checked(infinity)
+checked(missing)
+checked(-infinity)
+try:
+    math.log(0)
+except ValueError as error:
+    print(str(error))
+try:
+    math.acos(2.0)
+except ValueError as error:
+    print(str(error))
+try:
+    math.sin(infinity)
+except ValueError as error:
+    print(str(error))
+try:
+    root(-1.0)
+except ValueError as error:
+    print(str(error))
+"""
+    )
+    expected = _run([sys.executable, entry], tmp_path)
+    graph, plan, delivery = (tmp_path / name for name in ("graph", "plan", "delivery"))
+    _stage(tmp_path, "frontend", "build", "--entry", entry, "--out", graph)
+    entry.unlink()
+    _stage(tmp_path, "middle", "plan", "--graph", graph, "--out", plan)
+    shutil.rmtree(graph)
+    result = _stage(tmp_path, "backend", "compile", "--ir", plan, "--out", delivery)
+    shutil.rmtree(plan)
+    assert _run([result["executable"]], tmp_path) == expected
 
 
 def test_graphics_state_is_logical_ir_and_requires_native_qualification(tmp_path):

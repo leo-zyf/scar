@@ -282,6 +282,75 @@ def test_constant_file_proof_preserves_control_and_handle_boundaries():
         item["field"] == "copy_destination_kind"
         for item in analysis([start, write, close, copy2])["boundaries"]
     )
+    parameters = [dict(name=name, type="text") for name in ("source", "destination")]
+    source, destination = [dict(op="var", **item) for item in parameters]
+    helper_copy, helper_read = deepcopy(copied), deepcopy(read)
+    helper_copy["value"]["args"] = [source, destination]
+    helper_read[0]["init"]["args"][0] = destination
+    helper = dict(
+        name="copy_read",
+        params=parameters,
+        result="text",
+        body=[
+            helper_copy,
+            *helper_read,
+            dict(
+                op="expr",
+                value=dict(
+                    op="host_call", interface="stream.close", args=[read_handle]
+                ),
+            ),
+            dict(op="return", value=destination),
+        ],
+    )
+    caller_read = deepcopy(read)
+    caller_read[0]["init"]["args"][0] = dict(op="var", name="returned", type="text")
+    caller = dict(
+        name="writer",
+        body=[
+            start,
+            write,
+            close,
+            dict(
+                op="decl",
+                name="returned",
+                type="text",
+                init=dict(
+                    op="call",
+                    callee="copy_read",
+                    site="writer/copy",
+                    args=[literal("out.h"), literal("copy.h")],
+                ),
+            ),
+            *caller_read,
+        ],
+    )
+    module = dict(functions=[caller, helper])
+    cross_call = _layer("normalization", code, module)
+    (copy_edge,) = [
+        edge
+        for edge in cross_call["graph"]["edges"]
+        if edge["kind"] == "COPIES_FILE_VERSION"
+    ]
+    reads = [
+        edge
+        for edge in cross_call["graph"]["edges"]
+        if edge.get("role") == "stream_read"
+    ]
+    assert len(reads) == 2 and all(
+        edge["source"] == copy_edge["target"] for edge in reads
+    )
+    assert cross_call["file_call_contexts"] == 1
+    assert all(
+        item["normal_path_closed"] for item in cross_call["file_state_transitions"]
+    )
+    module["functions"][1]["body"].insert(
+        1, dict(op="expr", value=dict(op="call", callee="unknown", args=[]))
+    )
+    barrier = _layer("normalization", code, module)
+    assert not any(
+        edge.get("role") == "stream_read" for edge in barrier["graph"]["edges"]
+    )
     cases = [
         [
             start,

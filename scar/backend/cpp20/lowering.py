@@ -1221,6 +1221,20 @@ class Lowerer:
 
     def intrinsic(self, expr):
         intrinsic = expr["name"]
+        if intrinsic in ("isinf", "isnan", "isfinite"):
+            operands = expr.get("args")
+            if (
+                expr.get("type") != "bool"
+                or not isinstance(operands, (tuple, list))
+                or len(operands) != 1
+                or not isinstance(operands[0], dict)
+                or operands[0].get("type") != "f64"
+            ):
+                raise ValueError(
+                    f"{intrinsic} requires one f64 operand and a bool result"
+                )
+            self.headers.add("cmath")
+            return call("std::" + intrinsic, self.expression(operands[0]))
         args = tuple(map(self.expression, expr["args"]))
         ty = self.type_name(expr["type"])
         n = len(args)

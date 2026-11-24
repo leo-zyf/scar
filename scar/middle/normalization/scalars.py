@@ -2,6 +2,7 @@
 
 import math
 import operator
+import re
 from .values import (
     Value,
     literal,
@@ -12,6 +13,7 @@ from .values import (
     _UNKNOWN,
     choice,
     protocols,
+    source_site,
 )
 
 _NUMERIC = {"i64", "f64"}
@@ -27,6 +29,245 @@ _OPERATORS = {
     "gt": ("gt", operator.gt),
     "gte": ("ge", operator.ge),
 }
+
+# (native intrinsic, finite-input overflow possible, total on IEEE binary64).
+# Integer-valued rounding, multi-value functions and custom numeric protocols
+# need their own result/conversion contracts and do not enter this family.
+MATH_FUNCTIONS = {
+    **{
+        name: (name, False, False)
+        for name in (
+            "acos",
+            "acosh",
+            "asin",
+            "atanh",
+            "cos",
+            "sin",
+            "sqrt",
+            "tan",
+            "log",
+            "log1p",
+            "log2",
+            "log10",
+        )
+    },
+    **{name: (name, True, False) for name in ("cosh", "sinh", "exp", "exp2", "expm1")},
+    **{
+        name: (name, False, True)
+        for name in ("asinh", "atan", "tanh", "cbrt", "erf", "erfc")
+    },
+    "fabs": ("abs", False, True),
+}
+MATH_CLASSIFICATIONS = frozenset({"isfinite", "isinf", "isnan"})
+_MATH_DOMAIN_PREFIXES = {
+    "acos": "expected a number in range from -1 up to 1, got ",
+    "asin": "expected a number in range from -1 up to 1, got ",
+    "acosh": "expected argument value not less than 1, got ",
+    "atanh": "expected a number between -1 and 1, got ",
+    "cos": "expected a finite input, got ",
+    "sin": "expected a finite input, got ",
+    "tan": "expected a finite input, got ",
+    "sqrt": "expected a nonnegative input, got ",
+    "log1p": "expected argument value > -1, got ",
+}
+
+
+def _finite_math_domain(name, operand):
+    """Discharge error edges from an already-proven finite input interval."""
+    bounds = _binary64_bounds(operand)
+    if bounds is None:
+        return False
+    low, high = bounds
+    if name == "sqrt":
+        return low >= 0.0
+    if name in {"log", "log2", "log10"}:
+        return low > 0.0
+    if name == "log1p":
+        return low > -1.0
+    if name in {"acos", "asin"}:
+        return -1.0 <= low <= high <= 1.0
+    if name == "acosh":
+        return low >= 1.0
+    if name == "atanh":
+        return -1.0 < low <= high < 1.0
+    return name in {"sin", "cos", "tan"}
+
+
+def math_call(frame, node, name, args, keywords, steps, discard=False):
+    """Close scalar libm calls using ordinary values and explicit error regions.
+
+    The result classification rules follow CPython's scalar math contract.
+    This pass neither implements libm nor hides source errors in a C++ wrapper.
+    """
+    if keywords or len(args) not in ({1, 2} if name == "log" else {1}):
+        frame.fail(
+            node, "math_arguments", f"{name} needs its positional scalar signature"
+        )
+    captured = node.get("source_runtime", {}).get(
+        "interpreter"
+    ) or frame.project.text_profiles.get(frame.scope.get("text_profile"), {}).get(
+        "interpreter", ""
+    )
+    match = re.match(r"cpython (\d+)\.(\d+)\.", captured)
+    version = tuple(map(int, match.groups())) if match else ()
+    if not (3, 10) <= version < (3, 15):
+        frame.fail(
+            node,
+            "math_source_version",
+            "scalar math needs a registered source-library contract",
+        )
+    if name in {"cbrt", "exp2"} and version < (3, 11):
+        frame.fail(
+            node, "math_source_version", f"{name} is absent from this source library"
+        )
+    source_args = args
+    args = [construct(frame, node, "float", [value], {}) for value in args]
+
+    def intrinsic(function, value, kind):
+        return dict(
+            op="intrinsic",
+            name=function,
+            type=kind,
+            args=[value],
+            effects=["VAL"],
+            may_raise=False,
+        )
+
+    def combine(operator, left, right):
+        return dict(op="binary", type="bool", operator=operator, left=left, right=right)
+
+    def reject(condition, category, message, operand=None):
+        # Use the shared exception protocol at this same layer. The error
+        # object is allocated only along the exceptional edge.
+        from . import exceptions
+
+        body = []
+        message = literal(message)
+        if operand is not None:
+            from . import text
+
+            rendered = text.render(frame, node, operand, "repr", literal(""), body)
+            message = text._concat(frame, [message, rendered], body)
+        error = exceptions.construct(
+            frame, node, exceptions.builtin(category), [message], {}, body
+        )
+        body.append(dict(op="throw", value=error.value))
+        steps.append(
+            dict(
+                op="if",
+                condition=condition,
+                then=body,
+                **{"else": []},
+                **source_site(node),
+            )
+        )
+
+    def domain(function, operand, source):
+        if version < (3, 14):
+            return "math domain error", None
+        if function in {"log", "log2", "log10"}:
+            if source.kind in {"i64", "bool"}:
+                return "expected a positive input", None
+            if source.kind == "boolean_choice":
+                frame.fail(
+                    node,
+                    "math_error_protocol",
+                    "logarithm error presentation observes the source boolean protocol",
+                )
+            return "expected a positive input, got ", operand
+        prefix = _MATH_DOMAIN_PREFIXES.get(function)
+        return (prefix, operand) if prefix else ("math domain error", None)
+
+    def evaluate(function, operand, source):
+        if function in MATH_CLASSIFICATIONS:
+            value = intrinsic(function, operand.value, "bool")
+            facts = (
+                _numeric_facts(getattr(math, function)(operand.exact))
+                if operand.exact is not _UNKNOWN
+                else {}
+            )
+            return frame.effect(value, "bool", steps, facts=facts)
+        native, can_overflow, total = MATH_FUNCTIONS[function]
+        facts = {}
+        if operand.exact is not _UNKNOWN:
+            try:
+                facts = _numeric_facts(getattr(math, function)(operand.exact))
+            except (ValueError, OverflowError):
+                # Keep the operation and exceptional continuation at runtime.
+                pass
+        value = dict(**intrinsic(native, operand.value, "f64"), **source_site(node))
+        result = frame.effect(value, "f64", steps, facts=facts)
+        if (
+            not total
+            and "exact" not in facts
+            and not _finite_math_domain(function, operand)
+        ):
+            invalid = combine(
+                "land",
+                intrinsic("isnan", result.value, "bool"),
+                dict(
+                    op="unary",
+                    operator="not",
+                    type="bool",
+                    value=intrinsic("isnan", operand.value, "bool"),
+                ),
+            )
+            message, displayed = domain(function, operand, source)
+            reject(invalid, "ValueError", message, displayed)
+            infinite = combine(
+                "land",
+                intrinsic("isinf", result.value, "bool"),
+                intrinsic("isfinite", operand.value, "bool"),
+            )
+            reject(
+                infinite,
+                "OverflowError" if can_overflow else "ValueError",
+                "math range error" if can_overflow else message,
+                None if can_overflow else displayed,
+            )
+        return result
+
+    result = evaluate(name, args[0], source_args[0])
+    if len(args) == 2:
+        base = evaluate("log", args[1], source_args[1])
+        if base.exact is _UNKNOWN or base.exact == 0.0:
+            reject(
+                combine("eq", base.value, literal(0.0).value),
+                "ZeroDivisionError",
+                "float division by zero",
+            )
+        facts = {}
+        if (
+            result.exact is not _UNKNOWN
+            and base.exact is not _UNKNOWN
+            and base.exact != 0.0
+        ):
+            facts = _numeric_facts(result.exact / base.exact)
+        result = frame.effect(
+            dict(
+                op="binary",
+                operator="div",
+                type="f64",
+                left=result.value,
+                right=base.value,
+            ),
+            "f64",
+            steps,
+            facts=facts,
+        )
+    frame.project.decisions.append(
+        dict(
+            code="closed_scalar_math",
+            symbol=frame.name,
+            function=name,
+            input_types=[value.kind for value in source_args],
+            source_interpreter=captured,
+            result=result.kind,
+            **source_site(node),
+            proof="verified scalar library identity; binary64 argument conversion and explicit domain/range error continuations; no source-language execution",
+        )
+    )
+    return literal(None) if discard else result
 
 
 def _binary64_bounds(item):

@@ -2,7 +2,7 @@
 
 import math
 
-from . import text
+from . import scalars, text
 from .values import Value, argument_evidence, literal, source_site, wire
 
 _STREAM = "handle:text_stream"
@@ -82,7 +82,9 @@ _MEMBERS = {
     "shutil": {"rmtree", "copyfile", "copy", "copy2", "copytree"},
     "time": {"time", "sleep"},
     "sys": {"exit"},
-    "math": {"pi", "e", "tau"},
+    "math": {"pi", "e", "tau"}
+    | scalars.MATH_FUNCTIONS.keys()
+    | scalars.MATH_CLASSIFICATIONS,
     "subprocess": {"Popen", "PIPE", "STDOUT", "CalledProcessError"},
 }
 
@@ -110,6 +112,10 @@ def array_effect_free(target):
             "os.makedirs",
             "os.chdir",
             "os.getcwd",
+        }
+        | {
+            "math." + name
+            for name in scalars.MATH_FUNCTIONS.keys() | scalars.MATH_CLASSIFICATIONS
         }
     )
 
@@ -183,7 +189,7 @@ def member(frame, node, base, name):
     if qualified == "os.path":
         _path_identity(frame, node, base.facts)
         return Value("host_namespace", qualified, base.facts)
-    if base.value == "math":
+    if base.value == "math" and name in {"pi", "e", "tau"}:
         return literal(getattr(math, name))
     return Value("host_callable", qualified, base.facts)
 
@@ -351,6 +357,10 @@ def invoke(frame, node, target, args, keywords, steps, discard):
     if target.kind != "host_callable":
         return None
     name = target.value
+    if name.startswith("math."):
+        return scalars.math_call(
+            frame, node, name.removeprefix("math."), args, keywords, steps, discard
+        )
     if name == "builtins.open":
         return _open(frame, node, target, args, keywords, steps, discard)
     if name == "builtins.input":

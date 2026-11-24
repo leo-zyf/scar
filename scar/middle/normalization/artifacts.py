@@ -1,7 +1,7 @@
 """M2 file-content provenance over already-qualified canonical operations."""
 
 from copy import deepcopy
-from collections import deque
+from collections import defaultdict, deque
 from dataclasses import dataclass, field
 import json
 import posixpath
@@ -24,6 +24,72 @@ from .values import (
     evidence_scalar,
     _UNKNOWN,
 )
+
+_FILE_FREE_OPERATIONS = {
+    "literal",
+    "string",
+    "zero",
+    "var",
+    "unary",
+    "binary",
+    "cast",
+    "index",
+    "member",
+    "select",
+    "intrinsic",
+    "function_ref",
+    "sizeof",
+    "alignof",
+    "decl",
+    "assign",
+    "update",
+    "expr",
+    "return",
+    "block",
+    "if",
+    "for",
+    "while",
+    "do_while",
+    "map",
+    "each",
+    "switch",
+    "case",
+    "break",
+    "continue",
+    "pass",
+    "try",
+    "exception_handler",
+    "throw",
+    "raise",
+    "error_make",
+    "process_error_make",
+    "aggregate",
+    "buffer",
+    "runtime_array",
+    "allocate",
+    "release",
+    "load_bytes",
+    "store_bytes",
+    "text_concat",
+    "text_format",
+    "array_create",
+    "array_iota",
+    "array_literal",
+    "array_copy",
+    "array_broadcast_copy",
+    "array_unary",
+    "array_binary",
+    "array_view",
+    "array_reshape",
+    "array_store",
+    "array_update",
+    "array_load",
+    "array_shape",
+    "array_dtype",
+    "array_broadcast",
+    "array_comparison",
+    "array_power_dispatch",
+}
 
 
 @dataclass
@@ -63,6 +129,7 @@ def analyze(module):
     )
     nodes = {node["id"]: node for node in graph["nodes"]}
     edges, materializations, boundaries, templates = graph["edges"], [], [], []
+    file_transitions = []
     source_operations = {
         str(node["graph_id"]) + "/" + str(node["port"]): node["id"]
         for node in nodes.values()
@@ -86,6 +153,85 @@ def analyze(module):
     }
     stable_globals = set(protocol.get("single_bind_globals", ()))
     summaries = result_summaries(functions)
+    file_calls, file_effects, dependents = {}, {}, defaultdict(set)
+    summary_operations = 0
+    for name, fn in functions.items():
+        dependencies, effects = set(), set()
+        for node in walk_operations(fn["body"]):
+            summary_operations += 1
+            op = node["op"]
+            if op == "call" and node.get("callee") in functions:
+                dependencies.add(node["callee"])
+            elif op == "host_call":
+                interface = node["interface"]
+                if (
+                    interface.startswith(("fs.", "stream.", "process."))
+                    or interface == "console.input"
+                ):
+                    effects.add("FILE")
+                elif interface not in {"path.join", "time.wall", "time.sleep"}:
+                    effects.add("OPAQUE")
+            elif op in {"text_print", "process_spawn", "process_request"}:
+                effects.add("FILE")
+            elif op in {
+                "call",
+                "indirect_call",
+                "library_call",
+                "object_construct",
+                "object_new",
+                "object_destroy",
+                "object_dispatch",
+                "unsupported",
+                "opaque",
+            }:
+                effects.add("OPAQUE")
+            elif (
+                {
+                    "filesystem",
+                    "stream.state",
+                    "process.cwd",
+                    "external.state",
+                }.intersection(node.get("reads", ()))
+                or {
+                    "filesystem",
+                    "stream.state",
+                    "process.cwd",
+                    "external.state",
+                }.intersection(node.get("writes", ()))
+                or node.get("external_effect") not in (None, "NONE")
+                or "OPAQUE" in node.get("effects", ())
+                or op not in _FILE_FREE_OPERATIONS
+            ):
+                effects.add("OPAQUE")
+        file_calls[name], file_effects[name] = dependencies, effects
+        for callee in dependencies:
+            dependents[callee].add(name)
+    recursive, inspected, visiting = set(), set(), []
+
+    def inspect_calls(name):
+        if name in visiting:
+            recursive.update(visiting[visiting.index(name) :])
+        elif name not in inspected:
+            visiting.append(name)
+            for callee in file_calls[name]:
+                inspect_calls(callee)
+            visiting.pop()
+            inspected.add(name)
+
+    for name in functions:
+        inspect_calls(name)
+    for name in recursive:
+        file_effects[name].add("OPAQUE")
+    work = deque(name for name, effects in file_effects.items() if effects)
+    while work:
+        callee = work.popleft()
+        for caller in dependents[callee]:
+            merged = file_effects[caller] | file_effects[callee]
+            if merged != file_effects[caller]:
+                file_effects[caller] = merged
+                work.append(caller)
+    file_contexts = set()
+    file_call_counts = dict(non_file=0, opaque_barrier=0, stateful=0)
     # One abstract input tuple per static call port. Each scalar formal moves
     # monotonically from a constant to unknown on disagreement, so recursive or
     # polymorphic input paths cannot create an unbounded set of value contexts.
@@ -184,8 +330,7 @@ def analyze(module):
                     ),
                 )
 
-    while pending:
-        fragment = pending.popleft()
+    def evaluate_fragment(fragment, incoming=None, call_chain=()):
         function, completion = fragment["function"], fragment["completion"]
         symbol, streams, environment, ordinal = fragment["symbol"], [], {}, 0
         bindings = fragment.get("bindings", ())
@@ -197,13 +342,22 @@ def analyze(module):
                 for v in bindings
             ],
         ]
+        if "file_state_context" in fragment:
+            context.append(dict(file_state_context=fragment["file_state_context"]))
         for parameter, value in zip(function.get("params", ()), bindings):
             environment[None, parameter["name"]] = exact_scalar(
                 value, parameter["type"]
             )
-        fact_epoch_clean, live_process_effects = True, False
-        cwd, file_versions, filesystem_epoch = ("invocation.cwd", "."), {}, 0
-        last_file_operation, operation_ids = None, {}
+        state = incoming or {}
+        fact_epoch_clean = state.get("fact_epoch_clean", True)
+        live_process_effects = state.get("live_process_effects", False)
+        cwd = state.get("cwd", ("invocation.cwd", "."))
+        file_versions, filesystem_epoch = dict(
+            state.get("file_versions", {})
+        ), state.get("epoch", 0)
+        last_file_operation, operation_ids = state.get("last_operation"), {}
+        root_activation = state.get("root_activation", digest(json_bytes(context)))
+        return_value = _UNKNOWN
 
         def operation(node):
             nonlocal ordinal
@@ -275,11 +429,11 @@ def analyze(module):
             location = dict(
                 path=key[1] if key is not None else None,
                 cwd=key[0] if key is not None else "unresolved.cwd",
-                symbol=symbol,
+                activation=root_activation,
             )
             locator = add(
                 "FILE_LOCATOR",
-                [location, context, site if key is None else None],
+                [location, site if key is None else None],
                 **location,
                 identity_scope="normal_path_expression",
                 inode_aliases="unresolved",
@@ -585,6 +739,7 @@ def analyze(module):
 
         def expression(node):
             nonlocal fact_epoch_clean, live_process_effects, cwd
+            nonlocal file_versions, filesystem_epoch, last_file_operation
             if not isinstance(node, dict):
                 return _UNKNOWN
             op = node["op"]
@@ -610,6 +765,109 @@ def analyze(module):
                     callee.get("params", ())
                 ):
                     return apply_result(summaries[callee["name"]], args, summaries)
+                if not file_effects[callee["name"]] and callee["name"] not in recursive:
+                    # Numeric loops and memory-only callees do not need a
+                    # second traversal merely to establish file independence.
+                    file_call_counts["non_file"] += 1
+                    fact_epoch_clean = False
+                    environment.clear()
+                    return evidence_scalar(
+                        node.get("result_facts"), callee.get("result")
+                    )
+                site = operation(node)
+                static_site = node.get("site") or (symbol + "/call/" + str(ordinal))
+                file_key = root_activation, callee["name"], static_site
+                scalar_parameters = all(
+                    isinstance(parameter.get("type"), str)
+                    for parameter in callee.get("params", ())
+                )
+                supported = (
+                    len(args) == len(callee.get("params", ()))
+                    and scalar_parameters
+                    and "FILE" in file_effects[callee["name"]]
+                    and (bindings or not function.get("params"))
+                    and callee["name"] not in recursive
+                    and callee["name"] not in (*call_chain, symbol)
+                    and file_key not in file_contexts
+                )
+                if supported:
+                    file_call_counts["stateful"] += 1
+                    file_contexts.add(file_key)
+                    # A caller's still-open handle may alias any file touched
+                    # by its callee; no ownership transfer is inferred here.
+                    if any(not stream.closed for stream in streams):
+                        invalidate("interprocedural_open_stream_alias", site)
+                    ordered(site)
+                    input_versions = sorted(file_versions.values())
+                    state_context = digest(
+                        json_bytes(
+                            [
+                                context,
+                                static_site,
+                                cwd,
+                                sorted(file_versions.items()),
+                                filesystem_epoch,
+                            ]
+                        )
+                    )
+                    child_state, result, closed = evaluate_fragment(
+                        dict(
+                            symbol=callee["name"],
+                            function=callee,
+                            completion="complete",
+                            bindings=args,
+                            call_site=static_site,
+                            file_state_context=state_context,
+                            activation=dict(
+                                owner=symbol,
+                                site=node.get("site"),
+                                condition="source_call_reached_and_normal_completion",
+                            ),
+                        ),
+                        dict(
+                            cwd=cwd,
+                            file_versions=file_versions,
+                            epoch=filesystem_epoch,
+                            last_operation=last_file_operation,
+                            fact_epoch_clean=fact_epoch_clean,
+                            live_process_effects=live_process_effects,
+                            root_activation=root_activation,
+                        ),
+                        (*call_chain, symbol),
+                    )
+                    cwd, file_versions = (
+                        child_state["cwd"],
+                        child_state["file_versions"],
+                    )
+                    filesystem_epoch = child_state["epoch"]
+                    last_file_operation = child_state["last_operation"]
+                    live_process_effects = child_state["live_process_effects"]
+                    fact_epoch_clean = child_state["fact_epoch_clean"]
+                    locals_ = {
+                        key: value
+                        for key, value in environment.items()
+                        if key[0] != "global" and not isinstance(value, _Stream)
+                    }
+                    environment.clear()
+                    environment.update(locals_)
+                    if not closed:
+                        invalidate(
+                            "incomplete_interprocedural_file_state", changes_cwd=True
+                        )
+                    file_transitions.append(
+                        dict(
+                            owner=symbol,
+                            target=callee["name"],
+                            site=static_site,
+                            context=state_context,
+                            input_versions=input_versions,
+                            output_versions=sorted(file_versions.values()),
+                            normal_path_closed=closed,
+                            condition="source_call_reached_and_normal_completion",
+                            historical_instance="not_established",
+                        )
+                    )
+                    return result
                 if (
                     len(args) == len(callee.get("params", ()))
                     and args
@@ -619,8 +877,6 @@ def analyze(module):
                     # be copied into context facts or tensor-value snapshots.
                     # An uninstantiated parameterized frame is a template, not
                     # an invocation whose unknown inputs widen observed inputs.
-                    site = operation(node)
-                    static_site = node.get("site") or (symbol + "/call/" + str(ordinal))
                     bind_context(
                         callee,
                         static_site,
@@ -632,6 +888,7 @@ def analyze(module):
                         ),
                     )
                 fact_epoch_clean = False
+                file_call_counts["opaque_barrier"] += 1
                 environment.clear()
                 invalidate(
                     "interprocedural_file_effect", operation(node), changes_cwd=True
@@ -641,7 +898,16 @@ def analyze(module):
                         symbol=symbol,
                         field="interprocedural_file_state_summary",
                         target=callee["name"],
-                        reason="file_state_transition_not_summarized",
+                        reason=(
+                            "recursive_call_component"
+                            if callee["name"] in recursive
+                            or callee["name"] in (*call_chain, symbol)
+                            else (
+                                "static_call_context_widened"
+                                if file_key in file_contexts
+                                else "parameter_or_activation_state_unclosed"
+                            )
+                        ),
                     )
                 )
                 return evidence_scalar(node.get("result_facts"), callee.get("result"))
@@ -768,6 +1034,10 @@ def analyze(module):
                     invalidate("unresolved_filesystem_effect", site)
                 elif interface.startswith("process.") and node.get("writes"):
                     invalidate("external_process_effect", site, changes_cwd=True)
+                elif {"stdin.state", "stdout.state", "stderr.state"}.intersection(
+                    node.get("writes", ())
+                ):
+                    invalidate("unresolved_console_file_alias", site)
                 return _UNKNOWN
             if op == "text_print":
                 args = [
@@ -858,7 +1128,7 @@ def analyze(module):
             return exact_scalar(value, spec)
 
         def sequence(body):
-            nonlocal fact_epoch_clean
+            nonlocal fact_epoch_clean, return_value
             for statement in body:
                 op = statement["op"]
                 if op == "decl":
@@ -906,7 +1176,16 @@ def analyze(module):
                         return flow
                 elif op == "return":
                     if statement.get("value"):
-                        expression(statement["value"])
+                        returned = expression(statement["value"])
+                        if isinstance(returned, _Stream):
+                            returned.unresolved.add("escaped_returned_stream")
+                            invalidate("escaped_returned_stream", operation(statement))
+                        else:
+                            return_value = exact_scalar(
+                                returned, function.get("result")
+                            )
+                    else:
+                        return_value = None
                     return "return"
                 else:
                     # Preserve loops/branch/cleanup boundaries. Their writes
@@ -923,7 +1202,9 @@ def analyze(module):
                     return "unresolved"
             return "normal"
 
-        sequence(function["body"])
+        flow = sequence(function["body"])
+        if flow == "normal" and function.get("result") in {"unit", "void"}:
+            return_value = None
         for stream in streams:
             if not stream.closed or stream.unresolved:
                 boundaries.append(
@@ -945,15 +1226,34 @@ def analyze(module):
                     frontier=fragment["frontier"],
                 )
             )
+        return (
+            dict(
+                cwd=cwd,
+                file_versions=file_versions,
+                epoch=filesystem_epoch,
+                last_operation=last_file_operation,
+                live_process_effects=live_process_effects,
+                fact_epoch_clean=fact_epoch_clean,
+                root_activation=root_activation,
+            ),
+            return_value,
+            flow in {"normal", "return"}
+            and not any(not stream.closed for stream in streams),
+        )
+
+    while pending:
+        evaluate_fragment(pending.popleft())
 
     graph["nodes"] = list(nodes.values())
     graph["edges"] = [
         json.loads(encoded) for encoded in sorted({json_bytes(edge) for edge in edges})
     ]
     graph.setdefault("coverage", {})["normal_path_file_state"] = dict(
-        scope="single_straight_line_activation",
+        scope="bounded_normal_path_call_contexts",
         initial_cwd="symbolic_invocation_cwd",
-        interprocedural_file_state="not_summarized",
+        interprocedural_file_state="conditional_scalar_parameter_state_transitions",
+        context_limit="one_per_root_activation_and_static_call_site",
+        recursive_components="opaque_state_barrier",
         directory_kind="not_inferred_from_path_spelling",
         read_value="not_constant_folded",
     )
@@ -963,6 +1263,20 @@ def analyze(module):
         constant_materializations=materializations,
         file_templates=templates,
         call_contexts=len(context_inputs),
+        file_call_contexts=len(file_contexts),
+        file_state_transitions=file_transitions,
+        file_effect_summary=dict(
+            functions=len(functions),
+            scanned_operations=summary_operations,
+            call_edges=sum(len(edges) for edges in file_calls.values()),
+            file_functions=sum("FILE" in effect for effect in file_effects.values()),
+            opaque_functions=sum(
+                "OPAQUE" in effect for effect in file_effects.values()
+            ),
+            recursive_functions=len(recursive),
+            calls=file_call_counts,
+            propagation="two_monotone_effect_bits_per_function",
+        ),
         result_summaries={
             name: summary for name, summary in summaries.items() if summary is not None
         },
