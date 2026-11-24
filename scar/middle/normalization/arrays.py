@@ -6,7 +6,7 @@ import re
 
 from scar.contract import walk_operations
 
-from . import exceptions, products, scalars, text
+from . import exceptions, products, scalars, sequences, text
 from .scalars import as_float as _as_float
 from .values import (
     Value,
@@ -14,6 +14,7 @@ from .values import (
     array_kind,
     is_array,
     is_product,
+    is_sequence,
     product_members,
     rank_domain,
     binding_targets,
@@ -924,6 +925,22 @@ def capture_sequence(frame, node, steps):
         (frame.evaluate(child, steps) for child in node["items"]),
         steps,
     )
+    if kind == "list" and id(node) not in frame.project.sequences.static_lists:
+        return sequences.capture(frame, node, result.value, steps)
+    if kind == "tuple" and any(is_sequence(value.kind) for value in result.value):
+        resolved = []
+        for value in result.value:
+            if is_sequence(value.kind):
+                sequences._checked(
+                    frame, node, lambda: frame.project.sequences.element(value.kind)
+                )
+                value = Value(
+                    frame.project.sequences.resolve_kind(value.kind, strict=True),
+                    frame.project.sequences.resolve(value.value),
+                    value.facts,
+                )
+            resolved.append(value)
+        result = Value(kind, tuple(resolved))
     return (
         products.make(frame, node, result.value, steps) if kind == "tuple" else result
     )
@@ -957,6 +974,12 @@ def _capture_values(frame, node, kind, source, steps):
 
 
 def _tree(frame, node, item, steps):
+    if is_sequence(item.kind):
+        frame.fail(
+            node,
+            "array_sequence_input",
+            "a mutable runtime sequence needs a sequence-to-array contract",
+        )
     elements = products.elements(frame, node, item, steps)
     if elements is None:
         return (), [item]
@@ -1548,6 +1571,8 @@ def construct(frame, node, target, args, keywords, steps, discard):
 
 def index(frame, node, steps, rhs=None, discard=False):
     base = frame.evaluate(node["base"], steps)
+    if is_sequence(base.kind):
+        base = frame.effect(base.value, base.kind, steps, facts=base.facts)
     axes = []
     for port in node["indices"]:
         item = frame.evaluate(port, steps)
@@ -1556,6 +1581,14 @@ def index(frame, node, steps, rhs=None, discard=False):
             if item.kind == "tuple" or is_product(item.kind)
             else (item,)
         )
+    if is_sequence(base.kind):
+        if rhs is not None or len(axes) != 1:
+            frame.fail(
+                node,
+                "sequence_index",
+                "one list index is supported; indexed mutation needs a separate protocol",
+            )
+        return sequences.get(frame, node, base, axes[0])
     if products.is_sequence(base):
         if rhs is not None:
             frame.fail(

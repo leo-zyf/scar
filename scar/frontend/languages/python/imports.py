@@ -73,6 +73,7 @@ class Imports:
         self.members = cache(self._members)
         self.providers = {}
         self.exports = ExportSources(self)
+        self.module_imports = cache(self._module_imports)
         locale_encoding = (
             locale.getencoding()
             if hasattr(locale, "getencoding")
@@ -84,6 +85,7 @@ class Imports:
             os_name=os.name,
             default_text_encoding="utf-8" if sys.flags.utf8_mode else locale_encoding,
             filesystem_encoding=sys.getfilesystemencoding(),
+            filesystem_errors=sys.getfilesystemencodeerrors(),
             stdin_encoding=getattr(sys.stdin, "encoding", None),
             stdin_errors=getattr(sys.stdin, "errors", None),
             stdout_encoding=getattr(sys.stdout, "encoding", None),
@@ -322,6 +324,48 @@ class Imports:
                 )
         return self.providers[name]
 
+    def _module_imports(self, name):
+        """Static finder evidence for direct, absolute imports in this module suite."""
+        record = self.record(name)
+        if record.get("status") != "verified_stdlib" or record.get("loader") != "path":
+            return None
+        path = Path(record["origin"])
+        if path.suffix != ".py":
+            return None
+        source, error = self.exports.read_file(path, record["sha256"])
+        if source is None:
+            return dict(scope="absolute_module_suite", error=error)
+        order = []
+        for statement in source.tree.body:
+            if isinstance(statement, ast.Import):
+                order.extend(alias.name for alias in statement.names)
+            elif isinstance(statement, ast.ImportFrom) and not statement.level:
+                if statement.module is not None:
+                    order.append(statement.module)
+        keys = (
+            "module",
+            "status",
+            "loader",
+            "origin",
+            "sha256",
+            "hash_basis",
+            "proof_scope",
+            "resolution",
+            "reason",
+            "file",
+            "interpreter",
+            "platform",
+        )
+        modules = {
+            dependency: {
+                key: value
+                for key, value in self.record(dependency).items()
+                if key in keys
+            }
+            for dependency in dict.fromkeys(order)
+        }
+        return dict(scope="absolute_module_suite", order=order, modules=modules)
+
     def providers_for(self, tree):
         names = set()
         aliases = defaultdict(set)
@@ -373,6 +417,9 @@ class Imports:
             for i in range(1, len(parts) + 1)
         }
         records = {name: self.record(name) for name in sorted(prefixes)}
+        for name, record in records.items():
+            if (direct := self.module_imports(name)) is not None:
+                records[name] = dict(record, direct_imports=direct)
         additions = defaultdict(dict)
         for module, members in requests.items():
             if records.get(module, {}).get("status") != "verified_distribution":

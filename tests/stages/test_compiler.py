@@ -446,11 +446,23 @@ def test_byte_buffer_versions_connect_commands_without_executing_them(tmp_path):
     assert any(edge["kind"] == "SUPPLIES_COMMAND_BYTES" for edge in flow["edges"])
     assert any(node.get("form") == "phi" for node in flow["nodes"])
     shutil.rmtree(graph)
-    result = _stage(
-        tmp_path, "backend", "compile", "--ir", plan, "--out", delivery, returncode=2
+    result = _stage(tmp_path, "backend", "compile", "--ir", plan, "--out", delivery)
+    assert Path(result["executable"]).is_file()
+    sources = list((delivery / "project" / "src").glob("*.cpp"))
+    assert any("::system(" in path.read_text() for path in sources)
+    # These unqualified command bytes are preserved for the source runtime API.
+    # Compiling them does not prove their targets and must not execute them.
+    physical = json.loads((delivery / "physical-plan.json").read_bytes())
+    runtime = physical["operator_backends"]["posix_runtime"]
+    assert runtime["qualification"] == "api_bound"
+    assert runtime["descendant_closure"] == "open"
+    assert len(runtime["sites"]) == len(requests)
+    assert all(
+        site["qualification"] == "api_bound" and site["descendant_closure"] == "open"
+        for site in runtime["sites"].values()
     )
-    assert result["status"] == "INCOMPLETE"
-    assert not list(delivery.rglob("main.cpp"))
+    scheduled = json.loads((delivery / "scheduled-ir.json").read_bytes())
+    assert scheduled["runtime_boundaries"]["sites"] == sorted(runtime["sites"])
 
 
 def test_mpi_controller_joins_captured_worker_and_preserves_launch_conventions(
@@ -1530,6 +1542,49 @@ print(str(1e-5), str(1e15), str(1e16), str(False), str(None))
         "include/scar/host.hpp",
         "include/scar/text.hpp",
     ]
+
+
+def test_mutable_sequences_preserve_aliases_and_live_iteration(tmp_path):
+    entry = tmp_path / "entry.py"
+    entry.write_text(
+        """def fill(destination):
+    for item in range(3):
+        destination.append(item)
+    return destination
+items = []
+alias = items
+returned = fill(alias)
+print(items is returned, alias is returned, len(items), items[-1])
+ordered = sorted(items)
+ordered.append(8)
+print(ordered is items, len(items), len(ordered), ordered[0])
+pending = [1, 2]
+for value in pending:
+    if value == 1:
+        pending.append(3)
+    if value == 2:
+        continue
+    print(value)
+bound = [4, 5]
+remember = bound
+for value in bound:
+    bound = [9]
+    print(value)
+print(remember is bound, len(remember), len(bound))
+words = ['Ω', 'é', 'a']
+print(sorted(words)[0], words[0])
+""",
+        encoding="utf-8",
+    )
+    expected = _run([sys.executable, "-B", entry], tmp_path)
+    graph, plan, delivery = (tmp_path / name for name in ("graph", "plan", "delivery"))
+    _stage(tmp_path, "frontend", "build", "--entry", entry, "--out", graph)
+    entry.unlink()
+    _stage(tmp_path, "middle", "plan", "--graph", graph, "--out", plan)
+    shutil.rmtree(graph)
+    result = _stage(tmp_path, "backend", "compile", "--ir", plan, "--out", delivery)
+    shutil.rmtree(plan)
+    assert _run([result["executable"]], tmp_path) == expected
 
 
 def test_exception_regions_preserve_cleanup_and_control_transfers(tmp_path):

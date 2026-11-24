@@ -48,6 +48,18 @@ inline character first(std::string_view s) {
     return invalid;
   return {v, n};
 }
+inline bool codepoint_less(std::string_view left, std::string_view right) {
+  while (!left.empty() && !right.empty()) {
+    const auto a = first(left);
+    const auto b = first(right);
+    if (a.code != b.code)
+      return a.code < b.code;
+    left.remove_prefix(a.bytes);
+    right.remove_prefix(b.bytes);
+  }
+  return left.empty() && !right.empty();
+}
+
 inline std::string unicode(std::int64_t n) {
   if (n < 0 || n > 0x10ffff)
     throw program_error("overflow_error", "%c arg not in range(0x110000)");

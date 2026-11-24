@@ -1,6 +1,6 @@
 """Lower identity-bearing aggregate values and native class lifetimes to C++."""
 
-from scar.contract import digest, json_bytes, product_items
+from scar.contract import digest, json_bytes, product_items, sequence_element
 
 from .model import (
     Decl,
@@ -23,25 +23,112 @@ from .model import (
 )
 
 
+def has_managed_aggregate(spec):
+    if isinstance(spec, dict):
+        return spec.get("kind") in {"product_ref", "sequence_ref"} or any(
+            has_managed_aggregate(v) for v in spec.values()
+        )
+    return isinstance(spec, list) and any(has_managed_aggregate(v) for v in spec)
+
+
+def has_aggregate_signature(fn):
+    return has_managed_aggregate(fn.get("result")) or any(
+        has_managed_aggregate(p.get("type")) for p in fn.get("params", ())
+    )
+
+
+def sequence_reference(spec, lower):
+    lower.use_sdk("sequence.hpp")
+    element = lower.type_name(sequence_element(spec))
+    return Type("template", name="scar::sequence_ref", args=(element,))
+
+
+_SEQUENCE_EFFECTS = {
+    "sequence_make": {"MEM", "STATE"},
+    "sequence_append": {"MEM", "STATE"},
+    "sequence_size": {"STATE"},
+    "sequence_get": {"STATE"},
+    "sequence_identity": {"STATE"},
+    "sequence_sorted_copy": {"MEM", "STATE", "VAL"},
+}
+
+
+def sequence_expression(node, lower):
+    op, result = node["op"], node.get("type")
+    effects = _SEQUENCE_EFFECTS.get(op)
+    if effects is None or set(node.get("effects", ())) != effects:
+        raise ValueError("invalid sequence operation or effects")
+    if (
+        op not in {"sequence_identity", "sequence_size"}
+        and node.get("may_raise") is not True
+    ):
+        raise ValueError(
+            "sequence allocation, mutation or indexing requires its exception contract"
+        )
+    if op == "sequence_identity":
+        if result != "bool" or node.get("operator") not in {"eq", "ne"}:
+            raise ValueError("invalid sequence identity comparison")
+        owners = []
+        for side in ("left", "right"):
+            value = node[side]
+            owner = sequence_reference(value.get("type"), lower)
+            owners.append(cast(owner, lower.expression(value)))
+        same = call("scar::sequence_identity", Expr("braced", args=tuple(owners)))
+        return same if node["operator"] == "eq" else unary("!", same)
+
+    base = node.get("base", {})
+    spec = result if op == "sequence_make" else base.get("type")
+    owner = sequence_reference(spec, lower)
+    element, element_type = spec["element"], owner.args[0]
+    target = template("scar::" + op, element_type)
+    if op == "sequence_make":
+        items = node.get("items")
+        if not isinstance(items, list) or any(
+            not isinstance(item, dict) or item.get("type") != element for item in items
+        ):
+            raise ValueError("sequence initializer requires homogeneous typed items")
+        captured = tuple(cast(element_type, lower.expression(item)) for item in items)
+        return call(target, Expr("braced", args=captured))
+    if op in {"sequence_append", "sequence_get"}:
+        if op == "sequence_append":
+            operand = node["value"]
+            if result != "unit" or operand.get("type") != element:
+                raise ValueError(
+                    "sequence append requires a matching element and unit result"
+                )
+        else:
+            operand = node["index"]
+            if (
+                result != element
+                or operand.get("type") != "i64"
+                or node.get("source_index_profile") != "python_list_v1"
+            ):
+                raise ValueError("unsupported sequence index contract")
+        # Braced parameters capture the owner before evaluating the other operand.
+        held = cast(owner, lower.expression(base))
+        value = cast(lower.type_name(operand["type"]), lower.expression(operand))
+        return call(target, Expr("braced", args=(held, value)))
+    if op == "sequence_size":
+        if result != "i64":
+            raise ValueError("sequence size requires an i64 result")
+        return call(target, lower.expression(base))
+    if result != spec:
+        raise ValueError("sorted sequence must preserve its element type")
+    if element == "i64" and node.get("comparison") == "signed_integer":
+        comparator = construct(Type("template", name="std::less", args=(element_type,)))
+    elif element == "text" and node.get("comparison") == "unicode_codepoint":
+        lower.use_sdk("text.hpp")
+        comparator = name("scar::value_display::codepoint_less")
+    else:
+        raise ValueError("unsupported sorted sequence comparison contract")
+    return call(target, lower.expression(base), comparator)
+
+
 class ProductModel:
     """Immutable, heterogeneous aggregates with allocation identity."""
 
     def __init__(self):
         self.constants = {}
-
-    @staticmethod
-    def contains(spec):
-        if isinstance(spec, dict):
-            return spec.get("kind") == "product_ref" or any(
-                ProductModel.contains(v) for v in spec.values()
-            )
-        return isinstance(spec, list) and any(ProductModel.contains(v) for v in spec)
-
-    @classmethod
-    def in_signature(cls, fn):
-        return cls.contains(fn.get("result")) or any(
-            cls.contains(p.get("type")) for p in fn.get("params", ())
-        )
 
     @staticmethod
     def _tuple(spec, lower):

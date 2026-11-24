@@ -69,6 +69,12 @@ _FILE_FREE_OPERATIONS = {
     "product_make",
     "product_get",
     "product_identity",
+    "sequence_make",
+    "sequence_append",
+    "sequence_size",
+    "sequence_get",
+    "sequence_identity",
+    "sequence_sorted_copy",
     "buffer",
     "runtime_array",
     "allocate",
@@ -1311,12 +1317,38 @@ def analyze(module):
                 return _UNKNOWN
             if op == "array_source_open":
                 expression(node["source"])
+                site = operation(node)
                 invalidate(
                     "unqualified_path_or_network_resolver",
-                    operation(node),
+                    site,
                     changes_namespace=True,
                 )
-                return _UNKNOWN
+                if node.get("type") != dict(kind="handle", resource="text_stream"):
+                    return _UNKNOWN
+                resolution = node.get("resolution", {})
+                mode = (
+                    "rt"
+                    if resolution.get("profile") == "numpy-2.5.5-datasource-v1"
+                    and resolution.get("mode") == "rt"
+                    else _UNKNOWN
+                )
+                # This is the returned reference within an activation, not a
+                # fresh physical file identity. The resolver may use a URL,
+                # a cached file or compression; its input path does not prove
+                # the returned stream's locator, contents or aliases.
+                stream = _Stream(
+                    identity=site,
+                    path=_UNKNOWN,
+                    mode=mode,
+                    open_operation=site,
+                    last_operation=site,
+                    unresolved={
+                        "array_source_locator_and_aliases_unproven",
+                        "source_default_text_encoding",
+                    },
+                )
+                streams.append(stream)
+                return stream
             if op == "host_call":
                 args = [
                     exact(node, "args", expression(arg), i)

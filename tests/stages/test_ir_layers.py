@@ -681,6 +681,79 @@ def test_constant_file_proof_preserves_control_and_handle_boundaries():
         )
         == 1
     )
+    datasource = dict(op="var", name="datasource", type=pipe_type)
+    datasource_alias = dict(op="var", name="datasource_alias", type=pipe_type)
+    source_open = dict(
+        op="array_source_open",
+        type=pipe_type,
+        source=literal("input.txt"),
+        resolution=dict(
+            profile="numpy-2.5.5-datasource-v1",
+            mode="rt",
+            encoding="source_default",
+            errors="strict",
+            compressed_fallback=True,
+            url_cache=True,
+        ),
+        effects=["IO", "STATE", "MEM", "XFER"],
+        writes=["filesystem", "network", "new.stream"],
+    )
+    datasource_scope = dict(
+        op="resource_scope",
+        resource=datasource_alias,
+        body=[
+            dict(
+                op="if",
+                condition=dict(op="var", name="flag", type="bool"),
+                then=[],
+                **{"else": []},
+            ),
+            dict(op="expr", value=dict(op="array_text_read", source=datasource)),
+        ],
+    )
+    datasource_flow = analysis(
+        [
+            spawn_handle,
+            process_alias,
+            dict(op="decl", name="datasource", type=pipe_type, init=source_open),
+            dict(op="decl", name="datasource_alias", type=pipe_type, init=datasource),
+            datasource_scope,
+            waited,
+        ]
+    )
+    assert not any(
+        row.get("field") == "resource_scope_exit"
+        for row in datasource_flow["boundaries"]
+    )
+    assert any(
+        row.get("field") == "file_read_version"
+        and row.get("reason") == "array_reader_source_version_unproven"
+        for row in datasource_flow["boundaries"]
+    )
+    assert not datasource_flow["constant_materializations"]
+    assert not datasource_flow["file_templates"]
+    datasource_edges = datasource_flow["graph"]["edges"]
+    assert all(
+        sum(edge["kind"] == kind for edge in datasource_edges) == 1
+        for kind in (
+            "CAPTURES_RESOURCE_IF_NORMAL",
+            "RESOURCE_SCOPE_CLOSE_IF_NORMAL",
+            "COMPLETES_DIRECT_PROCESS_IF_NORMAL",
+        )
+    )
+    untyped_open = {**source_open, "type": "text"}
+    untyped_source = analysis(
+        [
+            dict(op="decl", name="datasource", type=pipe_type, init=untyped_open),
+            dict(op="decl", name="datasource_alias", type=pipe_type, init=datasource),
+            datasource_scope,
+        ]
+    )
+    assert any(
+        row.get("field") == "resource_scope_exit"
+        and row.get("reason") == "captured_text_stream_identity_unproven"
+        for row in untyped_source["boundaries"]
+    )
     for abrupt in (dict(op="return"), dict(op="throw"), dict(op="unsupported")):
         interrupted = analysis(
             [
@@ -890,6 +963,197 @@ def test_constant_file_proof_preserves_control_and_handle_boundaries():
         dict(functions=[], protocol_analysis=dict(prefix_fragments=[prefix])),
     )
     assert not negative["constant_materializations"]
+
+
+def test_mutable_sequence_constraints_preserve_construction_and_live_iteration():
+    result = _layer(
+        "normalization",
+        """from copy import deepcopy
+from scar.middle.normalization import arrays,sequences,values
+from scar.middle.normalization.protocols import normalize_protocols,_Project,_Frame,_Unclosed
+from scar.contract import walk_operations
+def var(name,global_=False):
+    return dict(op='var',name='py:test:'+name if global_ else name,**({'scope':'global'} if global_ else {}))
+def lit(value):
+    return dict(op='literal',value=value)
+def call(target,*args):
+    return dict(op='python_invoke',target=target,args=list(args),keywords=[])
+def assign(name,value):
+    return dict(op='assign',target=var(name,True),value=value)
+def aggregate(items,site):
+    return dict(op='aggregate',kind='list',items=items,site=site)
+def fn(name,params,body,module=False):
+    return dict(name=name,execution_kind='python_protocol',params=[dict(name=p,binding='positional') for p in params],
+        python_scope=dict(kind='module' if module else 'function',module='test',main=module),
+        call_protocol=dict(kind='regular'),body=body)
+fill=fn('fill',['destination'],[
+    dict(op='expr',value=call(dict(op='member',base=var('destination'),field='append'),lit(4))),
+    dict(op='return',value=var('destination'))])
+entry=fn('entry',[],[
+    dict(op='python_define',symbol='fill',target=var('fill',True)),
+    assign('items',aggregate([],'empty-construction')),
+    assign('alias',var('items',True)),
+    assign('returned',call(var('fill',True),var('alias',True))),
+    assign('same',dict(op='compare_chain',left=var('items',True),operators=['is'],operands=[var('returned',True)])),
+    assign('ordered',call(dict(op='python_builtin',name='sorted'),var('items',True))),
+    assign('pending',aggregate([lit(1),lit(2)],'initial-pending')),
+    dict(op='for',protocol='iterator',range=var('pending',True),target=var('item',True),body=[
+        dict(op='expr',value=call(dict(op='member',base=var('pending',True),field='append'),var('item',True))),
+        assign('pending',aggregate([lit(9)],'loop-rebinding')),dict(op='continue')],**{'else':[]}),
+],True)
+module=dict(entry='entry',functions=[entry,fill],globals=[],externs=[],records=[],declarations={})
+ready,changes,issues=normalize_protocols(deepcopy(module))
+assert not issues
+assert 'm2_typevar' not in json.dumps(ready) and 'sequence_var:' not in json.dumps(ready)
+closed={f['name']:f for f in ready['functions']}
+seq=dict(kind='sequence_ref',element='i64')
+assert closed['fill']['params'][0]['type']==closed['fill']['result']==seq
+ops=list(walk_operations(closed['entry']['body']))
+assert sum(n['op']=='sequence_make' and n.get('site')=='empty-construction' for n in ops)==1
+loop=next(n for n in ops if n['op']=='for')
+condition=loop['condition']['right']
+assert condition['op']=='sequence_size' and condition['base']['name']!='py:test:pending'
+assert loop['step']['op']=='update' and loop['step']['operator']=='add'
+assert any(n['op']=='continue' for n in walk_operations(loop['body']))
+selected=next(n for n in walk_operations(loop['body']) if n['op']=='sequence_get')
+assert selected['base']==condition['base'] and selected['index']==loop['step']['target']
+assert not any(n['op']=='sequence_make' and n.get('site')=='empty-construction' for n in walk_operations(loop['body']))
+assert any(n['op']=='sequence_identity' for n in ops)
+append=next(n for n in walk_operations(closed['fill']['body']) if n['op']=='sequence_append')
+assert append['type']=='unit' and append['base']['type']==seq
+assert not ready['protocol_analysis'].get('result_facts')
+empty=deepcopy(module);empty['functions']=[fn('entry',[],[assign('items',aggregate([],'untyped'))],True)]
+incomplete,_,issues=normalize_protocols(empty)
+assert issues and issues[0]['code']=='python.sequence_element_type'
+assert 'm2_typevar' not in json.dumps(incomplete.get('protocol_analysis',{}))
+bad=deepcopy(module)
+bad['functions'][0]['body'].append(dict(op='expr',value=call(dict(op='member',base=var('items',True),field='append'),lit('different'))))
+incomplete,_,issues=normalize_protocols(bad)
+assert issues and issues[0]['code']=='python.sequence_element_type'
+assert 'm2_typevar' not in json.dumps(incomplete.get('protocol_analysis',{}))
+
+shape=aggregate([lit(2),lit(3)],'shape')
+reshape=fn('reshape',['array'],[dict(op='return',value=call(dict(op='member',base=var('array'),field='reshape'),shape))])
+project=_Project({'reshape':reshape})
+project.providers['numpy']={'version':'2.5.5'}
+assert id(shape) not in project.sequences.static_lists
+array=values.array_kind(1)
+compiled=project.compile('reshape',(array,))
+assert id(shape) in project.sequences.static_lists
+assert not any(n['op']=='sequence_make' for n in walk_operations(compiled['body']))
+fake=_Project({'reshape':reshape})
+_Frame(fake,reshape,(values.object_kind('User'),))
+assert id(shape) not in fake.sequences.static_lists
+
+# Source lists can remain static only when every escaping use is a closed
+# immediate consumer. Nested constructors and aliases follow the same graph.
+np_import=dict(op='python_import',module='numpy',request={'form':'import'},
+    binding=var('np',True),source_provider=dict(module='numpy',status='verified_distribution',
+    distribution='numpy',version='2.5.5',sha256='a'*64,origin='/sealed/numpy/__init__.py'),effects=['CTRL','STATE','IO'])
+sp_import=dict(op='python_import',module='subprocess',request={'form':'import'},
+    binding=var('sp',True),source_provider=dict(module='subprocess',status='verified_stdlib',
+    sha256='b'*64,origin='/sealed/subprocess.py'),effects=['CTRL','STATE','IO'])
+inner=aggregate([lit(1),lit(2)],'inner');nested=aggregate([inner],'nested')
+display=aggregate([lit('name'),lit(2)],'display')
+argv=aggregate([lit('./worker')],'argv')
+consumers=fn('entry',[],[np_import,sp_import,assign('data',nested),assign('alias',var('data',True)),
+    dict(op='expr',value=call(dict(op='member',base=var('np',True),field='array'),var('alias',True))),
+    dict(op='expr',value=call(dict(op='python_builtin',name='print'),display)),
+    dict(op='expr',value=dict(op='process_launch',target=dict(op='member',base=var('sp',True),field='Popen'),args=[argv],keywords=[]))],True)
+consumer_project=_Project({'entry':consumers})
+assert {id(inner),id(nested),id(display),id(argv)} <= consumer_project.sequences.static_lists
+mutating=deepcopy(consumers)
+mutating['body'].append(dict(op='expr',value=call(dict(op='member',base=var('alias',True),field='append'),lit(3))))
+mutating_project=_Project({'entry':mutating})
+mutating_list=mutating['body'][2]['value']
+assert id(mutating_list) not in mutating_project.sequences.static_lists
+shadowed=fn('entry',[],[assign('print',lit(1)),dict(op='expr',value=call(dict(op='python_builtin',name='print'),display))],True)
+assert id(display) not in _Project({'entry':shadowed}).sequences.static_lists
+
+# Read-only constant projections carry exact scalar facts. Projecting a
+# container and then mutating or observing identity must taint its base too.
+configuration=aggregate([lit(2),lit(4)],'configuration')
+selector=lambda base,index=lit(1):dict(op='index',base=base,indices=[index])
+selected=fn('entry',[],[assign('configuration',configuration),
+    assign('selected',selector(var('configuration',True))),
+    assign('ratio',dict(op='binary',operator='div',left=lit(1.0),right=var('selected',True))),
+    assign('length',call(dict(op='python_builtin',name='len'),var('configuration',True))),
+    dict(op='if',condition=var('configuration',True),then=[],**{'else':[]})],True)
+selected_module=dict(entry='entry',functions=[selected],globals=[],externs=[],records=[],declarations={})
+proven,_,issues=normalize_protocols(selected_module)
+assert not issues and not any(n['op']=='sequence_make' for n in walk_operations(proven['functions'][0]['body']))
+assert any(n['op']=='assign' and n['target'].get('name')=='py:test:selected' and n['value'].get('value')==4 for n in walk_operations(proven['functions'][0]['body']))
+assert any(n['op']=='binary' and n['operator']=='div' for n in walk_operations(proven['functions'][0]['body']))
+for consumer in (
+    lambda:call(dict(op='member',base=var('inner',True),field='append'),lit(3)),
+    lambda:dict(op='compare_chain',left=var('inner',True),operators=['is'],operands=[var('inner',True)]),
+):
+    child=aggregate([lit(1)],'child');outer=aggregate([child],'outer')
+    projected=fn('entry',[],[assign('outer',outer),assign('inner',selector(var('outer',True),lit(0))),
+        dict(op='expr',value=consumer())],True)
+    domain=_Project({'entry':projected}).sequences
+    assert not {id(child),id(outer)} & domain.static_lists
+# A dynamic index still selects the runtime list path; no contents are cached.
+dynamic=aggregate([lit(1),lit(2)],'dynamic-index')
+dynamic_fn=fn('entry',['index'],[assign('data',dynamic),
+    dict(op='expr',value=call(dict(op='python_builtin',name='print'),selector(var('data',True),var('index'))))],True)
+assert id(dynamic) not in _Project({'entry':dynamic_fn}).sequences.static_lists
+# Imported module fields share their declared global slot in the use graph.
+settings=fn('settings',[],[dict(op='assign',target=dict(op='var',name='py:settings:configuration',scope='global'),value=configuration)],True)
+settings['python_scope'].update(module='settings',main=False)
+project_import=dict(op='python_import',provider='project',module='settings',request={'form':'import'},
+    binding=var('settings',True),source_provider=dict(status='project',module='settings'),
+    import_resolution=dict(status='project',module='settings'),bound_value=dict(**{'class':'module'},module='settings'))
+imported=fn('entry',[],[project_import,assign('local',dict(op='member',base=var('settings',True),field='configuration')),
+    assign('ratio',dict(op='binary',operator='div',left=lit(1.0),right=selector(var('local',True))))],True)
+assert id(configuration) in _Project({'entry':imported,'settings':settings}).sequences.static_lists
+imported['body'].append(dict(op='expr',value=call(dict(op='member',base=var('local',True),field='append'),lit(9))))
+assert id(configuration) not in _Project({'entry':imported,'settings':settings}).sequences.static_lists
+stored=aggregate([lit(8.0),lit(9.0)],'slice-rhs')
+store=fn('store',['array'],[dict(op='assign',target=dict(op='index',base=var('array'),indices=[lit(0)]),value=stored)])
+store_project=_Project({'store':store})
+compiled=store_project.compile('store',(values.array_kind(2),))
+assert id(stored) in store_project.sequences.static_lists
+assert not any(n['op']=='sequence_make' for n in walk_operations(compiled['body']))
+# F3's lexical declaration is not a write of an unknown value. An actual
+# unknown rebinding, in contrast, invalidates whole-function array qualification.
+row_values=aggregate([lit(0.0),dict(op='index',base=var('local_array'),indices=[lit(0),lit(0)])],'mixed-row')
+writer=fn('writer',[],[
+    dict(op='decl',name='local_array',initial_binding='unbound',type={'kind':'python_object'}),
+    dict(op='assign',target=var('local_array'),value=call(dict(op='member',base=var('np',True),field='zeros'),
+        dict(op='aggregate',kind='tuple',items=[lit(2),lit(2)]))),
+    dict(op='assign',target=dict(op='index',base=var('local_array'),indices=[lit(0)]),value=row_values)])
+writer_entry=fn('entry',[],[np_import,dict(op='python_define',symbol='writer',target=var('writer',True)),
+    dict(op='expr',value=call(var('writer',True)))],True)
+writer_module=dict(entry='entry',functions=[writer_entry,writer],globals=[],externs=[],records=[],declarations={})
+closed,_,issues=normalize_protocols(deepcopy(writer_module))
+assert not issues and not any(n['op']=='sequence_make' for f in closed['functions'] for n in walk_operations(f['body']))
+assert id(row_values) in _Project({'entry':writer_entry,'writer':writer}).sequences.static_lists
+rebound=deepcopy(writer)
+rebound['body'].insert(2,dict(op='assign',target=var('local_array'),value=call(var('unknown_factory'))))
+rebound_values=rebound['body'][-1]['value']
+assert id(rebound_values) not in _Project({'entry':writer_entry,'writer':rebound}).sequences.static_lists
+
+frame=_Frame(_Project({}),fn('local',[],[]),())
+steps=[]
+source=sequences.produced(frame,{},'text',dict(op='fs_glob',type=dict(kind='sequence_ref',element='text')),steps,text_order=True)
+alias=source.at('alias')
+method=sequences.member(frame,{},alias,'append')
+unknown=values.Value('text',dict(op='var',name='unknown',type='text'))
+returned=sequences.invoke(frame,{},method,[unknown],{},steps,False)
+assert returned.kind=='unit' and returned.exact is None
+try:
+    sequences.invoke(frame,{},values.Value('builtin','sorted'),[source],{},steps,False)
+except _Unclosed as error:
+    assert error.issue['code']=='python.sequence_sort'
+else:
+    raise AssertionError('an alias mutation retained an unproved text ordering domain')
+assert not sequences.text_order_atom(unknown)
+assert not sequences.text_order_atom(values.literal('\\udcc3\\udca9'))
+print(json.dumps({'ready':ready['protocol_analysis']['status'],'signatures':len(ready['protocol_analysis']['closed'])}))
+""",
+    )
+    assert result == dict(ready="READY", signatures=2)
 
 
 def test_projection_import_keeps_verified_class_and_shared_registry_effects():
@@ -1139,8 +1403,9 @@ ordered=steps[first:]
 assert next(i for i,s in enumerate(ordered) if s['op']=='assign' and s['target']['name']=='index') < next(i for i,s in enumerate(ordered) if s['op']=='array_store')
 unresolved=arrays.capture_sequence(frame,aggregate([var('a')],dict(kind='unresolved')),steps)
 mutable=arrays.capture_sequence(frame,aggregate([var('a')],kind='list'),steps)
-assert unresolved.kind=='tuple' and mutable.kind=='list'
-for item in (unresolved,mutable):
+assert unresolved.kind=='tuple' and values.is_sequence(mutable.kind)
+assert frame.project.sequences.resolve(frame.scalar(mutable,{}))['type']['kind']=='sequence_ref'
+for item in (unresolved,):
     try:
         frame.scalar(item,{})
     except _Unclosed as error:
@@ -2194,6 +2459,17 @@ def test_rewrites_use_binding_ownership_for_implicit_borrows():
             )
         ],
         [dict(op="expr", value=dict(op="call", callee="open", args=[var("n")]))],
+        [
+            dict(
+                op="expr",
+                value=dict(
+                    op="call",
+                    callee="borrow",
+                    args=[dict(op="unary", operator="addr", value=var("n"))],
+                    parameter_types=[dict(kind="ptr", to="i64")],
+                ),
+            )
+        ],
     ]
     for borrow in [[], *borrowings]:
         fn = deepcopy(coordinate)
@@ -2210,6 +2486,38 @@ print(json.dumps(optimize(data)))
         assert any(c["rule"] == "bounded_integer_coordinate" for c in result) == (
             not borrow
         )
+
+    element = dict(op="index", base=var("out"), indices=[var("n")])
+    for borrow in (
+        dict(
+            op="expr",
+            value=dict(
+                op="call",
+                callee="borrow",
+                args=[dict(op="unary", operator="addr", value=element)],
+                parameter_types=[dict(kind="ptr", to="i64")],
+            ),
+        ),
+        dict(op="decl", name="r", type=ref, init=element),
+        dict(
+            op="expr",
+            value=dict(
+                op="library_call", args=[element], parameter_modes=["reference"]
+            ),
+        ),
+    ):
+        indexed = deepcopy(coordinate)
+        indexed["body"][-1]["extent"] = var("n")
+        indexed["body"][2:2] = [borrow]
+        indexed = _canonical_function(indexed)
+        assert "n" in indexed["state_contract"]["private_scalars"]
+        assert "out" in indexed["state_contract"]["escaped"]
+        changed = _layer(
+            "rewrites",
+            "from scar.middle.rewrites import optimize\nprint(json.dumps(optimize(data)))",
+            indexed,
+        )
+        assert any(c["rule"] == "bounded_integer_coordinate" for c in changed)
 
     scoped = deepcopy(coordinate)
     scoped["body"][-1]["body"][0]["value"]["right"]["scope"] = "global"

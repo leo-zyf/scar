@@ -11,6 +11,7 @@ from . import (
     processes,
     products,
     scalars,
+    sequences,
     text,
     values,
 )
@@ -34,13 +35,34 @@ def _reachable(roots, edges):
     return result
 
 
-def _join(paths):
+def _join(paths, sequence_domain=None):
     """Only bindings present on every control predecessor are definitely bound."""
     result = {}
     for name, first in paths[0].items():
         incoming = [path.get(name) for path in paths[1:]]
         if all(values.identical(v, first) for v in incoming):
             result[name] = first
+        elif values.is_sequence(first.kind) and all(
+            v is not None
+            and values.is_sequence(v.kind)
+            and isinstance(v.value, dict)
+            and v.value.get("op") == first.value.get("op") == "var"
+            and (v.value.get("name"), v.value.get("scope"))
+            == (first.value.get("name"), first.value.get("scope"))
+            for v in incoming
+        ):
+            if sequence_domain is not None and all(
+                sequence_domain.compatible(first.kind, v.kind) for v in incoming
+            ):
+                kind = sequence_domain.resolve_kind(first.kind)
+                facts = (
+                    first.facts
+                    if all(values.identical(v.facts, first.facts) for v in incoming)
+                    else {}
+                )
+                result[name] = _Value(
+                    kind, {**first.value, "type": values.wire(kind)}, facts
+                )
         elif values.is_array(first.kind) and all(
             v is not None
             and values.is_array(v.kind)
@@ -217,6 +239,7 @@ class _Project:
         self.active = []
         self.global_reads = {}
         self.shadow, self.single_bind_globals = _global_bindings(functions)
+        self.sequences = sequences.Domains(functions, self.single_bind_globals)
 
     def require_operator(self, family, operation, **contract):
         requirement = self.required_operators.setdefault(
@@ -283,7 +306,10 @@ class _Project:
                 "recursive calls or partially initialized modules need a recursive contract",
             )
         if name in self.closed:
-            if self.types[name] != types:
+            if len(self.types[name]) != len(types) or not all(
+                self.sequences.compatible(left, right)
+                for left, right in zip(self.types[name], types)
+            ):
                 raise _Unclosed(
                     name,
                     fn,
@@ -364,6 +390,7 @@ class _Frame:
         self.source_expression = None
         self.dynamic = 0
         self.params = []
+        self.project.sequences.bind_frame(fn, types)
         for formal, kind in zip(fn["params"], types):
             if formal.get("cell") or formal.get("binding") not in {
                 "positional",
@@ -454,6 +481,7 @@ class _Frame:
                     "max",
                     "len",
                     "tuple",
+                    "sorted",
                 }:
                     result = _Value("builtin", name)
                 else:
@@ -503,6 +531,7 @@ class _Frame:
                             "max",
                             "len",
                             "tuple",
+                            "sorted",
                         }:
                             return _Value("builtin", name)
                         return exceptions.builtin(name) or host_protocols.builtin(
@@ -594,6 +623,8 @@ class _Frame:
             )
         scope = self.project.names if global_ else self.env
         previous = scope.get(name)
+        if value.kind == "sequence_method":
+            value = sequences.persist_method(self, target, value, steps)
         if global_ and value.kind == "project_method" and not self.dynamic:
             value = objects.persist_method(self, target, value, steps)
         if (
@@ -623,7 +654,7 @@ class _Frame:
                 self.fail(target, "rebind", f"symbolic identity of {name} changes")
             scope[name] = value
             return
-        if previous is not None and not values.storage_compatible(
+        if previous is not None and not self.project.sequences.compatible(
             previous.kind, value.kind
         ):
             self.fail(
@@ -632,7 +663,9 @@ class _Frame:
                 f"{name} changes type from {previous.kind} to {value.kind}",
             )
         types = self.project.globals if global_ else self.locals
-        if name in types and not values.storage_compatible(types[name], value.kind):
+        if name in types and not self.project.sequences.compatible(
+            types[name], value.kind
+        ):
             self.fail(
                 target, "local_type", f"{name} has incompatible reaching value types"
             )
@@ -789,7 +822,7 @@ class _Frame:
                     f"relative external import of {mod} needs a closed parent package",
                 )
             if status == "verified_stdlib" and host_protocols.supports_import(mod):
-                value = host_protocols.import_provider(self, node)
+                value = host_protocols.import_provider(self, node, steps)
                 receipt = self.project.providers["stdlib:" + mod.partition(".")[0]]
                 receipt["import_effects"] = node.get("effects", ["UNKNOWN"])
             elif status == "verified_distribution" and mod == "numpy":
@@ -885,10 +918,28 @@ class _Frame:
 
     def _evaluate(self, node, steps, discard=False, *, truth_context=False):
         op = node["op"]
+        if (
+            op == "compare_chain"
+            and len(node.get("operators", ())) == 1
+            and node["operators"][0] in {"is", "isnot"}
+        ):
+            return self._evaluate(
+                {
+                    **node,
+                    "op": "binary",
+                    "operator": node["operators"][0],
+                    "right": node["operands"][0],
+                },
+                steps,
+                discard,
+                truth_context=truth_context,
+            )
         if node.get("site") is not None:
             self.project.live_sites.add((self.name, node["site"]))
         if truth_context:
-            if op in {"binary", "compare_chain", "short_circuit"}:
+            if op in {"binary", "compare_chain", "short_circuit"} and not (
+                op == "binary" and node.get("operator") in {"is", "isnot"}
+            ):
                 return expressions.evaluate(self, node, steps, truth_context=True)
             return self.truth(self.evaluate(node, steps), node)
         if op == "literal":
@@ -909,6 +960,19 @@ class _Frame:
             return _literal(value)
         if op in {"var", "python_builtin"}:
             return self.ref(node)
+        if op == "binary" and node.get("operator") in {"is", "isnot"}:
+            left = self.evaluate(node["left"], steps)
+            if values.runtime(left.kind) and left.value.get("op") != "literal":
+                left = self.effect(left.value, left.kind, steps, facts=left.facts)
+            right = self.evaluate(node["right"], steps)
+            result = sequences.identity(node, left, right)
+            return (
+                result
+                if result is not None
+                else expressions.apply_binary(
+                    self, node, node["operator"], left, right, steps, discard
+                )
+            )
         if op in {"format_string", "format_field"}:
             return text.evaluate(self, node, steps, discard)
         if op == "aggregate":
@@ -956,6 +1020,9 @@ class _Frame:
                 return self.project.graphics.member(self, node, base, node["field"])
             if values.is_array(base.kind):
                 return arrays.member(self, node, base, node["field"], steps)
+            sequence_member = sequences.member(self, node, base, node["field"])
+            if sequence_member is not None:
+                return sequence_member
             if base.kind == "module":
                 slot = _slot(base.value, node["field"])
                 value = self.project.names.get(slot)
@@ -994,6 +1061,17 @@ class _Frame:
 
     def call(self, node, steps, discard):
         target = self.evaluate(node["target"], steps)
+        if target.kind == "sequence_method":
+            receiver, method = target.value
+            target = _Value(
+                target.kind,
+                (
+                    self.effect(
+                        receiver.value, receiver.kind, steps, facts=receiver.facts
+                    ),
+                    method,
+                ),
+            )
         if target.kind == "project_method":
             method, receiver = target.value
             if receiver.value.get("scope") == "global":
@@ -1013,6 +1091,11 @@ class _Frame:
             if key is None or key in kwargs:
                 self.fail(node, "keyword_binding", "dynamic or repeated keyword")
             kwargs[key] = argument(item["value"])
+        sequence_call = sequences.invoke(
+            self, node, target, args, kwargs, steps, discard
+        )
+        if sequence_call is not None:
+            return sequence_call
         if target.kind == "project_class":
             return self.project.objects.construct(
                 self, node, target, args, kwargs, steps
@@ -1036,6 +1119,8 @@ class _Frame:
         if target.kind == "builtin" and target.value in {"min", "max"}:
             return scalars.extreme(self, node, target.value, args, kwargs, steps)
         if target.kind == "builtin" and target.value == "len":
+            if not kwargs and len(args) == 1 and values.is_sequence(args[0].kind):
+                return sequences.size(args[0])
             if kwargs or len(args) != 1 or not products.is_sequence(args[0]):
                 self.fail(node, "length_contract", "len requires one closed sequence")
             return _literal(
@@ -1201,7 +1286,11 @@ class _Frame:
         operands = [self.scalar(v, node) for v in bound]
         function = self.project.compile(name, tuple(v.kind for v in bound), source=node)
         parameter_types = [param["type"] for param in function["params"]]
-        if parameter_types != [values.wire(v.kind) for v in bound]:
+        if self.project.sequences.resolve(
+            parameter_types, strict=False
+        ) != self.project.sequences.resolve(
+            [values.wire(v.kind) for v in bound], strict=False
+        ):
             self.fail(
                 node,
                 "argument_types",
@@ -1220,6 +1309,7 @@ class _Frame:
             )
         if self.project.external_array_writes[name]:
             self.project.array_state.invalidate()
+        self.project.sequences.invalidate()
         call = dict(
             op="call",
             callee=name,
@@ -1248,6 +1338,17 @@ class _Frame:
             self.return_facts = {}
 
     def truth(self, value, node):
+        if values.is_sequence(value.kind):
+            return _Value(
+                "bool",
+                dict(
+                    op="binary",
+                    operator="ne",
+                    type="bool",
+                    left=sequences.size(value).value,
+                    right=_literal(0).value,
+                ),
+            )
         if products.is_sequence(value):
             return _literal(
                 bool(values.product_members(value.kind))
@@ -1299,7 +1400,9 @@ class _Frame:
         self.env, self.project.names = (scope.copy() for scope in state)
 
     def merge(self, states):
-        self.env, self.project.names = (_join(group) for group in zip(*states))
+        self.env, self.project.names = (
+            _join(group, self.project.sequences) for group in zip(*states)
+        )
 
     def conditional(self, node, steps):
         check = self.evaluate(node["condition"], steps, truth_context=True)
@@ -1334,6 +1437,12 @@ class _Frame:
 
     def range_loop(self, node, steps):
         domain = self.evaluate(node["range"], steps)
+        if (
+            values.is_sequence(domain.kind)
+            and node.get("protocol") == "iterator"
+            and node["target"].get("op") == "var"
+        ):
+            return sequences.iteration(self, node, domain, steps)
         if (
             domain.kind == "handle:text_stream"
             and node.get("protocol") == "iterator"
@@ -1776,6 +1885,16 @@ class _Frame:
         if falls and not self.initializing:
             body.append(dict(op="return", value=_literal(None).value))
             self.record_return(_literal(None))
+        if self.returns and all(values.is_sequence(kind) for kind in self.returns):
+            first = next(iter(self.returns))
+            for kind in self.returns:
+                if not self.project.sequences.compatible(first, kind):
+                    self.fail(
+                        self.fn,
+                        "result_contract",
+                        "return paths have heterogeneous sequence element protocols",
+                    )
+            self.returns = {self.project.sequences.resolve_kind(first)}
         if len(self.returns) > 1 or self.initializing and self.returns:
             self.fail(
                 self.fn,
@@ -1862,8 +1981,15 @@ def normalize_protocols(module):
                     "frontend_obligation",
                     obligation["detail"],
                 )
+        try:
+            project.sequences.freeze(project)
+        except ValueError as error:
+            raise _Unclosed(
+                entry, functions[entry], "sequence_element_type", str(error)
+            ) from error
     except _Unclosed as error:
         issue = error.issue
+        project.sequences.freeze(project, partial=True)
     contracts = [
         dict(
             symbol=name,
@@ -1996,4 +2122,4 @@ def normalize_protocols(module):
             {k: fn[k] for k in ("name", "params", "result")},
         ]
     module.pop("protocol_obligations", None)
-    return module, changes, []
+    return project.sequences.resolve(module), changes, []

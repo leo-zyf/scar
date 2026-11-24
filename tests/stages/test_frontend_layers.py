@@ -495,12 +495,19 @@ def test_python_import_precedence_and_runtime_facts(tmp_path, monkeypatch):
     import codecs
     from importlib.machinery import BuiltinImporter, FrozenImporter
     import os
+    import sys
+    from types import SimpleNamespace
 
     from scar.contract import walk_operations
 
+    fs_errors = sys.getfilesystemencodeerrors()
+    stdin_errors = "replace" if fs_errors == "strict" else "strict"
+    monkeypatch.setattr(
+        sys, "stdin", SimpleNamespace(encoding="utf-8", errors=stdin_errors)
+    )
     entry = tmp_path / "entry.py"
     entry.write_text(
-        "import os, shutil, sys, time, math, subprocess\n"
+        "import os, shutil, sys, time, math, subprocess, glob\n"
         "from os.path import join as combine\nopen('never-executed')\n"
     )
     (facts,) = python.capture_project(entry, tmp_path).units
@@ -510,6 +517,18 @@ def test_python_import_precedence_and_runtime_facts(tmp_path, monkeypatch):
     assert imported["bound_value"]["external"] == "os.path.join"
     source = imported["source_provider"]
     assert source["module"] == "os" and source["status"] == "verified_stdlib"
+    assert (
+        source["filesystem_errors"]
+        == facts.runtime_facts["filesystem_errors"]
+        == fs_errors
+    )
+    assert facts.runtime_facts["filesystem_encoding"] == sys.getfilesystemencoding()
+    assert facts.runtime_facts["stdin_errors"] == stdin_errors
+    glob_imports = facts.providers["glob"]["direct_imports"]
+    matcher = glob_imports["modules"]["fnmatch"]
+    assert glob_imports["scope"] == "absolute_module_suite"
+    assert "fnmatch" in glob_imports["order"] and matcher["status"] == "verified_stdlib"
+    assert matcher["sha256"] != facts.providers["glob"]["sha256"]
     assert source["aliases"]["os.path"]["module"] == os.path.__name__
     opened = next(
         n for n in nodes if n["op"] == "python_builtin" and n["name"] == "open"
@@ -525,7 +544,17 @@ def test_python_import_precedence_and_runtime_facts(tmp_path, monkeypatch):
         (tmp_path / (name + ".py")).write_text(
             "raise RuntimeError('capture executed a module')\n"
         )
+    (tmp_path / "fnmatch.py").write_text(
+        "raise RuntimeError('capture executed a dependency')\n"
+    )
     project = python.capture_project(entry, tmp_path)
+    selected = project.units[0].providers["glob"]["direct_imports"]["modules"][
+        "fnmatch"
+    ]
+    if BuiltinImporter.find_spec("fnmatch") or FrozenImporter.find_spec("fnmatch"):
+        assert selected == matcher
+    else:
+        assert selected["status"] == "project" and selected["file"] == "fnmatch.py"
     path_modules = {
         name
         for name in shadows

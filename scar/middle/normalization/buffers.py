@@ -348,6 +348,61 @@ def _common_prefix(a, b):
     return a[:length]
 
 
+def _system_boundary(node, declaration, operation, request):
+    """A source-selected C runtime call is an ordered, externally effectful leaf."""
+    params = [p["type"] for p in declaration["params"]]
+    contract = node["artifact_effect"]["contract"]
+    if (
+        not node.get("site")
+        or params != [{"kind": "ptr", "to": {"kind": "const", "of": "char"}}]
+        or node.get("parameter_types") != params
+        or declaration.get("result") != "i32"
+        or contract.get("null_command") != "query_command_processor_availability"
+        or contract.get("command_read") != "through_first_nul_when_nonnull"
+        or contract.get("process_effect") != "external_command_processor_when_nonnull"
+        or contract.get("return_value") != "implementation_status_not_direct_exit_code"
+    ):
+        return
+    node["runtime_boundary"] = dict(
+        semantics_version=1,
+        profile="posix_libc_system_v1",
+        site=node["site"],
+        source_abi=dict(
+            symbol=declaration["name"],
+            provider=declaration["provider"],
+            header=declaration["header"],
+            parameters=params,
+            result=declaration["result"],
+            variadic=False,
+        ),
+        source_operation=operation,
+        command_request=request,
+        command_operand=["args", 0],
+        execution="synchronous",
+        result="c_system_status",
+        descendant_closure="open",
+    )
+    for key, additions in (
+        ("effects", {"CTRL", "IO", "OPAQUE", "ORDER", "STATE"}),
+        (
+            "reads",
+            {
+                "command.c_string",
+                "process.cwd",
+                "process.environment",
+                "process.signals",
+                "external.state",
+            },
+        ),
+        (
+            "writes",
+            {"process.children", "process.signals", "thread.errno", "external.state"},
+        ),
+    ):
+        node[key] = sorted(set(node.get(key, ())) | additions)
+    node["external_effect"] = "UNKNOWN"
+
+
 class _Function:
     def __init__(self, graph, fn, externs, module_globals):
         self.g, self.fn, self.symbol, self.externs = graph, fn, fn["name"], externs
@@ -1075,6 +1130,12 @@ class _Function:
             g.edge("SUPPLIES_COMMAND_BYTES", v.ref, ident)
             g.edge("COMMAND_PAYLOAD", exact, ident)
             g.requests[ident] = g.nodes[ident]
+            _system_boundary(node, self.externs[api], site, ident)
+            self.unknown(state, site, state.escaped | self.external, "external_runtime")
+            self.forget_bindings(
+                state,
+                state.exposed_names | {k for k in state.names if k[0] == "global"},
+            )
             return _UNKNOWN
         dest = roles["dst"]
         cap = roles.get("capacity")

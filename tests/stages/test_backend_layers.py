@@ -92,6 +92,94 @@ def test_native_execution_calls_require_bindings_without_blocking_local_names():
     assert _qualify(module)[2][0]["code"] == "missing_execution_boundary_binding"
 
 
+def test_system_runtime_binding_preserves_wait_status_and_keeps_descendants_open(
+    tmp_path,
+):
+    from copy import deepcopy
+
+    from scar.backend import compile_ir
+    from scar.backend.cpp20.lowering import Lowerer
+    from scar.backend.planning import _qualify
+    from scar.contract import read_member, walk_operations
+    from scar.frontend import build
+    from scar.middle import plan
+
+    source = tmp_path / "program.c"
+    source.write_text(
+        "#include <stdio.h>\n#include <stdlib.h>\n"
+        'int main(void) { int status = system("exit 7"); '
+        'printf("%d\\n", status); return 0; }\n'
+    )
+    baseline = tmp_path / "baseline"
+    subprocess.run(["cc", "-std=c99", source, "-o", baseline], check=True)
+    reference = subprocess.run([baseline], check=True, capture_output=True)
+    wait_status = int(reference.stdout)
+    assert os.WIFEXITED(wait_status) and os.WEXITSTATUS(wait_status) == 7
+    manifest = tmp_path / "request.json"
+    write_json(
+        manifest,
+        dict(
+            source_root=str(tmp_path),
+            entry="main",
+            units=[dict(path=source.name, language="c", flags=["-std=c99"])],
+        ),
+    )
+    graph, logical, delivery = (tmp_path / n for n in ("graph", "plan", "delivery"))
+    build(manifest, graph)
+    source.unlink()
+    assert plan(graph, logical)["status"] == "READY"
+    result = compile_ir(logical, delivery, policy="serial")
+    assert result["status"] == "COMPILED", result
+    actual = subprocess.run([result["executable"]], check=True, capture_output=True)
+    assert (actual.stdout, actual.stderr) == (reference.stdout, reference.stderr)
+
+    scheduled = json.loads((delivery / "scheduled-ir.json").read_bytes())
+    physical = read_member(delivery, scheduled["physical"])
+    binding = physical["operator_backends"]["posix_runtime"]
+    (site,) = binding["sites"]
+    proof = binding["sites"][site]
+    assert (
+        binding["qualification"] == "api_bound"
+        and proof["descendant_closure"] == "open"
+    )
+    assert scheduled["runtime_boundaries"]["sites"] == [site]
+    assert proof["expanded_argv"] == proof["tools"] == proof["cost"] == "unknown"
+    evidence = binding["deployment"]
+    assert evidence["probe"]["calls_system"] is False and evidence["libc"]["sha256"]
+    assert evidence["source_header"]["sha256"] in {
+        h["sha256"] for h in evidence["headers"]
+    }
+    assert evidence["shell"]["observation"] in {"present", "absent", "unobserved"}
+
+    module = dict(
+        scheduled["module"],
+        functions=[read_member(delivery, f) for f in scheduled["functions"]],
+    )
+
+    def call(data):
+        return next(
+            n for n in walk_operations(data["functions"]) if n.get("callee") == "system"
+        )
+
+    node = call(module)
+    assert node["external_effect"] == "UNKNOWN" and "ORDER" in node["effects"]
+    assert node["runtime_boundary"]["command_request"] == proof["command_request"]
+    assert any(
+        "::system(" in path.read_text()
+        for path in (delivery / "project/src").glob("*.cpp")
+    )
+    for missing in ("runtime_boundary", "artifact_effect", "writes"):
+        bad = deepcopy(module)
+        del call(bad)[missing]
+        assert _qualify(bad)[2][0]["code"] == "missing_execution_boundary_binding"
+    bad = deepcopy(module)
+    call(bad)["runtime_boundary"]["command_request"] = "unrelated"
+    assert _qualify(bad)[2][0]["code"] == "missing_execution_boundary_binding"
+    call(bad)["args"] = [dict(op="literal", type="i32", value=0)]
+    with pytest.raises(ValueError, match="qualified physical site"):
+        Lowerer(bad, physical).expression(call(bad))
+
+
 def test_unavailable_operator_bindings_stop_before_target_layers(tmp_path):
     def execution(folder, *, family=None, tagged=False, source_open=False):
         function = dict(
@@ -947,6 +1035,75 @@ def test_product_identity_pool_and_shared_arrays_across_target_units(tmp_path):
             effects=["STATE"],
         ),
     ]
+    numbers = dict(kind="sequence_ref", element="i64")
+    strings = dict(kind="sequence_ref", element="text")
+    seq, ordered = var("seq", numbers), var("ordered", numbers)
+
+    def sequence(action, result, **fields):
+        effects = {
+            "make": ["MEM", "STATE"],
+            "append": ["MEM", "STATE"],
+            "size": ["STATE"],
+            "get": ["STATE"],
+            "sorted_copy": ["MEM", "STATE", "VAL"],
+            "identity": ["STATE"],
+        }[action]
+        return dict(
+            op="sequence_" + action,
+            type=result,
+            effects=effects,
+            **({"may_raise": True} if action not in {"size", "identity"} else {}),
+            **fields,
+        )
+
+    def get(base, index):
+        return sequence(
+            "get",
+            base["type"]["element"],
+            base=base,
+            index=index,
+            source_index_profile="python_list_v1",
+        )
+
+    def eq(left, right):
+        return dict(op="binary", operator="eq", left=left, right=right)
+
+    incoming = dict(
+        op="host_call",
+        interface="console.input",
+        args=[lit("", "text"), lit("surrogateescape", "text")],
+        type="text",
+        effects=["IO", "STATE"],
+        semantics_version=1,
+    )
+    byte, words = var("byte", "text"), var("words", strings)
+    body.extend(
+        [
+            decl(
+                "seq", sequence("make", numbers, items=[lit(i, "i64") for i in (3, 1)])
+            ),
+            decl("shared", invoke("same_sequence", numbers, seq)),
+            decl("appended", invoke("append_item", "unit", var("shared", numbers))),
+            decl(
+                "ordered",
+                sequence("sorted_copy", numbers, base=seq, comparison="signed_integer"),
+            ),
+            decl("byte", incoming),
+            decl(
+                "words",
+                sequence(
+                    "sorted_copy",
+                    strings,
+                    base=sequence(
+                        "make",
+                        strings,
+                        items=[lit("\ue000", "text"), byte, lit("é", "text")],
+                    ),
+                    comparison="unicode_codepoint",
+                ),
+            ),
+        ]
+    )
     checks = [
         identical(box, alias),
         identical(box, fields, "ne"),
@@ -955,6 +1112,19 @@ def test_product_identity_pool_and_shared_arrays_across_target_units(tmp_path):
         identical(field(box, 2), box, "ne"),
         invoke("is_pooled", "bool", field(box, 2)),
         dict(op="binary", operator="eq", left=load, right=updated),
+        sequence(
+            "identity", "bool", left=seq, right=var("shared", numbers), operator="eq"
+        ),
+        sequence("identity", "bool", left=seq, right=ordered, operator="ne"),
+        sequence("identity", "bool", left=seq, right=words, operator="ne"),
+        eq(var("appended", "unit"), lit(None, "unit")),
+        eq(sequence("size", "i64", base=seq), lit(3, "i64")),
+        eq(get(seq, lit(0, "i64")), lit(3, "i64")),
+        eq(get(seq, lit(-1, "i64")), lit(2, "i64")),
+        eq(get(ordered, lit(0, "i64")), lit(1, "i64")),
+        eq(get(words, lit(1, "i64")), byte),
+        invoke("index_fails", "bool", seq, lit(3, "i64")),
+        invoke("index_fails", "bool", seq, lit(-4, "i64")),
     ]
     for code, condition in enumerate(checks, 1):
         body.append(
@@ -972,6 +1142,32 @@ def test_product_identity_pool_and_shared_arrays_across_target_units(tmp_path):
         returned("pool_b", dict(pooled, site="second")),
         returned("same_handle", box, [("box", box["type"])]),
         returned("is_pooled", identical(var("p", p), pooled), [("p", p)]),
+        returned("same_sequence", seq, [("seq", numbers)]),
+        returned(
+            "append_item",
+            sequence("append", "unit", base=seq, value=lit(2, "i64")),
+            [("seq", numbers)],
+        ),
+        dict(
+            name="index_fails",
+            params=[dict(name="seq", type=numbers), dict(name="index", type="i64")],
+            result="bool",
+            body=[
+                dict(
+                    op="try",
+                    body=[dict(op="expr", value=get(seq, var("index", "i64")))],
+                    handlers=[
+                        dict(
+                            categories=["index_error"],
+                            binding=None,
+                            body=[dict(op="return", value=lit(True, "bool"))],
+                        )
+                    ],
+                    **{"else": [], "finally": []},
+                ),
+                dict(op="return", value=lit(False, "bool")),
+            ],
+        ),
     ]
     source = tmp_path / "exec-ir.json"
     write_json(
@@ -1009,7 +1205,12 @@ def test_product_identity_pool_and_shared_arrays_across_target_units(tmp_path):
         )
     project = tmp_path / "project"
     assert len(list((project / "src").glob("*.cpp"))) >= 3
-    assert subprocess.run([project / "bin/scar_entry"], check=True).returncode == 0
+    assert (
+        subprocess.run(
+            [project / "bin/scar_entry"], input=b"\xff\n", check=True
+        ).returncode
+        == 0
+    )
     header = (project / "include/scar/program.hpp").read_text()
     assert 'extern "C" bool is_pooled' not in header and "bool is_pooled" in header
 
@@ -1021,3 +1222,13 @@ def test_product_identity_pool_and_shared_arrays_across_target_units(tmp_path):
         lower.expression(make(make(slot=0), lit("changed", "text"), slot=1))
     with pytest.raises(ValueError, match="requires literal"):
         lower.expression(make(var("local", "text"), slot=3))
+    floats = dict(kind="sequence_ref", element="f64")
+    with pytest.raises(ValueError, match="unsupported sorted sequence"):
+        lower.expression(
+            sequence(
+                "sorted_copy",
+                floats,
+                base=var("floats", floats),
+                comparison="signed_integer",
+            )
+        )

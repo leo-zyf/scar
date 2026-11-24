@@ -2,8 +2,8 @@
 
 import math
 
-from . import scalars, text
-from .values import Value, argument_evidence, literal, source_site, wire
+from . import scalars, sequences, text
+from .values import Value, argument_evidence, literal, sequence_kind, source_site, wire
 
 _STREAM = "handle:text_stream"
 _REQUIRED = object()
@@ -77,6 +77,7 @@ _METHODS = {
     "readline": ("stream.readline", "text", [("size", "i64", -1)]),
 }
 _MEMBERS = {
+    "glob": {"glob"},
     "os": {"path", "mkdir", "makedirs", "chdir", "getcwd"},
     "os.path": {"join", "exists", "isfile", "isdir"},
     "shutil": {"rmtree", "copyfile", "copy", "copy2", "copytree"},
@@ -87,6 +88,244 @@ _MEMBERS = {
     | scalars.MATH_CLASSIFICATIONS,
     "subprocess": {"Popen", "PIPE", "STDOUT", "CalledProcessError"},
 }
+
+_GLOB_PROFILE = "cpython-3.12.3-posix-glob-v1"
+_GLOB_SHA = "c9e5f9ae0752660ede63328a456f58f87c29500b31f58c1b813458b00fceb6d5"
+# Source files defining the qualified matcher and module initialization. Builtins
+# and frozen modules must belong to one captured image of the named interpreter.
+_GLOB_IMPORTS = {
+    "contextlib": (
+        "path",
+        "8b7a477f978a8532852fd81e241c78182516bc4975d672d580a5848a76e11eb6",
+    ),
+    "os": ("frozen", None),
+    "re": ("path", "8ff3c37c63b917fcf8dc8d50993a502292a3dc159e41de4f4018c72a53d1c07b"),
+    "fnmatch": (
+        "path",
+        "6683da36e47af523f3f41e18ad244d837783e19e98911cc0b7415dea81494ebc",
+    ),
+    "itertools": ("builtin", None),
+    "stat": ("frozen", None),
+    "sys": ("builtin", None),
+}
+
+
+def _glob_profile(frame, node, source):
+    if not (
+        source.get("interpreter") == "cpython 3.12.3"
+        and source.get("platform") == "linux"
+        and source.get("os_name") == "posix"
+        and source.get("filesystem_encoding") == "utf-8"
+        and source.get("filesystem_errors") == "surrogateescape"
+        and source.get("loader") == "path"
+        and source.get("hash_basis") == "provider_file"
+        and source.get("sha256") == _GLOB_SHA
+    ):
+        frame.fail(
+            node,
+            "glob_source_profile",
+            f"glob requires the audited {_GLOB_PROFILE} source and filesystem encoding",
+        )
+    direct = source.get("direct_imports", {})
+    if (
+        direct.get("scope") != "absolute_module_suite"
+        or direct.get("order") != list(_GLOB_IMPORTS)
+        or set(direct.get("modules", {})) != _GLOB_IMPORTS.keys()
+    ):
+        frame.fail(
+            node,
+            "glob_import_sources",
+            "glob requires ordered source evidence for its direct module imports",
+        )
+    image_hashes = set()
+    for name, (loader, digest) in _GLOB_IMPORTS.items():
+        dep = direct["modules"][name]
+        sha = dep.get("sha256", "")
+        same_source = (
+            dep.get("module") == name
+            and dep.get("status") == "verified_stdlib"
+            and dep.get("interpreter") == source["interpreter"]
+            and dep.get("platform") == source["platform"]
+            and dep.get("loader") == loader
+            and dep.get("proof_scope") == "resolved_module"
+        )
+        if loader == "path":
+            correct = (
+                bool(dep.get("origin"))
+                and dep.get("hash_basis") == "provider_file"
+                and sha == digest
+            )
+        else:
+            origin = "built-in" if loader == "builtin" else "frozen"
+            correct = (
+                dep.get("origin") == origin
+                and dep.get("hash_basis") == "interpreter_image"
+                and isinstance(sha, str)
+                and len(sha) == 64
+                and all(c in "0123456789abcdef" for c in sha)
+            )
+            image_hashes.add(sha)
+        if not (same_source and correct):
+            frame.fail(
+                node,
+                "glob_import_sources",
+                f"glob dependency {name} lacks its audited standard-library identity",
+            )
+    if len(image_hashes) != 1:
+        frame.fail(
+            node,
+            "glob_import_sources",
+            "glob dependencies refer to conflicting interpreter images",
+        )
+
+
+def _glob_operator(frame, node, op, kind, reads, writes, **fields):
+    frame.project.require_operator("filesystem_glob", op, profile=_GLOB_PROFILE)
+    return dict(
+        op=op,
+        operator_family="filesystem_glob",
+        profile=_GLOB_PROFILE,
+        type=wire(kind),
+        effects=["IO", "STATE", "MEM"],
+        may_raise=True,
+        reads=reads,
+        writes=writes,
+        **source_site(node),
+        **fields,
+    )
+
+
+def _glob_import(frame, node, source, steps):
+    _glob_profile(frame, node, source)
+    operation = _glob_operator(
+        frame,
+        node,
+        "fs_glob_import",
+        "unit",
+        [
+            "module.registry",
+            "process.import_hooks",
+            "process.audit_hooks",
+            "filesystem",
+        ],
+        [
+            "module.registry",
+            "process.audit_events",
+            "import.external_effects",
+            "re.cache",
+        ],
+        scope="process_module_registry",
+        module="glob",
+        source_provider="stdlib:glob",
+        source_sha256=source["sha256"],
+        source_effects=node.get("effects", ["UNKNOWN"]),
+        binding={
+            "request": node["request"]["form"],
+            "member": node.get("member"),
+            "lookup": "source_import_protocol",
+            "cached": "reuse_verified_module",
+            "unmodified_exports": ["glob.glob"],
+        },
+        initialization={
+            "policy": "initialize_once_on_success",
+            "cold_imports": list(_GLOB_IMPORTS),
+            "module_suite": [
+                "bind_exports",
+                "compile_magic_regex_text_and_bytes",
+                "read_directory_open_flags",
+            ],
+            "cold_import_effects": "preserve_dependency_initializers_hooks_and_failures",
+            "identity_guard": "pristine_registry_or_matching_verified_bindings",
+            "transitive_imports": "preserve_provider_semantics",
+        },
+    )
+    operation["effects"] = list(
+        dict.fromkeys(operation["source_effects"] + operation["effects"])
+    )
+    frame.effect(operation, "unit", steps, True)
+
+
+def _glob(frame, node, args, keywords, steps, discard):
+    if len(args) > 1:
+        frame.fail(node, "glob_arguments", "only pathname is positional in glob.glob")
+    pattern, _, _, recursive, hidden = _bind(
+        frame,
+        node,
+        args,
+        keywords,
+        [
+            ("pathname", "text", _REQUIRED),
+            ("root_dir", "unit", None),
+            ("dir_fd", "unit", None),
+            ("recursive", "bool", False),
+            ("include_hidden", "bool", False),
+        ],
+    )
+    if recursive.exact is not False or hidden.exact is not False:
+        frame.fail(
+            node,
+            "glob_options",
+            "this glob profile requires recursive=False and include_hidden=False",
+        )
+    operation = _glob_operator(
+        frame,
+        node,
+        "fs_glob",
+        sequence_kind("text"),
+        [
+            "process.cwd",
+            "filesystem",
+            "process.audit_hooks",
+            "module.registry",
+            "fnmatch.cache",
+        ],
+        [
+            "new.sequence",
+            "process.audit_events",
+            "audit_hook.external_effects",
+            "filesystem.access_times",
+            "fnmatch.cache",
+            "re.cache",
+        ],
+        interface="fs.glob",
+        source_provider="stdlib:glob",
+        pattern=frame.scalar(pattern, node),
+        options=dict(root_dir=None, dir_fd=None, recursive=False, include_hidden=False),
+        result=dict(
+            cardinality="runtime",
+            allocation="fresh_list",
+            order="source_scandir_traversal",
+            duplicates="preserve",
+        ),
+        semantics=dict(
+            path="posix_split_join_preserve_input_spelling",
+            pattern="fnmatch_unicode_codepoints_per_component_case_sensitive",
+            expansion="ordered_directory_components_without_recursive_double_star",
+            hidden="wildcard_component_requires_literal_leading_dot_for_hidden_name",
+            literal="lexists_including_dangling_symlink",
+            trailing_separator="directories_only",
+            directory_symlinks="follow_for_directory_descent",
+            spelling="no_shell_tilde_or_environment_expansion",
+            directory_snapshot="materialize_each_scandir_in_source_order_before_filter",
+            errors="skip_entry_or_directory_oserror_preserve_partial_listing",
+            literal_errors="posixpath_lexists_isdir_return_false_on_oserror_or_valueerror",
+            other_errors="preserve_source_exception_at_originating_operation",
+            audit=["glob.glob", "glob.glob/2", "os.scandir_per_attempt"],
+            audit_failures="preserve_at_the_source_exception_boundary",
+            filesystem_encoding="utf-8",
+            filesystem_errors="surrogateescape",
+        ),
+        **argument_evidence([pattern]),
+    )
+    return sequences.produced(
+        frame,
+        node,
+        "text",
+        operation,
+        steps,
+        text_order=sequences.text_order_atom(pattern),
+        discard=discard,
+    )
 
 
 def supports_import(module):
@@ -136,7 +375,7 @@ def builtin(frame, node, name):
     return None
 
 
-def import_provider(frame, node):
+def import_provider(frame, node, steps):
     source = node.get("source_provider", {})
     module = node["module"]
     if (
@@ -159,13 +398,26 @@ def import_provider(frame, node):
             "host_provider",
             "one program resolves conflicting host provider identities",
         )
-    frame.project.providers[key] = dict(
-        source, contract="closed host APIs with explicit resource effects"
-    )
     if module not in _MEMBERS:
         frame.fail(node, "host_provider", f"no host namespace contract for {module}")
+    if module == "glob":
+        if prior and prior.get("direct_imports") != source.get("direct_imports"):
+            frame.fail(
+                node,
+                "glob_import_sources",
+                "one program resolves conflicting glob dependencies",
+            )
+        _glob_import(frame, node, source, steps)
     if module == "os.path":
         _path_identity(frame, node, source)
+    frame.project.providers[key] = dict(
+        source,
+        contract=(
+            _GLOB_PROFILE
+            if module == "glob"
+            else "closed host APIs with explicit resource effects"
+        ),
+    )
     namespace = Value("host_namespace", module, source)
     if node["request"]["form"] == "from":
         return member(frame, node, namespace, node["member"])
@@ -358,6 +610,8 @@ def invoke(frame, node, target, args, keywords, steps, discard):
     if target.kind != "host_callable":
         return None
     name = target.value
+    if name == "glob.glob":
+        return _glob(frame, node, args, keywords, steps, discard)
     if name.startswith("math."):
         return scalars.math_call(
             frame, node, name.removeprefix("math."), args, keywords, steps, discard

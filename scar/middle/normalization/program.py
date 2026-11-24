@@ -278,6 +278,17 @@ def _state_contract(function, evidence):
             if node["op"] == "var" and node.get("scope") != "global"
         }
 
+    def storage_locals(value):
+        """Separate addressed storage from values used to locate that storage."""
+        if not isinstance(value, dict):
+            return referenced_locals(value)
+        if value.get("op") in {"index", "member"}:
+            return storage_locals(value["base"])
+        if value.get("op") == "unary" and value.get("operator") == "addr":
+            return storage_locals(value["value"])
+        # Unknown lvalue protocols retain the previous conservative boundary.
+        return referenced_locals(value)
+
     def register(declaration, initialized):
         name, spec = declaration["name"], declaration["type"]
         if (
@@ -294,7 +305,7 @@ def _state_contract(function, evidence):
         if isinstance(spec, str) and spec not in {"void"}:
             scalars[name] = dict(type=spec, initialized=initialized)
         elif isinstance(spec, dict) and spec.get("kind") in {"ref", "rref"}:
-            escaped.update(referenced_locals(declaration.get("init")))
+            escaped.update(storage_locals(declaration.get("init")))
 
     for param in function["params"]:
         register(param, True)
@@ -306,7 +317,7 @@ def _state_contract(function, evidence):
         if op in {"map", "each", "buffer", "runtime_array"}:
             escaped.add(node["index"] if op == "map" else node["name"])
         if op == "unary" and node["operator"] == "addr":
-            escaped.update(referenced_locals(node["value"]))
+            escaped.update(storage_locals(node["value"]))
         if op in calls or op.startswith("object_"):
             args = node.get("args", ())
             passing = node.get("parameter_types")
@@ -335,7 +346,7 @@ def _state_contract(function, evidence):
                         and formal.get("kind") in {"ref", "rref"}
                     )
                 ):
-                    escaped.update(referenced_locals(arg))
+                    escaped.update(storage_locals(arg))
     for state in evidence.get("states", {}).values():
         if state.get("kind") != "global" and state.get("address_taken"):
             escaped.add(state["name"])

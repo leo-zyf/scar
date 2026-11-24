@@ -125,6 +125,9 @@ def product_items(spec):
         if kind == "product_ref":
             product_items(value)
             return True
+        if kind == "sequence_ref":
+            sequence_element(value)
+            return True
         if kind == "ndarray":
             array_rank_domain(value)
             return value["element"] in scalars - {"unit", "text"}
@@ -146,6 +149,18 @@ def product_items(spec):
     ):
         raise ValueError("product requires fixed ordered managed value types")
     return tuple(spec["items"])
+
+
+def sequence_element(spec):
+    """Validate a mutable, homogeneous managed sequence with a concrete element."""
+    if (
+        not isinstance(spec, dict)
+        or set(spec) != {"kind", "element"}
+        or spec["kind"] != "sequence_ref"
+    ):
+        raise ValueError("sequence requires one concrete managed element type")
+    product_items(dict(kind="product_ref", items=[spec["element"]]))
+    return spec["element"]
 
 
 def validate_resource_flow(flow, resources=None):

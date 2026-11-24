@@ -6,7 +6,11 @@ import math
 import posixpath
 import struct
 
-from scar.contract import array_rank_domain, product_items
+from scar.contract import (
+    array_rank_domain,
+    product_items,
+    sequence_element as _sequence_element,
+)
 
 _NUMPY_SCALAR_TYPES = {"numpy_bool": "bool", "numpy_f64": "f64"}
 # These are compile-time sets of possible protocols, never runtime tags. A
@@ -22,6 +26,34 @@ _ARRAY_PREFIX = "ndarray:f64:"
 _HANDLE_PREFIX = "handle:"
 _OBJECT_PREFIX = "object_ref:"
 _PRODUCT_PREFIX = "product_ref:"
+_SEQUENCE_PREFIX = "sequence_ref:"
+_SEQUENCE_VAR_PREFIX = "sequence_var:"
+
+
+def is_sequence(kind):
+    return kind.startswith((_SEQUENCE_PREFIX, _SEQUENCE_VAR_PREFIX))
+
+
+def sequence_kind(element):
+    return _SEQUENCE_PREFIX + element
+
+
+def sequence_element(kind):
+    if not kind.startswith(_SEQUENCE_PREFIX):
+        raise ValueError("a sequence element has not been resolved")
+    return kind[len(_SEQUENCE_PREFIX) :]
+
+
+def sequence_variable(identity):
+    return _SEQUENCE_VAR_PREFIX + str(identity)
+
+
+def sequence_variable_id(kind):
+    return (
+        int(kind[len(_SEQUENCE_VAR_PREFIX) :])
+        if kind.startswith(_SEQUENCE_VAR_PREFIX)
+        else None
+    )
 
 
 def is_array(kind):
@@ -121,6 +153,10 @@ def choice(kinds):
 
 
 def wire(kind):
+    if (variable := sequence_variable_id(kind)) is not None:
+        return dict(kind="sequence_ref", element=dict(kind="m2_typevar", id=variable))
+    if is_sequence(kind):
+        return dict(kind="sequence_ref", element=wire(sequence_element(kind)))
     if is_product(kind):
         return dict(kind="product_ref", items=[wire(k) for k in product_members(kind)])
     if kind.startswith("handle:process:"):
@@ -153,6 +189,8 @@ def from_wire(spec):
         return spec
     if spec.get("kind") == "product_ref":
         return product_kind([from_wire(member) for member in product_items(spec)])
+    if spec.get("kind") == "sequence_ref":
+        return sequence_kind(from_wire(_sequence_element(spec)))
     if spec.get("kind") == "ndarray":
         if spec.get("element") != "f64":
             raise ValueError("unregistered array element protocol")
@@ -170,6 +208,7 @@ def runtime(kind):
         or kind.startswith("handle:process:")
         or is_array(kind)
         or is_product(kind)
+        or is_sequence(kind)
         or object_name(kind) is not None
         or kind
         in {

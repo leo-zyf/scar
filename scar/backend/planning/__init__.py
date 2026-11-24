@@ -20,7 +20,7 @@ from scar.contract import (
     walk_operations,
 )
 from scar.host import array_sdk
-from . import mpi
+from . import mpi, runtime
 
 _ARRAY_OPERATIONS = {
     "array_create",
@@ -274,61 +274,6 @@ def _process_binding(requirement, observed, module, context):
     )
 
 
-def _external_execution_boundaries(module):
-    """Native ABI calls need the same image closure as source process protocols."""
-    defined = {fn["name"] for fn in module.get("functions", ())}
-    interfaces = {
-        "system",
-        "popen",
-        "fork",
-        "vfork",
-        "execl",
-        "execle",
-        "execlp",
-        "execv",
-        "execve",
-        "execvp",
-        "execvpe",
-        "fexecve",
-        "posix_spawn",
-        "posix_spawnp",
-        "dlopen",
-        "dlmopen",
-    }
-    external = {
-        decl["name"]: decl
-        for decl in module.get("externs", ())
-        if decl["name"] not in defined
-        and decl.get("provider") in {"libc", "posix"}
-        and decl["name"].rsplit("::", 1)[-1] in interfaces
-    }
-    issues, seen = [], set()
-    for node in walk_operations(
-        [module.get("functions", ()), module.get("globals", ())]
-    ):
-        targets = (
-            [node.get("callee")]
-            if node["op"] == "call"
-            else node.get("targets", ()) if node["op"] == "indirect_call" else ()
-        )
-        for name in targets:
-            if name not in external or (name, node.get("site")) in seen:
-                continue
-            seen.add((name, node.get("site")))
-            issues.append(
-                dict(
-                    stage="B1",
-                    code="missing_execution_boundary_binding",
-                    symbol=name,
-                    provider=external[name]["provider"],
-                    site=node.get("site"),
-                    location=node.get("location"),
-                    detail="native process execution or dynamic loading requires an explicit image/tool binding; a library ABI alone does not close the application graph",
-                )
-            )
-    return issues
-
-
 def _qualify(module, image_context=None):
     requested = module.get("operator_requirements", {})
     if not isinstance(requested, dict):
@@ -347,7 +292,7 @@ def _qualify(module, image_context=None):
                 else:
                     requirement["element"] = next(iter(array_elements), "f64")
             requested[family] = requirement
-    bindings, issues = {}, _external_execution_boundaries(module)
+    bindings, issues = {}, []
     process = requested.get("process")
     if (
         not process_requests
@@ -435,6 +380,10 @@ def _qualify(module, image_context=None):
                 detail=detail,
             )
         )
+    native, runtime_issues = runtime.qualify(module, probe=not issues)
+    issues.extend(runtime_issues)
+    if native:
+        bindings["posix_runtime"] = native
     return requested, bindings, issues
 
 
@@ -463,7 +412,10 @@ def _schedule_image(
         module["resource_model"] = inventory
     module.pop("image_bindings", None)
     module.pop("process_launch_bindings", None)
+    module.pop("posix_runtime_binding_sha256", None)
     requirements, bindings, issues = _qualify(module, image_context)
+    if binding := bindings.get("posix_runtime"):
+        module["posix_runtime_binding_sha256"] = digest(json_bytes(binding))
     if "process" in bindings:
         module["image_bindings"] = bindings["process"]["images"]
         if "launches" in bindings["process"]:
@@ -515,6 +467,13 @@ def _schedule_image(
             )
             selected["resource_model"] = inventory
         scheduled = dict(module=selected, functions=functions)
+    if native := bindings.get("posix_runtime"):
+        scheduled["runtime_boundaries"] = dict(
+            provider="posix_runtime",
+            qualification=native["qualification"],
+            descendant_closure=native["descendant_closure"],
+            sites=sorted(native["sites"]),
+        )
     if requirements:
         physical["operator_requirements"] = requirements
     if bindings:

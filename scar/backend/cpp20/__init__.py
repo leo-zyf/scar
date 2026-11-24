@@ -398,6 +398,7 @@ def _lower_image(path, revision, scheduled, destination):
             "exceptions.hpp",
             "format.hpp",
             "text.hpp",
+            "sequence.hpp",
         }:
             raise ValueError(f"unregistered target SDK header {name!r}")
         data = Path(__file__).with_name(name).read_bytes()
@@ -563,6 +564,7 @@ def _print_image(path, product, directory, runtime, jobs, image=None):
             "include/scar/exceptions.hpp",
             "include/scar/format.hpp",
             "include/scar/text.hpp",
+            "include/scar/sequence.hpp",
         }:
             raise ValueError("invalid target SDK header output")
         target = directory / header["output"]

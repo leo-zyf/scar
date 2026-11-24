@@ -30,7 +30,14 @@ from .model import (
     utf8_literal,
     variable,
 )
-from .objects import ObjectModel, ProductModel
+from .objects import (
+    ObjectModel,
+    ProductModel,
+    has_aggregate_signature,
+    has_managed_aggregate,
+    sequence_reference,
+    sequence_expression,
+)
 
 _SCALARS = {
     "void": "void",
@@ -207,6 +214,13 @@ class Lowerer:
         self.module = module
         self.regions = physical.get("regions", {})
         self.operator_backends = physical.get("operator_backends", {})
+        native = self.operator_backends.get("posix_runtime")
+        if native is not None and module.get("posix_runtime_binding_sha256") != digest(
+            json_bytes(native)
+        ):
+            raise ValueError(
+                "physical runtime qualification differs from the scheduled module"
+            )
         self.libraries = Libraries()
         self.objects = ObjectModel(symbol_name, module.get("records", ()))
         self.products = ProductModel()
@@ -236,8 +250,10 @@ class Lowerer:
             if symbol in self.globals:
                 raise ValueError(f"duplicate global {symbol!r}")
             if declaration_.get("external"):
-                if self.products.contains(declaration_.get("type")):
-                    raise ValueError("external global requires an explicit product ABI")
+                if has_managed_aggregate(declaration_.get("type")):
+                    raise ValueError(
+                        "external global requires an explicit managed aggregate ABI"
+                    )
                 target = self.libraries.global_value(declaration_)
             elif _IDENTIFIER.fullmatch(symbol) and symbol not in _KEYWORDS:
                 target = symbol
@@ -279,9 +295,9 @@ class Lowerer:
             return self.functions[symbol]
         if symbol not in self.externs:
             raise ValueError(f"missing external declaration for {symbol!r}")
-        if self.products.in_signature(self.externs[symbol]):
+        if has_aggregate_signature(self.externs[symbol]):
             raise ValueError(
-                f"external function {symbol!r} requires an explicit product ABI"
+                f"external function {symbol!r} requires an explicit managed aggregate ABI"
             )
         return self.libraries.function(self.externs[symbol], self.type_name)
 
@@ -299,6 +315,8 @@ class Lowerer:
         kind = spec["kind"]
         if kind == "product_ref":
             return self.products.reference(spec, self)
+        if kind == "sequence_ref":
+            return sequence_reference(spec, self)
         if spec == TEXT_STREAM_TYPE:
             self.use_sdk("host.hpp")
             return named("scar::host::text_stream")
@@ -1160,6 +1178,8 @@ class Lowerer:
             return self.objects.expression(expr, self)
         if op.startswith("product_"):
             return self.products.expression(expr, self)
+        if op.startswith("sequence_"):
+            return sequence_expression(expr, self)
         if op == "literal":
             return self.literal(expr["type"], expr["value"])
         if op == "text_print":
@@ -1260,11 +1280,11 @@ class Lowerer:
             return name(symbol_name(symbol, "v"))
         if op == "binary":
             if any(
-                self.products.contains(expr[key].get("type"))
+                has_managed_aggregate(expr[key].get("type"))
                 for key in ("left", "right")
             ):
                 raise ValueError(
-                    "product operands require an explicit product comparison"
+                    "aggregate operands require an explicit aggregate comparison"
                 )
             return binary(_BINARY[expr["operator"]], E(expr["left"]), E(expr["right"]))
         if op == "unary":
@@ -1279,15 +1299,15 @@ class Lowerer:
                 _UPDATE[expr["operator"]], E(expr["target"]), E(expr["value"])
             )
         if op == "indirect_call":
-            if self.products.contains(expr.get("type")) or any(
-                self.products.contains(arg.get("type")) for arg in expr["args"]
+            if has_managed_aggregate(expr.get("type")) or any(
+                has_managed_aggregate(arg.get("type")) for arg in expr["args"]
             ):
                 targets = expr.get("targets", ())
                 if not targets or any(
                     symbol not in self.functions for symbol in targets
                 ):
                     raise ValueError(
-                        "indirect product call requires resolved internal C++ targets"
+                        "indirect aggregate call requires resolved internal C++ targets"
                     )
             return call(E(expr["target"]), *map(E, expr["args"]))
         if op == "allocate":
@@ -1323,10 +1343,10 @@ class Lowerer:
         if op == "cast":
             mode = expr.get("mode", "static")
             if (
-                self.products.contains(expr["type"])
+                has_managed_aggregate(expr["type"])
                 and expr["value"].get("type") != expr["type"]
             ):
-                raise ValueError("cast cannot establish product allocation identity")
+                raise ValueError("cast cannot establish aggregate allocation identity")
             ty = self.type_name(expr["type"])
             v = E(expr["value"])
             if mode == "explicit_pointer":
@@ -1343,9 +1363,23 @@ class Lowerer:
             symbol = expr["callee"]
             target = self.callee(symbol)
             if symbol not in self.functions:
-                if any(self.products.contains(arg.get("type")) for arg in expr["args"]):
+                if symbol == "system":
+                    binding = self.operator_backends.get("posix_runtime", {})
+                    site = binding.get("sites", {}).get(expr.get("site"), {})
+                    if (
+                        binding.get("profile") != "posix_libc_system_v1"
+                        or binding.get("qualification") != "api_bound"
+                        or binding.get("declaration_sha256")
+                        != digest(json_bytes(self.externs[symbol]))
+                        or site.get("interface") != symbol
+                        or site.get("call_sha256") != digest(json_bytes(expr))
+                    ):
+                        raise ValueError(
+                            "system call differs from its qualified physical site"
+                        )
+                if any(has_managed_aggregate(arg.get("type")) for arg in expr["args"]):
                     raise ValueError(
-                        f"external call {symbol!r} requires an explicit product ABI"
+                        f"external call {symbol!r} requires an explicit managed aggregate ABI"
                     )
                 target = (
                     self.libraries.format_operator(self.externs[symbol], expr["args"])
@@ -1733,9 +1767,9 @@ class Lowerer:
         return Stmt("if", condition=condition, body=body, else_body=(fallback,))
 
     def signature(self, function):
-        product = self.products.in_signature(function)
-        if product and function.get("linkage") == "C":
-            raise ValueError("C linkage requires an explicit product ABI")
+        aggregate = has_aggregate_signature(function)
+        if aggregate and function.get("linkage") == "C":
+            raise ValueError("C linkage requires an explicit managed aggregate ABI")
         params = tuple(
             Decl(
                 "param",
@@ -1753,7 +1787,7 @@ class Lowerer:
             params=params,
             linkage=(
                 None
-                if product
+                if aggregate
                 or function["name"] == "main"
                 or function["result"] == "text"
                 or (
@@ -1772,8 +1806,10 @@ class Lowerer:
         if not symbol:
             raise ValueError(f"missing entry {entry!r}")
         fn = next(f for f in self.module["functions"] if f["name"] == entry)
-        if self.products.in_signature(fn):
-            raise ValueError("executable entry requires an explicit product ABI")
+        if has_aggregate_signature(fn):
+            raise ValueError(
+                "executable entry requires an explicit managed aggregate ABI"
+            )
         if entry == "main":
             if abi:
                 raise ValueError("main may not also declare an entry adapter")
@@ -1999,7 +2035,7 @@ class Lowerer:
             if storage not in (None, "auto", "static", "thread_local"):
                 raise ValueError(f"unsupported global duration {storage}")
             duration = ("thread_local",) if storage == "thread_local" else ()
-            linkage = None if self.products.contains(decl["type"]) else "C"
+            linkage = None if has_managed_aggregate(decl["type"]) else "C"
             globals_.append(
                 replace(
                     variable(
