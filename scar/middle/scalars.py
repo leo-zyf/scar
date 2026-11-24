@@ -30,7 +30,7 @@ def _binary64_bounds(item):
     """Enclose finite values after binary64 conversion. An unknown float has no bounds."""
     if item.exact is not _UNKNOWN:
         interval = (item.exact, item.exact)
-    elif item.kind == "bool":
+    elif item.kind in {"bool", "numpy_bool"}:
         interval = (0, 1)
     elif item.kind == "i64":
         interval = item.bounds
@@ -69,7 +69,7 @@ def construct(frame, node, name, args, keywords):
     if not args:
         return literal(0 if name == "int" else 0.0)
     operand = args[0]
-    if operand.kind not in {"bool", "i64", "f64", "numpy_f64"}:
+    if operand.kind not in {"bool", "numpy_bool", "i64", "f64", "numpy_f64"}:
         detail = (
             "text parsing and its exceptions require a parsing contract"
             if operand.kind == "text"

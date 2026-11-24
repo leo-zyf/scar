@@ -4,7 +4,8 @@ from dataclasses import dataclass, field
 import math
 import struct
 
-SCALARS = {"bool", "i64", "f64", "text", "unit"}
+_NUMPY_SCALAR_TYPES = {"numpy_bool": "bool", "numpy_f64": "f64"}
+SCALARS = {"bool", "i64", "f64", "text", "unit", *_NUMPY_SCALAR_TYPES}
 _UNKNOWN = object()
 _MIN, _MAX = -(1 << 63), (1 << 63) - 1
 _ARRAY_PREFIX = "ndarray:f64:"
@@ -29,8 +30,8 @@ def object_name(kind):
 
 
 def wire(kind):
-    if kind == "numpy_f64":
-        return "f64"
+    if kind in _NUMPY_SCALAR_TYPES:
+        return _NUMPY_SCALAR_TYPES[kind]
     n = rank(kind)
     if n is not None:
         return dict(kind="ndarray", element="f64", rank=n)
@@ -56,7 +57,6 @@ def from_wire(spec):
 def runtime(kind):
     return (
         kind in SCALARS
-        or kind == "numpy_f64"
         or rank(kind) is not None
         or object_name(kind) is not None
         or kind

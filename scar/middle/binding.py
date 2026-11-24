@@ -9,6 +9,28 @@ from scar.contract import (
     validate_text_profiles,
 )
 
+_SITE_OPERATIONS = {
+    "map",
+    "for",
+    "assign",
+    "binary",
+    "if",
+    "while",
+    "try",
+    "with_context",
+    "expr",
+    "return",
+    "raise",
+    "break",
+    "continue",
+    "call",
+    "python_invoke",
+    "python_import",
+    "python_define_class",
+    "compare_chain",
+    "short_circuit",
+}
+
 
 def _definition(graph):
     nodes = graph["nodes"]
@@ -25,13 +47,59 @@ def _definition(graph):
                 raise ValueError(f"invalid operand port {port} in {graph['id']}")
             active.add(port)
             result = read(nodes[port])
-            if result["op"] in {"map", "for", "assign", "binary", "if"}:
+            if result["op"] in _SITE_OPERATIONS:
                 result["site"] = f"{graph['id']}/{port}"
             active.remove(port)
             return result
         return {key: read(field) for key, field in value.items()}
 
     return {**read(graph["signature"]), "body": read(graph["entry"])}
+
+
+def _activation_edges(graph):
+    """Preserve call-edge provenance independently of source name resolution."""
+    owner = graph["signature"]["name"]
+    if graph["signature"].get("calling_convention") != "python":
+        return [
+            dict(owner=owner, target=target, site=None, role="summary")
+            for target in graph["calls"]
+        ]
+    edges, attributed = [], set()
+    for port, node in enumerate(graph["nodes"]):
+        targets = []
+        if node["op"] == "call" and isinstance(node.get("callee"), str):
+            targets.append((node["callee"], "call"))
+        if node["op"] == "python_invoke":
+            targets.extend(
+                (v["symbol"], "candidate") for v in node.get("candidate_callees", ())
+            )
+        if node["op"] == "python_import":
+            targets.extend((v, "import") for v in node.get("initializers", ()))
+            targets.extend(
+                (v["initializer"], "conditional_import")
+                for v in node.get("conditional_initializers", ())
+            )
+        if node["op"] == "python_define_class":
+            targets.append((node["body_symbol"], "class_creation"))
+        for target, role in targets:
+            attributed.add(target)
+            edges.append(
+                dict(
+                    owner=owner, target=target, site=f"{graph['id']}/{port}", role=role
+                )
+            )
+        if node["op"] == "function_ref":
+            edges.append(
+                dict(
+                    owner=owner, target=node["name"], site=None, role="escaped_callable"
+                )
+            )
+    edges.extend(
+        dict(owner=owner, target=target, site=None, role="summary")
+        for target in graph["calls"]
+        if target not in attributed
+    )
+    return edges
 
 
 def _global_definition(previous, current):
@@ -334,6 +402,7 @@ def bind(graph, folder):
     constructor_initializers = {}
     text_profiles = {}
     python_classes = _PythonClasses()
+    activation_edges = []
     for index, unit in enumerate(graph["units"]):
         for identity, profile in validate_text_profiles(
             unit.get("source_facts", {}).get("text_profiles", {})
@@ -349,8 +418,14 @@ def bind(graph, folder):
             definitions[fn["name"]].append((index, fn))
         all_issues += unit["diagnostics"]
         payload = read_member(folder, unit["graph"])
+        roots.update(
+            n["name"]
+            for n in payload["global_graph"]["nodes"]
+            if n["op"] == "function_ref"
+        )
         for fn in payload["functions"]:
             python_classes.collect(fn)
+            activation_edges.extend(_activation_edges(fn))
             signature = fn["signature"]
             if signature.get("method", {}).get("kind") == "constructor":
                 constructor_initializers[signature["name"]] = signature.get(
@@ -617,6 +692,10 @@ def bind(graph, folder):
     return (
         dict(
             entry=graph["entry"],
+            activation_graph=dict(
+                roots=sorted(roots),
+                edges=[e for e in activation_edges if e["owner"] in covered],
+            ),
             functions=list(functions.values()),
             globals=list(globals_.values()),
             externs=list(externs.values()),

@@ -251,10 +251,7 @@ class ObjectModel:
                 "object_method_shadow",
                 f"instance assignment can shadow method {layout.name}.{name}",
             )
-        if (
-            value.kind not in values.SCALARS | {"numpy_f64"}
-            and values.rank(value.kind) is None
-        ):
+        if value.kind not in values.SCALARS and values.rank(value.kind) is None:
             frame.fail(
                 node,
                 "object_field_type",

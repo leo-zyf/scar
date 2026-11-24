@@ -139,6 +139,22 @@ def array_text(frame, node, value, steps):
     )
 
 
+def _numpy_major(frame, node):
+    provider = frame.project.providers.get("numpy", {})
+    major = provider.get("version", "").partition(".")[0]
+    if (
+        major not in {"1", "2"}
+        or provider.get("distribution", "").lower() != "numpy"
+        or not provider.get("sha256")
+    ):
+        frame.fail(
+            node,
+            "scalar_repr",
+            "NumPy scalar display needs the verified source distribution",
+        )
+    return major
+
+
 def _scalar_field(frame, node, value, conversion, spec, steps, discard=False):
     profile = frame.scope.get("text_profile")
     if (
@@ -151,7 +167,13 @@ def _scalar_field(frame, node, value, conversion, spec, steps, discard=False):
             "format_unicode",
             "text representation requires the source Unicode printability profile",
         )
-    if conversion == "none" and value.kind in {"bool", "i64", "f64", "numpy_f64"}:
+    if conversion == "none" and value.kind in {
+        "bool",
+        "numpy_bool",
+        "i64",
+        "f64",
+        "numpy_f64",
+    }:
         if spec["presentation"] == "n":
             frame.fail(
                 node,
@@ -167,6 +189,13 @@ def _scalar_field(frame, node, value, conversion, spec, steps, discard=False):
                     "the character range can produce a surrogate outside the text encoding contract",
                 )
     facts = {}
+    spelling = SCALAR_FORMAT
+    if value.kind == "numpy_bool":
+        major = _numpy_major(frame, node)
+        if major == "2" and conversion in {"repr", "ascii"}:
+            spelling = dict(
+                SCALAR_FORMAT, boolean_true="np.True_", boolean_false="np.False_"
+            )
     if spec["empty"] and conversion in {"none", "str"}:
         # Preserve small exact specifications assembled from literal text and integer
         # fields. Runtime rendering still occurs at the field's source evaluation point.
@@ -182,7 +211,7 @@ def _scalar_field(frame, node, value, conversion, spec, steps, discard=False):
             spec=spec,
             type="text",
             unicode_profile=profile,
-            scalar_format=SCALAR_FORMAT,
+            scalar_format=spelling,
             effects=["VAL", "MEM"],
             may_raise=True,
         ),
@@ -215,6 +244,10 @@ def display(frame, node, value, steps):
         return _container(frame, node, value, steps)
     if rank(value.kind) is not None:
         return array_text(frame, node, value, steps)
+    if value.kind == "numpy_bool":
+        _numpy_major(frame, node)
+        # The stream receives str(value); the original program binding keeps its kind.
+        return Value("bool", value.value, value.facts)
     return value
 
 
@@ -262,21 +295,14 @@ def render(frame, node, value, conversion, source_spec, steps, discard=False):
             steps,
         )
     elif source == "numpy_f64" and conversion in {"repr", "ascii"}:
-        provider = frame.project.providers.get("numpy", {})
-        if not provider.get("version"):
-            frame.fail(
-                node,
-                "scalar_repr",
-                "numerical scalar representation requires the source provider version",
-            )
-        if provider["version"].split(".")[0] == "2":
+        if _numpy_major(frame, node) == "2":
             inner = _scalar_field(
                 frame, node, value, "repr", _spec(frame, node, literal("")), steps
             )
             value = _concat(frame, [literal("np.float64("), inner, literal(")")], steps)
         else:
             return _scalar_field(frame, node, value, conversion, spec, steps, discard)
-    elif source in SCALARS or source == "numpy_f64":
+    elif source in SCALARS:
         return _scalar_field(frame, node, value, conversion, spec, steps, discard)
     else:
         frame.fail(

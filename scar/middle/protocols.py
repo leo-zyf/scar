@@ -3,6 +3,7 @@
 from scar.contract import walk_operations
 from . import (
     arrays,
+    expressions,
     exceptions,
     graphics,
     host_protocols,
@@ -16,6 +17,19 @@ from .values import Value as _Value, literal as _literal
 
 def _slot(module, name):
     return f"py:{module}:{name}"
+
+
+def _reachable(roots, edges):
+    successors = {}
+    for edge in edges:
+        successors.setdefault(edge["owner"], set()).add(edge["target"])
+    result, pending = set(), list(roots)
+    while pending:
+        current = pending.pop()
+        if current not in result:
+            result.add(current)
+            pending.extend(successors.get(current, ()))
+    return result
 
 
 def _join(paths):
@@ -114,6 +128,9 @@ class _Project:
         self.objects = objects.ObjectModel()
         self.graphics = graphics.Graphics()
         self.decisions = []
+        self.skipped_sites = {}
+        self.live_sites = set()
+        self.actual_calls = set()
         self.active = []
         self.global_reads = {}
         self.shadow, self.single_bind_globals = _global_bindings(functions)
@@ -122,6 +139,42 @@ class _Project:
         for active in self.active:
             if self.functions[active]["python_scope"]["kind"] == "function":
                 self.global_reads[active][name] = (value.kind, value.value)
+
+    def inactive_bodies(self, activation):
+        """Only proven edge removal can turn a required body into an inactive body."""
+        if not activation:
+            return set()
+        roots, edges = activation["roots"], activation["edges"]
+        removed, kept = [], []
+        for edge in edges:
+            key = edge["owner"], edge.get("site")
+            if (
+                edge.get("site") is not None
+                and key in self.skipped_sites
+                and key not in self.live_sites
+            ):
+                removed.append(dict(edge, proof=self.skipped_sites[key]))
+            else:
+                kept.append(edge)
+        kept.extend(
+            dict(owner=owner, target=target) for owner, target in self.actual_calls
+        )
+        inactive = (
+            (_reachable(roots, edges) - _reachable(roots, kept))
+            .intersection(self.functions)
+            .difference(self.closed)
+        )
+        if removed:
+            self.decisions.append(
+                dict(
+                    code="inactive_activation_edges",
+                    roots=roots,
+                    removed_edges=removed,
+                    inactive_bodies=sorted(inactive),
+                    proof="root reachability changes only after excluding proven untaken source sites; hard edges and actual calls remain",
+                )
+            )
+        return inactive
 
     def compile(self, name, types):
         fn = self.functions[name]
@@ -229,6 +282,11 @@ class _Frame:
             )
         return value.value
 
+    def skip_expression(self, node, reason):
+        for part in walk_operations(node):
+            if part.get("site") is not None:
+                self.project.skipped_sites[self.name, part["site"]] = reason
+
     def temporary(self):
         self.next_temp += 1
         return f"@evaluation/{self.next_temp}"
@@ -251,7 +309,7 @@ class _Frame:
             return value
         facts = {}
         if name in self.project.single_bind_globals:
-            if value.kind in values.SCALARS | {"numpy_f64"}:
+            if value.kind in values.SCALARS:
                 facts = value.facts
             elif values.rank(value.kind) is not None and "shape" in value.facts:
                 # A fixed handle and immutable region layout do not prove content.
@@ -576,6 +634,7 @@ class _Frame:
             return
 
         def initialize(symbol):
+            self.project.actual_calls.add((self.name, symbol))
             target = self.project.functions.get(symbol, {})
             scope = target.get("python_scope", {})
             if scope.get("kind") != "module":
@@ -631,8 +690,14 @@ class _Frame:
                 )
         self.store(node["binding"], value, steps)
 
-    def evaluate(self, node, steps, discard=False):
+    def evaluate(self, node, steps, discard=False, *, truth_context=False):
         op = node["op"]
+        if node.get("site") is not None:
+            self.project.live_sites.add((self.name, node["site"]))
+        if truth_context:
+            if op in {"binary", "compare_chain", "short_circuit"}:
+                return expressions.evaluate(self, node, steps, truth_context=True)
+            return self.truth(self.evaluate(node, steps), node)
         if op == "literal":
             value = node["value"]
             if type(value) not in (bool, int, float, str, type(None)) or (
@@ -702,89 +767,15 @@ class _Frame:
                 self, node, self.evaluate(node["value"], steps), steps, discard
             )
         if op == "unary" and node["operator"] == "not":
-            value = self.truth(self.evaluate(node["value"], steps), node)
+            value = self.evaluate(node["value"], steps, truth_context=True)
             if value.value["op"] == "literal":
                 return _literal(not value.value["value"])
             return _Value(
                 "bool", dict(op="unary", operator="not", type="bool", value=value.value)
             )
-        if op in {"binary", "compare_chain"}:
-            if op == "compare_chain" and len(node["operators"]) != 1:
-                self.fail(
-                    node,
-                    "comparison_chain",
-                    "multiple comparisons require short-circuit evaluation",
-                )
-            operator = node["operator"] if op == "binary" else node["operators"][0]
-            right_node = node["right"] if op == "binary" else node["operands"][0]
-            lhs = self.evaluate(node["left"], steps)
-            if (
-                values.runtime(lhs.kind)
-                and lhs.value["op"] != "literal"
-                and right_node["op"] != "literal"
-            ):
-                lhs = self.effect(lhs.value, lhs.kind, steps, facts=lhs.facts)
-            rhs = self.evaluate(right_node, steps)
-            identity = objects.compare(operator, lhs, rhs)
-            if identity is not None:
-                return identity
-            numeric = arrays.binary(self, node, operator, lhs, rhs, steps, discard)
-            if numeric is None:
-                numeric = scalars.binary(self, node, operator, lhs, rhs, steps)
-            if numeric is not None:
-                if numeric.value["op"] == "scalar_power":
-                    return self.effect(
-                        numeric.value, numeric.kind, steps, discard, facts=numeric.facts
-                    )
-                return numeric
-            if values.rank(lhs.kind) is not None or values.rank(rhs.kind) is not None:
-                self.fail(
-                    node,
-                    "array_operator",
-                    f"unclosed elementwise array operator {operator}",
-                )
-            left, right = self.scalar(lhs, node), self.scalar(rhs, node)
-            equal = operator in {"eq", "noteq", "ne"}
-            if lhs.kind == rhs.kind and (
-                equal
-                and lhs.kind in {"bool", "text", "unit"}
-                or operator == "add"
-                and lhs.kind == "text"
-            ):
-                if (
-                    lhs.exact is not values._UNKNOWN
-                    and rhs.exact is not values._UNKNOWN
-                ):
-                    a, b = lhs.exact, rhs.exact
-                    if left["op"] != "literal" or right["op"] != "literal":
-                        self.project.decisions.append(
-                            dict(
-                                code="exact_primitive_fact",
-                                symbol=self.name,
-                                location=node.get("location"),
-                                operator=operator,
-                                operand_types=[lhs.kind, rhs.kind],
-                                proof="current reaching scalar facts determine the primitive result; operand effects remain at their evaluation sites",
-                            )
-                        )
-                    return _literal(
-                        (a == b if operator == "eq" else a != b) if equal else a + b
-                    )
-                return _Value(
-                    "bool" if equal else "text",
-                    dict(
-                        op="binary",
-                        operator="ne" if operator == "noteq" else operator,
-                        left=left,
-                        right=right,
-                        type="bool" if equal else "text",
-                    ),
-                )
-            self.fail(
-                node,
-                "arithmetic_contract",
-                f"{operator} on {lhs.kind} and {rhs.kind} needs a closed operator and range",
-            )
+        if op in {"binary", "compare_chain", "short_circuit"}:
+            return expressions.evaluate(self, node, steps, discard)
+
         self.fail(node, "operation_contract", f"unclosed expression {op}")
 
     def call(self, node, steps, discard):
@@ -957,6 +948,7 @@ class _Frame:
             self.fail(node, "argument_binding", f"unconsumed keywords for {name}")
         operands = [self.scalar(v, node) for v in bound]
         function = self.project.compile(name, tuple(v.kind for v in bound))
+        self.project.actual_calls.add((self.name, name))
         if name not in self.project.external_array_writes:
             self.project.external_array_writes[name] = arrays.may_write_external(
                 function, self.project.closed
@@ -1003,11 +995,11 @@ class _Frame:
         expr = self.scalar(value, node)
         if "exact" in value.facts:
             return _literal(bool(value.exact))
-        if value.kind == "bool":
-            return value
+        if value.kind in {"bool", "numpy_bool"}:
+            return _Value("bool", value.value, value.facts)
         if value.kind == "unit":
             return _literal(False)
-        if value.kind not in {"i64", "f64", "text"}:
+        if value.kind not in {"i64", "f64", "numpy_f64", "text"}:
             self.fail(
                 node, "truth_contract", f"{value.kind} has no closed truth conversion"
             )
@@ -1034,8 +1026,16 @@ class _Frame:
         self.env, self.project.names = (_join(group) for group in zip(*states))
 
     def conditional(self, node, steps):
-        check = self.truth(self.evaluate(node["condition"], steps), node)
+        check = self.evaluate(node["condition"], steps, truth_context=True)
         if check.value["op"] == "literal":
+            self.skip_expression(
+                node["else"] if check.value["value"] else node["then"],
+                dict(
+                    rule="constant_condition",
+                    guard_site=node.get("site"),
+                    truth=check.value["value"],
+                ),
+            )
             return self.sequence(
                 node["then"] if check.value["value"] else node["else"], steps
             )
@@ -1256,7 +1256,7 @@ class _Frame:
         if counted:
             condition = loop["condition"]
         else:
-            test = self.truth(self.evaluate(node["condition"], test_setup), node)
+            test = self.evaluate(node["condition"], test_setup, truth_context=True)
             empty, nonempty = test.exact is False, test.exact is True
             condition = test.value
             self.refine_loop_test(condition)
@@ -1296,6 +1296,10 @@ class _Frame:
                 self.store(node["target"], iv, loop["body"])
             if self.sequence(node["body"], loop["body"]):
                 flow["continue"].append(self.snapshot())
+        else:
+            self.skip_expression(
+                node["body"], dict(rule="empty_loop", guard_site=node.get("site"))
+            )
         self.dynamic -= 1
         self.loops.pop()
         broke = flow["break"]
@@ -1332,7 +1336,20 @@ class _Frame:
         return bool(exits)
 
     def sequence(self, body, steps):
-        for node in body:
+        def stop():
+            self.skip_expression(
+                body[index + 1 :],
+                dict(
+                    rule="no_normal_successor",
+                    guard_site=node.get("site"),
+                    operator=node["op"],
+                ),
+            )
+            return False
+
+        for index, node in enumerate(body):
+            if node.get("site") is not None:
+                self.project.live_sites.add((self.name, node["site"]))
             op = node["op"]
             first = len(steps)
             if (
@@ -1361,13 +1378,13 @@ class _Frame:
                 self.store(node["target"], _Value("function", node["symbol"]), steps)
             elif op == "raise":
                 exceptions.throw(self, node, steps)
-                return False
+                return stop()
             elif op == "try":
                 if not exceptions.protected(self, node, steps):
-                    return False
+                    return stop()
             elif op == "with_context":
                 if not exceptions.resources(self, node, steps):
-                    return False
+                    return stop()
             elif op == "return":
                 value = (
                     self.evaluate(node["value"], steps)
@@ -1376,7 +1393,7 @@ class _Frame:
                 )
                 steps.append(dict(op="return", value=self.scalar(value, node)))
                 self.record_return(value)
-                return False
+                return stop()
             elif op == "update" and node["target"].get("op") in {"var", "member"}:
                 target = node["target"]
                 receiver = None
@@ -1395,18 +1412,8 @@ class _Frame:
                 if arrays.update(self, node, left, right, steps):
                     result = left
                 else:
-                    result = scalars.binary(
+                    result = expressions.apply_binary(
                         self, node, node["operator"], left, right, steps
-                    )
-                    if result is None:
-                        result = arrays.binary(
-                            self, node, node["operator"], left, right, steps
-                        )
-                if result is None:
-                    self.fail(
-                        node,
-                        "update_contract",
-                        "in-place operation needs a closed scalar contract",
                     )
                 if receiver is not None:
                     self.project.objects.write(
@@ -1418,13 +1425,13 @@ class _Frame:
                 flow = self.loops[-1]
                 flow[op].append(self.snapshot())
                 steps.append(dict(op=op))
-                return False
+                return stop()
             elif op == "if":
                 if not self.conditional(node, steps):
-                    return False
+                    return stop()
             elif op in {"for", "while"}:
                 if not self.loop(node, steps):
-                    return False
+                    return stop()
             else:
                 self.fail(node, "statement_contract", f"unclosed statement {op}")
             for statement in steps[first:]:
@@ -1435,7 +1442,7 @@ class _Frame:
                         else statement.get("value")
                     )
                     if value and value.get("noreturn"):
-                        return False
+                        return stop()
         return True
 
     def lower(self):
@@ -1502,6 +1509,7 @@ def normalize_protocols(module):
             project.closed
         )
         omitted.update(project.objects.class_bodies)
+        omitted.update(project.inactive_bodies(module.get("activation_graph")))
         for name, fn in functions.items():
             if name not in project.closed and name not in omitted:
                 raise _Unclosed(

@@ -260,6 +260,137 @@ for i in range(-5, 6):
         assert issues[0]["code"] == "python.integer_conversion_range", issues
 
 
+def test_short_circuit_preserves_values_effects_and_activation_edges(tmp_path):
+    entry = tmp_path / "entry.py"
+    entry.write_text("""import numpy as np
+def tap(label, value):
+    print(label, end='')
+    return value
+print(tap('a', 3) < tap('b', 2) < tap('c', 4))
+print(tap('d', 1) < tap('e', 2) <= tap('f', 2))
+message = 'short'
+message += '-circuit'
+print(message)
+for a in range(3):
+    for b in range(3):
+        print(tap('a', a) and (tap('b', b) or tap('c', 4)), end='/')
+        print(not (tap('x', a) and tap('y', b)))
+class Item:
+    def __init__(self, value):
+        self.value = value
+left = Item(2.0)
+right = Item(9.0)
+def tail():
+    print('T', end='')
+    left.value = -10.0
+    return 1.0
+print(0.0 < left.value < tail(), left.value)
+print((left or right) is left, (left and right) is right, left is left is not right)
+def gate(flag):
+    if flag and 7:
+        print('yes')
+    if flag or 'text':
+        print('text')
+    return not (flag and 7)
+print(gate(False), gate(True))
+def never_leaf():
+    return 1 / 0
+def never():
+    return never_leaf()
+print(False and never(), True or never(), 3 < 2 < never())
+for i in range(0):
+    never()
+def transfer():
+    return 'returned'
+    never()
+print(transfer())
+def repeat():
+    print('repeat')
+    return True
+False and repeat()
+print(repeat())
+array = np.array([-0.0, 3.0])
+print(repr(array[0] and never()), repr(array[1] or never()))
+def compare(data):
+    return data[0] < data[1] < 4.0
+flag = compare(array)
+print(repr(flag), str(flag), ascii(flag), format(flag, ''), format(flag, '>5'))
+print(int(flag), float(flag), repr(flag and flag), repr(flag or flag))
+print([flag], (flag,))
+""")
+    expected = _run([sys.executable, "-B", entry], tmp_path)
+    graph, plan, delivery = (tmp_path / name for name in ("graph", "plan", "delivery"))
+    _stage(tmp_path, "frontend", "build", "--entry", entry, "--out", graph)
+    entry.unlink()
+    # An explicit initializer root remains required even if every ordinary
+    # invocation site was proven untaken. The proof must not erase this root.
+    manifest = json.loads((graph / "graph.json").read_bytes())
+    needed = "py:entry:never"
+    for unit in manifest["units"]:
+        if any(fn["name"] == needed for fn in unit["functions"]):
+            unit["initializer_calls"] = [*unit["initializer_calls"], needed]
+            break
+    else:
+        raise AssertionError("the source function must be present in the input graph")
+    pinned = graph / "pinned-root.json"
+    pinned.write_text(json.dumps(manifest))
+    _stage(
+        tmp_path,
+        "middle",
+        "plan",
+        "--graph",
+        pinned,
+        "--out",
+        tmp_path / "pinned",
+        returncode=2,
+    )
+    issues = json.loads((tmp_path / "pinned/plan.json").read_bytes())["issues"]
+    assert any(
+        i["code"] == "python.reachable_protocol"
+        and i["symbol"] in {needed, "py:entry:never_leaf"}
+        for i in issues
+    )
+    _stage(tmp_path, "middle", "plan", "--graph", graph, "--out", plan)
+    report = json.loads((plan / "plan.json").read_bytes())
+    proofs = [
+        d for d in report["normalizations"] if d["code"] == "inactive_activation_edges"
+    ]
+    assert len(proofs) == 1
+    assert {"py:entry:never", "py:entry:never_leaf"} <= set(
+        proofs[0]["inactive_bodies"]
+    )
+    assert "py:entry:repeat" not in proofs[0]["inactive_bodies"]
+    assert all(e["site"] and e["proof"]["rule"] for e in proofs[0]["removed_edges"])
+    shutil.rmtree(graph)
+    result = _stage(tmp_path, "backend", "compile", "--ir", plan, "--out", delivery)
+    shutil.rmtree(plan)
+    assert _run([result["executable"]], tmp_path) == expected
+
+    sources = {
+        "union": "def choose(flag):\n    return flag and 7\nprint(choose(False))\n",
+        "numpy_identity": "import numpy as np\nprint((np.array([1.0])[0] < 2.0) is True)\n",
+        "definition": "def mark():\n    print('definition')\n    return 1\ndef never(x=mark()):\n    return x\nprint(False and never())\n",
+    }
+    for name, source in sources.items():
+        folder = tmp_path / name
+        folder.mkdir()
+        entry = folder / "entry.py"
+        entry.write_text(source)
+        graph, plan = folder / "graph", folder / "plan"
+        _stage(folder, "frontend", "build", "--entry", entry, "--out", graph)
+        entry.unlink()
+        _stage(folder, "middle", "plan", "--graph", graph, "--out", plan, returncode=2)
+        issue = json.loads((plan / "plan.json").read_bytes())["issues"][0]
+        assert (
+            issue["code"]
+            == {
+                "union": "python.short_circuit_union",
+                "numpy_identity": "python.comparison_identity",
+                "definition": "python.function_creation",
+            }[name]
+        ), issue
+
+
 def test_formatted_values_preserve_order_unicode_and_source_domains(tmp_path):
     entry = tmp_path / "entry.py"
     entry.write_text(

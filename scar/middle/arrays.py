@@ -458,7 +458,10 @@ def _operation(frame, node, op, lhs, rhs, steps, *, inplace=False, discard=False
 
 def binary(frame, node, op, lhs, rhs, steps, discard=False):
     """Select NumPy arithmetic from source operand identities, including scalar loads."""
-    if all(rank(v.kind) is None and v.kind != "numpy_f64" for v in (lhs, rhs)):
+    if all(
+        rank(v.kind) is None and v.kind not in {"numpy_f64", "numpy_bool"}
+        for v in (lhs, rhs)
+    ):
         return None
     if op in _COMPARISONS:
         if any(rank(v.kind) not in (None, 0) for v in (lhs, rhs)):
@@ -468,8 +471,9 @@ def binary(frame, node, op, lhs, rhs, steps, discard=False):
                 "a non-scalar comparison requires a boolean array contract",
             )
         operands = []
+        integral = all(v.kind in {"bool", "numpy_bool", "i64"} for v in (lhs, rhs))
         for v in (lhs, rhs):
-            if v.kind == "i64" and max(map(abs, v.bounds)) > 1 << 53:
+            if not integral and v.kind == "i64" and max(map(abs, v.bounds)) > 1 << 53:
                 frame.fail(
                     node,
                     "integer_precision",
@@ -481,20 +485,37 @@ def binary(frame, node, op, lhs, rhs, steps, discard=False):
                     "array_load",
                     "numpy_f64",
                     steps,
+                    facts=frame.project.array_state.selected(v, []),
                     base=v.value,
                     indices=[],
                     effects=["STATE"],
                 )
-            operands.append(_as_float(frame, node, v))
+            if v.kind in {"bool", "numpy_bool"}:
+                expr = dict(op="cast", type="i64" if integral else "f64", value=v.value)
+            else:
+                expr = v.value if integral else _as_float(frame, node, v)
+            operands.append((expr, v.exact))
+        symbol = _COMPARISONS[op]
+        (left, a), (right, b) = operands
+        facts = {}
+        if a is not _UNKNOWN and b is not _UNKNOWN:
+            facts["exact"] = getattr(operator, symbol)(a, b)
         return Value(
-            "bool",
+            "numpy_bool",
             dict(
                 op="binary",
-                operator=_COMPARISONS[op],
-                left=operands[0],
-                right=operands[1],
+                operator=symbol,
+                left=left,
+                right=right,
                 type="bool",
             ),
+            facts,
+        )
+    if any(v.kind == "numpy_bool" for v in (lhs, rhs)):
+        frame.fail(
+            node,
+            "array_operator_domain",
+            f"{op} needs a NumPy Boolean promotion contract",
         )
     return _operation(frame, node, op, lhs, rhs, steps, discard=discard)
 
