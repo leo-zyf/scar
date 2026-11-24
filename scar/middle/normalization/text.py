@@ -3,7 +3,17 @@
 import re
 import unicodedata
 
-from .values import SCALARS, Value, literal, rank, runtime, protocols, wire
+from .values import (
+    SCALARS,
+    Value,
+    literal,
+    rank,
+    runtime,
+    protocols,
+    wire,
+    scalar_spelling,
+    _UNKNOWN,
+)
 
 SCALAR_FORMAT = dict(
     boolean_true="True",
@@ -199,10 +209,8 @@ def _scalar_field(frame, node, value, conversion, spec, steps, discard=False):
     if spec["empty"] and conversion in {"none", "str"}:
         # Preserve small exact specifications assembled from literal text and integer
         # fields. Runtime rendering still occurs at the field's source evaluation point.
-        if value.kind == "text" and type(value.exact) is str:
-            facts["exact"] = value.exact
-        elif value.kind == "i64" and type(value.exact) is int:
-            facts["exact"] = str(value.exact)
+        if (rendered := scalar_spelling(value.exact, spelling)) is not _UNKNOWN:
+            facts["exact"] = rendered
     return frame.effect(
         dict(
             op="format_value",

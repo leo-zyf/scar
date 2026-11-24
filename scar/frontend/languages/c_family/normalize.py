@@ -3,7 +3,7 @@
 import hashlib
 from pathlib import PurePath
 
-from . import objects, standard_library
+from . import io as io_effects, objects, standard_library
 from .facts import ParsedUnit, cursor_kind as _kind
 
 
@@ -551,12 +551,24 @@ class _Unit:
 
     def call(self, cursor, args):
         name = self.declare_call(cursor)
-        return {
+        result = {
             "op": "call",
             "callee": name,
             "args": args,
             "parameter_types": [p["type"] for p in self.externs[name]["params"]],
         }
+        definition = cursor.get_definition()
+        projection = io_effects.project(
+            self.externs[name],
+            args,
+            c_usr=cursor.get_usr(),
+            application_definition=bool(
+                definition and self.facts.owns(definition.location)
+            ),
+        )
+        if projection is not None:
+            result["artifact_effect"] = projection
+        return result
 
     def function(self, cursor):
         name = _symbol(cursor, self.unit_tag)

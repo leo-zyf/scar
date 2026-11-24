@@ -352,10 +352,15 @@ def normalize(bound):
     from .protocols import normalize_protocols
     from .mpi import qualify as qualify_mpi
     from .artifacts import analyze as analyze_artifacts
+    from .buffers import analyze_buffers
+    from scar.contract import validate_artifact_flow
 
     module = deepcopy(bound)
     module, protocol_changes, issues = normalize_protocols(module)
     module["artifact_analysis"] = analyze_artifacts(module)
+    buffers = analyze_buffers(module, module["artifact_analysis"]["graph"])
+    module["artifact_analysis"]["graph"] = validate_artifact_flow(buffers.pop("graph"))
+    module["artifact_analysis"]["buffers"] = buffers
     if module["artifact_analysis"]["graph"]["nodes"]:
         module.setdefault("resource_model", {})["artifact_flow"] = module[
             "artifact_analysis"

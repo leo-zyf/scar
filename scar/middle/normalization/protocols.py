@@ -1091,6 +1091,19 @@ class _Frame:
             self.fail(node, "argument_binding", f"unconsumed keywords for {name}")
         operands = [self.scalar(v, node) for v in bound]
         function = self.project.compile(name, tuple(v.kind for v in bound), source=node)
+        parameter_types = [param["type"] for param in function["params"]]
+        if parameter_types != [values.wire(v.kind) for v in bound]:
+            self.fail(
+                node,
+                "argument_types",
+                "bound arguments disagree with the closed parameter types",
+            )
+        result = _Value(
+            self.project.result_kinds[name], None, self.project.result_facts[name]
+        )
+        result_fact = (
+            None if function.get("noreturn") else values.scalar_evidence(result)
+        )
         self.project.actual_calls.add((self.name, name))
         if name not in self.project.external_array_writes:
             self.project.external_array_writes[name] = arrays.may_write_external(
@@ -1103,16 +1116,18 @@ class _Frame:
             callee=name,
             args=operands,
             **values.source_site(node),
+            **values.argument_evidence(bound),
+            **({"result_facts": result_fact} if result_fact is not None else {}),
             type=function["result"],
-            parameter_types=[values.wire(v.kind) for v in bound],
+            parameter_types=parameter_types,
             **({"noreturn": True} if function.get("noreturn") else {}),
         )
         return self.effect(
             call,
-            self.project.result_kinds[name],
+            result.kind,
             steps,
             discard,
-            facts=self.project.result_facts[name],
+            facts=result.facts,
         )
 
     def record_return(self, value):

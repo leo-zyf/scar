@@ -173,15 +173,20 @@ def test_generated_content_joins_parser_snapshots_without_inventing_read_history
     source = tmp_path / "source"
     source.mkdir()
     (source / "producer.py").write_text(
-        "def generate():\n"
-        '    stream = open("values.h", "w")\n'
+        "import os\n"
+        "def identity(value):\n    return value\n"
+        "def location(directory):\n    return os.path.join(directory, 'values.h')\n"
+        "def generate(directory, contents):\n"
+        '    stream = open(location(directory), "w")\n'
         "    writer = stream.write\n"
-        '    writer("#define SCALE " + "3\\n")\n'
+        "    writer(identity(contents))\n"
         '    print("", file=stream)\n'
         "    stream.close()\n"
+        "def forward(directory, contents):\n"
+        "    generate(directory, contents)\n"
     )
     (source / "driver.py").write_text(
-        "import producer\nimport subprocess\nproducer.generate()\n"
+        'import producer\nimport subprocess\nproducer.forward(".", "#define SCALE 3\\n")\n'
         'child = subprocess.Popen("make -B -j2 worker", shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)\n'
         'for line in child.stdout:\n    print(line, end="")\n'
         "print(child.wait())\n"
@@ -272,6 +277,66 @@ def test_generated_content_joins_parser_snapshots_without_inventing_read_history
     ir = json.loads((plan / "images/driver/exec-ir.json").read_bytes())
     assert ir["status"] == "INCOMPLETE" and ir["functions"] == []
     assert report["protocol_analysis"]["prefix_fragments"]
+
+
+def test_byte_buffer_versions_connect_commands_without_executing_them(tmp_path):
+    from scar.contract import read_member, validate_artifact_flow
+
+    source = tmp_path / "entry.c"
+    source.write_text(
+        "#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n"
+        "void change(char **value) { (*value)[0] = 'x'; }\n"
+        "int main(int argc, char **argv) {\n"
+        'char cmd[64]; sprintf(cmd, "tool %s", argv[0]); system(cmd);\n'
+        'strcpy(cmd, "fixed"); snprintf(cmd, 0, "ignored"); system(cmd);\n'
+        'strncpy(cmd, "abcdef", 3); system(cmd);\n'
+        'if (argc > 1) strcpy(cmd, "alpha"); else strcpy(cmd, "beta");\n'
+        "system(cmd);\n"
+        'for (int i = 0; i < argc; ++i) sprintf(cmd, "step %d", i);\n'
+        "system(cmd);\n"
+        'char *alias = cmd; strcpy(cmd, "stale"); change(&alias); system(alias);\n'
+        "system(NULL); return 0; }\n"
+    )
+    manifest = tmp_path / "request.json"
+    manifest.write_text(
+        json.dumps(
+            dict(
+                source_root=str(tmp_path),
+                entry="main",
+                units=[dict(path=source.name, language="c", flags=["-std=c99"])],
+            )
+        )
+    )
+    graph, plan, delivery = (tmp_path / name for name in ("graph", "plan", "delivery"))
+    _stage(tmp_path, "frontend", "build", "--manifest", manifest, "--out", graph)
+    source.unlink()
+    _stage(tmp_path, "middle", "plan", "--graph", graph, "--out", plan)
+    report = json.loads((plan / "plan.json").read_bytes())
+    analysis = report["artifact_analysis"]
+    flow = validate_artifact_flow(read_member(plan, analysis["graph"]))
+    buffers = analysis["buffers"]
+    requests = buffers["command_requests"]
+    assert len(requests) == 7
+    assert {row["command"] for row in requests} == {None, "fixed"}
+    formatted = next(row for row in requests if row["literal_format"] == "tool %s")
+    assert formatted["literal_prefix"] == "tool "
+    assert formatted["source_version"] is not None
+    assert "dynamic_command_bytes" in formatted["unresolved"]
+    assert any(row["literal_prefix"] == "abc" for row in requests)
+    assert (
+        sum(row["request_kind"] == "processor_availability_query" for row in requests)
+        == 1
+    )
+    assert all(row["execution"] == "not_executed" for row in requests)
+    assert any(edge["kind"] == "LOOP_BACKEDGE" for edge in flow["edges"])
+    assert any(edge["kind"] == "SUPPLIES_COMMAND_BYTES" for edge in flow["edges"])
+    assert any(node.get("form") == "phi" for node in flow["nodes"])
+    shutil.rmtree(graph)
+    result = _stage(
+        tmp_path, "backend", "compile", "--ir", plan, "--out", delivery, returncode=2
+    )
+    assert result["status"] == "INCOMPLETE"
+    assert not list(delivery.rglob("main.cpp"))
 
 
 def test_mpi_controller_joins_captured_worker_and_preserves_launch_conventions(

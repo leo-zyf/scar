@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass, field
 import math
+import posixpath
 import struct
 
 _NUMPY_SCALAR_TYPES = {"numpy_bool": "bool", "numpy_f64": "f64"}
@@ -160,8 +161,8 @@ def source_site(node):
     return {key: node[key] for key in ("site", "location") if node.get(key) is not None}
 
 
-def _exact_argument(value):
-    """Only wire-level JSON scalars can serve as exact argument evidence."""
+def scalar_evidence(value):
+    """Return only exact JSON scalars representable at the stated wire type."""
     if value.kind not in SCALARS:
         return None
     item, kind = value.exact, wire(value.kind)
@@ -180,15 +181,17 @@ def _exact_argument(value):
         return None
     if kind == "f64" and not math.isfinite(item):
         return None
+    if kind == "i64" and not _MIN <= item <= _MAX:
+        return None
     return dict(type=kind, exact=item)
 
 
 def argument_evidence(args, **options):
-    positions = [_exact_argument(value) for value in args]
+    positions = [scalar_evidence(value) for value in args]
     known_options = {
         key: fact
         for key, value in options.items()
-        if (fact := _exact_argument(value)) is not None
+        if (fact := scalar_evidence(value)) is not None
     }
     return (
         dict(argument_facts=dict(args=positions, **known_options))
@@ -218,3 +221,218 @@ def identical(left, right):
             identical(a, b) for a, b in zip(left, right)
         )
     return left == right
+
+
+def scalar_spelling(value, profile):
+    """Evaluate the declared primitive text profile, never an object's protocol."""
+    if type(value) is str:
+        return value
+    if type(value) is bool:
+        return profile.get("boolean_true" if value else "boolean_false", _UNKNOWN)
+    if value is None:
+        return profile.get("unit", _UNKNOWN)
+    if (
+        type(value) is int
+        and profile.get("integer_base") == 10
+        and _MIN <= value <= _MAX
+    ):
+        return str(value)
+    if (
+        type(value) is float
+        and math.isfinite(value)
+        and profile.get("float") == "shortest_binary64"
+    ):
+        # Python's primitive binary64 spelling follows this IR profile: shortest
+        # round trip, fixed notation for decimal exponents -4 through 15.
+        return str(value)
+    return _UNKNOWN
+
+
+def exact_scalar(value, kind):
+    """Keep a scalar fact only when its value is exact at the destination type."""
+    if not isinstance(kind, str):
+        return _UNKNOWN
+    if kind == "text" and type(value) is str:
+        return value
+    if kind == "bool" and type(value) is bool:
+        return value
+    if kind == "unit" and value is None:
+        return value
+    if kind == "f64" and type(value) is float and math.isfinite(value):
+        return value
+    if kind in {"i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64"}:
+        bits = int(kind[1:])
+        lower, upper = (
+            (-(1 << (bits - 1)), (1 << (bits - 1)) - 1)
+            if kind[0] == "i"
+            else (0, (1 << bits) - 1)
+        )
+        if type(value) is int and lower <= value <= upper:
+            return value
+    return _UNKNOWN
+
+
+def evidence_scalar(fact, kind):
+    if not isinstance(fact, dict) or fact.get("type") != kind:
+        return _UNKNOWN
+    return exact_scalar(fact.get("exact", _UNKNOWN), kind)
+
+
+_SUMMARY_SCALARS = {
+    "text",
+    "bool",
+    "unit",
+    "i8",
+    "i16",
+    "i32",
+    "i64",
+    "u8",
+    "u16",
+    "u32",
+    "u64",
+    "f64",
+}
+
+
+def result_summaries(functions):
+    """Summarize closed scalar value paths, without deleting their calls."""
+    summaries = {}
+
+    def function(name):
+        if name in summaries:
+            return summaries[name]
+        summaries[name] = None  # Recursive result dependencies stay unresolved.
+        fn = functions[name]
+        if (
+            fn.get("noreturn")
+            or not isinstance(fn.get("result"), str)
+            or fn["result"] not in _SUMMARY_SCALARS
+        ):
+            return None
+
+        def typed(summary, kind):
+            return (
+                dict(kind="scalar", type=kind, value=summary)
+                if summary is not None
+                else None
+            )
+
+        scope = {
+            parameter["name"]: typed(
+                dict(kind="parameter", index=index), parameter["type"]
+            )
+            for index, parameter in enumerate(fn.get("params", ()))
+            if isinstance(parameter.get("type"), str)
+            and parameter["type"] in _SUMMARY_SCALARS
+        }
+        types = {
+            parameter["name"]: parameter["type"] for parameter in fn.get("params", ())
+        }
+
+        def value(node):
+            if not isinstance(node, dict):
+                return None
+            op = node["op"]
+            if op == "var" and node.get("scope") != "global":
+                return scope.get(node["name"])
+            if op == "literal" and type(node.get("value")) in {
+                str,
+                int,
+                float,
+                bool,
+                type(None),
+            }:
+                constant = exact_scalar(node["value"], node.get("type"))
+                return (
+                    dict(kind="literal", value=constant)
+                    if constant is not _UNKNOWN
+                    else None
+                )
+            if op == "text_concat":
+                parts = [value(part) for part in node["parts"]]
+                return (
+                    dict(kind="concat", parts=parts)
+                    if all(part is not None for part in parts)
+                    else None
+                )
+            if op == "host_call" and node["interface"] == "path.join":
+                parts = [value(part) for part in node["args"]]
+                return (
+                    dict(kind="path_join", parts=parts)
+                    if all(part is not None for part in parts)
+                    else None
+                )
+            if (
+                op == "call"
+                and node.get("callee") in functions
+                and function(node["callee"]) is not None
+            ):
+                parts = [value(part) for part in node["args"]]
+                if len(parts) == len(
+                    functions[node["callee"]].get("params", ())
+                ) and all(part is not None for part in parts):
+                    return dict(kind="call", target=node["callee"], args=parts)
+            return None
+
+        for statement in fn["body"]:
+            op = statement["op"]
+            if op == "return":
+                summaries[name] = typed(value(statement.get("value")), fn["result"])
+                return summaries[name]
+            if (
+                op == "decl"
+                and isinstance(statement.get("type"), str)
+                and statement["type"] in _SUMMARY_SCALARS
+                and statement.get("scope") != "global"
+                and statement.get("storage") not in {"static", "thread_local", "extern"}
+            ):
+                result = value(statement.get("init")) if "init" in statement else None
+                if "init" in statement and result is None:
+                    return None
+                types[statement["name"]] = statement["type"]
+                scope[statement["name"]] = typed(result, statement["type"])
+            elif (
+                op == "assign"
+                and statement["target"]["op"] == "var"
+                and statement["target"].get("scope") != "global"
+                and statement["target"]["name"] in scope
+            ):
+                result = value(statement["value"])
+                if result is None:
+                    return None
+                target = statement["target"]["name"]
+                scope[target] = typed(result, types[target])
+            else:
+                return None
+        return None
+
+    for name in functions:
+        function(name)
+    return summaries
+
+
+def apply_result(summary, arguments, summaries):
+    if summary is None:
+        return _UNKNOWN
+    kind = summary["kind"]
+    if kind == "scalar":
+        return exact_scalar(
+            apply_result(summary["value"], arguments, summaries), summary["type"]
+        )
+    if kind == "parameter":
+        return arguments[summary["index"]]
+    if kind == "literal":
+        return summary["value"]
+    parts = [
+        apply_result(part, arguments, summaries)
+        for part in summary.get("parts", summary.get("args", ()))
+    ]
+    if kind == "call":
+        return apply_result(summaries[summary["target"]], parts, summaries)
+    if not all(type(part) is str for part in parts):
+        return _UNKNOWN
+    if kind == "concat":
+        return "".join(parts)
+    if kind == "path_join" and parts:
+        return posixpath.join(*parts)
+    return _UNKNOWN

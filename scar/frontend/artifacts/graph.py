@@ -159,6 +159,11 @@ def artifact_graph(units, payloads, build, images, root):
                         obligations=effect["obligations"],
                         binding_guard=row.get("binding_guard"),
                         stream_handle=row.get("stream_handle"),
+                        **(
+                            {"contract": effect["contract"]}
+                            if "contract" in effect
+                            else {}
+                        ),
                     )
                 )
 

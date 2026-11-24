@@ -311,6 +311,147 @@ def test_constant_file_proof_preserves_control_and_handle_boundaries():
     assert not negative["constant_materializations"]
 
 
+def test_scalar_file_facts_respect_destination_types_and_persistent_state():
+    code = """from scar.middle.normalization.values import result_summaries, apply_result, _UNKNOWN
+from scar.middle.normalization.artifacts import analyze
+functions={f['name']:f for f in data['functions']}
+summaries=result_summaries(functions)
+results={name:apply_result(summary,[],summaries) for name,summary in summaries.items()}
+assert results['exact'] == 3
+assert all(results[name] is _UNKNOWN for name in ('narrow','static','recursive'))
+assert not analyze(data)['constant_materializations']
+print(json.dumps({'checked':list(results)}))
+"""
+    value = dict(op="var", name="result", type="i32")
+    narrow = dict(
+        name="narrow",
+        result="i32",
+        params=[],
+        body=[
+            dict(op="decl", name="result", type="i32"),
+            dict(
+                op="assign",
+                target=value,
+                value=dict(op="literal", type="f64", value=3.75),
+            ),
+            dict(op="return", value=value),
+        ],
+    )
+    exact = dict(
+        name="exact",
+        result="i32",
+        params=[],
+        body=[dict(op="return", value=dict(op="literal", type="i64", value=3))],
+    )
+    persistent = dict(
+        name="static",
+        result="i32",
+        params=[],
+        body=[
+            dict(
+                op="decl",
+                name="result",
+                type="i32",
+                storage="static",
+                init=dict(op="literal", type="i32", value=3),
+            ),
+            dict(op="return", value=value),
+        ],
+    )
+    recursive = dict(
+        name="recursive",
+        result="i32",
+        params=[],
+        body=[
+            dict(
+                op="return",
+                value=dict(op="call", callee="recursive", args=[], type="i32"),
+            )
+        ],
+    )
+    stream = dict(
+        op="var", name="file", type=dict(kind="handle", resource="text_stream")
+    )
+
+    def text(value):
+        return dict(op="literal", type="text", value=value)
+
+    writer = dict(
+        name="writer",
+        result="void",
+        params=[],
+        body=[
+            dict(
+                op="decl",
+                name="file",
+                type=stream["type"],
+                init=dict(
+                    op="host_call",
+                    interface="stream.open",
+                    args=[text("out.txt"), text("w"), text("utf-8"), text("universal")],
+                ),
+            ),
+            *deepcopy(narrow["body"][:-1]),
+            dict(
+                op="expr",
+                value=dict(
+                    op="text_print",
+                    args=[value],
+                    stream=stream,
+                    sep=text(" "),
+                    end=text("\n"),
+                    scalar_format=dict(integer_base=10),
+                ),
+            ),
+            dict(
+                op="expr",
+                value=dict(op="host_call", interface="stream.close", args=[stream]),
+            ),
+        ],
+    )
+    counter = dict(op="var", name="counter", type="i64")
+    writer_static = deepcopy(writer)
+    writer_static["name"] = "writer_static"
+    writer_static["body"] = [
+        dict(
+            op="decl",
+            name="counter",
+            type="i64",
+            storage="static",
+            init=dict(op="literal", type="i64", value=1),
+        ),
+        deepcopy(writer["body"][0]),
+        dict(
+            op="expr",
+            value=dict(
+                op="text_print",
+                args=[counter],
+                stream=stream,
+                sep=text(" "),
+                end=text("\n"),
+                scalar_format=dict(integer_base=10),
+            ),
+        ),
+        deepcopy(writer["body"][-1]),
+        dict(
+            op="assign", target=counter, value=dict(op="literal", type="i64", value=2)
+        ),
+    ]
+    result = _layer(
+        "normalization",
+        code,
+        dict(functions=[narrow, exact, persistent, recursive, writer, writer_static]),
+    )
+    assert set(result["checked"]) == {
+        "narrow",
+        "exact",
+        "static",
+        "recursive",
+        "writer",
+        "writer_static",
+    }
+
+
 def test_middle_layers_consume_only_preceding_products(tmp_path):
     ptr = {"kind": "ptr", "to": "i64"}
     ref = {"kind": "ref", "to": "i64"}

@@ -75,6 +75,10 @@ def validate_artifact_flow(flow):
         "EXECUTION_IMAGE",
         "FILE_VERSION_TEMPLATE",
         "CANONICAL_OPERATION",
+        "BUFFER_LOCATOR",
+        "BUFFER_VERSION",
+        "BYTE_EXPRESSION",
+        "COMMAND_REQUEST",
     }
     records = {}
     for node in flow["nodes"]:
@@ -108,6 +112,26 @@ def validate_artifact_flow(flow):
             value = node.get("value")
             if value is not None and records.get(value, {}).get("kind") != "BYTE_VALUE":
                 raise ValueError("file version references an absent byte value")
+        if node["kind"] == "BUFFER_VERSION":
+            if records.get(node.get("locator"), {}).get("kind") != "BUFFER_LOCATOR":
+                raise ValueError("buffer version requires its storage locator")
+            if (
+                node.get("expression") is not None
+                and records.get(node["expression"], {}).get("kind") != "BYTE_EXPRESSION"
+            ):
+                raise ValueError("buffer version references an absent byte expression")
+        if node["kind"] == "COMMAND_REQUEST":
+            if (
+                node.get("source_version") is not None
+                and records.get(node["source_version"], {}).get("kind")
+                != "BUFFER_VERSION"
+            ):
+                raise ValueError("command request references an absent buffer version")
+            if (
+                node.get("source_value") is not None
+                and records.get(node["source_value"], {}).get("kind") != "BYTE_VALUE"
+            ):
+                raise ValueError("command request references an absent byte value")
     for relation in flow["edges"]:
         if relation["source"] not in records or relation["target"] not in records:
             raise ValueError("artifact edge references an absent node")
