@@ -74,6 +74,8 @@ M1 保留 `state_evidence`，包含图身份、状态表、访问和版本关系
 
 `process_launch` 的 `result_handle.site` 是静态分配站点，每次成功动态调用产生新实例。`process_wait/poll/communicate` 的 `handle` 引用原目标的端口投影，`sites` 是可能来源，不代表这些进程都已发生。`process_stream` 保留通道、方向及句柄关系；绑定方法取创建时的接收者快照，不能在调用处重读后来被改绑的变量。全部操作保留调用目标和守卫，尚未绑定到子程序镜像的部分仍为开放边界。
 
+F5 的 `artifact_flow.source_processes` 把这些源进程操作、命令候选、标准流路由及接收者引用接入跨单元索引；操作数使用全局 `SOURCE_OPERATION` ID。`PROCESS_HANDLE_TEMPLATE` 只连接有条件的句柄来源模板，不证明动态实例相同；构建事件仍保留自己的 argv、cwd 和捕获依据，源请求与事件之间尚未证明的对应关系单独报告。
+
 资源使用独立类型化表，含 CPU、物理核、逻辑 CPU、NUMA 内存、缓存容量、存储和可见加速设备。拓扑边表示资源归属及可达性。时间成本记录在后端物理计划中，包含测量、估计、线程范围与选择理由。硬件能力的观测和软件操作的合法性分别保留来源。
 
 `CPU_POOL` 表达同一进程可使用的 CPU 集合及共享时间配额，通过 `CPU_POOL_MEMBER` 指向具体逻辑 CPU。`capacity_upper_bound_cores` 保留按 quota/period 推导的持续核时间上界，不是瞬时并发上限或计算吞吐；原始 quota 和 period 同时保留。资源 `capacity` 的单位明确为保守 worker 预算。cgroup 路径只作为限额证据，不展开为待优化的操作节点。未知约束保留 `issues`，工具并发回退为一；无争用和最佳并行度均不能由核数直接推出。

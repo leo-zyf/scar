@@ -145,6 +145,67 @@ def validate_artifact_flow(flow):
     for effect in flow.get("source_effects", ()):
         if records.get(effect["operation"], {}).get("kind") != "SOURCE_OPERATION":
             raise ValueError("artifact effect requires its source operation")
+    processes = {}
+    for process in flow.get("source_processes", ()):
+        operation = records.get(process.get("operation"), {})
+        if (
+            operation.get("kind") != "SOURCE_OPERATION"
+            or operation.get("operation") != process.get("operation_kind")
+            or process.get("operation_kind")
+            not in {
+                "process_launch",
+                "process_wait",
+                "process_poll",
+                "process_communicate",
+                "process_stream",
+            }
+            or any(
+                operation.get(key) != process.get(key)
+                for key in ("unit", "graph_id", "port")
+            )
+            or process.get("execution") != "not_observed"
+            or process["operation"] in processes
+        ):
+            raise ValueError(
+                "process source record requires a unique matching operation"
+            )
+        processes[process["operation"]] = process
+
+        def process_operand(value):
+            if isinstance(value, list):
+                for item in value:
+                    process_operand(item)
+            elif isinstance(value, dict) and set(value) == {"name", "value"}:
+                if value["name"] is not None and not isinstance(value["name"], str):
+                    raise ValueError(
+                        "process keyword requires its source argument name"
+                    )
+                process_operand(value["value"])
+            elif isinstance(value, str):
+                reference = records.get(value, {})
+                if reference.get("kind") != "SOURCE_OPERATION" or any(
+                    reference.get(key) != operation.get(key)
+                    for key in ("unit", "graph_id")
+                ):
+                    raise ValueError(
+                        "process operand requires a source operation in its graph"
+                    )
+            else:
+                raise ValueError("invalid process operand reference")
+
+        for operand in process.get("operands", {}).values():
+            process_operand(operand)
+    for relation in flow["edges"]:
+        if relation["kind"] == "PROCESS_HANDLE_TEMPLATE" and (
+            processes.get(relation["source"], {}).get("operation_kind")
+            != "process_launch"
+            or relation["target"] not in processes
+            or relation.get("conditional") is not True
+            or relation.get("dynamic_instance_equality") != "unproven"
+        ):
+            raise ValueError(
+                "source handle templates do not prove dynamic process identity"
+            )
     return flow
 
 

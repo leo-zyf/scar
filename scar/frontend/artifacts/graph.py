@@ -62,7 +62,14 @@ def artifact_graph(units, payloads, build, images, root):
         return version
 
     profiles = {}
-    source_sites = []
+    source_sites, source_processes, process_templates = [], [], {}
+    process_kinds = {
+        "process_launch",
+        "process_wait",
+        "process_poll",
+        "process_communicate",
+        "process_stream",
+    }
     for index, (unit, payload) in enumerate(zip(units, payloads)):
         reader = node(
             "SOURCE_CAPTURE",
@@ -117,28 +124,27 @@ def artifact_graph(units, payloads, build, images, root):
 
             for port, row in enumerate(rows):
                 effect = row.get("artifact_effect")
-                if not effect:
+                process = row["op"] in process_kinds
+                if not effect and not process:
                     continue
-                if effect.get("semantics_version") != 1:
-                    raise ValueError("unsupported source artifact effect contract")
                 action = operation(port)
                 operands = {}
 
-                def references(value, role):
+                def references(value, role, relation="ARGUMENT", **fields):
                     if isinstance(value, dict) and set(value) == {"port"}:
                         reference = operation(value["port"])
-                        edge("ARGUMENT", reference, action, role=role)
+                        edge(relation, reference, action, role=role, **fields)
                         return reference
                     if isinstance(value, list):
                         return [
-                            references(item, role + "/" + str(i))
+                            references(item, role + "/" + str(i), relation, **fields)
                             for i, item in enumerate(value)
                         ]
                     raise ValueError(
                         "artifact operands must identify graph value ports"
                     )
 
-                for role, path in effect["operands"].items():
+                def routed(path):
                     value = row
                     for key in path:
                         # F3 has replaced nested expressions by port edges.
@@ -149,6 +155,116 @@ def artifact_graph(units, payloads, build, images, root):
                             operation(target_port)
                             value = rows[target_port]
                         value = value[key]
+                    return value
+
+                if process:
+                    record = dict(
+                        operation=action,
+                        operation_kind=row["op"],
+                        unit=index,
+                        graph_id=function["id"],
+                        port=port,
+                        function=function["signature"]["name"],
+                        operands={},
+                        execution="not_observed",
+                        instance_scope="per_dynamic_invocation_and_iteration",
+                        obligations=[
+                            "source_binding_guard",
+                            "source_control_reached",
+                            "runtime_process_instance",
+                            "no_build_event_identity_proven",
+                        ],
+                    )
+                    record.update(
+                        {
+                            key: row[key]
+                            for key in (
+                                "symbol",
+                                "provider",
+                                "location",
+                                "command_argument",
+                                "command_values",
+                                "launch_forms",
+                                "source_runtime",
+                                "binding_guard",
+                                "result_handle",
+                                "stream_handle",
+                                "channels",
+                                "channel",
+                                "direction",
+                                "channel_binding",
+                                "waits_for_exit",
+                            )
+                            if key in row
+                        }
+                    )
+                    arguments = record["operands"]
+                    for field in ("target", "args", "base"):
+                        if field in row:
+                            arguments[field] = references(row[field], field)
+                    if "keywords" in row:
+                        arguments["keywords"] = [
+                            dict(
+                                name=keyword["name"],
+                                value=references(
+                                    keyword["value"], f"keywords/{number}/value"
+                                ),
+                            )
+                            for number, keyword in enumerate(row["keywords"])
+                        ]
+                    command = row.get("command_argument")
+                    if type(command) is int and 0 <= command < len(row.get("args", ())):
+                        arguments["command"] = references(
+                            row["args"][command], "command"
+                        )
+                    elif command == "args":
+                        for number, keyword in enumerate(row.get("keywords", ())):
+                            if keyword["name"] == "args":
+                                arguments["command"] = references(
+                                    keyword["value"], "command"
+                                )
+                    for field in ("cwd", "shell"):
+                        descriptor = row.get(field)
+                        if isinstance(descriptor, dict) and set(descriptor) == {"port"}:
+                            arguments[field] = references(descriptor, field)
+                            record[field] = {"source": "operand"}
+                        elif isinstance(descriptor, dict) and "operand" in descriptor:
+                            arguments[field] = references(
+                                routed(descriptor["operand"]), field
+                            )
+                            record[field] = {"source": "operand"}
+                        elif descriptor is not None:
+                            record[field] = descriptor
+                    handle = row.get("handle", {})
+                    if isinstance(handle, dict) and "operand" in handle:
+                        record["handle"] = {
+                            key: value
+                            for key, value in handle.items()
+                            if key != "operand"
+                        }
+                        arguments["receiver"] = references(
+                            routed(handle["operand"]),
+                            "receiver",
+                            "PROCESS_HANDLE",
+                            projection=handle.get("projection", "identity"),
+                            conditional=True,
+                        )
+                    source_processes.append(record)
+                    produced = row.get("result_handle", {})
+                    if (
+                        row["op"] == "process_launch"
+                        and isinstance(produced, dict)
+                        and isinstance(produced.get("site"), str)
+                    ):
+                        process_templates.setdefault(
+                            (index, produced["site"]), set()
+                        ).add(action)
+                if not effect:
+                    continue
+                if effect.get("semantics_version") != 1:
+                    raise ValueError("unsupported source artifact effect contract")
+                for role, path in effect["operands"].items():
+                    value = routed(path)
                     operands[role] = references(value, role)
                 source_sites.append(
                     dict(
@@ -166,6 +282,31 @@ def artifact_graph(units, payloads, build, images, root):
                         ),
                     )
                 )
+
+    for process in source_processes:
+        handle = process.get("handle", {})
+        for site in handle.get("sites", ()):
+            for producer in sorted(process_templates.get((process["unit"], site), ())):
+                edge(
+                    "PROCESS_HANDLE_TEMPLATE",
+                    producer,
+                    process["operation"],
+                    site=site,
+                    conditional=True,
+                    dynamic_instance_equality="unproven",
+                    evidence="source_receiver_binding_candidate",
+                )
+        pending.append(
+            dict(
+                operation=process["operation"],
+                fields=[
+                    "runtime_process_instance",
+                    "source_control_reached",
+                    "observed_process_event",
+                ],
+                basis="source_process_binding_and_control_obligations",
+            )
+        )
 
     build_refs, build_snapshots = {}, {}
     if build:
@@ -188,6 +329,13 @@ def artifact_graph(units, payloads, build, images, root):
                     key,
                     build_node=key,
                     invocation_id=row["invocation_id"],
+                    **{
+                        field: row[field]
+                        for field in ("arguments", "directory")
+                        if field in row
+                    },
+                    evidence="captured_build_trace",
+                    trace_sha256=build["trace_sha256"],
                 )
         requirements = set()
         for relation in build["edges"]:
@@ -273,9 +421,14 @@ def artifact_graph(units, payloads, build, images, root):
             nodes=list(nodes.values()),
             edges=edges,
             source_effects=source_sites,
+            source_processes=source_processes,
             open_fields=pending,
             coverage=dict(
                 source_effect_sites=len(source_sites),
+                source_process_sites=len(source_processes),
+                process_execution_events="not_observed",
+                process_instance_binding="source_templates_only",
+                process_build_invocation_matching="not_established",
                 parser_snapshot_reads=sum(
                     e["kind"] == "READS_CAPTURED_VERSION" for e in edges
                 ),

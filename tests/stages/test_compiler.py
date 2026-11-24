@@ -239,6 +239,25 @@ def test_generated_content_joins_parser_snapshots_without_inventing_read_history
     source_flow = validate_artifact_flow(read_member(graph, product["artifact_flow"]))
     interfaces = {effect["interface"] for effect in source_flow["source_effects"]}
     assert interfaces >= {"stream.open", "stream.write", "text.print", "stream.close"}
+    processes = source_flow["source_processes"]
+    (launch,) = [row for row in processes if row["operation_kind"] == "process_launch"]
+    assert launch["launch_forms"][0]["argv"] == ["make", "-B", "-j2", "worker"]
+    assert launch["operands"]["command"]
+    assert launch["channels"]["stdout"]["route"] == "pipe"
+    assert all(row["execution"] == "not_observed" for row in processes)
+    assert any(row["operation_kind"] == "process_wait" for row in processes)
+    assert any(
+        edge["kind"] == "PROCESS_HANDLE_TEMPLATE" for edge in source_flow["edges"]
+    )
+    # The index records source requests, not correspondence to captured events.
+    assert (
+        source_flow["coverage"]["process_build_invocation_matching"]
+        == "not_established"
+    )
+    broken = json.loads(json.dumps(source_flow))
+    broken["source_processes"][0]["operands"]["command"] = "missing:source:operation"
+    with pytest.raises(ValueError, match="process operand"):
+        validate_artifact_flow(broken)
     value = byte_value_id(sha256(expected).hexdigest())
     assert any(node["id"] == value for node in source_flow["nodes"])
     shutil.rmtree(source)
