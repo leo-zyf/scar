@@ -20,7 +20,7 @@ from scar.contract import (
     walk_operations,
 )
 from scar.host import array_sdk
-from . import mpi, runtime
+from . import mpi, runtime, toolchain
 
 _ARRAY_OPERATIONS = {
     "array_create",
@@ -414,6 +414,7 @@ def _schedule_image(
     module.pop("process_launch_bindings", None)
     module.pop("posix_runtime_binding_sha256", None)
     module.pop("parameter_access_binding_sha256", None)
+    module.pop("compilation_binding_sha256", None)
     requirements, bindings, issues = _qualify(module, image_context)
     if binding := bindings.get("posix_runtime"):
         module["posix_runtime_binding_sha256"] = digest(json_bytes(binding))
@@ -438,11 +439,15 @@ def _schedule_image(
     else:
         from .cpu import schedule
 
-        access = runtime.parameter_access(
+        access = toolchain.parameter_access(
             module, cache=(image_context or {}).get("compiler_features")
         )
         if access:
             module["parameter_access_binding_sha256"] = digest(json_bytes(access))
+        compilation = toolchain.compilation(
+            module, cache=(image_context or {}).get("compiler_features")
+        )
+        module["compilation_binding_sha256"] = digest(json_bytes(compilation))
         mpi = bindings.get("mpi", {})
         uses_mpi = bool(mpi.get("called_or_possible") or mpi.get("address_taken"))
         selected, physical = schedule(module, policy, 1 if uses_mpi else workers)
@@ -462,6 +467,7 @@ def _schedule_image(
                 reason="rank_placement_and_provided_thread_level_unverified",
             )
         physical.update(fields)
+        physical["compilation"] = compilation
         if access:
             physical["parameter_access"] = access
         functions = [

@@ -132,15 +132,22 @@ def build(manifest) -> Path:
         folder = Path(scratch)
         compile_command = ["cmake", "--build", str(folder / "build")]
         compile_command.extend(("--parallel", str(parallel)))
+        configure_command = [
+            "cmake",
+            "-S",
+            str(root),
+            "-B",
+            str(folder / "build"),
+            "-DCMAKE_BUILD_TYPE=Release",
+        ]
+        # Historical sealed projects predate the compiler-worker input. Their
+        # CMake files must remain untouched and cannot consume this new setting.
+        if "build_options" in package or any(
+            "build_options" in image for image in package.get("images", ())
+        ):
+            configure_command.append(f"-DSCAR_COMPILER_WORKER_LIMIT={parallel}")
         commands = (
-            [
-                "cmake",
-                "-S",
-                str(root),
-                "-B",
-                str(folder / "build"),
-                "-DCMAKE_BUILD_TYPE=Release",
-            ],
+            configure_command,
             compile_command,
             [
                 "cmake",

@@ -1432,3 +1432,202 @@ def test_invocation_access_qualifies_only_sealed_definition_parameters(tmp_path)
     ):
         with pytest.raises(ValueError):
             validate_node(invalid, Decl)
+
+
+def test_link_image_compilation_survives_target_relocation(tmp_path):
+    from scar.backend.cpp20 import lower_scheduled, print_target
+    from scar.contract import PHYSICAL, digest, json_bytes
+
+    revision = "1" * 64
+    tool = dict(path="/qualified/tool", size=1, sha256="2" * 64)
+    decision = dict(
+        semantics_version=1,
+        scope="link_image",
+        mode="gnu_lto",
+        workers=2,
+        evidence=dict(worker_budget=2),
+        reason="cross-unit calls",
+        qualification=dict(
+            supported=True, compiler_id="GNU", compiler=tool, cmake=tool
+        ),
+    )
+    scheduled = tmp_path / "scheduled"
+    target, printed = tmp_path / "target", tmp_path / "printed"
+    members = []
+    for name, value in (
+        ("answer", dict(op="literal", type="i32", value=7)),
+        ("main", dict(op="call", callee="answer", args=[])),
+    ):
+        function = dict(
+            name=name, params=[], result="i32", body=[dict(op="return", value=value)]
+        )
+        members.append(member(scheduled, "functions", function))
+
+    def seal(settings, bound):
+        module = dict(entry="main")
+        physical = document(PHYSICAL, ir_sha256=revision)
+        if settings is not None:
+            physical["compilation"] = settings
+        if bound is not None:
+            module["compilation_binding_sha256"] = digest(json_bytes(bound))
+        write_json(
+            scheduled / "scheduled-ir.json",
+            document(
+                "scar.scheduled-ir",
+                status="READY",
+                ir_sha256=revision,
+                module=module,
+                physical=member(scheduled, "physical", physical),
+                functions=members,
+            ),
+        )
+
+    def isolated(stage, source, out, *args):
+        subprocess.run(
+            [
+                sys.executable,
+                "-B",
+                "-c",
+                _RUN_LAYER,
+                stage,
+                str(source),
+                str(out),
+                *args,
+            ],
+            cwd=tmp_path,
+            env=dict(
+                os.environ, PYTHONPATH=str(Path(scar.__file__).resolve().parents[1])
+            ),
+            check=True,
+            capture_output=True,
+            timeout=60,
+        )
+
+    for settings, bound, error in (
+        (decision, None, "compilation binding"),
+        (None, decision, "compilation binding"),
+        (dict(decision, workers=1), decision, "compilation binding"),
+    ):
+        seal(settings, bound)
+        with pytest.raises(ValueError, match=error):
+            lower_scheduled(scheduled, target)
+    for settings, error in (
+        (dict(decision, workers=3), "compilation budget"),
+        (
+            dict(decision, qualification=dict(supported=True, compiler_id="Clang")),
+            "GNU",
+        ),
+    ):
+        seal(settings, settings)
+        with pytest.raises(ValueError, match=error):
+            lower_scheduled(scheduled, target)
+    noop = dict(decision, mode="none", workers=1, qualification=dict(supported=False))
+    default = dict(semantics_version=1, interprocedural=dict(mode="none", workers=1))
+    for settings in (None, noop):
+        seal(settings, settings)
+        artifact = lower_scheduled(scheduled, tmp_path / "default-target")
+        assert json.loads(artifact.read_bytes())["build_options"] == default
+
+    seal(decision, decision)
+    isolated("B2a", scheduled, target, "1")
+    scheduled.rename(tmp_path / "hidden-schedule")
+    target = target.rename(tmp_path / "relocated-target")
+    isolated("B2b", target, printed)
+    package = json.loads((printed / "cpp20.json").read_bytes())
+    assert len(package["sources"]) >= 2
+    assert package["build_options"] == dict(
+        semantics_version=1, interprocedural=dict(mode="gnu_lto", workers=2)
+    )
+    old = json.loads((target / "target-ir.json").read_bytes())
+    del old["build_options"]
+    historical = target / "legacy.json"
+    write_json(historical, old)
+    legacy = print_target(historical, tmp_path / "legacy-project")
+    assert legacy["build_options"] == default
+    assert "-flto" not in (Path(legacy["project"]) / "CMakeLists.txt").read_text()
+    write_json(
+        historical,
+        dict(
+            old,
+            build_options=dict(default, interprocedural=dict(mode="none", workers=2)),
+        ),
+    )
+    with pytest.raises(ValueError, match="build options"):
+        print_target(historical, tmp_path / "invalid-project")
+
+    def configure(source, directory, limit, *, check=True):
+        return subprocess.run(
+            [
+                "cmake",
+                "-S",
+                str(source),
+                "-B",
+                str(directory),
+                "-DCMAKE_CXX_COMPILER=g++",
+                "-DCMAKE_BUILD_TYPE=Release",
+                "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
+                f"-DSCAR_COMPILER_WORKER_LIMIT={limit}",
+            ],
+            check=check,
+            capture_output=True,
+            text=True,
+        )
+
+    assert (
+        "warning"
+        not in configure(legacy["project"], tmp_path / "legacy-build", 1).stderr.lower()
+    )
+    invalid = configure(legacy["project"], tmp_path / "legacy-build", 0, check=False)
+    assert invalid.returncode != 0 and "must be a positive integer" in invalid.stderr
+
+    images = [
+        dict(id=name, output=name, entry="main", target=file_receipt(tmp_path, package))
+        for name, package in (
+            ("first", target / "target-ir.json"),
+            ("second", artifact),
+        )
+    ]
+    bundle = tmp_path / "bundle.json"
+    write_json(
+        bundle,
+        document(
+            "scar.cpp20-target-ir",
+            kind="image_bundle",
+            root_image="first",
+            images=images,
+            ir_sha256=revision,
+        ),
+    )
+    result = tmp_path / "bundle-project"
+    isolated("B2b", bundle, result)
+    bundle.unlink()
+    target.rename(tmp_path / "hidden-target")
+    artifact.parent.rename(tmp_path / "hidden-default-target")
+    root = result / "project"
+    cmake = (root / "CMakeLists.txt").read_text()
+    assert all(f"$<TARGET_OBJECTS:scar_{i['id']}.objects>" in cmake for i in images)
+    assert "add_dependencies(scar_first scar.objects.ready)" in cmake
+    assert "add_dependencies(scar_second scar_first)" in cmake
+    build = tmp_path / "build"
+    assert "warning" not in configure(root, build, 1).stderr.lower()
+    commands = json.loads((build / "compile_commands.json").read_bytes())
+    for command in commands:
+        lto = Path(command["file"]).is_relative_to(root / "images/first")
+        assert ("-flto=1" in command["command"]) == lto
+        assert ("-fno-fat-lto-objects" in command["command"]) == lto
+    link = subprocess.run(
+        ["cmake", "--build", str(build), "--parallel", "2", "--verbose"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    invocations = [
+        line for line in link.stdout.splitlines() if "g++" in line and " -o " in line
+    ]
+    assert len(invocations) == len(commands) + 2
+    assert all(" -c " in line for line in invocations[:-2])
+    for image, line in zip(images, invocations[-2:]):
+        output = image["output"]
+        assert Path(line.split(" -o ", 1)[1].split()[0]).name == output
+        assert ("-flto=1" in line) == (output == "first")
+        assert subprocess.run([build / "images" / image["id"] / output]).returncode == 7

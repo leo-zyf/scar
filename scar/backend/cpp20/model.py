@@ -708,6 +708,31 @@ def validate_unit(unit):
     return validate_node(unit, Unit)
 
 
+def build_options(mode="none", workers=1):
+    """Construct the compile and link settings for one C++ executable."""
+    if (
+        mode not in ("none", "gnu_lto")
+        or type(workers) is not int
+        or workers < 1
+        or (mode == "none" and workers != 1)
+    ):
+        raise ValueError("invalid C++ interprocedural build options")
+    return dict(semantics_version=1, interprocedural=dict(mode=mode, workers=workers))
+
+
+def validate_build_options(options):
+    if (
+        not isinstance(options, dict)
+        or set(options) != {"semantics_version", "interprocedural"}
+        or type(options["semantics_version"]) is not int
+        or options["semantics_version"] != 1
+        or not isinstance(options["interprocedural"], dict)
+        or set(options["interprocedural"]) != {"mode", "workers"}
+    ):
+        raise ValueError("invalid C++ target build options")
+    return build_options(**options["interprocedural"])
+
+
 def to_data(value):
     """Serialize every target node as structure, preserving empty definitions."""
     if type(value) in _FIELDS:

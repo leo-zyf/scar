@@ -52,8 +52,16 @@ def _format_sources(formatter, files, jobs):
 
 _STYLE = "BasedOnStyle: LLVM\nStandard: c++20\n"
 _HEADER = "include/scar/program.hpp"
+_CMAKE_PROJECT = (
+    "cmake_minimum_required(VERSION 3.20)",
+    "project(scar_delivery LANGUAGES CXX)",
+    'if(DEFINED SCAR_COMPILER_WORKER_LIMIT AND NOT "${SCAR_COMPILER_WORKER_LIMIT}" MATCHES "^[1-9][0-9]*$")',
+    '    message(FATAL_ERROR "SCAR_COMPILER_WORKER_LIMIT must be a positive integer")',
+    "endif()",
+)
 _METADATA = (
     "ir_sha256",
+    "build_options",
     "openmp",
     "runtime_libraries",
     "coordinate_maps",
@@ -261,7 +269,7 @@ def _mpi_checks(receipt):
     return lines
 
 
-def _package(root, sources, openmp, libraries, jobs, image=None, mpi=None):
+def _package(root, sources, openmp, libraries, jobs, options, image=None, mpi=None):
     unknown = libraries - {
         "MPI",
         "Threads",
@@ -282,27 +290,38 @@ def _package(root, sources, openmp, libraries, jobs, image=None, mpi=None):
     generated.extend(sorted((root / "include").rglob("*.hpp")))
     _format_sources(formatter, generated, jobs)
     target = f"scar_{image['id']}" if image else "scar_entry"
-    lines = (
-        []
-        if image
-        else [
-            "cmake_minimum_required(VERSION 3.20)",
-            "project(scar_delivery LANGUAGES CXX)",
-        ]
-    )
+    objects = f"{target}.objects"
+    lines = [] if image else list(_CMAKE_PROJECT)
     lines += [
-        f"add_executable({target}",
+        f"add_library({objects} OBJECT",
         *(f"    {source}" for source in sources),
         ")",
-        f"target_include_directories({target} PRIVATE include)",
-        f"set_target_properties({target} PROPERTIES CXX_STANDARD 20",
+        f"add_executable({target})",
+        f"target_link_libraries({target} PRIVATE {objects})",
+        f"target_include_directories({objects} PRIVATE include)",
+        f"set_target_properties({objects} {target} PROPERTIES CXX_STANDARD 20",
         "    CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)",
         'if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|IntelLLVM")',
-        f"    target_compile_options({target} PRIVATE -Werror -fno-fast-math -frounding-math -ffp-contract=off)",
+        f"    target_compile_options({objects} PRIVATE -Werror -fno-fast-math -frounding-math -ffp-contract=off)",
         'elseif(CMAKE_CXX_COMPILER_ID STREQUAL "NVHPC")',
-        f"    target_compile_options({target} PRIVATE -Werror -Kieee -Mnofma)",
+        f"    target_compile_options({objects} PRIVATE -Werror -Kieee -Mnofma)",
         "endif()",
     ]
+    interprocedural = options["interprocedural"]
+    if interprocedural["mode"] == "gnu_lto":
+        lines.extend(
+            (
+                'if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "GNU")',
+                '    message(FATAL_ERROR "This target requires GNU C++ link-time optimization")',
+                "endif()",
+                f"set(scar_lto_workers {interprocedural['workers']})",
+                "if(DEFINED SCAR_COMPILER_WORKER_LIMIT AND SCAR_COMPILER_WORKER_LIMIT LESS scar_lto_workers)",
+                '    set(scar_lto_workers "${SCAR_COMPILER_WORKER_LIMIT}")',
+                "endif()",
+                f'target_compile_options({objects} PRIVATE "-flto=${{scar_lto_workers}}" -fno-fat-lto-objects)',
+                f'target_link_options({target} PRIVATE "-flto=${{scar_lto_workers}}")',
+            )
+        )
     if "MPI" in libraries:
         lines.extend(
             ("set(MPI_ASSUME_NO_BUILTIN_MPI TRUE)", "set(MPI_CXX_SKIP_MPICXX TRUE)")
@@ -312,19 +331,19 @@ def _package(root, sources, openmp, libraries, jobs, image=None, mpi=None):
             lines.extend(
                 (
                     f"find_package({package} REQUIRED COMPONENTS CXX)",
-                    f"target_link_libraries({target} PRIVATE {package}::{package}_CXX)",
+                    f"target_link_libraries({objects} PUBLIC {package}::{package}_CXX)",
                 )
             )
     if "MPI" in libraries:
         lines.extend(_mpi_checks(mpi))
         lines.append(
-            f"target_compile_definitions({target} PRIVATE OMPI_SKIP_MPICXX=1 MPICH_SKIP_MPICXX=1)"
+            f"target_compile_definitions({objects} PRIVATE OMPI_SKIP_MPICXX=1 MPICH_SKIP_MPICXX=1)"
         )
     if "Threads" in libraries:
         lines.extend(
             (
                 "find_package(Threads REQUIRED)",
-                f"target_link_libraries({target} PRIVATE Threads::Threads)",
+                f"target_link_libraries({objects} PUBLIC Threads::Threads)",
             )
         )
     if "DynamicLoader" in libraries:
@@ -338,7 +357,7 @@ def _package(root, sources, openmp, libraries, jobs, image=None, mpi=None):
         )
     if "XTensor" in libraries:
         lines.append(
-            f'target_include_directories({target} SYSTEM PRIVATE "${{CMAKE_CURRENT_SOURCE_DIR}}/vendor/xtensor-cpu/include")'
+            f'target_include_directories({objects} SYSTEM PRIVATE "${{CMAKE_CURRENT_SOURCE_DIR}}/vendor/xtensor-cpu/include")'
         )
     if image:
         lines.append(
@@ -346,6 +365,53 @@ def _package(root, sources, openmp, libraries, jobs, image=None, mpi=None):
         )
     lines.append(f"install(TARGETS {target} RUNTIME DESTINATION bin)")
     (root / "CMakeLists.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _compilation_options(module, physical):
+    """Project a sealed link-image decision onto the C++ target build contract."""
+    from .model import build_options
+
+    seal = "compilation_binding_sha256"
+    if seal not in module and "compilation" not in physical:
+        return build_options()
+    decision = physical.get("compilation")
+    if not isinstance(decision, dict) or module.get(seal) != digest(
+        json_bytes(decision)
+    ):
+        raise ValueError("missing or mismatched physical compilation binding")
+    qualification = decision.get("qualification")
+    evidence = decision.get("evidence")
+    if (
+        type(decision.get("semantics_version")) is not int
+        or decision["semantics_version"] != 1
+        or decision.get("scope") != "link_image"
+        or not isinstance(decision.get("reason"), str)
+        or not decision["reason"].strip()
+        or not isinstance(qualification, dict)
+        or type(qualification.get("supported")) is not bool
+        or not isinstance(evidence, dict)
+    ):
+        raise ValueError("invalid physical compilation binding")
+    options = build_options(decision.get("mode"), decision.get("workers"))
+    if decision["mode"] == "gnu_lto":
+        if not qualification["supported"] or qualification.get("compiler_id") != "GNU":
+            raise ValueError("GNU LTO requires a qualified GNU toolchain")
+        budget = evidence.get("worker_budget")
+        if type(budget) is not int or decision["workers"] > budget:
+            raise ValueError("GNU LTO workers exceed the sealed compilation budget")
+        for tool in ("compiler", "cmake"):
+            record = qualification.get(tool)
+            if (
+                not isinstance(record, dict)
+                or not isinstance(record.get("path"), str)
+                or not record["path"]
+                or type(record.get("size")) is not int
+                or record["size"] <= 0
+                or not isinstance(record.get("sha256"), str)
+                or not re.fullmatch(r"[0-9a-f]{64}", record["sha256"])
+            ):
+                raise ValueError(f"GNU LTO lacks a sealed {tool} toolchain receipt")
+    return options
 
 
 def _lower_image(path, revision, scheduled, destination):
@@ -367,6 +433,7 @@ def _lower_image(path, revision, scheduled, destination):
         "status", "READY"
     ) != "READY":
         raise ValueError("physical plan does not belong to its scheduled IR package")
+    options = _compilation_options(scheduled["module"], physical)
     module = dict(
         scheduled["module"],
         functions=[read_member(path.parent, f) for f in scheduled["functions"]],
@@ -414,6 +481,7 @@ def _lower_image(path, revision, scheduled, destination):
         lowerer.libraries.links.add("MPI")
         operator_sdks["MPI"] = member(destination, "operator-sdk", mpi)
     metadata = dict(
+        build_options=options,
         openmp=lowerer.openmp,
         runtime_libraries=sorted(lowerer.libraries.links),
         coordinate_maps=lowerer.coordinate_maps,
@@ -542,9 +610,14 @@ def lower_scheduled(source, destination):
 
 
 def _print_image(path, product, directory, runtime, jobs, image=None):
-    from .model import from_data
+    from .model import build_options, from_data, validate_build_options
     from .printer import print_unit
 
+    options = (
+        validate_build_options(product["build_options"])
+        if "build_options" in product
+        else build_options()
+    )
     if "runtime" in product:
         runtime = read_blob(path.parent, product["runtime"])
     elif runtime is None:
@@ -619,8 +692,10 @@ def _print_image(path, product, directory, runtime, jobs, image=None):
         mpi = read_member(path.parent, bindings["MPI"])
         _validate_mpi_sdk(mpi)
         write_json(directory / "mpi-sdk.json", mpi)
-    _package(directory, sources, product["openmp"], libraries, jobs, image, mpi)
-    return sources
+    _package(
+        directory, sources, product["openmp"], libraries, jobs, options, image, mpi
+    )
+    return sources, options
 
 
 def print_target(target, destination, *, jobs=4):
@@ -644,10 +719,7 @@ def print_target(target, destination, *, jobs=4):
             validate_images(images, root)
             staging.mkdir()
             (staging / ".clang-format").write_text(_STYLE, encoding="utf-8")
-            cmake = [
-                "cmake_minimum_required(VERSION 3.20)",
-                "project(scar_delivery LANGUAGES CXX)",
-            ]
+            cmake = list(_CMAKE_PROJECT)
             projects = []
             for image in images:
                 child, child_hash, data = read_image_product(
@@ -658,7 +730,7 @@ def print_target(target, destination, *, jobs=4):
                     "scar.cpp20-target-ir",
                 )
                 directory = Path("images") / image["id"]
-                sources = _print_image(
+                sources, options = _print_image(
                     child, data, staging / directory, runtime, jobs, image
                 )
                 cmake.append(f"add_subdirectory({directory.as_posix()})")
@@ -670,9 +742,27 @@ def print_target(target, destination, *, jobs=4):
                         directory=directory.as_posix(),
                         header=(directory / _HEADER).as_posix(),
                         sources=[(directory / s).as_posix() for s in sources],
+                        build_options=options,
                         target_ir_sha256=child_hash,
                     )
                 )
+            # Link processes may each consume the entire compiler budget for LTO.
+            # Keep all object compilations parallel, then order the image links.
+            targets = [f"scar_{image['id']}" for image in images]
+            cmake.extend(
+                [
+                    "add_custom_target(scar.objects.ready DEPENDS",
+                    *(f"    $<TARGET_OBJECTS:{t}.objects>" for t in targets),
+                    ")",
+                    "add_dependencies(scar.objects.ready "
+                    + " ".join(f"{t}.objects" for t in targets)
+                    + ")",
+                ]
+            )
+            previous = "scar.objects.ready"
+            for target in targets:
+                cmake.append(f"add_dependencies({target} {previous})")
+                previous = target
             (staging / "CMakeLists.txt").write_text(
                 "\n".join(cmake) + "\n", encoding="utf-8"
             )
@@ -686,9 +776,10 @@ def print_target(target, destination, *, jobs=4):
                 ir_sha256=product["ir_sha256"],
             )
         else:
-            sources = _print_image(path, product, staging, runtime, jobs)
+            sources, options = _print_image(path, product, staging, runtime, jobs)
             header, first_source = _HEADER, sources[0]
-            metadata = {key: product[key] for key in _METADATA}
+            image = dict(product, build_options=options)
+            metadata = {key: image[key] for key in _METADATA}
         members = [
             file_receipt(staging, f) for f in sorted(staging.rglob("*")) if f.is_file()
         ]

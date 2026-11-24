@@ -1,14 +1,3 @@
-#if defined(SCAR_CXX_ACCESS_PROBE)
-#include <type_traits>
-
-// Compile only: validate the parameter spelling used by the target printer,
-// including standard pointer aliases and a cv-qualified pointee.
-void scar_access_parameter(std::add_pointer_t<double> __restrict__ output,
-                           std::add_pointer_t<const double> left,
-                           const double *right) {
-  output[0] = left[0] + right[0];
-}
-#else
 #include <climits>
 #include <cstdio>
 #include <dlfcn.h>
@@ -26,4 +15,3 @@ int main() {
   std::printf("%s\n%s\n%zu\n", symbol.dli_fname, gnu_get_libc_version(),
               CHAR_BIT * sizeof(void *));
 }
-#endif
