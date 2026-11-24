@@ -251,6 +251,69 @@ def test_external_import_facts_preserve_ownership_without_execution(
     assert imported["initializers"] == [] and "IO" in imported["effects"]
 
 
+def test_external_exports_follow_aliases_and_preserve_source_evidence(
+    tmp_path, monkeypatch
+):
+    from base64 import urlsafe_b64encode
+    from hashlib import sha256
+    import sys
+
+    project, installed = tmp_path / "project", tmp_path / "installed"
+    project.mkdir()
+    package = installed / "source_library"
+    package.mkdir(parents=True)
+    sources = {
+        "source_library/__init__.py": "from .unknown import *\nfrom .first import produce as selected\nsaved = selected\nfrom .second import produce as selected\n",
+        "source_library/unknown.py": "__all__ = unknown_at_runtime()\n",
+        "source_library/first.py": 'def produce(x):\n    """not a statement site"""\n    def nested():\n        return 999\n    return x + 1\n',
+        "source_library/second.py": "def produce(x):\n    return x + 2\n",
+    }
+    metadata = installed / "source_library-1.0.dist-info"
+    metadata.mkdir()
+    (metadata / "METADATA").write_text(
+        "Metadata-Version: 2.1\nName: source-library\nVersion: 1.0\n"
+    )
+    (metadata / "top_level.txt").write_text("source_library\n")
+    records = []
+    for name, content in sources.items():
+        data = content.encode()
+        (installed / name).write_bytes(data)
+        records.append(
+            f"{name},sha256={urlsafe_b64encode(sha256(data).digest()).decode().rstrip('=')},{len(data)}\n"
+        )
+    (metadata / "RECORD").write_text("".join(records))
+    monkeypatch.syspath_prepend(str(installed))
+    entry = project / "entry.py"
+    entry.write_text("import source_library as api\napi.saved(1)\napi.selected(2)\n")
+    assert "source_library" not in sys.modules
+    facts = python.parse_unit(entry, root=project)
+    exports = facts.providers["source_library"]["exports"]
+    (first,) = exports["saved"]["candidates"]
+    (second,) = exports["selected"]["candidates"]
+    assert (
+        first["module"] == "source_library.first"
+        and second["module"] == "source_library.second"
+    )
+    assert exports["selected"]["unresolved"] == []
+    assert first["locations"] == {"3": "def nested():", "5": "return x + 1"}
+    assert all(step["sha256"] for step in first["via"])
+    assert "source_library" not in sys.modules
+    (package / "second.py").write_text("def produce(x):\n    return x + 900\n")
+    changed = python.parse_unit(entry, root=project).providers["source_library"][
+        "exports"
+    ]["selected"]
+    assert not changed["candidates"] and changed["unresolved"]
+    shutil.rmtree(installed)
+    entry.unlink()
+    neutral = _offline(monkeypatch, python, facts)
+    from scar.contract import walk_operations
+
+    imported = next(
+        n for n in walk_operations(neutral["functions"]) if n["op"] == "python_import"
+    )
+    assert imported["source_provider"]["exports"] == exports
+
+
 def test_python_binding_time_loop_edges_and_class_frames(tmp_path, monkeypatch):
     from scar.contract import walk_operations
 

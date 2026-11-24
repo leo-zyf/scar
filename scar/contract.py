@@ -94,7 +94,7 @@ def semantic_form(value):
         return {
             k: semantic_form(v)
             for k, v in value.items()
-            if k not in {"location", "site"}
+            if k not in {"location", "site", "origin_region"}
         }
     if isinstance(value, list):
         return [semantic_form(v) for v in value]

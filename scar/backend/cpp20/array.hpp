@@ -24,6 +24,7 @@
 #include <xtensor/core/xmath.hpp>
 #include <xtensor/core/xnoalias.hpp>
 #include <xtensor/core/xoperation.hpp>
+#include <xtensor/generators/xbuilder.hpp>
 #include <xtensor/views/xbroadcast.hpp>
 #include <xtensor/views/xstrided_view.hpp>
 
@@ -154,6 +155,21 @@ public:
     return result;
   }
 
+  static ndarray iota(std::int64_t length) {
+    static_assert(std::is_same_v<T, double> &&
+                  std::numeric_limits<T>::is_iec559 &&
+                  std::numeric_limits<T>::digits == 53);
+    constexpr auto max_count = std::int64_t{1} << 53;
+    if (length > max_count)
+      throw std::length_error("array_iota exceeds the binary64 index limit");
+    auto dims = shape({1, {length}});
+    auto size = count(dims);
+    auto result = allocate(std::move(dims), size);
+    if (size)
+      xt::noalias(*result.region_->storage) = xt::cast<T>(xt::arange(length));
+    return result;
+  }
+
   static ndarray literal(array_shape layout, std::initializer_list<T> values) {
     auto dims = shape(layout);
     auto size = count(dims);
@@ -243,6 +259,10 @@ private:
 
 template <class T> ndarray<T> array_create(array_shape shape) {
   return ndarray<T>::zeros(shape);
+}
+
+template <class T> ndarray<T> array_iota(std::int64_t count) {
+  return ndarray<T>::iota(count);
 }
 
 template <class T> struct array_elements {

@@ -24,6 +24,7 @@ _SITE_OPERATIONS = {
     "break",
     "continue",
     "call",
+    "library_call",
     "python_invoke",
     "python_import",
     "python_define_class",

@@ -432,6 +432,66 @@ except TypeError as error:
     assert header.count("namespace scar::generated_unicode") == 1
 
 
+def test_source_sequence_expands_to_native_operators_with_provider_diagnostics(
+    tmp_path,
+):
+    source = tmp_path / "source"
+    source.mkdir()
+    entry = source / "entry.py"
+    entry.write_text("""import numpy as np
+def show(values, count):
+    for i in range(count):
+        print(f'{values[i]:.17g}', end=';')
+    print()
+show(np.linspace(0.0, 1.0, 6), 6)
+show(np.linspace(-2.0, 3.0, 7, endpoint=False), 7)
+show(np.linspace(0.0, 5e-324, 6), 6)
+show(np.linspace(0.0, -0.0, 3, axis=-1, dtype=np.float64), 3)
+empty = np.linspace(-1e308, 1e308, 0)
+show(empty, 0)
+show(np.linspace(-1e308, 1e308, 1), 1)
+show(np.linspace(-1e308, 1e308, 4), 4)
+show(np.linspace(-1e308, 1e308, 4), 4)
+show(np.linspace(-1e308, 1e308, 4, endpoint=False), 4)
+pair = np.linspace(1.0, 4.0, 4, retstep=True)
+def report():
+    show(pair[0], 4)
+    print(repr(pair[1]), abs(pair[1]))
+report()
+undefined = np.linspace(1.0, 4.0, 1, retstep=True)
+print(repr(undefined[1]))
+for n in range(-1, 4):
+    try:
+        show(np.linspace(1.0, 2.0, n), n)
+    except ValueError as error:
+        print(str(error))
+print(abs(True), abs(-3.5), abs(-9223372036854775807), abs(-0.0))
+""")
+    expected = subprocess.run(
+        [sys.executable, "-B", entry], cwd=source, capture_output=True, check=True
+    )
+    graph, plan, delivery = (tmp_path / name for name in ("graph", "plan", "delivery"))
+    _stage(tmp_path, "frontend", "build", "--entry", entry, "--out", graph)
+    shutil.rmtree(source)
+    _stage(tmp_path, "middle", "plan", "--graph", graph, "--out", plan)
+    report = json.loads((plan / "plan.json").read_bytes())
+    expansions = [
+        d for d in report["normalizations"] if d["code"] == "expanded_sequence_region"
+    ]
+    assert len(expansions) == 12
+    ir = json.loads((plan / "exec-ir.json").read_bytes())
+    assert (
+        "array_iota" in ir["module"]["operator_requirements"]["ndarray"]["operations"]
+    )
+    shutil.rmtree(graph)
+    result = _stage(tmp_path, "backend", "compile", "--ir", plan, "--out", delivery)
+    shutil.rmtree(plan)
+    native = subprocess.run(
+        [result["executable"]], cwd=tmp_path, capture_output=True, check=True
+    )
+    assert (native.stdout, native.stderr) == (expected.stdout, expected.stderr)
+
+
 def test_numpy_default_warnings_survive_source_removal(tmp_path):
     entry = tmp_path / "entry.py"
     entry.write_text("""import numpy as np

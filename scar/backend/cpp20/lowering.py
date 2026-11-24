@@ -50,6 +50,7 @@ _SCALARS = {
 }
 _ARRAY_EFFECTS = {
     "array_create": {"MEM", "VAL"},
+    "array_iota": {"MEM", "VAL"},
     "array_literal": {"MEM", "VAL"},
     "array_unary": {"MEM", "VAL"},
     "array_copy": {"MEM", "STATE", "XFER"},
@@ -673,6 +674,24 @@ class Lowerer:
         self.type_name(ty)
         elem = self.type_name(ty["element"])
         target = template("scar::" + op, elem)
+        if op == "array_iota":
+            count = node.get("count")
+            limit = node.get("max_count")
+            if (
+                rank != 1
+                or type(limit) is not int
+                or limit != 1 << 53
+                or not isinstance(count, dict)
+                or count.get("type") != "i64"
+            ):
+                raise ValueError(
+                    "array_iota requires a rank-one binary64 result, an i64 count and the exact index limit"
+                )
+            if count.get("op") == "literal" and (
+                type(count.get("value")) is not int or not 0 <= count["value"] <= limit
+            ):
+                raise ValueError("array_iota literal count outside its integer domain")
+            return call(target, self.expression(count))
         if op in {"array_create", "array_literal"}:
             shape = operands(node["shape"], "i64")
             if len(shape.args) != rank:

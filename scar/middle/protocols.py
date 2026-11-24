@@ -328,7 +328,7 @@ class _Frame:
             slot = _slot(self.module, name)
             result = self.env.get(name, self.project.names.get(slot))
             if result is None and slot not in self.project.shadow:
-                if name in {"print", "range", "int", "float"}:
+                if name in {"print", "range", "int", "float", "abs"}:
                     result = _Value("builtin", name)
                 else:
                     result = exceptions.builtin(name) or host_protocols.builtin(
@@ -367,7 +367,7 @@ class _Frame:
                     slot = _slot(self.module, name)
                     found = self.env.get(name, self.project.names.get(slot))
                     if found is None and slot not in self.project.shadow:
-                        if name in {"print", "range", "int", "float"}:
+                        if name in {"print", "range", "int", "float", "abs"}:
                             return _Value("builtin", name)
                         return exceptions.builtin(name) or host_protocols.builtin(
                             self, expr, name
@@ -810,11 +810,15 @@ class _Frame:
             )
         if target.kind in {"array_constructor", "array_copy_method"}:
             return arrays.construct(self, node, target, args, kwargs, steps, discard)
-        if target.kind == "builtin" and target.value in {"int", "float"}:
+        if target.kind == "builtin" and target.value in {"int", "float", "abs"}:
             result = scalars.construct(self, node, target.value, args, kwargs)
             self.project.decisions.append(
                 dict(
-                    code="numeric_conversion",
+                    code=(
+                        "numeric_intrinsic"
+                        if target.value == "abs"
+                        else "numeric_conversion"
+                    ),
                     symbol=self.name,
                     location=node.get("location"),
                     constructor=target.value,

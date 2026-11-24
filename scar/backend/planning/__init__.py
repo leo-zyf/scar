@@ -20,6 +20,7 @@ from scar.host import array_sdk
 
 _ARRAY_OPERATIONS = {
     "array_create",
+    "array_iota",
     "array_literal",
     "array_copy",
     "array_unary",

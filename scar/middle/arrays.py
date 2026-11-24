@@ -6,11 +6,16 @@ import re
 
 from scar.contract import walk_operations
 
-from . import scalars
+from . import exceptions, scalars, text
 from .scalars import as_float as _as_float
 from .values import Value, _UNKNOWN, array_kind, literal, rank, runtime, wire
 
-_PROVIDED = {"array", "zeros", "float64"}
+_PROVIDED = {"array", "zeros", "float64", "linspace"}
+_LINEAR_SPACE_SOURCE = {
+    "numpy": "09295a80660f17925ae23765ce8cbd7ff7ceae968d5f2f89349f1cb74c0b9e11",
+    "numpy._core": "837ce8aec8693095d2e1c7c306d385d1785a50be97a009935c64cae04e3555d2",
+    "numpy._core.function_base": "97925f5f2a271088cbff838a149a6312335d8dac80ac0314f0c85a31b442c1b5",
+}
 _OPERATORS = {
     "add": ("add", "add"),
     "sub": ("sub", "subtract"),
@@ -178,6 +183,7 @@ def may_write_external(function, functions, active=()):
         op = expr["op"]
         if op in {
             "array_create",
+            "array_iota",
             "array_literal",
             "array_copy",
             "array_unary",
@@ -255,6 +261,7 @@ def _output(frame, node, kind, steps, *, facts=None, discard=False, **fields):
         and node
         in {
             "array_create",
+            "array_iota",
             "array_literal",
             "array_copy",
             "array_unary",
@@ -301,6 +308,7 @@ def import_provider(frame, node):
         "sha256": source["sha256"],
         "import_effects": node["effects"],
         "contract": "closed public numerical operations with unobserved module registry and initialization hooks",
+        "exports": {**(prior or {}).get("exports", {}), **source.get("exports", {})},
     }
     if node["request"]["form"] == "import":
         return Value("provider_namespace", "numpy")
@@ -427,6 +435,7 @@ def _operation(frame, node, op, lhs, rhs, steps, *, inplace=False, discard=False
         warning["module"] = "__main__" if frame.scope.get("main") else frame.module
     if "source_line" in location:
         warning["source_line"] = location["source_line"]
+    warning.update(node.get("diagnostic_context", {}))
     contract = dict(
         operator=operator,
         left=left,
@@ -577,9 +586,18 @@ def capture_sequence(frame, node, steps):
         frame.fail(
             node, "sequence_contract", f"{kind} has no ordered array or shape contract"
         )
+    return _capture_values(
+        frame,
+        node,
+        kind,
+        (frame.evaluate(child, steps) for child in node["items"]),
+        steps,
+    )
+
+
+def _capture_values(frame, node, kind, source, steps):
     items = []
-    for child in node["items"]:
-        item = frame.evaluate(child, steps)
+    for item in source:
         if runtime(item.kind):
             # A sequence captures the current value, including the current array handle.
             # A module-level sequence may outlive its initializer's local temporaries.
@@ -644,6 +662,307 @@ def _literal_array(frame, node, source, steps, *, force, discard=False):
     )
 
 
+def _linspace(frame, node, args, keywords, steps, discard):
+    """Expand a versioned public sequence contract into neutral scalar/array ops."""
+    first_operation = len(steps)
+    provider = frame.project.providers.get("numpy", {})
+    exported = provider.get("exports", {}).get("linspace", {})
+    candidates = exported.get("candidates", ())
+    expected = _LINEAR_SPACE_SOURCE["numpy._core.function_base"]
+    matches = [
+        p
+        for p in candidates
+        if p.get("sha256") == expected and p.get("name") == "linspace"
+    ]
+    if provider.get("version") != "2.5.5" or len(matches) != 1:
+        frame.fail(
+            node,
+            "provider_implementation",
+            "linspace needs captured source evidence for its registered implementation profile",
+        )
+    profile = matches[0]
+    route = {p["module"]: p.get("sha256") for p in profile.get("via", ())}
+    if provider.get("sha256") != _LINEAR_SPACE_SOURCE["numpy"] or any(
+        route.get(m) != sha for m, sha in _LINEAR_SPACE_SOURCE.items()
+    ):
+        frame.fail(
+            node,
+            "provider_implementation",
+            "the public API export path differs from the registered source profile",
+        )
+    names = ("start", "stop", "num", "endpoint", "retstep", "dtype", "axis")
+    defaults = (
+        None,
+        None,
+        literal(50),
+        literal(True),
+        literal(False),
+        literal(None),
+        literal(0),
+    )
+    if len(args) > len(names) or set(keywords) - {*names, "device"}:
+        frame.fail(
+            node, "array_arguments", "linspace has unbound or excessive arguments"
+        )
+    bound = []
+    for index, (name, default) in enumerate(zip(names, defaults)):
+        if index < len(args):
+            if name in keywords:
+                frame.fail(node, "array_arguments", f"linspace binds {name} twice")
+            bound.append(args[index])
+        else:
+            value = keywords.get(name, default)
+            if value is None:
+                frame.fail(node, "array_arguments", f"linspace requires {name}")
+            bound.append(value)
+    start, stop, count, endpoint, retstep, dtype, axis = bound
+    if count.kind == "bool":
+        count = scalars.construct(frame, node, "int", [count], {})
+    if count.kind != "i64" or count.bounds[1] > 1 << 53:
+        frame.fail(
+            node,
+            "array_count",
+            "the exact coordinate sequence requires a proven index-width count no larger than 2**53",
+        )
+    if count.bounds[1] < 0:
+        frame.fail(
+            node,
+            "array_count",
+            "this source invocation raises ValueError for a negative sample count",
+        )
+    if not (
+        dtype.kind == "unit"
+        or dtype.kind == "dtype"
+        and dtype.value == "f64"
+        or dtype.kind == "builtin"
+        and dtype.value == "float"
+        or dtype.kind == "text"
+        and dtype.exact in {"float64", "f8", "d"}
+    ):
+        frame.fail(
+            node, "array_dtype", "linspace requires a binary64/default output dtype"
+        )
+    if (
+        axis.kind != "i64"
+        or axis.exact not in {0, -1}
+        or keywords.get("device", literal(None)).kind != "unit"
+    ):
+        frame.fail(
+            node,
+            "array_layout",
+            "scalar endpoints require axis 0/-1 and the default CPU device",
+        )
+    endpoint, retstep = frame.truth(endpoint, node), frame.truth(retstep, node)
+    if type(retstep.exact) is not bool:
+        frame.fail(
+            node, "array_return", "retstep must determine one source return layout"
+        )
+    start, stop = [
+        scalars.construct(frame, node, "float", [v], {}) for v in (start, stop)
+    ]
+
+    def scalar(op, a, b, kind="i64"):
+        return dict(op="binary", type=kind, operator=op, left=a, right=b)
+
+    if count.bounds[0] < 0:
+        bad = []
+        rendered = text.render(frame, node, count, "str", literal(""), bad)
+        message = text._concat(
+            frame,
+            [
+                literal("Number of samples, "),
+                rendered,
+                literal(", must be non-negative."),
+            ],
+            bad,
+        )
+        error = exceptions.construct(
+            frame, node, exceptions.builtin("ValueError"), [message], {}, bad
+        )
+        bad.append(dict(op="throw", value=error.value))
+        steps.append(
+            dict(
+                op="if",
+                condition=scalar("lt", count.value, literal(0).value, "bool"),
+                then=bad,
+                **{"else": []},
+            )
+        )
+        count = Value("i64", count.value, dict(range=(0, count.bounds[1])))
+    lower, upper = count.bounds
+    div = (
+        count
+        if endpoint.exact is False
+        else Value(
+            "i64",
+            scalar("sub", count.value, literal(1).value),
+            dict(range=(lower - 1, upper - 1)),
+        )
+    )
+    if endpoint.exact is _UNKNOWN:
+        div = Value(
+            "i64",
+            dict(
+                op="select",
+                type="i64",
+                condition=endpoint.value,
+                then=div.value,
+                **{"else": count.value},
+            ),
+            dict(range=(lower - 1, upper)),
+        )
+    div = frame.effect(div.value, div.kind, steps, facts=div.facts)
+    positive = True if div.bounds[0] > 0 else False if div.bounds[1] <= 0 else None
+    if retstep.exact and positive is None:
+        frame.fail(
+            node,
+            "array_return",
+            "the returned step can have either a Python float or NumPy scalar source type",
+        )
+
+    def site(line, operation):
+        source_line = profile.get("locations", {}).get(str(line))
+        if source_line is None:
+            frame.fail(
+                node,
+                "provider_implementation",
+                "captured sequence profile lacks a required operation site",
+            )
+        return dict(
+            location=dict(
+                file=profile["origin"],
+                diagnostic_file=profile["origin"],
+                line=line,
+                source_line=source_line,
+            ),
+            diagnostic_context=dict(module=profile["module"], operation=operation),
+        )
+
+    def arithmetic(line, op, a, b, out, *, inplace=False, operation=None):
+        return _operation(
+            frame,
+            site(line, operation or _OPERATORS[op][1]),
+            op,
+            a,
+            b,
+            out,
+            inplace=inplace,
+        )
+
+    delta = arithmetic(141, "sub", stop, start, steps)
+    extent = count.exact if count.exact is not _UNKNOWN else None
+    ramp = _output(
+        frame,
+        "array_iota",
+        array_kind(1),
+        steps,
+        count=count.value,
+        max_count=1 << 53,
+        facts={"shape": (extent,)},
+        effects=["MEM", "VAL"],
+    )
+    denominator = Value("f64", _as_float(frame, node, div))
+
+    def regular(out):
+        step = arithmetic(
+            152, "div", delta, denominator, out, operation="scalar divide"
+        )
+        zero = binary(frame, node, "eq", step, literal(0.0), out)
+        zero = frame.truth(zero, node)
+        tiny, normal = [], []
+        if zero.exact is not False:
+            arithmetic(157, "div", ramp, denominator, tiny, inplace=True)
+            arithmetic(159, "mult", ramp, delta, tiny, inplace=True)
+        if zero.exact is not True:
+            arithmetic(163, "mult", ramp, step, normal, inplace=True)
+        if zero.exact is not _UNKNOWN:
+            out.extend(tiny if zero.exact else normal)
+        else:
+            out.append(
+                dict(op="if", condition=zero.value, then=tiny, **{"else": normal})
+            )
+        return ramp, step
+
+    def degenerate(out):
+        return arithmetic(171, "mult", ramp, delta, out), Value(
+            "f64", dict(op="literal", type="f64", value="nan")
+        )
+
+    if positive is not None:
+        result, step = (regular if positive else degenerate)(steps)
+    else:
+        yes, no = [], []
+        first, _ = regular(yes)
+        last, _ = degenerate(no)
+        result = Value(
+            array_kind(1), None, frame.project.array_state.create((extent,))
+        ).at(frame.temporary())
+        steps.append(dict(op="decl", name=result.value["name"], type=wire(result.kind)))
+        for body, selected in ((yes, first), (no, last)):
+            body.append(dict(op="assign", target=result.value, value=selected.value))
+        steps.append(
+            dict(
+                op="if",
+                condition=scalar("gt", div.value, literal(0).value, "bool"),
+                then=yes,
+                **{"else": no},
+            )
+        )
+        step = None
+    arithmetic(173, "add", result, start, steps, inplace=True)
+    if endpoint.exact is not False and upper > 1:
+        store = dict(
+            op="array_store",
+            base=result.value,
+            indices=[literal(-1).value],
+            value=stop.value,
+            effects=["STATE"],
+            broadcasting="trailing",
+        )
+        frame.project.array_ops.add("array_store")
+        if endpoint.exact is True and lower > 1:
+            steps.append(store)
+        else:
+            guard = scalar(
+                "land",
+                endpoint.value,
+                scalar("gt", count.value, literal(1).value, "bool"),
+                "bool",
+            )
+            steps.append(dict(op="if", condition=guard, then=[store], **{"else": []}))
+    region = "sequence/" + node.get("site", f"{frame.name}/{first_operation}")
+    selected = (
+        literal(None)
+        if discard
+        else (
+            _capture_values(frame, node, "tuple", (result, step), steps)
+            if retstep.exact
+            else result
+        )
+    )
+    pending = list(steps[first_operation:])
+    while pending:
+        generated = pending.pop()
+        generated.setdefault("origin_region", region)
+        for branch in ("then", "else", "body"):
+            pending.extend(generated.get(branch, ()))
+    frame.project.decisions.append(
+        dict(
+            code="expanded_sequence_region",
+            region=region,
+            source_site=node.get("site"),
+            symbol=frame.name,
+            location=node.get("location"),
+            provider=profile["module"],
+            implementation_sha256=profile["sha256"],
+            leaf="array_iota",
+            binding_contract="registered release public API with pristine exported namespace and numeric inputs; static export candidates alone do not establish runtime identity",
+            proof="ordered scalar-f64 source implementation with underflow branch, fresh private storage and endpoint overwrite; base/flags do not escape",
+        )
+    )
+    return selected
+
+
 def construct(frame, node, target, args, keywords, steps, discard):
     options = dict(keywords)
     if target.kind == "array_copy_method":
@@ -665,6 +984,8 @@ def construct(frame, node, target, args, keywords, steps, discard):
             effects=["MEM", "STATE", "XFER"],
         )
     name = target.value
+    if name == "linspace":
+        return _linspace(frame, node, args, options, steps, discard)
     formal = "shape" if name == "zeros" else "object"
     if not args and formal in options:
         args = [options.pop(formal)]

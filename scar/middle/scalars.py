@@ -6,6 +6,7 @@ from .values import (
     Value,
     literal,
     numeric_facts as _numeric_facts,
+    wire,
     _MIN,
     _MAX,
     _UNKNOWN,
@@ -51,8 +52,54 @@ def _binary64_bounds(item):
     return None
 
 
+def _absolute(frame, node, item):
+    if item.kind == "numpy_bool":
+        return item
+    exact = item.exact
+    if item.kind == "bool":
+        facts = {"range": (0, 1)} if exact is _UNKNOWN else _numeric_facts(int(exact))
+        return Value("i64", dict(op="cast", type="i64", value=item.value), facts)
+    if item.kind == "i64":
+        interval = item.bounds if exact is _UNKNOWN else (exact, exact)
+        if interval[0] <= _MIN:
+            frame.fail(
+                node,
+                "integer_range",
+                "abs() requires a signed 64-bit operand above INT64_MIN",
+            )
+    elif item.kind in {"f64", "numpy_f64"}:
+        interval = _binary64_bounds(item)
+    else:
+        frame.fail(
+            node,
+            "absolute_domain",
+            f"abs() requires a scalar magnitude contract for {item.kind}",
+        )
+
+    facts = {} if exact is _UNKNOWN else _numeric_facts(abs(exact))
+    if interval is not None:
+        low, high = interval
+        lower = min(abs(low), abs(high))
+        if low <= 0 <= high:
+            lower = 0 if item.kind == "i64" else 0.0
+        facts["range"] = (lower, max(abs(low), abs(high)))
+    return Value(
+        item.kind,
+        dict(op="intrinsic", name="abs", type=wire(item.kind), args=[item.value]),
+        facts,
+    )
+
+
 def construct(frame, node, name, args, keywords):
     """Close a proven numeric builtin using its already evaluated arguments."""
+    if name == "abs":
+        if len(args) != 1 or keywords:
+            frame.fail(
+                node,
+                "absolute_arguments",
+                "abs() requires exactly one positional argument",
+            )
+        return _absolute(frame, node, args[0])
     if name not in {"int", "float"}:
         return None
     if keywords or len(args) > 1:
