@@ -10,6 +10,7 @@ from scar.contract import (
     document,
     file_receipt,
     open_product,
+    member,
     validate_images,
     write_json,
 )
@@ -60,6 +61,30 @@ def _plan_image(graph, folder, revision, out, *, optimize_graph, shape, trip_cou
         contract=graph["contract"],
         logical_optimization=optimize_graph,
     )
+    artifact_analysis = module.get("artifact_analysis")
+    if artifact_analysis is not None:
+        artifact_analysis = {
+            **artifact_analysis,
+            "graph": member(out, "analysis", artifact_analysis["graph"]),
+        }
+    protocol_analysis = module.get("protocol_analysis")
+    if protocol_analysis is not None:
+        protocol_analysis = dict(protocol_analysis)
+        if "closed_fragments" in protocol_analysis:
+            protocol_analysis["closed_fragments"] = [
+                {**fragment, "function": member(out, "analysis", fragment["function"])}
+                for fragment in protocol_analysis["closed_fragments"]
+            ]
+        if "prefix_fragments" in protocol_analysis:
+            protocol_analysis["prefix_fragments"] = [
+                {
+                    key: value
+                    for key, value in fragment.items()
+                    if key not in {"body", "frontier"}
+                }
+                | {"fragment": member(out, "analysis", fragment)}
+                for fragment in protocol_analysis["prefix_fragments"]
+            ]
     report = document(
         PLAN,
         status=status,
@@ -71,8 +96,13 @@ def _plan_image(graph, folder, revision, out, *, optimize_graph, shape, trip_cou
         baseline_defects=module.get("baseline_defects", []),
         normalizations=module.get("normalizations", []),
         **(
-            {"protocol_analysis": module["protocol_analysis"]}
-            if "protocol_analysis" in module
+            {"artifact_analysis": artifact_analysis}
+            if artifact_analysis is not None
+            else {}
+        ),
+        **(
+            {"protocol_analysis": protocol_analysis}
+            if protocol_analysis is not None
             else {}
         ),
         layers=[

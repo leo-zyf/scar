@@ -165,6 +165,115 @@ def test_make_capture_preserves_mixed_profiles_and_independent_stages(
     assert _run([executable], executable.parent) == expected
 
 
+def test_generated_content_joins_parser_snapshots_without_inventing_read_history(
+    tmp_path,
+):
+    from scar.contract import byte_value_id, read_member, validate_artifact_flow
+
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "producer.py").write_text(
+        "def generate():\n"
+        '    stream = open("values.h", "w")\n'
+        "    writer = stream.write\n"
+        '    writer("#define SCALE " + "3\\n")\n'
+        '    print("", file=stream)\n'
+        "    stream.close()\n"
+    )
+    (source / "driver.py").write_text(
+        "import producer\nimport subprocess\nproducer.generate()\n"
+        'child = subprocess.Popen("make -B -j2 worker", shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)\n'
+        'for line in child.stdout:\n    print(line, end="")\n'
+        "print(child.wait())\n"
+    )
+    (source / "worker.c").write_text(
+        '#include "values.h"\n#include <stdio.h>\n'
+        'int main(void) { printf("%d\\n", SCALE * SCALE); return 0; }\n'
+    )
+    (source / "Makefile").write_text(
+        "worker: worker.c values.h\n\tgcc -std=c99 -MMD -MF worker.d -O2 worker.c -o $@\n"
+    )
+    trace = tmp_path / "events.json"
+    _run(
+        [
+            "bear",
+            "intercept",
+            "--force-preload",
+            "--output",
+            trace,
+            "--",
+            sys.executable,
+            "driver.py",
+        ],
+        source,
+    )
+    expected = (source / "values.h").read_bytes()
+    assert expected == b"#define SCALE 3\n\n"
+    assert _run([source / "worker"], source) == b"9\n"
+    request = tmp_path / "request.json"
+    request.write_text(
+        json.dumps(
+            dict(
+                source_root="source",
+                root_image="driver",
+                images=[
+                    dict(
+                        id="driver",
+                        entry="__main__",
+                        output="driver",
+                        source="driver.py",
+                    )
+                ],
+                build_trace=dict(provider="bear-3-intercept", path=trace.name),
+            )
+        )
+    )
+    graph, plan = tmp_path / "graph", tmp_path / "plan"
+    _stage(tmp_path, "frontend", "build", "--manifest", request, "--out", graph)
+    product = json.loads((graph / "graph.json").read_bytes())
+    source_flow = validate_artifact_flow(read_member(graph, product["artifact_flow"]))
+    interfaces = {effect["interface"] for effect in source_flow["source_effects"]}
+    assert interfaces >= {"stream.open", "stream.write", "text.print", "stream.close"}
+    value = byte_value_id(sha256(expected).hexdigest())
+    assert any(node["id"] == value for node in source_flow["nodes"])
+    shutil.rmtree(source)
+    trace.unlink()
+    logical = _stage(
+        tmp_path, "middle", "plan", "--graph", graph, "--out", plan, returncode=2
+    )
+    assert logical["status"] == "INCOMPLETE"
+    report = json.loads((plan / "images/driver/plan.json").read_bytes())
+    analysis = report["artifact_analysis"]
+    (materialization,) = analysis["constant_materializations"]
+    assert (
+        materialization["value"] == value
+        and materialization["transformation"] == "not_applied"
+    )
+    flow = validate_artifact_flow(
+        read_member(plan / "images/driver", analysis["graph"])
+    )
+    nodes = {node["id"]: node for node in flow["nodes"]}
+    assert nodes[value]["literal_text"].encode() == expected
+    assert nodes[materialization["version"]]["value"] == value
+    assert any(
+        node["kind"] == "FILE_VERSION" and node["value"] == value
+        for node in nodes.values()
+    )
+    requirements = [
+        node for node in nodes.values() if node["kind"] == "FILE_VERSION_REQUIREMENT"
+    ]
+    assert requirements and all(node["value"] is None for node in requirements)
+    assert all(
+        edge["establishes_version_equality"] is False
+        for edge in flow["edges"]
+        if edge["kind"] == "CAPTURED_AT_SAME_LOCATOR"
+    )
+    # Prefix and complete fragments are audit members, never executable bodies.
+    ir = json.loads((plan / "images/driver/exec-ir.json").read_bytes())
+    assert ir["status"] == "INCOMPLETE" and ir["functions"] == []
+    assert report["protocol_analysis"]["prefix_fragments"]
+
+
 def test_mpi_controller_joins_captured_worker_and_preserves_launch_conventions(
     tmp_path, monkeypatch
 ):
@@ -276,21 +385,30 @@ def test_mpi_controller_joins_captured_worker_and_preserves_launch_conventions(
     assert b"published executable" in failed.stderr
 
 
+@pytest.mark.parametrize("language", ["c", "c++"])
 def test_mpi_calls_survive_independent_stages_and_two_rank_execution(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, language
 ):
     if os.geteuid() == 0:
         monkeypatch.setenv("OMPI_ALLOW_RUN_AS_ROOT", "1")
         monkeypatch.setenv("OMPI_ALLOW_RUN_AS_ROOT_CONFIRM", "1")
     source = tmp_path / "source"
     source.mkdir()
-    entry = source / "exchange.c"
+    entry = source / ("exchange.c" if language == "c" else "exchange.cpp")
+    compiler = "mpicc" if language == "c" else "mpicxx"
+    options = (
+        ["-std=c99"] if language == "c" else ["-std=c++17", "-DOMPI_SKIP_MPICXX=1"]
+    )
     entry.write_text("""#include <mpi.h>
 #include <stdio.h>
 int main(int argc, char **argv) {
   int rank, size, provided, sent, received = -1, total = -1;
   MPI_Request requests[2];
+#ifdef __cplusplus
+  MPI_Status *statuses = new MPI_Status[2];
+#else
   MPI_Status statuses[2];
+#endif
   MPI_Init_thread(&argc, &argv, MPI_THREAD_FUNNELED, &provided);
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
   MPI_Comm_size(MPI_COMM_WORLD, &size);
@@ -301,15 +419,18 @@ int main(int argc, char **argv) {
   MPI_Allreduce(&received, &total, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
   MPI_Barrier(MPI_COMM_WORLD);
   if (rank == 0) printf("ranks=%d sum=%d\\n", size, total);
+#ifdef __cplusplus
+  delete[] statuses;
+#endif
   MPI_Finalize();
   return total == size * (size + 1) / 2 ? 0 : 3;
 }
 """)
     original = source / "original"
-    _run(["mpicc", "-std=c99", "-O2", entry, "-o", original], source)
+    _run([compiler, *options, "-O2", entry, "-o", original], source)
     expected = _run(["mpiexec", "-n", "2", original], source)
     assert expected == b"ranks=2 sum=3\n"
-    includes = shlex.split(_run(["mpicc", "--showme:compile"], source).decode())
+    includes = shlex.split(_run([compiler, "--showme:compile"], source).decode())
     sdk = tmp_path / "sdk" / "include"
     sdk.mkdir(parents=True)
     mpi_header = next(
@@ -327,8 +448,8 @@ int main(int argc, char **argv) {
                 units=[
                     dict(
                         path=entry.name,
-                        language="c",
-                        flags=["-std=c99", "-I" + str(sdk), *includes],
+                        language=language,
+                        flags=[*options, "-I" + str(sdk), *includes],
                     )
                 ],
             )

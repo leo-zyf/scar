@@ -156,6 +156,47 @@ def literal(value):
     return Value(kind, dict(op="literal", type=kind, value=value), numeric_facts(value))
 
 
+def source_site(node):
+    return {key: node[key] for key in ("site", "location") if node.get(key) is not None}
+
+
+def _exact_argument(value):
+    """Only wire-level JSON scalars can serve as exact argument evidence."""
+    if value.kind not in SCALARS:
+        return None
+    item, kind = value.exact, wire(value.kind)
+    if kind == "f64" and type(item) is int and -(1 << 53) <= item <= 1 << 53:
+        item = float(item)
+    if (
+        type(item)
+        is not {
+            "text": str,
+            "i64": int,
+            "f64": float,
+            "bool": bool,
+            "unit": type(None),
+        }[kind]
+    ):
+        return None
+    if kind == "f64" and not math.isfinite(item):
+        return None
+    return dict(type=kind, exact=item)
+
+
+def argument_evidence(args, **options):
+    positions = [_exact_argument(value) for value in args]
+    known_options = {
+        key: fact
+        for key, value in options.items()
+        if (fact := _exact_argument(value)) is not None
+    }
+    return (
+        dict(argument_facts=dict(args=positions, **known_options))
+        if any(fact is not None for fact in positions) or known_options
+        else {}
+    )
+
+
 def identical(left, right):
     """Compare analysis records without merging distinct floating bit patterns."""
     if type(left) is not type(right):

@@ -194,6 +194,123 @@ print(json.dumps(dict(module=data,changes=changes,issues=issues)))
     assert _layer("normalization", code, forged)["issues"]
 
 
+def test_constant_file_proof_preserves_control_and_handle_boundaries():
+    def literal(value):
+        return dict(op="literal", type="text", value=value)
+
+    handle = dict(op="var", name="file")
+    opened = dict(
+        op="host_call",
+        interface="stream.open",
+        args=[literal("out.h"), literal("w"), literal("utf-8"), literal("universal")],
+    )
+    start = dict(op="decl", name="file", init=opened)
+    write = dict(
+        op="expr",
+        value=dict(
+            op="host_call",
+            interface="stream.write",
+            args=[handle, literal("constant\n")],
+        ),
+    )
+    close = dict(
+        op="expr", value=dict(op="host_call", interface="stream.close", args=[handle])
+    )
+    code = "from scar.middle.normalization.artifacts import analyze\nprint(json.dumps(analyze(data)))"
+
+    def analysis(body, **extra):
+        module = dict(functions=[dict(name="writer", body=body)], **extra)
+        return _layer("normalization", code, module)
+
+    positive = analysis([start, write, close])
+    assert len(positive["constant_materializations"]) == 1
+    assert (
+        positive["constant_materializations"][0]["file_content_status"]
+        == "conditional_on_storage_and_writer_contracts"
+    )
+    cases = [
+        [
+            start,
+            write,
+            dict(op="expr", value=dict(op="call", callee="unknown", args=[handle])),
+            close,
+        ],
+        [start, write, dict(op="decl", name="other", init=opened), close],
+        [
+            start,
+            dict(op="while", condition=dict(op="var", name="condition"), body=[write]),
+            close,
+        ],
+        [start, write, dict(op="block", body=[dict(op="return")]), close],
+        [
+            start,
+            write,
+            dict(
+                op="decl",
+                name="child",
+                init=dict(op="process_spawn", image_id="worker", argv=[]),
+            ),
+            close,
+        ],
+        [
+            dict(
+                op="decl",
+                name="child",
+                init=dict(op="process_spawn", image_id="worker", argv=[]),
+            ),
+            start,
+            write,
+            close,
+        ],
+        [
+            start,
+            write,
+            dict(
+                op="expr",
+                value=dict(
+                    op="text_print",
+                    args=[literal("other")],
+                    sep=literal(" "),
+                    end=literal("\n"),
+                ),
+            ),
+            close,
+        ],
+        [
+            dict(op="decl", name="g", scope="global", init=literal("old")),
+            dict(op="expr", value=dict(op="call", callee="changes_global", args=[])),
+            start,
+            dict(
+                op="expr",
+                value=dict(
+                    op="host_call",
+                    interface="stream.write",
+                    args=[handle, dict(op="var", name="g", scope="global")],
+                    argument_facts=dict(args=[None, dict(type="text", exact="old")]),
+                ),
+            ),
+            close,
+        ],
+    ]
+    for body in cases:
+        assert not analysis(body)["constant_materializations"]
+    prefix = dict(
+        symbol="partial",
+        completion="prefix",
+        body=[start],
+        frontier=dict(
+            operator="if",
+            regions=[dict(path=["then"], completion="complete", body=[write, close])],
+        ),
+    )
+    negative = _layer(
+        "normalization",
+        code,
+        dict(functions=[], protocol_analysis=dict(prefix_fragments=[prefix])),
+    )
+    assert not negative["constant_materializations"]
+
+
 def test_middle_layers_consume_only_preceding_products(tmp_path):
     ptr = {"kind": "ptr", "to": "i64"}
     ref = {"kind": "ref", "to": "i64"}

@@ -3,7 +3,7 @@
 import math
 
 from . import text
-from .values import Value, literal, wire
+from .values import Value, argument_evidence, literal, source_site, wire
 
 _STREAM = "handle:text_stream"
 _REQUIRED = object()
@@ -237,7 +237,7 @@ def _bind(frame, node, args, keywords, parameters):
     return bound
 
 
-def _emit(frame, node, interface, result, args, steps, discard):
+def _emit(frame, node, interface, result, args, steps, discard, *, result_facts=None):
     filesystem = interface.startswith("fs.")
     reads = ["process.cwd"] if filesystem else []
     writes = []
@@ -279,11 +279,15 @@ def _emit(frame, node, interface, result, args, steps, discard):
             reads=reads,
             writes=writes,
             may_raise=True,
+            **source_site(node),
+            **argument_evidence(args),
+            **({"result_facts": result_facts} if result_facts else {}),
             **({"noreturn": True} if interface == "process.exit" else {}),
         ),
         result,
         steps,
         discard,
+        facts=result_facts,
     )
 
 
@@ -377,7 +381,29 @@ def invoke(frame, node, target, args, keywords, steps, discard):
                 "path_arguments",
                 "path.join requires positional text path components",
             )
-        return _emit(frame, node, "path.join", "text", args, steps, discard)
+        facts = {}
+        origin = target.facts.get("aliases", {}).get("os.path", {})
+        if (
+            origin.get("module") == "posixpath"
+            and origin.get("status") == "verified_stdlib"
+            and origin.get("sha256")
+            and all(type(v.exact) is str for v in args)
+        ):
+            # POSIX join resets at each absolute component and preserves a final
+            # empty component. It neither normalizes dots nor consults the filesystem.
+            joined = args[0].exact
+            for value in args[1:]:
+                part = value.exact
+                if part.startswith("/"):
+                    joined = part
+                else:
+                    joined += (
+                        "/" if joined and not joined.endswith("/") else ""
+                    ) + part
+            facts["exact"] = joined
+        return _emit(
+            frame, node, "path.join", "text", args, steps, discard, result_facts=facts
+        )
     interface, result, parameters = _SIGNATURES[name]
     values = _bind(frame, node, args, keywords, parameters)
     if name in {"os.mkdir", "os.makedirs"}:

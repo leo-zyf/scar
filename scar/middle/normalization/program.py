@@ -26,6 +26,134 @@ def _abi(fn):
     ]
 
 
+def _typed_object_use(node, field, method):
+    owner = {"kind": "record", "name": method["owner"]}
+    if method["kind"] == "constructor":
+        return (
+            node.get("op") in {"object_construct", "object_new"}
+            and field == "symbol"
+            and node.get("type") == owner
+            and node.get("parameter_types") == [p["type"] for p in method["params"]]
+            and isinstance(node.get("args"), list)
+            and len(node["args"]) == len(method["params"])
+        )
+    receiver = node.get("value")
+    return (
+        node.get("op") == "object_destroy"
+        and field == "destructor"
+        and node.get("owner") == method["owner"]
+        and isinstance(receiver, dict)
+        and ("type" not in receiver or receiver["type"] == {"kind": "ptr", "to": owner})
+    )
+
+
+def _object_member_interfaces(module, declarations, definitions):
+    """Separate compiler-supplied object operations from callable ABI imports."""
+    records = {r["name"]: r for r in module["records"]}
+    methods = {}
+    for external in module["externs"]:
+        method = external.get("method", {})
+        name, owner = external["name"], method.get("owner")
+        record = records.get(owner)
+        if (
+            name in definitions
+            or name == module["entry"]
+            or not record
+            or method.get("kind") not in {"constructor", "destructor"}
+            or method.get("symbol") != name
+            or method.get("defaulted") is not True
+            or method.get("deleted") is not False
+            or external.get("variadic")
+            or external["result"] != "void"
+            or method.get("result") != "void"
+        ):
+            continue
+        declared = [m for m in record.get("methods", ()) if m.get("symbol") == name]
+        public_type = bool(
+            record.get("complete")
+            and record.get("provider")
+            and record.get("symbol")
+            and record["provider"] == external.get("provider")
+        )
+        if (
+            (record.get("opaque") and not public_type)
+            or not (method.get("implicit") is True or declared or public_type)
+            or any(m != method for m in declared)
+        ):
+            continue
+        expected = [
+            {"kind": "ptr", "to": {"kind": "record", "name": owner}},
+            *[p["type"] for p in method["params"]],
+        ]
+        if any(
+            signature["result"] != "void"
+            or signature.get("variadic")
+            or [p["type"] for p in signature["params"]] != expected
+            for signature in (external, *declarations.get(name, ()))
+        ):
+            continue
+        methods[name] = method
+    if not methods:
+        return []
+
+    # Inspect every executable occurrence, including indirect target lists,
+    # initializers and nested operations. A record's own method declaration
+    # describes its object semantics and is not a callable use.
+    declared_owners = {
+        id(method): record["name"]
+        for record in records.values()
+        for method in record.get("methods", ())
+    }
+    uses, other = {}, set()
+    pending = [*module["functions"], *module["globals"], *module["records"]]
+    while pending:
+        node = pending.pop()
+        if isinstance(node, list):
+            for value in node:
+                if isinstance(value, str) and value in methods:
+                    other.add(value)
+                elif isinstance(value, (dict, list)):
+                    pending.append(value)
+            continue
+        op = node.get("op")
+        for key, value in node.items():
+            if isinstance(value, (dict, list)):
+                pending.append(value)
+                continue
+            if not isinstance(value, str) or value not in methods:
+                continue
+            method = methods[value]
+            if key == "symbol" and declared_owners.get(id(node)) == method["owner"]:
+                continue
+            if key == "value" and op in {"literal", "string"}:
+                continue
+            if not _typed_object_use(node, key, method):
+                other.add(value)
+                continue
+            counts = uses.setdefault(value, {})
+            counts[op] = counts.get(op, 0) + 1
+
+    closed = uses.keys() - other
+    module["externs"] = [
+        decl for decl in module["externs"] if decl["name"] not in closed
+    ]
+    changes = []
+    for name in sorted(closed):
+        declarations.pop(name, None)
+        method = methods[name]
+        changes.append(
+            dict(
+                code="language_object_special_member",
+                symbol=name,
+                owner=method["owner"],
+                member_kind=method["kind"],
+                uses=uses[name],
+                proof="consistent special-member declarations and exclusively typed object lifetime operations; construction and destruction remain in the executable graph",
+            )
+        )
+    return changes
+
+
 def _discarded_scalar_result(
     symbol, declarations, definition, functions, globals_, architecture
 ):
@@ -223,9 +351,15 @@ def _state_contract(function, evidence):
 def normalize(bound):
     from .protocols import normalize_protocols
     from .mpi import qualify as qualify_mpi
+    from .artifacts import analyze as analyze_artifacts
 
     module = deepcopy(bound)
     module, protocol_changes, issues = normalize_protocols(module)
+    module["artifact_analysis"] = analyze_artifacts(module)
+    if module["artifact_analysis"]["graph"]["nodes"]:
+        module.setdefault("resource_model", {})["artifact_flow"] = module[
+            "artifact_analysis"
+        ]["graph"]
     if issues:
         # An open object protocol is not a native ABI. In particular, Python
         # keyword/default binding cannot be checked by counting C arguments.
@@ -236,6 +370,7 @@ def normalize(bound):
     environment = module.pop("abi_environment")
     functions = {f["name"]: f for f in module["functions"]}
     globals_ = {g["name"]: g for g in module["globals"]}
+    object_changes = _object_member_interfaces(module, declarations, functions)
     externs = {e["name"]: e for e in module["externs"]}
     defects = []
     for name, variants in declarations.items():
@@ -267,7 +402,7 @@ def normalize(bound):
     call_changes, call_issues = _bind_call_arguments(
         functions, externs, globals_, module["records"]
     )
-    module["normalizations"] = protocol_changes + call_changes
+    module["normalizations"] = protocol_changes + object_changes + call_changes
     issues.extend(call_issues)
     mpi_changes, mpi_issues = qualify_mpi(module)
     module["normalizations"].extend(mpi_changes)

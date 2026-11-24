@@ -4,6 +4,12 @@
 
 构建子图通过根文件的 `build.graph` 收据独立存储。`BUILD_OPERATION` 是捕获的工具调用，`BUILD_ARTIFACT` 是具有路径及可选采集摘要的源文件、对象或可执行产物；`BUILD_INPUT/BUILD_OUTPUT` 边连接消费者和生产者，序号保留链接输入顺序。`LIBRARY_REQUEST` 只说明命令请求，`ELF_LIBRARY_DEPENDENCY` 只说明采集时 ELF 的直接依赖，均不等于运行时加载或已执行计算。工具和库事实也进入资源表。构建调用与应用运行操作属于不同图域，捕获到编译器执行不能替代应用程序执行证据。
 
+文件依赖通过独立的 `artifact_flow` 收据连接子图，格式为 `scar.artifact-flow`。`FILE_LOCATOR` 表示路径定位表达式，不能视作 inode 身份；`FILE_VERSION` 是某次捕获的字节快照；`FILE_VERSION_REQUIREMENT` 表示工具需要读取、但历史字节尚未观测的版本。`BYTE_VALUE` 用 `bytes:sha256:<digest>` 表示与路径、文件对象无关的字节内容。`SOURCE_OPERATION` 引用原过程图与端口，`SOURCE_CAPTURE` 表示分析器读取，`BUILD_OPERATION`、`EXECUTION_IMAGE` 接到对应子图。`READS_CAPTURED_VERSION/HAS_CONTENT/REQUIRES_VERSION/BUILT_IMAGE_SOURCE` 分别连接这些实体。捕获时相同路径不证明历史版本相同，`CAPTURED_AT_SAME_LOCATOR` 明确禁止升级为版本相等。
+
+F2 的 `artifact_effect` 保留接口、操作数字段路径、默认值和未闭合义务；路径在 F3 图中沿端口边下降，而不是重新遍历 AST。流句柄的静态站点代表每次成功调用的实例模板，别名与条件候选单独保存，不把循环中的多次打开当作同一动态对象。M2 的 `FILE_VERSION_TEMPLATE` 进一步连接已正规化的写入／关闭操作与已证明的字节值；值相同可以跨文件副本连接，但文件内容还受普通字节文件、独占写入和并发效果条件约束。对特殊设备成功写入不等于产生同样的可读文件内容。
+
+未闭合协议的 `closed_fragments` 和 `prefix_fragments` 是分析产物，按内容收据放入 `analysis/`。前缀保留控制端口及尚未完成语句的求值边界，不能把分支体提升为无条件事件。M4 不把这些片段封为可执行函数。常量文件分析也分别报告值证明、物理存储义务和未实施变换，不以内容哈希匹配替代消费者版本证明。
+
 程序镜像是一个独立链接与全局状态的命名空间。显式多镜像输入用 `images` 描述各镜像的 `id`、`entry`、交付文件名 `output` 和编译配置，`root_image` 指定交付入口。F0 先应用各镜像自己的 ABI，再去重编译配置；图中 `images[].units` 是共享单元表的索引。同一编译配置可供多个镜像使用，但不同镜像中的同名 `main`、全局变量和记录不会合并。该归属由输入构建清单声明，目前不从子进程命令字符串猜测。
 
 多镜像执行包使用 `kind: "image_bundle"`，每个子镜像都有独立的完整包及其相对收据。中端、调度层和目标降级层分别用 `ir`、`scheduled`、`target` 引用下一层可独立消费的镜像产物；顶层仅在全部必需镜像闭合后为 `READY`。一个镜像自己的函数收据始终相对于该镜像包，不能相对于总包解释。既有单镜像格式仍表示同一种执行模型中的一个链接目标。

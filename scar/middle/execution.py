@@ -217,6 +217,9 @@ def seal(module, out, *, status, graph_sha256, contract, logical_optimization):
     ):
         raise ValueError("execution IR cannot contain unresolved source protocols")
     payload = dict(module)
+    # This is an audit product. Its graph already lives once in resource_model;
+    # source-protocol prefixes must never become executable function members.
+    payload.pop("artifact_analysis", None)
     functions = (
         [member(out, "functions", f) for f in payload.pop("functions", [])]
         if status == "READY"

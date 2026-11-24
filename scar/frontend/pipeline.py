@@ -11,6 +11,7 @@ from scar.contract import (
     document,
     json_bytes,
     member,
+    read_member,
     validate_state_flow,
     write_json,
 )
@@ -102,6 +103,7 @@ def _unit(job):
         path=profile["path"],
         language=language,
         flags=flags,
+        compilation_profile_sha256=digest(json_bytes(profile)),
         revision=revision,
         source_facts=source_facts,
         graph=receipt,
@@ -132,6 +134,7 @@ def _unit(job):
 
 def build(manifest, out, *, jobs=1):
     from .capture import capture_project
+    from .artifacts import artifact_graph
     from .hardware import snapshot
     from .input import read_request, with_entry_abi
 
@@ -209,6 +212,17 @@ def build(manifest, out, *, jobs=1):
         ],
         contract={"arithmetic": "preserve", "externally_visible_effects": "preserve"},
         coverage=dict(totals=totals, diagnostic_categories=dict(counts.most_common())),
+        artifact_flow=member(
+            out,
+            "artifacts",
+            artifact_graph(
+                units,
+                [read_member(out, unit["graph"]) for unit in units],
+                build_graph,
+                images,
+                root,
+            ),
+        ),
         **({"images": images, "root_image": root_image} if images is not None else {}),
         **(
             {

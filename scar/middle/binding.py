@@ -436,6 +436,8 @@ def _build_bindings(graph, build, captured):
 
 
 def bind(graph, folder):
+    from scar.contract import validate_artifact_flow
+
     image_context = {}
     if "images" in graph:
         # Unit indices belong to the full graph, already checked before projection.
@@ -455,6 +457,11 @@ def bind(graph, folder):
     roots = {graph["entry"]}
     all_issues, records = [], {}
     build_bindings = []
+    artifact_flow = None
+    if "artifact_flow" in graph:
+        artifact_flow = validate_artifact_flow(
+            read_member(folder, graph["artifact_flow"])
+        )
     if build := graph.get("build"):
         build_graph = read_member(folder, build["graph"])
         if build_graph["diagnostics"] != build["diagnostics"]:
@@ -809,6 +816,11 @@ def bind(graph, folder):
                 topology=graph.get("topology", []),
                 platform=graph.get("platform", {}),
                 software_headers=software_headers,
+                **(
+                    {"artifact_flow": artifact_flow}
+                    if artifact_flow is not None
+                    else {}
+                ),
                 **({"build_bindings": build_bindings} if build_bindings else {}),
             ),
         ),

@@ -6,6 +6,7 @@ import shlex
 
 from scar.contract import digest, json_bytes
 
+from . import io as io_effects
 from .facts import (
     _function,
     _literal_fact,
@@ -110,7 +111,13 @@ def _guarded(fact, state):
     """A late lookup may retain an identity candidate, never a captured literal."""
     result = {"state": state}
     expected = {k: fact[k] for k in ("module", "symbol", "external") if k in fact}
-    for key in ("process_handles", "bound_process_handles", "context_result"):
+    for key in (
+        "process_handles",
+        "bound_process_handles",
+        "stream_handles",
+        "bound_stream_handles",
+        "context_result",
+    ):
         if key in fact:
             expected[key] = fact[key]
     if expected:
@@ -119,7 +126,15 @@ def _guarded(fact, state):
         # remains valid even if the slot it was copied from has been rebound.
         prior = (
             []
-            if ("process_handles" in expected or "bound_process_handles" in expected)
+            if any(
+                key in expected
+                for key in (
+                    "process_handles",
+                    "bound_process_handles",
+                    "stream_handles",
+                    "bound_stream_handles",
+                )
+            )
             else fact.get("guards", [])
         )
         result.update(expected, guards=prior if guard in prior else [*prior, guard])
@@ -187,6 +202,10 @@ def _join_facts(*facts):
         # A reaching object is one instance from one of these sites.
         common["process_handles"] = sorted(
             {s for f in facts for s in f["process_handles"]}
+        )
+    if all(f.get("stream_handles") for f in facts):
+        common["stream_handles"] = sorted(
+            {s for f in facts for s in f["stream_handles"]}
         )
     if "symbol" not in common:
         candidates = set()
@@ -762,6 +781,8 @@ class _Scope:
                     "possible_symbols",
                     "process_handles",
                     "bound_process_handles",
+                    "stream_handles",
+                    "bound_stream_handles",
                     "context_result",
                     "state",
                     "guards",
@@ -781,6 +802,21 @@ class _Scope:
             member = None
             handles = b.get("process_handles")
             if handles and name in _STREAM_DIRECTIONS:
+                channel = b.get("process_channels", {}).get(name, {"route": "runtime"})
+                stream = {}
+                if channel.get("route") == "pipe":
+                    sites = [
+                        digest(json_bytes(["process_channel", site, name]))[:32]
+                        for site in handles
+                    ]
+                    f = {"class": "io.IOBase", "stream_handles": sites}
+                    stream["stream_handle"] = dict(
+                        binding="process_channel",
+                        sites=sites,
+                        process_sites=handles,
+                        channel=name,
+                        instance="per_process_instance",
+                    )
                 guards = [
                     {
                         "operand": "base",
@@ -799,9 +835,8 @@ class _Scope:
                         channel=name,
                         direction=_STREAM_DIRECTIONS[name],
                         handle={"operand": ["base"], "sites": handles},
-                        channel_binding=b.get("process_channels", {}).get(
-                            name, {"route": "runtime"}
-                        ),
+                        channel_binding=channel,
+                        **stream,
                         binding_guard={
                             "status": "conditional",
                             "conditions": guards,
@@ -811,12 +846,17 @@ class _Scope:
                         type=_py_type(),
                         effects=["STATE"],
                     ),
-                    {},
+                    f,
                 )
             if handles and name in _PROCESS_METHODS:
                 f = {
                     "external": "subprocess.Popen." + name,
                     "bound_process_handles": handles,
+                }
+            elif b.get("stream_handles") and name in io_effects.STREAM_METHODS:
+                f = {
+                    "external": "io.IOBase." + name,
+                    "bound_stream_handles": b["stream_handles"],
                 }
             elif "module" in b:
                 module = b["module"]
@@ -847,9 +887,23 @@ class _Scope:
                         },
                     }
                 )
+            if f.get("bound_stream_handles"):
+                f.setdefault("guards", []).append(
+                    {
+                        "operand": "target",
+                        "expected": {
+                            "bound_receiver_from": f["bound_stream_handles"],
+                            "method": "io.IOBase." + name,
+                        },
+                    }
+                )
             if b.get("maybe_unbound"):
                 f["maybe_unbound"] = True
-            if "external" in f and not (handles and name in _PROCESS_METHODS):
+            if (
+                "external" in f
+                and not (handles and name in _PROCESS_METHODS)
+                and not f.get("bound_stream_handles")
+            ):
                 f = _guarded(f, f["external"])
             fields = {"base": base, "field": name, "type": _py_type(f.get("class"))}
             if member:
@@ -898,6 +952,23 @@ class _Scope:
                 f = self._external_value(name, facts, key_facts)
                 op = "library_call"
                 effect = ["CTRL", "STATE"]
+                if name == "builtins.open":
+                    site = digest(
+                        json_bytes(
+                            [
+                                self.unit.source_hash,
+                                self.symbol,
+                                self.unit.location(node),
+                                "stream.open",
+                            ]
+                        )
+                    )[:32]
+                    fields["stream_handle"] = dict(
+                        site=site,
+                        instance="per_successful_invocation",
+                        binding="call_result",
+                    )
+                    f["stream_handles"] = [site]
                 if name in {
                     "subprocess.Popen",
                     "subprocess.run",
@@ -1000,6 +1071,15 @@ class _Scope:
                     effect.append("IO")
                 if name == "os.chdir":
                     fields["state_writes"] = ["process.cwd"]
+                projection = io_effects.project(
+                    name,
+                    node,
+                    fields,
+                    providers=self.unit.providers,
+                    stream_handles=t.get("bound_stream_handles", ()),
+                )
+                if projection is not None:
+                    fields["artifact_effect"] = projection
                 if (
                     name
                     in {
@@ -1650,7 +1730,12 @@ class _Scope:
                     # replacement method can return an entirely different value.
                     entered.update(
                         (key, fact[key])
-                        for key in ("class", "process_handles", "process_channels")
+                        for key in (
+                            "class",
+                            "process_handles",
+                            "process_channels",
+                            "stream_handles",
+                        )
                         if key in fact
                     )
                     entered["guards"] = [

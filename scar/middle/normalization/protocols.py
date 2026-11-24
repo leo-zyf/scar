@@ -89,9 +89,71 @@ class _Unclosed(Exception):
             code="python." + field,
             symbol=name,
             location=node.get("location"),
+            **({"site": node["site"]} if node.get("site") is not None else {}),
             detail=detail,
         )
         super().__init__(detail)
+
+
+class _Region:
+    """A statement boundary and its in-progress child regions in the target buffer."""
+
+    def __init__(self, steps, parent, source):
+        self.steps = steps
+        self.start = len(steps) if parent is None or steps is parent.steps else 0
+        self.end = self.start
+        self.source = source
+        self.current = None
+        self.children = []
+
+    def boundary(self, node):
+        self.current, self.end = node, len(self.steps)
+        self.children.clear()
+
+    def fragment(self):
+        record = dict(
+            completion="complete" if self.current is None else "prefix",
+            body=self.steps[self.start : self.end],
+        )
+        if self.current is None:
+            return record
+        node = self.current
+        frontier = dict(operator=node["op"], **values.source_site(node), regions=[])
+        # Constant-folded branches may share the caller's destination. Their
+        # operations remain inside the corresponding source branch in this record.
+        before_child = min(
+            (child.start for child in self.children if child.steps is self.steps),
+            default=len(self.steps),
+        )
+        setup = []
+        for statement in self.steps[self.end : before_child]:
+            if statement["op"] not in {"decl", "assign", "expr"}:
+                break
+            setup.append(statement)
+        if setup:
+            frontier["evaluation"] = setup
+        for child in self.children:
+            path = next(
+                (
+                    [key]
+                    for key in ("body", "then", "else", "finally")
+                    if node.get(key) is child.source
+                ),
+                None,
+            )
+            if path is None:
+                path = next(
+                    (
+                        ["handlers", i, "body"]
+                        for i, handler in enumerate(node.get("handlers", ()))
+                        if handler.get("body") is child.source
+                    ),
+                    None,
+                )
+            if path is not None:
+                frontier["regions"].append(dict(path=path, **child.fragment()))
+        record["frontier"] = frontier
+        return record
 
 
 class _Project:
@@ -106,6 +168,8 @@ class _Project:
         self.globals = {}
         self.types = {}
         self.closed = {}
+        self.activations = {}
+        self.prefixes = []
         self.result_kinds = {}
         self.result_facts = {}
         self.providers = {}
@@ -165,7 +229,7 @@ class _Project:
             )
         return inactive
 
-    def compile(self, name, types):
+    def compile(self, name, types, *, source=None):
         fn = self.functions[name]
         if name in self.active:
             raise _Unclosed(
@@ -213,6 +277,10 @@ class _Project:
                 "arity",
                 "the invocation must bind every formal parameter once",
             )
+        if source is not None:
+            self.activations[name] = dict(
+                owner=self.active[-1], **values.source_site(source)
+            )
         self.active.append(name)
         self.global_reads[name] = {}
         saved_contents = self.array_state.contents if kind == "function" else None
@@ -220,7 +288,11 @@ class _Project:
             self.array_state.contents = {}
         try:
             frame = _Frame(self, fn, types)
-            result = frame.lower()
+            try:
+                result = frame.lower()
+            except _Unclosed:
+                self.prefixes.append(frame.prefix_fragment())
+                raise
             self.types[name] = types
             self.closed[name] = result
             return result
@@ -243,6 +315,8 @@ class _Frame:
         self.next_temp = 0
         self.loops = []
         self.handler_depth = 0
+        self.region = None
+        self.root_region = None
         self.dynamic = 0
         self.params = []
         for formal, kind in zip(fn["params"], types):
@@ -669,9 +743,17 @@ class _Frame:
                     node, "import_initializer", f"missing module initializer {symbol}"
                 )
             if symbol not in self.project.closed:
-                self.project.compile(symbol, ())
+                self.project.compile(symbol, (), source=node)
                 steps.append(
-                    dict(op="expr", value=dict(op="call", callee=symbol, args=[]))
+                    dict(
+                        op="expr",
+                        value=dict(
+                            op="call",
+                            callee=symbol,
+                            args=[],
+                            **values.source_site(node),
+                        ),
+                    )
                 )
             parent, _, leaf = scope["module"].rpartition(".")
             if parent:
@@ -946,6 +1028,8 @@ class _Frame:
                 type="unit",
                 effects=["IO", "STATE"],
                 encoding="utf-8",
+                **values.source_site(node),
+                **values.argument_evidence(args, sep=sep, end=end, flush=flush),
                 scalar_format=dict(
                     boolean_true="True",
                     boolean_false="False",
@@ -1006,7 +1090,7 @@ class _Frame:
         if kwargs:
             self.fail(node, "argument_binding", f"unconsumed keywords for {name}")
         operands = [self.scalar(v, node) for v in bound]
-        function = self.project.compile(name, tuple(v.kind for v in bound))
+        function = self.project.compile(name, tuple(v.kind for v in bound), source=node)
         self.project.actual_calls.add((self.name, name))
         if name not in self.project.external_array_writes:
             self.project.external_array_writes[name] = arrays.may_write_external(
@@ -1018,6 +1102,7 @@ class _Frame:
             op="call",
             callee=name,
             args=operands,
+            **values.source_site(node),
             type=function["result"],
             parameter_types=[values.wire(v.kind) for v in bound],
             **({"noreturn": True} if function.get("noreturn") else {}),
@@ -1418,6 +1503,20 @@ class _Frame:
         return bool(exits)
 
     def sequence(self, body, steps):
+        parent = self.region
+        self.region = region = _Region(steps, parent, body)
+        if parent is None:
+            self.root_region = region
+        else:
+            parent.children.append(region)
+        try:
+            falls = self._sequence(body, steps, region)
+            region.boundary(None)
+            return falls
+        finally:
+            self.region = parent
+
+    def _sequence(self, body, steps, region):
         def stop():
             self.skip_expression(
                 body[index + 1 :],
@@ -1430,6 +1529,7 @@ class _Frame:
             return False
 
         for index, node in enumerate(body):
+            region.boundary(node)
             if node.get("site") is not None:
                 self.project.live_sites.add((self.name, node["site"]))
             op = node["op"]
@@ -1526,6 +1626,19 @@ class _Frame:
                     if value and value.get("noreturn"):
                         return stop()
         return True
+
+    def prefix_fragment(self):
+        region = self.root_region
+        record = region.fragment() if region else dict(body=[])
+        record.update(
+            completion="prefix",
+            symbol=self.name,
+            params=self.params,
+            **values.source_site((region.current if region else None) or self.fn),
+        )
+        if self.name in self.project.activations:
+            record["activation"] = self.project.activations[self.name]
+        return record
 
     def lower(self):
         if self.initializing:
@@ -1654,6 +1767,23 @@ def normalize_protocols(module):
         ),
     )
     if issue:
+        module["protocol_analysis"].update(
+            closed_fragments=[
+                dict(
+                    symbol=name,
+                    completion="complete",
+                    function=fn,
+                    **values.source_site(functions[name]),
+                    **(
+                        {"activation": project.activations[name]}
+                        if name in project.activations
+                        else {}
+                    ),
+                )
+                for name, fn in project.closed.items()
+            ],
+            prefix_fragments=list(reversed(project.prefixes)),
+        )
         return module, project.decisions, [issue]
     changes = project.decisions + [
         dict(

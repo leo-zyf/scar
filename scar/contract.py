@@ -12,6 +12,7 @@ GRAPH = "scar.program-graph"
 PLAN = "scar.logical-plan"
 IR = "scar.execution-ir"
 PHYSICAL = "scar.physical-plan"
+ARTIFACT_FLOW = "scar.artifact-flow"
 VERSION = 1
 
 
@@ -50,6 +51,77 @@ def json_bytes(value):
 
 def digest(data):
     return hashlib.sha256(data).hexdigest()
+
+
+def byte_value_id(sha256):
+    """Path-independent byte-content identity shared by stage products."""
+    if not isinstance(sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", sha256):
+        raise ValueError("byte values require a SHA-256 content receipt")
+    return "bytes:sha256:" + sha256
+
+
+def validate_artifact_flow(flow):
+    """Check typed artifact references without promoting snapshots to history."""
+    if (flow.get("schema"), flow.get("schema_version")) != (ARTIFACT_FLOW, VERSION):
+        raise ValueError("unsupported artifact flow contract")
+    kinds = {
+        "FILE_LOCATOR",
+        "BYTE_VALUE",
+        "FILE_VERSION",
+        "FILE_VERSION_REQUIREMENT",
+        "SOURCE_CAPTURE",
+        "SOURCE_OPERATION",
+        "BUILD_OPERATION",
+        "EXECUTION_IMAGE",
+        "FILE_VERSION_TEMPLATE",
+        "CANONICAL_OPERATION",
+    }
+    records = {}
+    for node in flow["nodes"]:
+        identity = node.get("id")
+        if (
+            not isinstance(identity, str)
+            or not identity
+            or identity in records
+            or node.get("kind") not in kinds
+        ):
+            raise ValueError("invalid or duplicate artifact node")
+        records[identity] = node
+        if node["kind"] == "BYTE_VALUE" and identity != byte_value_id(node["sha256"]):
+            raise ValueError("byte value identity disagrees with its receipt")
+        if node["kind"] == "BYTE_VALUE" and "literal_text" in node:
+            if (
+                not isinstance(node["literal_text"], str)
+                or digest(node["literal_text"].encode("utf-8")) != node["sha256"]
+            ):
+                raise ValueError(
+                    "literal artifact text disagrees with its content identity"
+                )
+    for node in records.values():
+        if node["kind"] in {
+            "FILE_VERSION",
+            "FILE_VERSION_REQUIREMENT",
+            "FILE_VERSION_TEMPLATE",
+        }:
+            if records.get(node.get("locator"), {}).get("kind") != "FILE_LOCATOR":
+                raise ValueError("file version requires its locator node")
+            value = node.get("value")
+            if value is not None and records.get(value, {}).get("kind") != "BYTE_VALUE":
+                raise ValueError("file version references an absent byte value")
+    for relation in flow["edges"]:
+        if relation["source"] not in records or relation["target"] not in records:
+            raise ValueError("artifact edge references an absent node")
+        if not isinstance(relation.get("kind"), str) or not relation["kind"]:
+            raise ValueError("artifact edge requires its relationship kind")
+        if (
+            relation["kind"] == "CAPTURED_AT_SAME_LOCATOR"
+            and relation.get("establishes_version_equality") is not False
+        ):
+            raise ValueError("capture snapshots do not prove a historical read version")
+    for effect in flow.get("source_effects", ()):
+        if records.get(effect["operation"], {}).get("kind") != "SOURCE_OPERATION":
+            raise ValueError("artifact effect requires its source operation")
+    return flow
 
 
 def validate_text_profiles(profiles):
