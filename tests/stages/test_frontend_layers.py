@@ -12,6 +12,110 @@ import tokenize
 from scar.frontend.languages import fortran, python
 
 
+def test_capture_mount_topology_distinguishes_backing_and_visibility(
+    tmp_path, monkeypatch
+):
+    from types import SimpleNamespace
+
+    from scar.frontend import hardware
+
+    bind = tmp_path / "data set"
+    remote = bind / "network"
+    request = remote / "input"
+    request.mkdir(parents=True)
+    devices = tmp_path / "dev-block"
+    devices.mkdir()
+    disk = tmp_path / "block" / "disk"
+    partition = disk / "partition1"
+    partition.mkdir(parents=True)
+    (partition / "partition").write_text("1")
+    (disk / "size").write_text("4096")
+    (devices / "8:1").symlink_to(partition)
+    volume = tmp_path / "block" / "dm-test"
+    (volume / "slaves").mkdir(parents=True)
+    (volume / "slaves" / partition.name).symlink_to(partition)
+    (volume / "slaves" / "same-partition").symlink_to(partition)
+    (devices / "253:0").symlink_to(volume)
+    namespace = tmp_path / "namespace"
+    namespace.symlink_to("mnt:[9101]")
+    mountinfo = tmp_path / "mountinfo"
+    escaped = str(bind).replace(" ", r"\040")
+    mountinfo.write_bytes(
+        (
+            "10 2 0:1 / / rw - overlay overlay rw\n"
+            f"11 10 253:0 /data\\134old {escaped} rw - ext4 /dev/by-label/data rw\n"
+            f"12 11 0:22 / {escaped}/network rw shared:8 - nfs4 host:/dir\\040name ro\n"
+            "13 10 0:31 / /scratch rw - tmpfs tmpfs rw\n"
+            "14 10 0:33 / /dev rw - devtmpfs udev rw\n"
+            "15 14 0:35 / /dev/shm rw - tmpfs shm rw\n"
+            "16 10 0:33 / /proc rw - proc proc rw\n"
+            "17 16 0:37 / /proc/keys ro - tmpfs tmpfs ro\n"
+            "18 10 0:38 / /other/control rw - cgroup2 none rw\n"
+            "20 10 0:40 / /stack rw - tmpfs tmpfs rw\n"
+            "21 20 0:41 / /stack rw - tmpfs tmpfs rw\n"
+            "22 20 0:42 / /stack/hidden rw - tmpfs tmpfs rw\n"
+            "23 10 0:43 / /uncertain rw - tmpfs tmpfs rw\n"
+            "24 10 0:44 / /uncertain rw - tmpfs tmpfs rw\n"
+            "25 16 0:45 / /proc/fs/nfsd rw - nfsd nfsd rw\n"
+            "26 14 0:46 / /dev/hugepages rw - hugetlbfs hugetlbfs rw\n"
+            "27 10 8:1 / /partition rw - ext4 /dev/partition1 rw\n"
+        ).encode()
+    )
+    stat_calls = []
+
+    def statvfs(path):
+        stat_calls.append(path)
+        return SimpleNamespace(f_blocks=10, f_frsize=4096)
+
+    monkeypatch.setattr(hardware.os, "statvfs", statvfs)
+    rows, edges, platform = hardware._storage_mounts(
+        request, {}, mountinfo=mountinfo, device_root=devices, namespace_link=namespace
+    )
+    by_id = {row.id: row for row in rows}
+    assert platform["input_mount"] == "mount:12"
+    assert platform["mount_namespace"] == "mnt:[9101]"
+    assert stat_calls == [request]
+    assert by_id["mount:12"].capacity == 40960
+    assert all(
+        row.capacity is None
+        for row in rows
+        if row.kind == "STORAGE_MOUNT" and row.id != platform["input_mount"]
+    )
+    binding, network = (by_id[f"mount:{i}"].attributes for i in (11, 12))
+    assert (binding["root"], binding["mountpoint"], binding["major_minor"]) == (
+        r"/data\old",
+        str(bind),
+        "253:0",
+    )
+    assert network["source"] == "host:/dir name" and network["read_only"]
+    assert network["backing_kind"] == "network_filesystem"
+    assert by_id["mount:15"].attributes["backing_kind"] == "host_memory"
+    assert not {f"mount:{i}" for i in (14, 16, 17, 18, 25)} & by_id.keys()
+    assert by_id["mount:26"].attributes["backing_kind"] == "host_memory"
+    assert by_id["mount:26"].attributes["page_policy"] == "huge_pages"
+    assert {
+        i: by_id[f"mount:{i}"].attributes["path_visibility"]
+        for i in (20, 21, 22, 23, 24)
+    } == {
+        20: "covered",
+        21: "visible",
+        22: "covered",
+        23: "unresolved",
+        24: "unresolved",
+    }
+    links = {(e.source, e.target, e.value) for e in edges}
+    assert ("mount:11", "block:dm-test", "MOUNT_BACKING_DEVICE") in links
+    assert ("mount:27", "block:partition1", "MOUNT_BACKING_DEVICE") in links
+    assert ("block:dm-test", "block:partition1", "BLOCK_BACKED_BY") in links
+    assert ("block:partition1", "block:disk", "BLOCK_BACKED_BY") in links
+    assert len(links) == len(edges)
+    assert ("mount:12", "mount:11", "MOUNT_PARENT") in links
+    assert all(e.source in by_id and e.target in by_id for e in edges)
+    assert not any(
+        e.source == "mount:15" and e.value == "MOUNT_BACKING_DEVICE" for e in edges
+    )
+
+
 def test_build_normalization_uses_only_captured_artifact_facts(tmp_path, monkeypatch):
     from scar.frontend.builds.normalize import normalize_build
 

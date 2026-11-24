@@ -709,6 +709,8 @@ def test_python_project_protocols_preserve_initialization_and_effect_order(tmp_p
 
 
 def test_array_protocols_preserve_views_copies_and_lifetimes(tmp_path):
+    from scar.contract import read_member, validate_resource_flow
+
     entry = tmp_path / "arrays.py"
     entry.write_text("""import numpy as np
 a = np.array([[1.0, 2.0], [3.0, 4.0]])
@@ -739,6 +741,19 @@ print(snapshot[0] == 1.0)
     _stage(tmp_path, "frontend", "build", "--entry", entry, "--out", graph)
     entry.unlink()
     _stage(tmp_path, "middle", "plan", "--graph", graph, "--out", plan)
+    logical = json.loads((plan / "plan.json").read_bytes())
+    execution = json.loads((plan / "exec-ir.json").read_bytes())
+    inventory = execution["module"]["resource_model"]
+    flow_member = inventory["resource_flow"]
+    assert flow_member == logical["resource_analysis"]["graph"]
+    flow = validate_resource_flow(
+        read_member(plan, flow_member), inventory["resources"]
+    )
+    copies = [node for node in flow["nodes"] if node["kind"] == "COPY"]
+    assert copies and all(node["opcode"] == "array_copy" for node in copies)
+    assert all(node["site"] for node in copies)
+    assert any(node["byte_count"] == dict(kind="constant", value=32) for node in copies)
+    assert all(node["destination_storage"] == "fresh" for node in copies)
     shutil.rmtree(graph)
     result = _stage(tmp_path, "backend", "compile", "--ir", plan, "--out", delivery)
     shutil.rmtree(plan)

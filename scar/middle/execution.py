@@ -3,8 +3,11 @@
 from copy import deepcopy
 from scar.contract import (
     IR,
+    digest,
     document,
+    json_bytes,
     member,
+    validate_resource_flow,
     write_json,
     walk_operations as _nodes,
     control_regions,
@@ -201,14 +204,42 @@ def annotate_scoped_arrays(function):
     return sequence(function["body"], True)
 
 
-def prepare(module):
-    prepared = deepcopy(module)
-    globals_ = {g["name"] for g in prepared["globals"]}
-    layouts = sum(
-        annotate_iteration_layouts(fn, globals_) for fn in prepared["functions"]
+def prepare(module, *, executable=True):
+    from .resource_flow import analyze
+
+    prepared = deepcopy(module) if executable else dict(module)
+    layouts = lifetimes = 0
+    if executable:
+        globals_ = {g["name"] for g in prepared["globals"]}
+        layouts = sum(
+            annotate_iteration_layouts(fn, globals_) for fn in prepared["functions"]
+        )
+        lifetimes = sum(annotate_scoped_arrays(fn) for fn in prepared["functions"])
+    inventory = dict(prepared.get("resource_model", {}))
+    prepared["resource_model"] = inventory
+    flow = validate_resource_flow(
+        analyze(prepared, partial=not executable), inventory.get("resources", [])
     )
-    lifetimes = sum(annotate_scoped_arrays(fn) for fn in prepared["functions"])
-    return prepared, dict(iteration_layouts=layouts, scoped_lifetimes=lifetimes)
+    prepared["resource_analysis"] = dict(
+        graph=flow,
+        inventory_sha256=digest(
+            json_bytes(
+                {
+                    key: inventory.get(key)
+                    for key in ("resources", "topology", "platform")
+                }
+            )
+        ),
+        coverage=flow["coverage"],
+        scope="logical copies and source resource domains; runtime placement is not established",
+    )
+    inventory["resource_flow"] = flow
+    return prepared, dict(
+        iteration_layouts=layouts,
+        scoped_lifetimes=lifetimes,
+        resource_copies=flow["coverage"]["copies"],
+        resource_coverage=flow["coverage"]["kind"],
+    )
 
 
 def seal(module, out, *, status, graph_sha256, contract, logical_optimization):
@@ -220,6 +251,13 @@ def seal(module, out, *, status, graph_sha256, contract, logical_optimization):
     # This is an audit product. Its graph already lives once in resource_model;
     # source-protocol prefixes must never become executable function members.
     payload.pop("artifact_analysis", None)
+    payload.pop("resource_analysis", None)
+    if status == "READY" and "resource_flow" in payload.get("resource_model", {}):
+        inventory = dict(payload["resource_model"])
+        inventory["resource_flow"] = member(
+            out, "resources", inventory["resource_flow"]
+        )
+        payload["resource_model"] = inventory
     functions = (
         [member(out, "functions", f) for f in payload.pop("functions", [])]
         if status == "READY"

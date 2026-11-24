@@ -15,7 +15,7 @@ _RUN_LAYER = """
 import importlib, sys
 from pathlib import Path
 
-layer, source, output = sys.argv[1:]
+layer, source, output, *settings = sys.argv[1:]
 implementations = {
     "B1": ("scar.backend.planning", "schedule_ir", ("scar.backend.cpp20", "scar.backend.build")),
     "B2a": ("scar.backend.cpp20", "lower_scheduled",
@@ -41,7 +41,12 @@ run = getattr(implementation, entry)
 if layer == "B3":
     run(source)
 elif layer == "B1":
-    run(source, output, policy="serial")
+    from unittest.mock import patch
+    from scar.backend.planning import cpu
+    with patch.object(cpu, "_probe", wraps=cpu._probe) as probe:
+        run(source, output, policy=settings[0] if settings else "serial",
+            workers=int(settings[1]) if len(settings) > 1 else None)
+    print(probe.call_count)
 else:
     run(source, output)
 """
@@ -602,3 +607,139 @@ def test_cpu_costs_price_the_traversal_actually_emitted():
         assert isclose(
             prediction["ns_per_element"], (median if workers == 1 else max)(estimates)
         )
+
+
+def test_copy_costs_share_one_calibration_and_preserve_runtime_binding(tmp_path):
+    from scar.middle.execution import prepare, seal
+
+    array = dict(kind="ndarray", element="f64", rank=1)
+    ptr = dict(kind="ptr", to="u8")
+    count = dict(op="var", name="n", type="i64")
+    create = dict(op="array_create", type=array, shape=[count], fill="zeros")
+    fixed = dict(
+        op="call",
+        callee="memcpy",
+        args=[dict(op="var", name=n, type=ptr) for n in ("dst", "src")]
+        + [dict(op="literal", type="i64", value=4096)],
+    )
+    dynamic = dict(op="array_copy", type=array, value=create)
+    broadcast = dict(op="array_broadcast_copy", type=array, value=create, shape=[count])
+    filesystem = dict(
+        op="host_call",
+        interface="fs.copy2",
+        args=[dict(op="literal", type="text", value=p) for p in ("in", "out")],
+    )
+    loop = dict(
+        op="map", site="map", independent=True, index="i", extent=count, body=[]
+    )
+    resources = [
+        dict(id="workers", kind="CPU_POOL"),
+        dict(id="numa:0", kind="NUMA_MEMORY"),
+        dict(id="mount:7", kind="STORAGE_MOUNT", attrs=dict(filesystem_type="tmpfs")),
+        dict(id="disk:0", kind="NVME"),
+    ]
+
+    def execution(name, body):
+        fn = dict(
+            name="run",
+            params=[
+                dict(name="n", type="i64"),
+                *(dict(name=n, type=ptr) for n in ("src", "dst")),
+            ],
+            result="void",
+            body=body,
+        )
+        module = dict(
+            entry="run",
+            functions=[fn],
+            globals=[],
+            externs=[dict(name="memcpy", provider="libc")],
+            resource_model=dict(resources=resources),
+        )
+        prepared, _ = prepare(module)
+        return seal(
+            prepared,
+            tmp_path / name,
+            status="READY",
+            graph_sha256="0" * 64,
+            contract={},
+            logical_optimization={},
+        )
+
+    def measure(source, policy):
+        output = source.parent / policy
+        calls = subprocess.check_output(
+            [sys.executable, "-B", "-c", _RUN_LAYER, "B1", source, output, policy, "2"],
+            env=dict(
+                os.environ, PYTHONPATH=str(Path(scar.__file__).resolve().parents[1])
+            ),
+            cwd=tmp_path,
+            timeout=60,
+        )
+        return int(calls), json.loads((output / "physical-plan.json").read_bytes())
+
+    source = execution(
+        "all",
+        [
+            *(
+                dict(op="expr", value=node)
+                for node in (fixed, dynamic, broadcast, filesystem)
+            ),
+            loop,
+        ],
+    )
+    calls, physical = measure(source, "auto")
+    measured = physical["calibration"]
+    metric = "memcpy_payload_byte"
+    assert calls == 1 and set(measured["metrics"]) == {"team", "byte", metric}
+    assert measured["metric_widths"][metric] == [1]
+    assert measured["sampled_widths"] == list(range(1, physical["worker_limit"] + 1))
+    assert {c["workers"] for c in physical["regions"]["map"]["candidate_costs"]} == set(
+        measured["sampled_widths"]
+    )
+    plan = physical["movement_plan"]
+    coefficient = plan["coefficients"][metric]
+    assert coefficient["samples"] == [row[metric] for row in measured["samples"]["1"]]
+    assert (
+        len(coefficient["samples"]) == 3
+        and 0
+        < coefficient["minimum"]
+        <= coefficient["median"]
+        <= coefficient["maximum"]
+    )
+    fixed, dynamic, broadcast, filesystem_copy = plan["copies"]
+    assert all(
+        c["dispatch"]["resource_candidates"] == ["workers"] for c in plan["copies"]
+    )
+    assert fixed["dispatch"]["binding"] == "caller_thread"
+    assert (
+        fixed["cost"]["copy_component"]["estimated_ns"] == 4096 * coefficient["median"]
+    )
+    assert (
+        dynamic["cost"]["copy_component"]["expression"]["left"]["operation"]
+        == dynamic["id"]
+    )
+    assert dynamic["cost"]["copy_component"]["estimated_ns"] is None
+    assert all(c["cost"]["total_duration_ns"] is None for c in plan["copies"])
+    assert (
+        broadcast["cost"]["copy_component"]
+        is filesystem_copy["cost"]["copy_component"]
+        is None
+    )
+    assert (
+        plan["materializations"][dynamic["target"]]["location"]["binding"]
+        == "runtime_allocator"
+    )
+    location = plan["materializations"][filesystem_copy["target"]]["location"]
+    assert (
+        location["namespace"] == "source_inventory"
+        and location["binding"] == "execution_namespace"
+    )
+    assert location["resource_candidates"] == ["mount:7"]
+    assert (
+        filesystem_copy["ordering"]["ready_on_success"]["operation"]
+        == filesystem_copy["id"]
+    )
+    assert measure(source, "serial")[0] == 0
+    files_only = execution("files", [dict(op="expr", value=filesystem)])
+    assert measure(files_only, "auto")[0] == 0

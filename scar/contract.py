@@ -13,6 +13,7 @@ PLAN = "scar.logical-plan"
 IR = "scar.execution-ir"
 PHYSICAL = "scar.physical-plan"
 ARTIFACT_FLOW = "scar.artifact-flow"
+RESOURCE_FLOW = "scar.resource-flow"
 VERSION = 1
 
 
@@ -90,6 +91,228 @@ def array_rank_domain(spec):
     ):
         return None
     raise ValueError("invalid array rank domain")
+
+
+def validate_resource_flow(flow, resources=None):
+    """Validate symbolic copies and materializations, never physical IO claims."""
+    if (flow.get("schema"), flow.get("schema_version")) != (RESOURCE_FLOW, VERSION):
+        raise ValueError("unsupported resource flow contract")
+    resource_ids = flow.get("resources")
+    if (
+        not isinstance(resource_ids, list)
+        or any(not isinstance(ref, str) or not ref for ref in resource_ids)
+        or len(set(resource_ids)) != len(resource_ids)
+    ):
+        raise ValueError("resource flow requires unique inventory references")
+    known_resources = set(resource_ids)
+    resource_types = (
+        {record["id"]: record["kind"] for record in resources}
+        if resources is not None
+        else None
+    )
+    if resource_types is not None and not known_resources <= resource_types.keys():
+        raise ValueError("resource flow references an absent inventory resource")
+
+    def port(value):
+        return (
+            isinstance(value, dict)
+            and isinstance(value.get("owner"), str)
+            and bool(value["owner"])
+            and isinstance(value.get("path"), list)
+            and all(
+                isinstance(key, str) or type(key) is int and key >= 0
+                for key in value["path"]
+            )
+        )
+
+    nodes = flow.get("nodes")
+    if not isinstance(nodes, list):
+        raise ValueError("resource flow requires typed node records")
+    records = {}
+    for node in nodes:
+        ref = node.get("id")
+        if (
+            not isinstance(ref, str)
+            or not ref
+            or ref in records
+            or node.get("kind") not in {"COPY", "MATERIALIZATION"}
+        ):
+            raise ValueError("invalid or duplicate resource flow node")
+        records[ref] = node
+    copies = {ref: node for ref, node in records.items() if node["kind"] == "COPY"}
+    materializations = {
+        ref: node for ref, node in records.items() if node["kind"] == "MATERIALIZATION"
+    }
+    for ref, node in copies.items():
+        dispatch = node.get("dispatch", {})
+        if (
+            not port(node)
+            or node.get("source") not in materializations
+            or node.get("target") not in materializations
+            or node["source"] == node["target"]
+            or node.get("blocking") is not True
+            or node.get("value_relation")
+            not in {"equal_bytes", "broadcast", "tree_copy"}
+            or node.get("destination_storage")
+            not in {"fresh", "existing", "may_create", "fresh_tree"}
+            or not isinstance(node.get("opcode"), str)
+            or not node["opcode"]
+            or not isinstance(node.get("scope"), list)
+            or not isinstance(node.get("effects"), list)
+            or any(not isinstance(effect, str) for effect in node["effects"])
+            or any(not isinstance(item, str) for item in node.get("conditions", []))
+            or dispatch.get("kind") != "host_thread"
+            or dispatch.get("namespace") != "source_inventory"
+            or dispatch.get("binding") != "caller_thread"
+            or not isinstance(dispatch.get("resource_candidates"), list)
+            or not set(dispatch["resource_candidates"]) <= known_resources
+        ):
+            raise ValueError("invalid copy operation contract")
+        if resource_types is not None and any(
+            resource_types[resource] != "CPU_POOL"
+            for resource in dispatch["resource_candidates"]
+        ):
+            raise ValueError("host dispatch must reference process CPU pools")
+        count = node.get("byte_count", {})
+        if count.get("kind") == "constant":
+            valid_count = type(count.get("value")) is int and count["value"] >= 0
+        else:
+            valid_count = count.get("kind") in {
+                "operand_nbytes",
+                "operand_count",
+                "result_nbytes",
+                "tree_bytes",
+            } and port(count)
+        if not valid_count:
+            raise ValueError("copy requires a logical byte count or symbolic extent")
+        for frame in node["scope"]:
+            if (
+                not isinstance(frame, dict)
+                or not isinstance(frame.get("kind"), str)
+                or not port({"owner": node["owner"], "path": frame.get("path")})
+            ):
+                raise ValueError("copy requires structural control scope references")
+    for ref, node in materializations.items():
+        region, location = node.get("region", {}), node.get("location", {})
+        if (
+            not isinstance(node.get("owner"), str)
+            or not node["owner"]
+            or node.get("operand") is not None
+            and not port(node["operand"])
+            or node.get("domain") not in {"host_memory", "filesystem", "device_memory"}
+            or region.get("dtype") is not None
+            and not isinstance(region["dtype"], str)
+        ):
+            raise ValueError("materialization requires a typed region and operand")
+        for key in ("shape", "strides_bytes"):
+            value = region.get(key)
+            if value is not None and (
+                not isinstance(value, list)
+                or any(
+                    item is not None
+                    and (type(item) is not int or key == "shape" and item < 0)
+                    for item in value
+                )
+            ):
+                raise ValueError("invalid materialization shape or byte strides")
+        offset = region.get("offset_bytes")
+        storage = region.get("storage", {})
+        if (
+            offset is not None
+            and (type(offset) is not int or offset < 0)
+            or storage.get("kind") not in {"operand_storage", "fresh_allocation"}
+            or storage.get("operation") not in copies
+            or location.get("kind") not in {"resource_domain", "filesystem_path"}
+            or location.get("namespace") != "source_inventory"
+            or location.get("binding")
+            not in {"runtime_allocator", "execution_namespace"}
+            or not isinstance(location.get("resource_candidates"), list)
+            or not set(location["resource_candidates"]) <= known_resources
+        ):
+            raise ValueError("invalid materialization storage or location domain")
+        if storage.get("origin") is not None and not port(storage["origin"]):
+            raise ValueError("storage origin must reference a canonical value port")
+        if resource_types is not None and any(
+            resource_types[resource]
+            not in {
+                "host_memory": {"DRAM", "NUMA_MEMORY"},
+                "device_memory": {"DEVICE_MEMORY", "HBM"},
+                "filesystem": {"STORAGE_MOUNT"},
+            }[node["domain"]]
+            for resource in location["resource_candidates"]
+        ):
+            raise ValueError("materialization candidates disagree with storage domain")
+        logical, ready = node.get("logical_value", {}), node.get("ready", {})
+        if not (
+            logical.get("kind") == "operand_version"
+            and port(logical)
+            or logical.get("kind") in {"same_as", "broadcast_of", "tree_copy_of"}
+            and logical.get("materialization") in materializations
+            and logical["materialization"] != ref
+        ):
+            raise ValueError("materialization requires its logical value provenance")
+        if not (
+            ready.get("kind") == "input_ready"
+            and port(ready)
+            or ready.get("kind") == "operation_complete"
+            and ready.get("operation") in copies
+        ):
+            raise ValueError("materialization requires its readiness relation")
+    edges = flow.get("edges")
+    if not isinstance(edges, list):
+        raise ValueError("resource flow requires relationship records")
+    relationships = set()
+    for edge in edges:
+        source, target, kind = edge.get("source"), edge.get("target"), edge.get("kind")
+        if not (
+            kind == "READS"
+            and source in materializations
+            and target in copies
+            or kind == "PRODUCES"
+            and source in copies
+            and target in materializations
+            or kind == "MAY_RESIDE_ON"
+            and source in materializations
+            and target in known_resources
+            or kind == "MAY_DISPATCH_ON"
+            and source in copies
+            and target in known_resources
+        ):
+            raise ValueError("invalid resource flow relationship")
+        relationships.add((kind, source, target))
+    for ref, node in copies.items():
+        if (
+            not {
+                ("READS", node["source"], ref),
+                ("PRODUCES", ref, node["target"]),
+            }
+            <= relationships
+        ):
+            raise ValueError("copy is missing its input/output data relationships")
+        if any(
+            ("MAY_DISPATCH_ON", ref, resource) not in relationships
+            for resource in node["dispatch"]["resource_candidates"]
+        ):
+            raise ValueError("copy is missing its controller resource relationships")
+        target = materializations[node["target"]]
+        relation = {
+            "equal_bytes": "same_as",
+            "broadcast": "broadcast_of",
+            "tree_copy": "tree_copy_of",
+        }[node["value_relation"]]
+        if target["logical_value"] != dict(
+            kind=relation, materialization=node["source"]
+        ) or target["ready"] != dict(kind="operation_complete", operation=ref):
+            raise ValueError("copy result provenance or readiness disagrees")
+    coverage = flow.get("coverage", {})
+    if (
+        coverage.get("kind") not in {"canonical", "partial"}
+        or type(coverage.get("functions")) is not int
+        or coverage["functions"] < 0
+        or coverage.get("copies") != len(copies)
+    ):
+        raise ValueError("resource flow requires its scoped coverage")
+    return flow
 
 
 def validate_artifact_flow(flow):

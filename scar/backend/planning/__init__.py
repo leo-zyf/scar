@@ -438,9 +438,16 @@ def _qualify(module, image_context=None):
 
 
 def _load_module(path, ir):
-    return dict(
+    module = dict(
         ir["module"], functions=[read_member(path.parent, r) for r in ir["functions"]]
     )
+    if "resource_flow" in module.get("resource_model", {}):
+        inventory = dict(module["resource_model"])
+        inventory["resource_flow"] = read_member(
+            path.parent, inventory["resource_flow"]
+        )
+        module["resource_model"] = inventory
+    return module
 
 
 def _schedule_image(
@@ -489,6 +496,12 @@ def _schedule_image(
             member(destination, "scheduled-units", fn)
             for fn in selected.pop("functions")
         ]
+        if "resource_flow" in selected.get("resource_model", {}):
+            inventory = dict(selected["resource_model"])
+            inventory["resource_flow"] = member(
+                destination, "resources", inventory["resource_flow"]
+            )
+            selected["resource_model"] = inventory
         scheduled = dict(module=selected, functions=functions)
     if requirements:
         physical["operator_requirements"] = requirements
@@ -500,6 +513,10 @@ def _schedule_image(
             sha256=digest(json_bytes(inventory)),
             count=len(inventory.get("resources", ())),
         )
+        if "resource_flow" in inventory:
+            physical["resource_flow"] = member(
+                destination, "resources", inventory["resource_flow"]
+            )
     physical_member = member(destination, "scheduled-units", physical)
     write_json(destination / "physical-plan.json", physical)
     package = document(

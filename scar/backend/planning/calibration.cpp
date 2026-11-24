@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <omp.h>
 #include <sched.h>
 #include <set>
@@ -45,6 +46,27 @@ void emit(const std::string &metric, int width, int repetition,
   if (repetition >= 0)
     std::printf("%d %d %s %.12g\n", width, repetition, metric.c_str(),
                 duration);
+}
+
+void copy_payload(std::size_t bytes) {
+  if (bytes == 0 || bytes % sizeof(std::uint64_t) != 0)
+    std::exit(2);
+  std::vector<std::uint64_t> source(bytes / sizeof(std::uint64_t));
+  std::vector<std::uint64_t> destination(source.size());
+  for (std::size_t i = 0; i < source.size(); ++i)
+    source[i] = i;
+  // Keep the timed call in the target C library and consume its output after
+  // it.
+  using Copy = void *(*)(void *, const void *, std::size_t);
+  Copy volatile copy = std::memcpy;
+  for (int rep = -1; rep < 3; ++rep) {
+    source.front() = static_cast<std::uint64_t>(rep + 1);
+    auto start = Clock::now();
+    copy(destination.data(), source.data(), bytes);
+    double duration = elapsed(start);
+    consume(destination);
+    emit("memcpy_payload_byte", 1, rep, duration / static_cast<double>(bytes));
+  }
 }
 
 void team(int width) {
@@ -171,34 +193,41 @@ void controls(const std::set<std::string> &wanted, std::int64_t period) {
 } // namespace
 
 int main(int argc, char **argv) {
-  int split = 1;
+  int split = 2;
   while (split < argc && std::string(argv[split]) != "--")
     ++split;
-  if (split == 1 || split + 1 >= argc)
+  if (split == 2 || split + 1 >= argc)
     return 2;
   const std::set<std::string> wanted(argv + split + 1, argv + argc);
   omp_set_dynamic(0);
-  for (int j = 1; j < split; ++j) {
+  for (int j = 2; j < split; ++j) {
     const int width = std::atoi(argv[j]);
     if (width < 1)
       return 2;
-    int actual = 0;
+    if (wanted.contains("team")) {
+      int actual = 0;
 #pragma omp parallel num_threads(width)
-    {
+      {
 #pragma omp single
-      actual = omp_get_num_threads();
+        actual = omp_get_num_threads();
+      }
+      if (actual != width)
+        return 3;
+      team(width);
     }
-    if (actual != width)
-      return 3;
-    team(width);
     kernels<std::int32_t>("i32", width, wanted);
     kernels<std::uint32_t>("u32", width, wanted);
     kernels<std::int64_t>("i64", width, wanted);
     kernels<std::uint64_t>("u64", width, wanted);
     kernels<float>("f32", width, wanted);
     kernels<double>("f64", width, wanted);
-    if (width == 1)
-      controls(wanted, 2 * split + 13);
+    if (width == 1) {
+      if (wanted.contains("fp_guard") || wanted.contains("guard_i64") ||
+          wanted.contains("carry_i64"))
+        controls(wanted, 2 * (split - 1) + 13);
+      if (wanted.contains("memcpy_payload_byte"))
+        copy_payload(std::stoull(argv[1]));
+    }
     std::fflush(stdout);
   }
 }

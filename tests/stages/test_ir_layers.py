@@ -456,6 +456,213 @@ def test_constant_file_proof_preserves_control_and_handle_boundaries():
     assert not negative["constant_materializations"]
 
 
+def test_resource_flow_projects_copies_without_unrolling_or_placement_claims():
+    array = dict(kind="ndarray", element="f64", rank=2)
+
+    def integer(value):
+        return dict(op="literal", type="i64", value=value)
+
+    def variable(name, kind=array):
+        return dict(op="var", name=name, type=kind)
+
+    def create():
+        return dict(op="array_create", type=array, shape=[integer(2), integer(3)])
+
+    def copy(value, site):
+        return dict(
+            op="expr",
+            value=dict(op="array_copy", type=value["type"], value=value, site=site),
+        )
+
+    body = [
+        dict(op="decl", name="base", type=array, init=create()),
+        dict(op="decl", name="alias", type=array, init=variable("base")),
+        copy(variable("alias"), "known"),
+        copy(
+            dict(
+                op="array_view",
+                type={**array, "rank": 1},
+                base=variable("base"),
+                indices=[integer(0)],
+            ),
+            "view",
+        ),
+        copy(
+            dict(
+                op="array_reshape",
+                type=array,
+                value=variable("base"),
+                shape=[integer(3), integer(2)],
+                layout="C",
+            ),
+            "reshape",
+        ),
+        copy(variable("dynamic"), "dynamic"),
+        dict(
+            op="expr",
+            value=dict(
+                op="array_broadcast_copy",
+                type=array,
+                value=variable("base"),
+                shape=[variable("n", "i64"), integer(3)],
+                site="broadcast",
+            ),
+        ),
+        dict(
+            op="expr",
+            value=dict(
+                op="host_call",
+                interface="fs.copy2",
+                args=[
+                    dict(op="literal", type="text", value=value)
+                    for value in ("source", "unknown-destination")
+                ],
+                site="file",
+            ),
+        ),
+        dict(
+            op="expr",
+            value=dict(
+                op="call",
+                callee="memcpy",
+                args=[
+                    variable("dst", "opaque"),
+                    variable("src", "opaque"),
+                    integer(16),
+                ],
+                site="native",
+            ),
+        ),
+        dict(
+            op="if",
+            condition=variable("flag", "bool"),
+            then=[
+                dict(op="assign", target=variable("base"), value=variable("dynamic"))
+            ],
+            **{"else": []},
+        ),
+        copy(variable("base"), "joined"),
+        dict(op="assign", target=variable("base"), value=create()),
+        dict(
+            op="while",
+            condition=variable("flag", "bool"),
+            body=[
+                copy(variable("base"), "iteration"),
+                dict(op="assign", target=variable("base"), value=variable("dynamic")),
+            ],
+        ),
+        copy(variable("base"), "after-loop"),
+    ]
+    body[2]["value"]["source_evidence"] = dict(
+        op="array_copy", type=array, value=variable("base"), site="historical"
+    )
+    inventory = [
+        dict(id=identity, kind=kind)
+        for identity, kind in (
+            ("pool", "CPU_POOL"),
+            ("cpu", "CPU"),
+            ("dram", "DRAM"),
+            ("mount", "STORAGE_MOUNT"),
+            ("gpu", "GPU"),
+            ("hbm", "DEVICE_MEMORY"),
+        )
+    ]
+    module = dict(
+        functions=[dict(name="main", body=body)],
+        externs=[dict(name="memcpy", provider="libc")],
+        resource_model=dict(resources=inventory),
+    )
+    shadowed = deepcopy(module)
+    shadowed["functions"].append(dict(name="memcpy", body=[]))
+    partial = dict(
+        functions=[
+            dict(
+                name="unclosed",
+                execution_kind="python_protocol",
+                body=[copy(variable("dynamic"), "must-not-project")],
+            )
+        ],
+        protocol_analysis=dict(
+            closed_fragments=[
+                dict(
+                    symbol="closed",
+                    completion="complete",
+                    function=dict(name="closed", body=[copy(create(), "closed")]),
+                )
+            ],
+            prefix_fragments=[
+                dict(
+                    symbol="prefix",
+                    body=[copy(variable("dynamic"), "prefix")],
+                    frontier=dict(body=[copy(variable("dynamic"), "not-a-prefix")]),
+                )
+            ],
+        ),
+        resource_model=dict(resources=inventory),
+    )
+    flows = _layer(
+        "execution",
+        """from scar.middle.resource_flow import analyze
+from scar.contract import validate_resource_flow
+flows=[analyze(data[0]),analyze(data[1]),analyze(data[2],partial=True)]
+for flow,module in zip(flows,data):
+    validate_resource_flow(flow,module['resource_model']['resources'])
+assert flows[0] == analyze(data[0])
+print(json.dumps(flows))
+""",
+        [module, shadowed, partial],
+    )
+    flow = flows[0]
+    nodes = {node["id"]: node for node in flow["nodes"]}
+    copies = {node["site"]: node for node in nodes.values() if node["kind"] == "COPY"}
+    assert flow["coverage"] == dict(kind="canonical", functions=1, copies=10)
+    assert copies["known"]["byte_count"] == dict(kind="constant", value=48)
+    assert copies["view"]["byte_count"] == dict(kind="constant", value=24)
+    assert copies["reshape"]["byte_count"] == dict(kind="constant", value=48)
+    assert copies["native"]["destination_storage"] == "existing"
+    assert copies["native"]["byte_count"] == dict(kind="constant", value=16)
+    assert all(
+        copies[site]["byte_count"]["kind"] == "operand_nbytes"
+        for site in ("dynamic", "joined", "iteration", "after-loop")
+    )
+    assert copies["broadcast"]["byte_count"]["kind"] == "result_nbytes"
+    assert copies["iteration"]["scope"][0]["kind"] == "while"
+    assert (
+        len([node for node in nodes.values() if node.get("site") == "iteration"]) == 1
+    )
+    source, destination = (
+        nodes[copies["known"][role]] for role in ("source", "target")
+    )
+    assert source["region"]["storage"]["kind"] == "operand_storage"
+    assert destination["region"]["storage"]["kind"] == "fresh_allocation"
+    assert destination["logical_value"] == dict(
+        kind="same_as", materialization=source["id"]
+    )
+    assert destination["ready"]["kind"] == "operation_complete"
+    assert destination["location"]["resource_candidates"] == ["dram"]
+    assert source["region"]["storage"]["origin"] == dict(
+        owner="main", path=["body", 0, "init"]
+    )
+    assert all(
+        nodes[copies[site]["source"]]["region"]["storage"]["origin"]
+        == source["region"]["storage"]["origin"]
+        for site in ("view", "reshape")
+    )
+    assert destination["region"]["storage"]["origin"] != (
+        source["region"]["storage"]["origin"]
+    )
+    assert copies["known"]["dispatch"]["resource_candidates"] == ["pool"]
+    file = nodes[copies["file"]["target"]]
+    assert file["operand"] is None and file["region"]["path_resolution"]
+    assert file["location"]["resource_candidates"] == ["mount"]
+    assert not any(node.get("site") == "native" for node in flows[1]["nodes"])
+    assert flows[2]["coverage"] == dict(kind="partial", functions=2, copies=2)
+    assert {node["site"] for node in flows[2]["nodes"] if node["kind"] == "COPY"} == {
+        "closed",
+        "prefix",
+    }
+
+
 def test_file_versions_preserve_stable_aliases_and_closed_writer_returns():
     def literal(value, kind="text"):
         return dict(op="literal", type=kind, value=value)

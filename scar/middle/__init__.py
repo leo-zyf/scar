@@ -52,7 +52,7 @@ def _plan_image(graph, folder, revision, out, *, optimize_graph, shape, trip_cou
         for fn in module["functions"]:
             if optimize_graph:
                 changes.extend(optimize(fn))
-        module, lowering_facts = prepare(module)
+    module, lowering_facts = prepare(module, executable=not issues)
     ir_path = seal(
         module,
         out,
@@ -66,6 +66,12 @@ def _plan_image(graph, folder, revision, out, *, optimize_graph, shape, trip_cou
         artifact_analysis = {
             **artifact_analysis,
             "graph": member(out, "analysis", artifact_analysis["graph"]),
+        }
+    resource_analysis = module.get("resource_analysis")
+    if resource_analysis is not None:
+        resource_analysis = {
+            **resource_analysis,
+            "graph": member(out, "resources", resource_analysis["graph"]),
         }
     protocol_analysis = module.get("protocol_analysis")
     if protocol_analysis is not None:
@@ -98,6 +104,11 @@ def _plan_image(graph, folder, revision, out, *, optimize_graph, shape, trip_cou
         **(
             {"artifact_analysis": artifact_analysis}
             if artifact_analysis is not None
+            else {}
+        ),
+        **(
+            {"resource_analysis": resource_analysis}
+            if resource_analysis is not None
             else {}
         ),
         **(

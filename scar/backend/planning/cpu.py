@@ -15,8 +15,10 @@ from scar.contract import (
     digest,
     document,
     control_regions as _control_regions,
+    validate_resource_flow,
 )
 from scar.host import cpu_availability
+from .movement import COPY_METRIC, SAMPLE_BYTES, Movement
 
 _PROBE = Path(__file__).with_name("calibration.cpp")
 
@@ -66,7 +68,13 @@ def _probe(limit, metrics):
         )
         try:
             result = subprocess.run(
-                [str(binary), *map(str, widths), "--", *sorted(metrics)],
+                [
+                    str(binary),
+                    str(SAMPLE_BYTES),
+                    *map(str, widths),
+                    "--",
+                    *sorted(metrics),
+                ],
                 capture_output=True,
                 timeout=45,
             )
@@ -92,9 +100,9 @@ def _probe(limit, metrics):
                 raise ValueError("duplicate target calibration")
             row[metric] = value
     for width, rows in list(samples.items()):
-        required = metrics | {"team"}
+        required = metrics
         if width > 1:
-            required -= {"carry_i64", "guard_i64", "fp_guard"}
+            required = required - {"carry_i64", "guard_i64", "fp_guard", COPY_METRIC}
         if any(row.keys() != required for row in rows):
             if width == 1 or not interrupted:
                 raise ValueError("incomplete target calibration")
@@ -555,6 +563,12 @@ def _structural_layout(bodies):
 
 
 def schedule(module, mode, worker_limit=None):
+    inventory = module.get("resource_model", {})
+    movement = None
+    if "resource_flow" in inventory:
+        flow = inventory["resource_flow"]
+        validate_resource_flow(flow, inventory.get("resources", ()))
+        movement = Movement(flow, _BYTES)
     deployment_cpu = cpu_availability()
     caps = _worker_caps(deployment_cpu.worker_budget, worker_limit)
     limit = min(caps.values())
@@ -575,8 +589,10 @@ def schedule(module, mode, worker_limit=None):
         deployment="unverified",
     )
     samples = {}
-    if mode == "auto" and maps:
-        metrics = {"byte"}
+    map_probe = bool(mode == "auto" and maps)
+    metrics = movement.required_metrics() if movement and mode == "auto" else set()
+    if map_probe:
+        metrics.update(("byte", "team"))
         if has_fusion:
             metrics.add("fp_guard")
         for bodies in maps.values():
@@ -586,40 +602,59 @@ def schedule(module, mode, worker_limit=None):
                     metrics.update(work["operations"])
             if "coordinate" in bodies:
                 metrics.update(("guard_i64", "carry_i64"))
+    if metrics:
         try:
             probe_limit = (
-                limit if any(b["parallel_allowed"] for b in maps.values()) else 1
+                limit
+                if map_probe and any(b["parallel_allowed"] for b in maps.values())
+                else 1
             )
             samples, compiler = _probe(probe_limit, metrics)
+            units = {}
+            if map_probe:
+                units.update(
+                    team="ns per team",
+                    byte="ns per logical stream byte",
+                    operations="ns per operation or named probe group",
+                )
+            if COPY_METRIC in metrics:
+                units[COPY_METRIC] = "ns per payload byte"
             report["calibration"] = dict(
                 evidence="observed",
                 compiler=compiler,
                 source_sha256=digest(_PROBE.read_bytes()),
-                metrics=sorted(metrics | {"team"}),
+                metrics=sorted(metrics),
+                metric_widths={
+                    metric: [
+                        width for width, rows in samples.items() if metric in rows[0]
+                    ]
+                    for metric in sorted(metrics)
+                },
                 samples=samples,
                 repetitions=3,
-                elements_per_sample=1 << 18,
-                units=dict(
-                    team="ns per team",
-                    byte="ns per logical stream byte",
-                    operations="ns per operation or named probe group",
-                ),
-                constant_divisors=dict(shift=8, other=7),
+                units=units,
                 coverage="powers of two and the effective probe budget",
                 sampled_widths=sorted(samples),
                 unmeasured_widths=sorted(set(_widths(probe_limit)) - samples.keys()),
             )
-            report["cost_model"] = dict(
-                evidence="inferred",
-                duration="setup_ns + elements * max(logical_bytes * ns_per_byte, typed_operation_ns)",
-                envelope="serial median and parallel maximum across three observed repetitions",
-                ordinary_arithmetic_proxy="four same-type multiply/add operations per result",
-                coordinate_assumption="axis guards pass; the emitted linear loop remains the guard fallback",
-                coordinate_controls="guard comparison and loop-carry observations are proxies for outer-loop control",
-                constant_division="representative compile-time divisors 8 and 7 for power-of-two and other constants",
-            )
+            if map_probe:
+                report["calibration"].update(
+                    elements_per_sample=1 << 18,
+                    constant_divisors=dict(shift=8, other=7),
+                )
+                report["cost_model"] = dict(
+                    evidence="inferred",
+                    duration="setup_ns + elements * max(logical_bytes * ns_per_byte, typed_operation_ns)",
+                    envelope="serial median and parallel maximum across three observed repetitions",
+                    ordinary_arithmetic_proxy="four same-type multiply/add operations per result",
+                    coordinate_assumption="axis guards pass; the emitted linear loop remains the guard fallback",
+                    coordinate_controls="guard comparison and loop-carry observations are proxies for outer-loop control",
+                    constant_division="representative compile-time divisors 8 and 7 for power-of-two and other constants",
+                )
         except (ValueError, OSError, subprocess.SubprocessError) as error:
             report["calibration_issue"] = str(error)
+    if movement is not None:
+        report["movement_plan"] = movement.plan(samples)
 
     choices = {}
     for site, bodies in maps.items():
@@ -671,7 +706,7 @@ def schedule(module, mode, worker_limit=None):
                 contenders = [choices.get(id(s), ({}, {}))[1] for s in group]
                 guard = (
                     statistics.median(row["fp_guard"] for row in samples[1])
-                    if samples
+                    if samples and "fp_guard" in samples[1][0]
                     else None
                 )
                 selected_fusion = _fusion_profitable(contenders, guard, fused["extent"])

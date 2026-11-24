@@ -360,6 +360,7 @@ class _Frame:
         self.handler_depth = 0
         self.region = None
         self.root_region = None
+        self.source_expression = None
         self.dynamic = 0
         self.params = []
         for formal, kind in zip(fn["params"], types):
@@ -398,6 +399,10 @@ class _Frame:
         return f"@evaluation/{self.next_temp}"
 
     def effect(self, node, kind, steps, discard=False, *, facts=None):
+        source = self.source_expression or (
+            self.region.current if self.region is not None else None
+        )
+        node = {**values.source_site(source or {}), **node}
         if discard:
             steps.append(dict(op="expr", value=node))
             return _literal(None)
@@ -853,6 +858,14 @@ class _Frame:
         self.store(node["binding"], value, steps)
 
     def evaluate(self, node, steps, discard=False, *, truth_context=False):
+        previous = self.source_expression
+        self.source_expression = node
+        try:
+            return self._evaluate(node, steps, discard, truth_context=truth_context)
+        finally:
+            self.source_expression = previous
+
+    def _evaluate(self, node, steps, discard=False, *, truth_context=False):
         op = node["op"]
         if node.get("site") is not None:
             self.project.live_sites.add((self.name, node["site"]))

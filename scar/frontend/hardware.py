@@ -1,5 +1,6 @@
 """Linux hardware discovery for the graph's placement domain."""
 
+from dataclasses import dataclass
 import os
 from pathlib import Path
 import platform
@@ -94,21 +95,254 @@ def _caches(root, allowed):
     return tuple(domains.values()), edges
 
 
-def _mount(path):
-    selected = None
-    for line in (_text(Path("/proc/self/mountinfo")) or "").splitlines():
-        prefix, _, suffix = line.partition(" - ")
-        fields, filesystem = prefix.split(), suffix.split()
-        if len(fields) < 5 or len(filesystem) < 2:
-            continue
-        mount = Path(
-            re.sub(r"\\([0-7]{3})", lambda match: chr(int(match[1], 8)), fields[4])
+_PSEUDO_FS = frozenset(
+    "autofs binfmt_misc bpf cgroup cgroup2 configfs debugfs devpts devtmpfs "
+    "efivarfs fusectl mqueue nfsd nsfs proc pstore resctrl rpc_pipefs securityfs "
+    "selinuxfs smackfs sysfs tracefs usbfs".split()
+)
+_NETWORK_FS = frozenset(
+    "afs beegfs ceph cifs coda fuse.ceph fuse.glusterfs fuse.sshfs "
+    "glusterfs lustre nfs nfs4 smb3 smbfs".split()
+)
+_MEMORY_FS = {"tmpfs", "ramfs", "hugetlbfs"}
+
+
+@dataclass(frozen=True)
+class _Mount:
+    id: int
+    parent: int
+    device: str
+    root: str
+    point: Path
+    filesystem: str
+    source: str
+    read_only: bool
+
+    @property
+    def data_mount(self):
+        if self.filesystem in _PSEUDO_FS:
+            return False
+        if self.filesystem not in {"tmpfs", "ramfs"}:
+            return True
+        return self.point.is_relative_to("/dev/shm") or not any(
+            self.point.is_relative_to(p) for p in ("/dev", "/sys", "/proc")
         )
-        if path.is_relative_to(mount) and (
-            selected is None or len(mount.parts) >= len(selected[0].parts)
+
+
+def _mount_table(source):
+    try:
+        data = source.read_bytes()
+    except OSError:
+        return {}
+
+    def name(field):
+        unescaped = re.sub(
+            rb"\\(040|011|012|134)", lambda m: bytes([int(m[1], 8)]), field
+        )
+        return os.fsdecode(unescaped)
+
+    mounts = {}
+    for line in data.split(b"\n"):
+        left, separator, right = line.partition(b" - ")
+        fields, fs = left.split(b" "), right.split(b" ")
+        if (
+            not separator
+            or len(fields) < 6
+            or len(fs) < 3
+            or not fields[0].isdigit()
+            or not fields[1].isdigit()
+            or not re.fullmatch(rb"\d+:\d+", fields[2])
         ):
-            selected = mount, fields[2], filesystem[0], filesystem[1]
-    return selected
+            continue
+        record = _Mount(
+            int(fields[0]),
+            int(fields[1]),
+            fields[2].decode("ascii"),
+            name(fields[3]),
+            Path(name(fields[4])),
+            name(fs[0]),
+            name(fs[1]),
+            b"ro" in fields[5].split(b",") or b"ro" in fs[2].split(b","),
+        )
+        mounts[record.id] = record
+    return mounts
+
+
+def _visible_mount(path, children):
+    """Walk mount attachments in path order, including overmounts of the same path."""
+    current = None
+    visited = set()
+    for prefix in (*reversed(path.parents), path):
+        if current is not None and (None, prefix) in children:
+            return None, "unlinked_mount_hierarchy"
+        while candidates := children.get((current, prefix)):
+            if len(candidates) != 1 or candidates[0] in visited:
+                return None, "ambiguous_mount_hierarchy"
+            current = candidates[0]
+            visited.add(current)
+    return (current, "mount_hierarchy") if current is not None else (None, "unresolved")
+
+
+def _block_topology(numbers, root, storage):
+    by_device, identities, expanded = {}, storage.copy(), set()
+    resources, edges, pending = [], [], []
+
+    def identity(device):
+        if device.name not in identities:
+            key = identities[device.name] = f"block:{device.name}"
+            sectors = _integer(device / "size")
+            resources.append(
+                Resource(
+                    key,
+                    "BLOCK_VOLUME",
+                    sectors * 512 if sectors is not None else None,
+                    {"device": device.name, "capacity_unit": "bytes"},
+                )
+            )
+        return identities[device.name]
+
+    for number in sorted(numbers):
+        try:
+            device = (root / number).resolve(strict=True)
+        except (OSError, RuntimeError):
+            continue
+        by_device[number] = identity(device)
+        pending.append((device, frozenset()))
+    # Only follow kernel-published dependencies reachable from these mounts.
+    while pending:
+        device, ancestors = pending.pop()
+        if device in expanded:
+            continue
+        expanded.add(device)
+        ancestors = ancestors | {device}
+        links = (
+            [device.parent]
+            if (device / "partition").is_file()
+            else sorted((device / "slaves").glob("*"))
+        )
+        inputs = set()
+        for link in links:
+            try:
+                backing = link.resolve(strict=True)
+            except (OSError, RuntimeError):
+                continue
+            if backing not in ancestors and backing not in inputs:
+                inputs.add(backing)
+                edges.append(
+                    Edge(
+                        identity(device),
+                        identity(backing),
+                        "RESOURCE",
+                        "BLOCK_BACKED_BY",
+                    )
+                )
+                pending.append((backing, ancestors))
+    return by_device, resources, edges
+
+
+def _storage_mounts(
+    path,
+    storage,
+    *,
+    mountinfo=Path("/proc/self/mountinfo"),
+    device_root=Path("/sys/dev/block"),
+    namespace_link=Path("/proc/self/ns/mnt"),
+):
+    mounts = _mount_table(mountinfo)
+    try:
+        namespace = os.readlink(namespace_link)
+    except OSError:
+        namespace = None
+    children = {}
+    for m in mounts.values():
+        parent = m.parent if m.parent in mounts and m.parent != m.id else None
+        children.setdefault((parent, m.point), []).append(m.id)
+    try:
+        selected, resolution = _visible_mount(Path(path).resolve(strict=True), children)
+    except (OSError, RuntimeError):
+        selected, resolution = None, "input_path_unavailable"
+    kept = {i: m for i, m in mounts.items() if m.data_mount}
+    capacity = None
+    if selected in kept:
+        try:
+            stat = os.statvfs(path)
+            capacity = stat.f_blocks * stat.f_frsize
+        except OSError:
+            pass
+    elif selected is not None:
+        selected, resolution = None, "outside_data_filesystems"
+    numbers = {
+        m.device
+        for m in kept.values()
+        if m.filesystem not in _MEMORY_FS and m.filesystem not in _NETWORK_FS
+    }
+    by_device, resources, edges = _block_topology(numbers, device_root, storage)
+    for i, m in sorted(kept.items()):
+        identity = f"mount:{i}"
+        if m.parent in kept and m.parent != i:
+            edges.append(
+                Edge(identity, f"mount:{m.parent}", "RESOURCE", "MOUNT_PARENT")
+            )
+        if m.filesystem in _MEMORY_FS:
+            backing = "host_memory"
+        elif m.filesystem in _NETWORK_FS:
+            backing = "network_filesystem"
+        else:
+            block = by_device.get(m.device)
+            backing = "block_device" if block is not None else "unresolved"
+            if block is not None:
+                edges.append(Edge(identity, block, "RESOURCE", "MOUNT_BACKING_DEVICE"))
+        top, _ = _visible_mount(m.point, children)
+        resources.append(
+            Resource(
+                identity,
+                "STORAGE_MOUNT",
+                capacity if i == selected else None,
+                dict(
+                    mount_id=i,
+                    parent_id=m.parent,
+                    mountpoint=str(m.point),
+                    root=m.root,
+                    major_minor=m.device,
+                    filesystem=m.filesystem,
+                    source=m.source,
+                    read_only=m.read_only,
+                    backing_kind=backing,
+                    **(
+                        {"page_policy": "huge_pages"}
+                        if m.filesystem == "hugetlbfs"
+                        else {}
+                    ),
+                    path_visibility=(
+                        "unresolved"
+                        if top is None
+                        else "visible" if top == i else "covered"
+                    ),
+                    capture_namespace=namespace,
+                    capacity_unit="bytes",
+                ),
+            )
+        )
+    return (
+        resources,
+        edges,
+        dict(
+            input_mount=f"mount:{selected}" if selected is not None else None,
+            input_mount_resolution=resolution,
+            mount_namespace=namespace,
+            mount_scope="capture_process_mount_namespace",
+        ),
+    )
+
+
+def _block_kind(device, rotational):
+    try:
+        subsystem = Path(os.readlink(device / "device/subsystem")).name
+    except OSError:
+        subsystem = None
+    if subsystem in {"nvme", "nvme-subsystem"}:
+        return "NVME"
+    return "SSD" if rotational == 0 else "STORAGE"
 
 
 def snapshot(path):
@@ -217,11 +451,7 @@ def snapshot(path):
             continue
         sectors = _integer(device / "size")
         rotational = _integer(device / "queue/rotational")
-        kind = (
-            "NVME"
-            if device.name.startswith("nvme")
-            else "SSD" if rotational == 0 else "STORAGE"
-        )
+        kind = _block_kind(device, rotational)
         identity = storage[device.name] = f"block:{device.name}"
         resources.append(
             Resource(
@@ -235,38 +465,9 @@ def snapshot(path):
                 },
             )
         )
-    mount = _mount(path)
-    if mount:
-        mountpoint, major_minor, filesystem, source = mount
-        stat = os.statvfs(path)
-        resources.append(
-            Resource(
-                "mount:input",
-                "STORAGE_MOUNT",
-                stat.f_blocks * stat.f_frsize,
-                {
-                    "mountpoint": str(mountpoint),
-                    "filesystem": filesystem,
-                    "source": source,
-                    "capacity_unit": "bytes",
-                },
-            )
-        )
-        device_path = Path("/sys/dev/block") / major_minor
-        if device_path.exists():
-            device = device_path.resolve()
-            backing = (
-                device.parent.name if (device / "partition").exists() else device.name
-            )
-            if backing in storage:
-                edges.append(
-                    Edge(
-                        "mount:input",
-                        storage[backing],
-                        "RESOURCE",
-                        "MOUNT_BACKING_DEVICE",
-                    )
-                )
+    mounts, mount_edges, mount_evidence = _storage_mounts(path, storage)
+    resources.extend(mounts)
+    edges.extend(mount_edges)
 
     render_devices = {
         node.joinpath("device").resolve(): node.name
@@ -313,6 +514,7 @@ def snapshot(path):
             )
             edges.append(Edge(identity, memory_id, "RESOURCE", "DEVICE_MEMORY_ACCESS"))
     evidence = {
+        **mount_evidence,
         "provider": "linux-proc-sysfs",
         "online_cpu_ids": sorted(online),
         "affinity_cpu_ids": sorted(allowed),
