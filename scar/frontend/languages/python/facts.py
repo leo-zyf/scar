@@ -273,17 +273,62 @@ class ParsedProject:
     source_digests: dict
 
 
-def capture_project(
-    entry: Path, root: Path, *, buffers=None, source_hashes=None
-) -> ParsedProject:
+class ProjectCapture:
+    """Share file syntax within one build, keeping each script's import environment."""
+
+    def __init__(self, root, *, buffers=None, source_hashes=None):
+        self.root = Path(root).resolve()
+        self.buffers = buffers or {}
+        self.source_hashes = source_hashes
+        self.parsed = {}
+        self.resolved = {}
+        self.finders = {}
+        self.projects = {}
+
+    def _read(self, path, module, imports):
+        key = (path, imports)
+        if key not in self.resolved:
+            facts = self.parsed.get(path)
+            if facts is None:
+                relative = path.relative_to(self.root).as_posix()
+                facts = parse_unit(
+                    path,
+                    root=self.root,
+                    abi={"module": module},
+                    source_bytes=self.buffers.get(relative),
+                    source_hashes=self.source_hashes,
+                    _imports=imports,
+                )
+                self.parsed[path] = facts
+            elif facts.tree is not None:
+                # The same bytes can import a different helper in a different image.
+                facts = replace(facts, providers=imports.providers_for(facts.tree))
+            self.resolved[key] = facts
+        facts = self.resolved[key]
+        if facts.tree is not None and module != facts.abi["module"]:
+            return replace(facts, exports=_catalog(facts.tree, module))
+        return facts
+
+    def capture(self, entry, *, search_root=None) -> ParsedProject:
+        entry = (self.root / entry).resolve()
+        directory = Path(search_root).resolve() if search_root else entry.parent
+        key = (directory, entry)
+        if key not in self.projects:
+            if directory not in self.finders:
+                self.finders[directory] = Imports(
+                    self.root, ParsedUnit.compiler_id, search_root=directory
+                )
+            self.projects[key] = _capture_project(
+                entry, self.root, directory, self.finders[directory], self._read
+            )
+        return self.projects[key]
+
+
+def _capture_project(entry, root, directory, imports, read) -> ParsedProject:
     """Discover local imports on the same syntax trees that F2 will normalize."""
-    root = Path(root).resolve()
-    entry = Path(entry)
-    entry = (root / entry).resolve() if not entry.is_absolute() else entry.resolve()
-    imports = Imports(root, ParsedUnit.compiler_id)
 
     def module_path(path):
-        relative = path.relative_to(root).with_suffix("")
+        relative = path.relative_to(directory).with_suffix("")
         pieces = relative.parts[:-1] if relative.name == "__init__" else relative.parts
         return ".".join(pieces) or "__main__"
 
@@ -291,7 +336,6 @@ def capture_project(
 
     entry_module = module_path(entry)
     catalog = {}
-    by_path = {}
     modules = {}
     pending = deque([(entry_module, entry)])
     scheduled = {entry_module}
@@ -311,20 +355,7 @@ def capture_project(
         module, path = pending.popleft()
         package = path.name == "__init__.py"
         relative = path.relative_to(root).as_posix()
-        facts = by_path.get(path)
-        if facts is None:
-            facts = parse_unit(
-                path,
-                root=root,
-                abi={"module": module},
-                source_bytes=(buffers or {}).get(relative),
-                source_hashes=source_hashes,
-                _imports=imports,
-            )
-            by_path[path] = facts
-        elif facts.tree is not None and module != facts.abi["module"]:
-            # Different import names can refer to one physical source via symlinks.
-            facts = replace(facts, exports=_catalog(facts.tree, module))
+        facts = read(path, module, imports)
         modules[module] = facts
         catalog[module] = {
             "path": relative,
@@ -362,9 +393,16 @@ def capture_project(
         catalog,
         {
             unit.path.relative_to(root).as_posix(): unit.source_hash
-            for unit in by_path.values()
+            for unit in modules.values()
         },
     )
+
+
+def capture_project(
+    entry: Path, root: Path, *, buffers=None, source_hashes=None
+) -> ParsedProject:
+    capture = ProjectCapture(root, buffers=buffers, source_hashes=source_hashes)
+    return capture.capture(entry, search_root=root)
 
 
 def project_units(entry: Path, root: Path) -> list[dict]:

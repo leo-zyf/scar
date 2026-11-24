@@ -907,6 +907,7 @@ class _Scope:
                     "os.system",
                 }:
                     op = "process_launch"
+                    fields["source_runtime"] = self.unit.runtime
                     effect = ["CTRL", "STATE", "IO", "ORDER"]
                     if name == "subprocess.Popen":
                         site = digest(

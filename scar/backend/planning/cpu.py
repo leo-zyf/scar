@@ -10,7 +10,12 @@ import statistics
 import subprocess
 from tempfile import TemporaryDirectory
 
-from scar.contract import PHYSICAL, digest, document
+from scar.contract import (
+    PHYSICAL,
+    digest,
+    document,
+    control_regions as _control_regions,
+)
 from scar.host import cpu_availability
 
 _PROBE = Path(__file__).with_name("calibration.cpp")
@@ -488,23 +493,34 @@ def _collect(module):
         nonlocal has_fusion
         for stmt in items:
             op = stmt["op"]
+            if op == "schedule_choice":
+                # Price each alternative in the same incoming scope. Only choose()
+                # can replace this node with the selected branch and any guard.
+                has_fusion = True
+                scope(stmt["reference"], types.copy())
+                scope((stmt["fused"],), types.copy())
+                continue
             if op == "decl":
                 types[stmt["name"]] = stmt["type"]
-            if op in {"buffer", "runtime_array"}:
+            elif op == "buffer":
                 types[stmt["name"]] = {"kind": "ptr", "to": stmt["type"]}
-            nested = types.copy()
-            if op == "map":
-                nested[stmt["index"]] = "i64"
-                if stmt.get("independent") is True or stmt.get("iteration_layout"):
-                    maps[id(stmt)] = _candidates(stmt, types)
-            if isinstance(stmt.get("init"), list):
-                scope(stmt["init"], nested)
-            for field in ("body", "then", "else", "reference"):
-                if isinstance(stmt.get(field), list):
-                    scope(stmt[field], nested.copy())
-            if op == "schedule_choice":
-                has_fusion = True
-                scope([stmt["fused"]], nested.copy())
+            elif op == "runtime_array":
+                types[stmt["name"]] = {"kind": "ptr", "to": stmt["element"]}
+            if op == "map" and (
+                stmt.get("independent") is True or stmt.get("iteration_layout")
+            ):
+                maps[id(stmt)] = _candidates(stmt, types)
+            # for.init declarations are visible to the loop and end with it.
+            enclosing = types.copy() if op == "for" else types
+            for owner, field, binding in _control_regions(stmt):
+                nested = enclosing if field == "init" else enclosing.copy()
+                if op == "map":
+                    nested[stmt["index"]] = "i64"
+                elif op == "each":
+                    nested[stmt["name"]] = stmt["type"]
+                if isinstance(binding, str):
+                    nested[binding] = {"kind": "handle", "resource": "error"}
+                scope(owner[field], nested)
 
     for fn in module["functions"]:
         scope(fn["body"], {**globals_, **{p["name"]: p["type"] for p in fn["params"]}})
@@ -700,9 +716,8 @@ def schedule(module, mode, worker_limit=None):
                         duration="lexical_continuation",
                     )
                 )
-            for field in ("body", "then", "else"):
-                if isinstance(stmt.get(field), list):
-                    stmt[field] = choose(stmt[field])
+            for owner, field, _ in _control_regions(stmt):
+                owner[field] = choose(owner[field])
             if op == "map":
                 region, lines = choices.get(id(stmt), ({}, {}))
                 if lines and stmt.get("independent") is True:

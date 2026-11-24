@@ -5,7 +5,15 @@ from concurrent.futures import ProcessPoolExecutor
 from dataclasses import asdict
 from pathlib import Path
 
-from scar.contract import GRAPH, digest, document, json_bytes, member, write_json
+from scar.contract import (
+    GRAPH,
+    digest,
+    document,
+    json_bytes,
+    member,
+    validate_images,
+    write_json,
+)
 from scar.host import cpu_availability
 
 
@@ -152,6 +160,50 @@ def _unit(job):
     )
 
 
+def _capture_inputs(request):
+    """Expand each script into its own module catalog and intern full unit profiles."""
+    sources = dict(request.source_hashes)
+    profiles = list(request.profiles)
+    parsed_units = [None] * len(profiles)
+    images = request.images
+    if request.project_entry or any("source" in image for image in images or ()):
+        from .languages.python.facts import ProjectCapture
+
+        scripts = ProjectCapture(
+            request.root,
+            buffers=request.python_buffers,
+            source_hashes=request.source_hashes,
+        )
+        if request.project_entry:
+            project = scripts.capture(request.project_entry)
+            sources.update(project.source_digests)
+            return project.profiles, project.units, images, sources
+        indices = {json_bytes(profile): i for i, profile in enumerate(profiles)}
+        images = []
+        for image in request.images:
+            if "source" not in image:
+                images.append(image)
+                continue
+            project = scripts.capture(image["source"])
+            sources.update(project.source_digests)
+            units = []
+            for profile, parsed in zip(project.profiles, project.units):
+                key = json_bytes(profile)
+                if key not in indices:
+                    indices[key] = len(profiles)
+                    profiles.append(profile)
+                    parsed_units.append(parsed)
+                else:
+                    parsed_units[indices[key]] = parsed
+                units.append(indices[key])
+            images.append(
+                {k: v for k, v in image.items() if k != "source"} | {"units": units}
+            )
+    if images is not None:
+        validate_images(images, request.root_image, unit_count=len(profiles))
+    return profiles, parsed_units, images, sources
+
+
 def build(manifest, out, *, jobs=1):
     from .hardware import snapshot
     from .input import read_request, with_entry_abi
@@ -160,21 +212,7 @@ def build(manifest, out, *, jobs=1):
         raise ValueError("expected a positive worker count")
     request, out = read_request(manifest), Path(out).resolve()
     root = request.root
-    sources = dict(request.source_hashes)
-    profiles = request.profiles
-    if request.project_entry:
-        from .languages.python import capture_project
-
-        capture = capture_project(
-            request.project_entry,
-            root,
-            buffers=request.python_buffers,
-            source_hashes=request.source_hashes,
-        )
-        profiles, parsed_units = capture.profiles, capture.units
-        sources.update(capture.source_digests)
-    else:
-        parsed_units = (None,) * len(profiles)
+    profiles, parsed_units, images, sources = _capture_inputs(request)
     snapshot_id = digest(json_bytes(sources))
     evidence = None
     entry_abi = request.entry_abi
@@ -236,8 +274,8 @@ def build(manifest, out, *, jobs=1):
         contract={"arithmetic": "preserve", "externally_visible_effects": "preserve"},
         coverage=dict(totals=totals, diagnostic_categories=dict(counts.most_common())),
         **(
-            {"images": request.images, "root_image": request.root_image}
-            if request.images is not None
+            {"images": images, "root_image": request.root_image}
+            if images is not None
             else {}
         ),
     )

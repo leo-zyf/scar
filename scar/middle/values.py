@@ -50,6 +50,8 @@ def choice(kinds):
 
 
 def wire(kind):
+    if kind.startswith("handle:process:"):
+        return dict(kind="handle", resource="process")
     if kind in _SCALAR_CHOICES:
         return "f64" if kind == "binary64_choice" else "bool"
     if kind in _NUMPY_SCALAR_TYPES:
@@ -79,11 +81,13 @@ def from_wire(spec):
 def runtime(kind):
     return (
         kind in SCALARS
+        or kind.startswith("handle:process:")
         or rank(kind) is not None
         or object_name(kind) is not None
         or kind
         in {
             "handle:text_stream",
+            "handle:process",
             "handle:error",
             "handle:graphics_context",
             "handle:graphics_lines",

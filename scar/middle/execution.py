@@ -1,7 +1,14 @@
 """Derive target-neutral lowering contracts and seal the execution IR product."""
 
 from copy import deepcopy
-from scar.contract import IR, document, member, write_json, walk_operations as _nodes
+from scar.contract import (
+    IR,
+    document,
+    member,
+    write_json,
+    walk_operations as _nodes,
+    control_regions,
+)
 
 
 def _private_extents(function, global_names):
@@ -155,15 +162,9 @@ def annotate_scoped_arrays(function):
             ):
                 raise ValueError(f"automatic array continuation crosses a {op} edge")
             nested_loop = op in {"for", "each", "while", "do_while", "map"}
-            regions = [
-                node.get(field, ()) for field in ("body", "then", "else", "finally")
-            ]
-            regions.extend(
-                handler.get("body", ()) for handler in node.get("handlers", ())
-            )
-            for region in regions:
+            for owner, field, _ in control_regions(node):
                 inspect(
-                    region,
+                    owner[field],
                     at_function_scope,
                     loop or nested_loop,
                     breakable or nested_loop or op == "switch",
@@ -172,6 +173,13 @@ def annotate_scoped_arrays(function):
     def sequence(items, at_function_scope=False):
         count = 0
         for index, node in enumerate(items):
+            if node["op"] == "for" and any(
+                s["op"] == "runtime_array" for s in node.get("init", ())
+            ):
+                loop = dict(node, init=[])
+                initializers = node["init"]
+                node.clear()
+                node.update(op="block", body=[*initializers, loop])
             if node["op"] == "runtime_array":
                 if (
                     node.get("storage") != "scoped"
@@ -183,11 +191,10 @@ def annotate_scoped_arrays(function):
                 inspect(items[index + 1 :], at_function_scope)
                 node["scope_control"] = "lexical_continuation"
                 count += 1
-            for field in ("body", "then", "else", "finally", "reference"):
-                count += sequence(node.get(field, ()))
-            for handler in node.get("handlers", ()):
-                count += sequence(handler.get("body", ()))
+            for owner, field, _ in control_regions(node):
+                count += sequence(owner[field])
             if node.get("op") == "schedule_choice":
+                count += sequence(node["reference"])
                 count += sequence([node["fused"]])
         return count
 

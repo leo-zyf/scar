@@ -101,6 +101,27 @@ def semantic_form(value):
     return value
 
 
+_CONTROL_REGIONS = {
+    "for": ("init", "body"),
+    "if": ("then", "else"),
+    "try": ("body", "handlers", "else", "finally"),
+    **dict.fromkeys(
+        ("block", "do_while", "each", "map", "resource_scope", "switch", "while"),
+        ("body",),
+    ),
+}
+
+
+def control_regions(statement):
+    """Yield structured statement-list slots, never expression operands or alternatives."""
+    for field in _CONTROL_REGIONS.get(statement["op"], ()):
+        if field == "handlers":
+            for handler in statement.get(field, ()):
+                yield handler, "body", handler.get("binding")
+        elif field in statement:
+            yield statement, field, None
+
+
 def walk_operations(value):
     """Iterate neutral operation records without interpreting their semantics."""
     pending = [value]

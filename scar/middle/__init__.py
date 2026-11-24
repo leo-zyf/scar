@@ -122,6 +122,7 @@ def plan(graph_path, out, *, optimize_graph=True, shape=None, trip_count=None):
         identity = {key: image[key] for key in ("id", "entry", "output")}
         view = dict(
             graph,
+            current_image=image["id"],
             entry=image["entry"],
             entry_abi=image.get("entry_abi"),
             units=[graph["units"][index] for index in image["units"]],

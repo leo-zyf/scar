@@ -514,6 +514,12 @@ def stamp(label, value):
 print(max(stamp('first', values[0]), stamp('second', values[3]), stamp('third', values[1])))
 print(min(4, 2, 3), max(4, 2, 3))
 print(f'{max(0.0, -0.0):.17g}', f'{max(-0.0, 0.0):.17g}')
+number = np.array([2.0])[0]
+print(repr(number))
+number = 3.0
+print(repr(number))
+number = np.array([4.0])[0]
+print(repr(number))
 """)
     expected = subprocess.run(
         [sys.executable, "-B", entry], capture_output=True, check=True
@@ -1178,6 +1184,116 @@ def test_import_closure_distinguishes_missing_sources_and_missing_semantics(tmp_
         assert module in product["issues"][0]["detail"]
         execution = json.loads((plan / "exec-ir.json").read_bytes())
         assert execution["status"] == "INCOMPLETE" and not execution["functions"]
+
+
+def test_automatic_array_in_for_initializer_survives_all_layers(tmp_path):
+    entry = tmp_path / "entry.c"
+    entry.write_text(
+        "#include <stdio.h>\nint main(void) {\n"
+        "int n = 3; double sum = 0;\n"
+        "for (double scratch[n]; n > 0; --n) {\n"
+        "scratch[n-1] = n; sum += scratch[n-1];\n"
+        '} printf("%.1f\\n", sum); return 0; }\n'
+    )
+    original = tmp_path / "original"
+    _run(["gcc", "-std=c99", entry, "-o", original], tmp_path)
+    expected = _run([original], tmp_path)
+    request = tmp_path / "request.json"
+    request.write_text(
+        json.dumps(
+            dict(
+                source_root=str(tmp_path),
+                entry="main",
+                units=[dict(path=entry.name, language="c", flags=["-std=c99"])],
+            )
+        )
+    )
+    graph, plan, delivery = (tmp_path / name for name in ("graph", "plan", "delivery"))
+    _stage(tmp_path, "frontend", "build", "--manifest", request, "--out", graph)
+    entry.unlink()
+    original.unlink()
+    _stage(tmp_path, "middle", "plan", "--graph", graph, "--out", plan)
+    shutil.rmtree(graph)
+    result = _stage(tmp_path, "backend", "compile", "--ir", plan, "--out", delivery)
+    shutil.rmtree(plan)
+    assert _run([result["executable"]], tmp_path) == expected == b"6.0\n"
+
+
+def test_declared_process_images_preserve_pipes_and_receiver_identity(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    child = source / "worker.c"
+    child.write_text(
+        "#include <stdio.h>\nint main(int argc, char **argv) {\n"
+        'printf("%s %d\\n", argv[0], argc);\n'
+        'if (argc > 1) printf("%s\\n", argv[1]);\n'
+        'printf("line\\r\\nlast\\rtail");\n'
+        "return argc + 5;\n}\n"
+    )
+    (source / "helper.py").write_text("""def consume(stream, output):
+    for line in stream:
+        output.write(line)
+        print(line, end='')
+    else:
+        print('drained')
+""")
+    parent = source / "driver.py"
+    parent.write_text("""import subprocess
+from helper import consume
+process = subprocess.Popen(['./worker', 'space * raw'], stdout=subprocess.PIPE,
+                           stderr=subprocess.STDOUT, text=True, encoding='utf-8')
+wait_first = process.wait
+alias = process
+with open('copy.txt', 'w', encoding='utf-8') as output:
+    consume(process.stdout, output)
+print(wait_first(), alias.wait())
+process = subprocess.Popen(['./worker'], stdout=subprocess.PIPE, text=True,
+                           encoding='utf-8')
+print(process.stdout.read())
+print(wait_first(), process.wait())
+""")
+    _run(["gcc", "-std=c89", child, "-o", source / "worker"], tmp_path)
+    expected = subprocess.run(
+        [sys.executable, "-B", parent], cwd=source, capture_output=True, check=True
+    )
+    expected_file = (source / "copy.txt").read_bytes()
+    request = tmp_path / "request.json"
+    request.write_text(
+        json.dumps(
+            dict(
+                source_root=str(source),
+                root_image="controller",
+                images=[
+                    dict(
+                        id="controller",
+                        entry="__main__",
+                        output="controller",
+                        source="driver.py",
+                    ),
+                    dict(
+                        id="worker",
+                        entry="main",
+                        output="worker",
+                        units=[dict(path="worker.c", language="c", flags=["-std=c89"])],
+                    ),
+                ],
+            )
+        )
+    )
+    graph, plan, delivery = (tmp_path / name for name in ("graph", "plan", "delivery"))
+    _stage(tmp_path, "frontend", "build", "--manifest", request, "--out", graph)
+    shutil.rmtree(source)
+    _stage(tmp_path, "middle", "plan", "--graph", graph, "--out", plan)
+    shutil.rmtree(graph)
+    result = _stage(tmp_path, "backend", "compile", "--ir", plan, "--out", delivery)
+    shutil.rmtree(plan)
+    run = tmp_path / "run"
+    run.mkdir()
+    native = subprocess.run(
+        [result["executables"]["controller"]], cwd=run, capture_output=True, check=True
+    )
+    assert (native.stdout, native.stderr) == (expected.stdout, expected.stderr)
+    assert (run / "copy.txt").read_bytes() == expected_file
 
 
 def test_mixed_program_images_preserve_link_and_state_boundaries(tmp_path):

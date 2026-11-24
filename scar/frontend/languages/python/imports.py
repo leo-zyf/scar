@@ -50,11 +50,13 @@ def _interpreter_digest(compiler_id):
 class Imports:
     """One capture's standard-finder results. No loader executes a target module."""
 
-    def __init__(self, root, compiler_id):
+    def __init__(self, root, compiler_id, *, search_root=None):
         self.root = root
         self.compiler_id = compiler_id
         self.search_path = list(
-            dict.fromkeys(str(Path(p or ".").resolve()) for p in (root, *sys.path))
+            dict.fromkeys(
+                str(Path(p or ".").resolve()) for p in (search_root or root, *sys.path)
+            )
         )
         roots = [
             Path(sysconfig.get_path(k)).resolve() for k in ("stdlib", "platstdlib")

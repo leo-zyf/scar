@@ -5,6 +5,7 @@ from scar.contract import (
     json_bytes,
     read_member,
     semantic_form as semantics,
+    validate_images,
     walk_operations as _operations,
     validate_text_profiles,
 )
@@ -25,6 +26,11 @@ _SITE_OPERATIONS = {
     "continue",
     "call",
     "library_call",
+    "process_launch",
+    "process_stream",
+    "process_wait",
+    "process_poll",
+    "process_communicate",
     "python_invoke",
     "python_import",
     "python_define_class",
@@ -394,6 +400,21 @@ class _PythonClasses:
 
 
 def bind(graph, folder):
+    image_context = {}
+    if "images" in graph:
+        # Unit indices belong to the full graph, already checked before projection.
+        images = graph["images"]
+        validate_images(images, graph["root_image"])
+        current = graph.get("current_image")
+        if not any(i["id"] == current and i["entry"] == graph["entry"] for i in images):
+            raise ValueError("image binding requires the selected image and its entry")
+        image_context = dict(
+            current_image=current,
+            execution_images=[
+                {key: image[key] for key in ("id", "entry", "output")}
+                for image in images
+            ],
+        )
     definitions = defaultdict(list)
     roots = {graph["entry"]}
     all_issues, records = [], {}
@@ -693,6 +714,7 @@ def bind(graph, folder):
     return (
         dict(
             entry=graph["entry"],
+            **image_context,
             activation_graph=dict(
                 roots=sorted(roots),
                 edges=[e for e in activation_edges if e["owner"] in covered],

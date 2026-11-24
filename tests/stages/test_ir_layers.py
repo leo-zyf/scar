@@ -47,6 +47,68 @@ data=json.loads(sys.stdin.read())
     return json.loads(result.stdout)
 
 
+def test_execution_scopes_automatic_for_initializers_before_sealing():
+    index = dict(op="var", name="i", type="i64")
+
+    def literal(n):
+        return dict(op="literal", type="i64", value=n)
+
+    function = dict(
+        name="main",
+        result="i32",
+        params=[],
+        body=[
+            dict(
+                op="for",
+                init=[
+                    dict(op="decl", name="i", type="i64", init=literal(0)),
+                    dict(
+                        op="runtime_array",
+                        name="scratch",
+                        element="f64",
+                        extent=literal(2),
+                        storage="scoped",
+                        initialization="uninitialized",
+                    ),
+                ],
+                condition=dict(
+                    op="binary",
+                    operator="lt",
+                    type="bool",
+                    left=index,
+                    right=literal(2),
+                ),
+                step=dict(
+                    op="update",
+                    operator="add",
+                    target=index,
+                    value=literal(1),
+                    type="i64",
+                ),
+                body=[dict(op="continue")],
+            ),
+            dict(op="return", value=dict(op="literal", type="i32", value=0)),
+        ],
+    )
+    result = _layer(
+        "execution",
+        """from scar.middle.execution import prepare
+module,facts=prepare(data)
+print(json.dumps(dict(module=module,facts=facts)))
+""",
+        dict(functions=[function], globals=[]),
+    )
+    block = result["module"]["functions"][0]["body"][0]
+    assert block["op"] == "block"
+    initial, array, loop = block["body"]
+    assert initial["name"] == "i" and array["name"] == "scratch"
+    assert array["scope_control"] == "lexical_continuation"
+    assert loop["op"] == "for" and loop["init"] == []
+    assert loop["condition"] == function["body"][0]["condition"]
+    assert loop["step"] == function["body"][0]["step"]
+    assert result["facts"]["scoped_lifetimes"] == 1
+
+
 def _canonical_function(function):
     module = _layer(
         "normalization",

@@ -80,9 +80,12 @@ _FORMAT_DEFAULTS = dict(
     fill_explicit=False,
     empty=True,
 )
+_PROCESS_TYPE = {"kind": "handle", "resource": "process"}
 _HOST_SIGNATURES = {
     "console.input": ("text", ("text", "text")),
     "process.exit": ("unit", (ERROR_TYPE,)),
+    "process.stdout": (TEXT_STREAM_TYPE, (_PROCESS_TYPE,)),
+    "process.wait": ("i64", (_PROCESS_TYPE,)),
     "error.message": ("text", (ERROR_TYPE,)),
     "fs.exists": ("bool", ("text",)),
     "fs.is_file": ("bool", ("text",)),
@@ -283,6 +286,9 @@ class Lowerer:
         if spec == TEXT_STREAM_TYPE:
             self.use_sdk("host.hpp")
             return named("scar::host::text_stream")
+        if spec == _PROCESS_TYPE:
+            self.use_sdk("host.hpp")
+            return named("scar::host::process_handle")
         if spec == ERROR_TYPE:
             self.used_sdk_headers.add("exceptions.hpp")
             return named("scar::error_value")
@@ -489,6 +495,65 @@ class Lowerer:
         output = Expr("braced", args=(Expr("braced", args=tuple(operands)), formatting))
         return call(namespace + "text_print", output)
 
+    def process_spawn(self, node):
+        if (
+            node.get("type") != _PROCESS_TYPE
+            or node.get("operator_family") != "process"
+            or node.get("may_raise") is not True
+            or set(node.get("effects", ())) != {"CTRL", "STATE", "IO"}
+            or node.get("stdout") not in ("pipe", "inherit")
+            or node.get("stderr") not in ("stdout", "inherit")
+            or node.get("stdin") != "inherit"
+            or node.get("cwd") != "inherit"
+            or node.get("env", "inherit") != "inherit"
+            or node.get("shell", False) is not False
+            or node.get("close_fds", True) is not True
+            or node.get("restore_signals", True) is not True
+            or (node.get("encoding"), node.get("errors"), node.get("newline"))
+            != ("utf-8", "strict", "universal")
+        ):
+            raise ValueError("unsupported process launch contract")
+        image = node.get("image_id")
+        bindings = self.module.get("image_bindings", {})
+        target = (
+            bindings.get(image)
+            if isinstance(bindings, dict) and isinstance(image, str)
+            else None
+        )
+        if (
+            not isinstance(target, dict)
+            or target.get("image_id") != image
+            or not isinstance(target.get("output"), str)
+            or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]*", target["output"])
+            or not isinstance(target.get("ir_sha256"), str)
+            or not re.fullmatch(r"[0-9a-f]{64}", target["ir_sha256"])
+        ):
+            raise ValueError(
+                f"process target has no sealed executable image binding: {image!r}"
+            )
+        args = node.get("argv")
+        if (
+            not isinstance(args, list)
+            or not args
+            or any(
+                not isinstance(arg, dict) or arg.get("type") != "text" for arg in args
+            )
+        ):
+            raise ValueError("process launch requires a nonempty text argument vector")
+        self.use_sdk("host.hpp")
+        # The ordered vector owns every argument, including the caller's argv[0].
+        arguments = Expr("braced", args=tuple(self.expression(arg) for arg in args))
+        request = Expr(
+            "braced",
+            args=(
+                utf8_literal(target["output"], "std::string"),
+                arguments,
+                Expr("literal", value=node["stdout"] == "pipe"),
+                Expr("literal", value=node["stderr"] == "stdout"),
+            ),
+        )
+        return call("scar::host::process_spawn", request)
+
     def host_call(self, node):
         interface = node.get("interface")
         args = node.get("args")
@@ -501,6 +566,10 @@ class Lowerer:
         effects = (
             {"VAL"} if interface in ("path.join", "error.message") else {"IO", "STATE"}
         )
+        if interface == "process.stdout":
+            effects = {"STATE"}
+        elif interface == "process.wait":
+            effects = {"IO", "STATE", "ORDER"}
         if set(node.get("effects", ())) != effects:
             raise ValueError(f"invalid host effects for {interface!r}")
         if interface == "path.join" and args:
@@ -917,6 +986,8 @@ class Lowerer:
             )
         if op == "host_call":
             return self.host_call(expr)
+        if op == "process_spawn":
+            return self.process_spawn(expr)
         if op == "scalar_power":
             values = (expr["base"], expr["exponent"])
             if (

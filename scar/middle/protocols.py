@@ -8,6 +8,7 @@ from . import (
     graphics,
     host_protocols,
     objects,
+    processes,
     scalars,
     text,
     values,
@@ -109,6 +110,8 @@ class _Project:
         self.result_facts = {}
         self.providers = {}
         self.array_ops = set()
+        self.process_ops = set()
+        self.execution_images = []
         self.array_state = arrays.LiteralState()
         self.external_array_writes = {}
         self.objects = objects.ObjectModel()
@@ -453,6 +456,8 @@ class _Frame:
             value = objects.persist_method(self, target, value, steps)
         if global_ and value.kind == "array_copy_method" and not self.dynamic:
             value = arrays.persist_copy(self, target, value, steps)
+        if global_ and value.kind == "process_method" and not self.dynamic:
+            value = processes.persist_method(self, target, value, steps)
         if not values.runtime(value.kind):
             if self.dynamic or value.kind == "range":
                 self.fail(
@@ -472,14 +477,16 @@ class _Frame:
                 self.fail(target, "rebind", f"symbolic identity of {name} changes")
             scope[name] = value
             return
-        if previous is not None and previous.kind != value.kind:
+        if previous is not None and values.wire(previous.kind) != values.wire(
+            value.kind
+        ):
             self.fail(
                 target,
                 "rebind",
                 f"{name} changes type from {previous.kind} to {value.kind}",
             )
         types = self.project.globals if global_ else self.locals
-        if name in types and types[name] != value.kind:
+        if name in types and values.wire(types[name]) != values.wire(value.kind):
             self.fail(
                 target, "local_type", f"{name} has incompatible reaching value types"
             )
@@ -742,6 +749,16 @@ class _Frame:
             return arrays.capture_sequence(self, node, steps)
         if op == "index":
             return arrays.index(self, node, steps, discard=discard)
+        if op == "process_stream":
+            base = self.evaluate(node["base"], steps)
+            result = processes.member(self, node, base, node["field"], steps)
+            if result is None:
+                self.fail(
+                    node,
+                    "process_receiver",
+                    "the process channel has no proven receiver",
+                )
+            return result
         if op == "member":
             base = self.evaluate(node["base"], steps)
             if values.object_name(base.kind) is not None:
@@ -759,8 +776,11 @@ class _Frame:
                     "class_attribute",
                     f"no ordinary method binding for {base.value}.{node['field']}",
                 )
-            if base.kind == "handle:text_stream":
+            if base.kind == "handle:text_stream" or processes.is_process(base.kind):
                 base = self.effect(base.value, base.kind, steps, facts=base.facts)
+            process_member = processes.member(self, node, base, node["field"], steps)
+            if process_member is not None:
+                return process_member
             host_member = host_protocols.member(self, node, base, node["field"])
             if host_member is not None:
                 return host_member
@@ -780,7 +800,15 @@ class _Frame:
                 "attribute",
                 f"unbound module or dynamic attribute {node['field']}",
             )
-        if op in {"call", "library_call", "python_invoke"}:
+        if op in {
+            "call",
+            "library_call",
+            "python_invoke",
+            "process_launch",
+            "process_wait",
+            "process_poll",
+            "process_communicate",
+        }:
             return self.call(node, steps, discard)
         if op == "unary" and node["operator"] != "not":
             return arrays.scalar_unary(
@@ -830,6 +858,11 @@ class _Frame:
             )
         if target.kind in {"array_constructor", "array_copy_method"}:
             return arrays.construct(self, node, target, args, kwargs, steps, discard)
+        process_call = processes.invoke(
+            self, node, target, args, kwargs, steps, discard
+        )
+        if process_call is not None:
+            return process_call
         if target.kind == "builtin" and target.value in {"min", "max"}:
             return scalars.extreme(self, node, target.value, args, kwargs, steps)
         if target.kind == "builtin" and target.value in {"int", "float", "abs"}:
@@ -1091,6 +1124,29 @@ class _Frame:
     def range_loop(self, node, steps):
         domain = self.evaluate(node["range"], steps)
         if (
+            domain.kind == "handle:text_stream"
+            and node.get("protocol") == "iterator"
+            and node["target"].get("op") == "var"
+        ):
+            stream = self.effect(domain.value, domain.kind, steps, facts=domain.facts)
+            setup = []
+            line = processes.next_line(self, stream, setup)
+            condition = dict(
+                op="binary",
+                operator="ne",
+                type="bool",
+                left=line.value,
+                right=_literal("").value,
+            )
+            return (
+                dict(op="while", body=[], condition=condition),
+                line,
+                None,
+                False,
+                False,
+                setup,
+            )
+        if (
             node.get("protocol") != "iterator"
             or domain.kind != "range"
             or node["target"].get("op") != "var"
@@ -1154,7 +1210,7 @@ class _Frame:
             ),
             body=[],
         )
-        return loop, iv, count, empty, nonempty
+        return loop, iv, count, empty, nonempty, []
 
     def widen_loop(self, node, iv, count):
         body = node["body"]
@@ -1271,13 +1327,13 @@ class _Frame:
         allocation_mark = self.project.array_state.enter_loop(self, node)
         start = self.snapshot()
         if counted:
-            loop, iv, count, empty, nonempty = self.range_loop(node, steps)
+            loop, iv, count, empty, nonempty, test_setup = self.range_loop(node, steps)
         else:
             iv, count = None, None
             loop = dict(op="while", body=[])
+            test_setup = []
         self.widen_loop(node, iv, count)
         header = self.snapshot()
-        test_setup = []
         flag = self.temporary() if node.get("else") else None
         if counted:
             condition = loop["condition"]
@@ -1516,6 +1572,7 @@ def normalize_protocols(module):
     if not functions:
         return module, [], []
     project = _Project(functions)
+    project.execution_images = module.get("execution_images", [])
     project.text_profiles = module.get("text_profiles", {})
     issue = None
     try:
@@ -1633,6 +1690,10 @@ def normalize_protocols(module):
     if project.array_ops:
         module.setdefault("operator_requirements", {})["ndarray"] = dict(
             device="cpu", element="f64", operations=sorted(project.array_ops)
+        )
+    if project.process_ops:
+        module.setdefault("operator_requirements", {})["process"] = dict(
+            operations=sorted(project.process_ops), binding="declared_images"
         )
     if project.graphics.operations:
         module.setdefault("operator_requirements", {})[

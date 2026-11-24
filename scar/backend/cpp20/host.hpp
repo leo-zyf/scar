@@ -6,11 +6,19 @@
 #include <dirent.h>
 #include <fcntl.h>
 #include <filesystem>
+#include <list>
 #include <memory>
+#include <mutex>
+#include <optional>
+#include <signal.h>
+#include <spawn.h>
 #include <stdexcept>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <sys/xattr.h>
 #include <time.h>
+#include <unistd.h>
+#include <vector>
 
 namespace scar::host {
 namespace fs = std::filesystem;
@@ -130,6 +138,14 @@ public:
   }
   int get() const { return fd_; }
   int release() { return std::exchange(fd_, -1); }
+  void move_above_stdio() {
+    if (fd_ <= STDERR_FILENO) {
+      const int high = ::fcntl(fd_, F_DUPFD_CLOEXEC, STDERR_FILENO + 1);
+      if (high < 0)
+        os_error("move pipe descriptor");
+      ::close(std::exchange(fd_, high));
+    }
+  }
   void close() {
     if (::close(release()) != 0)
       os_error("close");
@@ -469,6 +485,20 @@ public:
   }
 };
 using text_stream = std::shared_ptr<stream_state>;
+inline text_stream adopt_text_stream(descriptor &fd, const char *mode) {
+  auto *f = ::fdopen(fd.get(), mode);
+  if (!f)
+    os_error("fdopen");
+  fd.release();
+  struct close_file {
+    void operator()(std::FILE *file) const { std::fclose(file); }
+  };
+  std::unique_ptr<std::FILE, close_file> owner(f);
+  auto s = std::make_shared<stream_state>(f, mode[0] == 'r');
+  owner.release();
+  return s;
+}
+
 inline stream_state &stream(const text_stream &s) {
   if (!s)
     throw std::ios_base::failure("unbound text stream");
@@ -514,17 +544,7 @@ inline text_stream stream_open(const stream_options &o) {
   if (S_ISDIR(status_of(fd.get()).st_mode))
     throw std::system_error(EISDIR, std::generic_category(),
                             "open text stream");
-  auto *f = ::fdopen(fd.get(), mode);
-  if (!f)
-    os_error("fdopen");
-  fd.release();
-  struct close_file {
-    void operator()(std::FILE *file) const { std::fclose(file); }
-  };
-  std::unique_ptr<std::FILE, close_file> owner(f);
-  auto s = std::make_shared<stream_state>(f, m[0] == 'r');
-  owner.release();
-  return s;
+  return adopt_text_stream(fd, mode);
 }
 struct stream_data {
   text_stream handle;
@@ -550,6 +570,180 @@ inline std::nullptr_t stream_flush(const text_stream &s) {
 inline std::nullptr_t stream_close(const text_stream &s) {
   stream(s).close();
   return nullptr;
+}
+
+// An explicit wait owns completion. Released live children are checked again
+// on a later launch without changing unrelated children's wait status.
+class unclaimed_children {
+  std::list<pid_t> children_;
+  std::mutex lock_;
+
+  static bool finished(pid_t child) noexcept {
+    int status;
+    const pid_t result = ::waitpid(child, &status, WNOHANG);
+    return (result == child && (WIFEXITED(status) || WIFSIGNALED(status))) ||
+           (result < 0 && errno == ECHILD);
+  }
+
+public:
+  void collect() {
+    std::lock_guard guard(lock_);
+    children_.remove_if(finished);
+  }
+  void adopt(std::list<pid_t> &ticket) {
+    if (!finished(ticket.front())) {
+      std::lock_guard guard(lock_);
+      children_.splice(children_.end(), ticket);
+    }
+  }
+};
+
+class process_state {
+  std::shared_ptr<unclaimed_children> registry_;
+  std::list<pid_t> child_{-1};
+  std::optional<std::int64_t> status_;
+  std::mutex wait_lock_;
+
+public:
+  text_stream output;
+  explicit process_state(std::shared_ptr<unclaimed_children> registry)
+      : registry_(std::move(registry)) {}
+  void started(pid_t pid) noexcept { child_.front() = pid; }
+  ~process_state() {
+    if (child_.front() > 0)
+      registry_->adopt(child_);
+  }
+  std::int64_t wait() {
+    std::lock_guard guard(wait_lock_);
+    while (!status_) {
+      if (child_.front() <= 0)
+        throw std::invalid_argument("process has no waitable child");
+      int status;
+      if (::waitpid(child_.front(), &status, 0) < 0) {
+        if (errno == EINTR)
+          continue;
+        if (errno == ECHILD)
+          child_.front() = -1;
+        os_error("waitpid");
+      }
+      if (WIFEXITED(status))
+        status_ = WEXITSTATUS(status);
+      else if (WIFSIGNALED(status))
+        status_ = -WTERMSIG(status);
+    }
+    child_.front() = -1;
+    return *status_;
+  }
+};
+using process_handle = std::shared_ptr<process_state>;
+
+inline void spawn_check(int error, const char *operation) {
+  if (error != 0)
+    throw std::system_error(error, std::generic_category(), operation);
+}
+struct spawn_actions {
+  posix_spawn_file_actions_t value;
+  spawn_actions() {
+    spawn_check(::posix_spawn_file_actions_init(&value),
+                "initialize child file actions");
+  }
+  spawn_actions(const spawn_actions &) = delete;
+  ~spawn_actions() { ::posix_spawn_file_actions_destroy(&value); }
+};
+struct spawn_attributes {
+  posix_spawnattr_t value;
+  spawn_attributes() {
+    spawn_check(::posix_spawnattr_init(&value),
+                "initialize process attributes");
+  }
+  spawn_attributes(const spawn_attributes &) = delete;
+  ~spawn_attributes() { ::posix_spawnattr_destroy(&value); }
+};
+struct spawn_request {
+  std::string output_image;
+  std::vector<std::string> argv;
+  bool pipe_stdout, stderr_to_stdout;
+};
+inline process_handle process_spawn(spawn_request request) {
+  if (request.argv.empty())
+    throw std::invalid_argument("empty child argument vector");
+  const fs::path output(file_path(request.output_image));
+  if (output.empty() || output.has_parent_path() || output == "." ||
+      output == "..")
+    throw std::invalid_argument("invalid executable image name");
+  const auto image = fs::read_symlink("/proc/self/exe").parent_path() / output;
+  if (fs::is_symlink(fs::symlink_status(image)))
+    throw std::invalid_argument("executable image must be a published file");
+  std::vector<char *> argv;
+  argv.reserve(request.argv.size() + 1);
+  for (auto &arg : request.argv) {
+    if (arg.find('\0') != std::string::npos)
+      throw std::invalid_argument("embedded NUL in process argument");
+    argv.push_back(arg.data());
+  }
+  argv.push_back(nullptr);
+  static const auto registry = std::make_shared<unclaimed_children>();
+  registry->collect();
+  auto child = std::make_shared<process_state>(registry);
+  spawn_actions actions;
+  spawn_attributes attrs;
+  sigset_t defaults;
+  ::sigemptyset(&defaults);
+  ::sigaddset(&defaults, SIGPIPE);
+#ifdef SIGXFSZ
+  ::sigaddset(&defaults, SIGXFSZ);
+#endif
+#ifdef SIGXFZ
+  ::sigaddset(&defaults, SIGXFZ);
+#endif
+  spawn_check(::posix_spawnattr_setsigdefault(&attrs.value, &defaults),
+              "set child default signals");
+  spawn_check(::posix_spawnattr_setflags(&attrs.value, POSIX_SPAWN_SETSIGDEF),
+              "set child signal policy");
+  std::optional<descriptor> writer;
+  if (request.pipe_stdout) {
+    int pipe[2];
+    if (::pipe2(pipe, O_CLOEXEC) != 0)
+      os_error("create child output pipe");
+    descriptor reader(pipe[0]);
+    writer.emplace(pipe[1]);
+    reader.move_above_stdio();
+    writer->move_above_stdio();
+    child->output = adopt_text_stream(reader, "r");
+    spawn_check(::posix_spawn_file_actions_adddup2(
+                    &actions.value, writer->get(), STDOUT_FILENO),
+                "route child stdout");
+  }
+  if (request.stderr_to_stdout)
+    spawn_check(::posix_spawn_file_actions_adddup2(
+                    &actions.value, STDOUT_FILENO, STDERR_FILENO),
+                "route child stderr");
+#if defined(__GLIBC__) &&                                                      \
+    (__GLIBC__ > 2 || (__GLIBC__ == 2 && __GLIBC_MINOR__ >= 34))
+  spawn_check(::posix_spawn_file_actions_addclosefrom_np(&actions.value,
+                                                         STDERR_FILENO + 1),
+              "close child auxiliary descriptors");
+#else
+  throw std::system_error(ENOTSUP, std::generic_category(),
+                          "close child auxiliary descriptors");
+#endif
+  pid_t pid;
+  spawn_check(::posix_spawn(&pid, image.c_str(), &actions.value, &attrs.value,
+                            argv.data(), ::environ),
+              "launch executable image");
+  child->started(pid);
+  return child;
+}
+
+inline text_stream process_stdout(const process_handle &child) {
+  if (!child || !child->output)
+    throw std::invalid_argument("process has no stdout pipe");
+  return child->output;
+}
+inline std::int64_t process_wait(const process_handle &child) {
+  if (!child)
+    throw std::invalid_argument("unbound process handle");
+  return child->wait();
 }
 
 inline double time_wall() {

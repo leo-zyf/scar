@@ -131,6 +131,59 @@ def test_python_project_locks_and_parses_each_imported_file_once(tmp_path, monke
     }
 
 
+def test_script_images_share_syntax_and_preserve_import_bindings(tmp_path, monkeypatch):
+    from collections import Counter
+
+    from scar.contract import read_member
+    from scar.frontend import build
+
+    shared = tmp_path / "shared.py"
+    shared.write_text("import choice\n")
+    images = []
+    for name in ("left", "right"):
+        directory = tmp_path / name
+        directory.mkdir()
+        (directory / "entry.py").write_text("import helper\n")
+        (directory / "helper.py").symlink_to(shared)
+        (directory / "choice.py").write_text(f"value = {name!r}\n")
+        images.append(
+            dict(id=name, output=name, entry="__main__", source=f"{name}/entry.py")
+        )
+    images.append({**images[0], "id": "repeat", "output": "repeat"})
+    manifest = tmp_path / "project.json"
+    manifest.write_text(json.dumps(dict(root_image="right", images=images)))
+
+    parse, parsed = ast.parse, Counter()
+
+    def count(source, filename="<unknown>", *args, **kwargs):
+        path = Path(filename)
+        if path.is_relative_to(tmp_path):
+            parsed[path.relative_to(tmp_path).as_posix()] += 1
+        return parse(source, filename, *args, **kwargs)
+
+    monkeypatch.setattr(ast, "parse", count)
+    output = tmp_path / "graph"
+    build(manifest, output)
+    graph = json.loads((output / "graph.json").read_bytes())
+    members = {image["id"]: image["units"] for image in graph["images"]}
+    assert graph["root_image"] == "right" and members["repeat"] == members["left"]
+    expected = set()
+    for name in ("left", "right"):
+        paths = {f"{name}/entry.py", f"{name}/choice.py", "shared.py"}
+        expected.update(paths)
+        units = {graph["units"][i]["path"]: graph["units"][i] for i in members[name]}
+        assert set(units) == paths
+        shared_graph = read_member(output, units["shared.py"]["graph"])
+        (binding,) = (
+            n
+            for f in shared_graph["functions"]
+            for n in f["nodes"]
+            if n["op"] == "python_import"
+        )
+        assert binding["import_resolution"]["file"] == f"{name}/choice.py"
+    assert parsed == Counter({path: 1 for path in expected})
+
+
 def test_python_import_precedence_and_runtime_facts(tmp_path, monkeypatch):
     import codecs
     from importlib.machinery import BuiltinImporter, FrozenImporter

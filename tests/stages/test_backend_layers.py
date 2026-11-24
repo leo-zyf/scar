@@ -47,6 +47,32 @@ else:
 """
 
 
+def test_native_execution_calls_require_bindings_without_blocking_local_names():
+    from scar.backend.planning import _qualify
+
+    declaration = dict(name="system", provider="libc", header="stdlib.h")
+    module = dict(
+        functions=[
+            dict(
+                name="main",
+                body=[dict(op="call", callee="system", args=[], site="launch")],
+            )
+        ],
+        externs=[declaration],
+    )
+    _, _, issues = _qualify(module)
+    assert issues[0]["code"] == "missing_execution_boundary_binding"
+    module["functions"].append(dict(name="system", body=[]))
+    assert _qualify(module)[2] == []
+    module["functions"].pop()
+    module["functions"][0]["body"] = [dict(op="function_ref", name="system")]
+    assert _qualify(module)[2] == []
+    module["functions"][0]["body"].append(
+        dict(op="indirect_call", targets=["system"], args=[])
+    )
+    assert _qualify(module)[2][0]["code"] == "missing_execution_boundary_binding"
+
+
 def test_unavailable_operator_bindings_stop_before_target_layers(tmp_path):
     def execution(folder, *, family=None, tagged=False):
         function = dict(
@@ -343,6 +369,113 @@ def test_cpu_budget_is_shared_with_graph_planner_and_formatter(tmp_path, monkeyp
     unknown = host.cpu_availability()
     assert unknown.issues and unknown.worker_budget == 1
     assert _format_workers(4, 36) == 1
+
+
+def test_cpu_schedules_nested_control_regions_without_emitting_both_choices():
+    from scar.backend.planning.cpu import schedule
+    from scar.contract import walk_operations
+
+    extent = dict(op="literal", type="i64", value=4)
+    stream = dict(kind="handle", resource="text_stream")
+
+    def scratch(name):
+        return dict(
+            op="runtime_array",
+            name=name,
+            element="f64",
+            extent=extent,
+            storage="scoped",
+            initialization="uninitialized",
+            scope_control="lexical_continuation",
+        )
+
+    def fill(site, value):
+        target = dict(
+            op="index",
+            base=dict(op="var", name="caught_array"),
+            indices=[dict(op="var", name="i")],
+        )
+        return dict(
+            op="map",
+            index="i",
+            site=site,
+            independent=True,
+            extent=extent,
+            body=[
+                dict(
+                    op="assign",
+                    target=target,
+                    value=dict(op="literal", type="f64", value=value),
+                )
+            ],
+        )
+
+    first, second, fused = fill("first", 1.0), fill("second", 2.0), fill("fused", 1.0)
+    fused["body"] += second["body"]
+    alternative = dict(
+        op="schedule_choice",
+        site="alternative",
+        reference=[first, second],
+        fused=fused,
+        guard="masked_floating_exceptions",
+    )
+    step = dict(op="unary", operator="preinc", value=dict(op="var", name="j"))
+    loop = dict(
+        op="for",
+        init=[
+            dict(op="block", body=[scratch("setup")]),
+            dict(op="decl", name="j", type="i64", init=extent),
+        ],
+        condition=dict(op="literal", type="bool", value=False),
+        step=step,
+        body=[],
+    )
+    protected = {
+        "op": "try",
+        "body": [
+            dict(
+                op="resource_scope",
+                resource=dict(op="var", name="stream", type=stream),
+                body=[scratch("inside_resource")],
+            )
+        ],
+        "handlers": [
+            dict(
+                categories=["exception"],
+                binding=None,
+                body=[scratch("caught_array"), alternative],
+            )
+        ],
+        "else": [scratch("success"), loop],
+        "finally": [scratch("cleanup")],
+    }
+    fn = dict(
+        name="work",
+        params=[dict(name="stream", type=stream)],
+        result="void",
+        body=[protected],
+    )
+    selected, physical = schedule(dict(functions=[fn]), "serial")
+    nodes = list(walk_operations(selected["functions"][0]["body"]))
+    arrays = {
+        n["name"]: n.get("allocation") for n in nodes if n["op"] == "runtime_array"
+    }
+    assert arrays == dict.fromkeys(
+        ("inside_resource", "caught_array", "success", "setup", "cleanup"),
+        "scoped_stack",
+    )
+    assert {a["name"] for a in physical["allocations"]} == set(arrays)
+    assert next(n for n in nodes if n["op"] == "for")["step"] == step
+    assert [c["chosen"] for c in physical["choices"]] == ["reference"]
+    assert (
+        {n["site"] for n in nodes if n["op"] == "map"}
+        == set(physical["regions"])
+        == {"first", "second"}
+    )
+    assert all(
+        r["work"]["priced"] and r["work"]["bytes_per_element"] == 8
+        for r in physical["regions"].values()
+    )
 
 
 def test_cpu_costs_price_the_traversal_actually_emitted():

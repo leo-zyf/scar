@@ -83,7 +83,7 @@ _MEMBERS = {
     "time": {"time", "sleep"},
     "sys": {"exit"},
     "math": {"pi", "e", "tau"},
-    "subprocess": set(),
+    "subprocess": {"Popen", "PIPE", "STDOUT"},
 }
 
 
@@ -178,6 +178,8 @@ def member(frame, node, base, name):
     if name not in _MEMBERS.get(base.value, ()):
         frame.fail(node, "host_member", f"no host API contract for {base.value}.{name}")
     qualified = base.value + "." + name
+    if qualified in {"subprocess.PIPE", "subprocess.STDOUT"}:
+        return literal(-1 if name == "PIPE" else -2)
     if qualified == "os.path":
         _path_identity(frame, node, base.facts)
         return Value("host_namespace", qualified, base.facts)

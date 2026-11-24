@@ -15,6 +15,7 @@ from scar.contract import (
     read_member,
     validate_images,
     write_json,
+    walk_operations,
 )
 from scar.host import array_sdk
 
@@ -57,6 +58,12 @@ def _observed_operators(module):
                     observed.setdefault(family, set()).add(op)
                 if isinstance(op, str) and op in _ARRAY_OPERATIONS:
                     observed.setdefault("ndarray", set()).add(op)
+                if (
+                    op == "process_spawn"
+                    or op == "host_call"
+                    and node.get("interface") in {"process.stdout", "process.wait"}
+                ):
+                    observed.setdefault("process", set()).add(op)
             if node.get("kind") == "ndarray":
                 observed.setdefault("ndarray", set())
                 element = node.get("element")
@@ -92,7 +99,125 @@ def _ndarray_binding(requirement, observed):
 _OPERATOR_BINDINGS = {"ndarray": _ndarray_binding}
 
 
-def _qualify(module):
+def _process_binding(requirement, observed, module, context):
+    import ctypes
+    import platform
+
+    if platform.system() != "Linux" or not Path("/proc/self/exe").is_file():
+        raise ValueError("image processes require the Linux executable namespace")
+    try:
+        getattr(ctypes.CDLL(None), "posix_spawn_file_actions_addclosefrom_np")
+    except (OSError, AttributeError) as exc:
+        raise ValueError(
+            "process deployment lacks the required native spawn file actions"
+        ) from exc
+    if (
+        not isinstance(requirement, dict)
+        or requirement.keys() - {"operations", "binding"}
+        or requirement.get("binding", "declared_images") != "declared_images"
+        or not isinstance(requirement.get("operations", []), list)
+        or any(not isinstance(op, str) for op in requirement.get("operations", ()))
+        or observed.union(requirement.get("operations", ()))
+        - {"process_spawn", "host_call"}
+    ):
+        raise ValueError("requires declared image process operations")
+    if not context:
+        raise ValueError("process targets require the enclosing sealed image bundle")
+    images = context["images"]
+    declarations = [
+        {k: image[k] for k in ("id", "entry", "output")} for image in images
+    ]
+    if (
+        module.get("execution_images") != declarations
+        or module.get("current_image") != context["current_image"]
+    ):
+        raise ValueError(
+            "process image declarations disagree with the enclosing bundle"
+        )
+    targets = {
+        image["id"]: dict(
+            image_id=image["id"], output=image["output"], ir_sha256=image["ir_sha256"]
+        )
+        for image in images
+    }
+    references = set()
+    for node in walk_operations(module):
+        if node["op"] == "process_spawn":
+            if node.get("image_id") not in targets:
+                raise ValueError(
+                    "process launch references an undeclared or unsealed image"
+                )
+            references.add(node["image_id"])
+        elif node.get("operator_family") == "process" and (
+            node["op"] != "host_call"
+            or node.get("interface") not in {"process.stdout", "process.wait"}
+        ):
+            raise ValueError("unregistered process interface")
+    return dict(
+        provider="posix_spawn",
+        target="linux-cxx20",
+        binding="declared_images",
+        images={name: targets[name] for name in sorted(references)},
+        environment_contract="immutable executable generation during execution; inherited cwd, environment and input",
+    )
+
+
+def _external_execution_boundaries(module):
+    """Native ABI calls need the same image closure as source process protocols."""
+    defined = {fn["name"] for fn in module.get("functions", ())}
+    interfaces = {
+        "system",
+        "popen",
+        "fork",
+        "vfork",
+        "execl",
+        "execle",
+        "execlp",
+        "execv",
+        "execve",
+        "execvp",
+        "execvpe",
+        "fexecve",
+        "posix_spawn",
+        "posix_spawnp",
+        "dlopen",
+        "dlmopen",
+    }
+    external = {
+        decl["name"]: decl
+        for decl in module.get("externs", ())
+        if decl["name"] not in defined
+        and decl.get("provider") in {"libc", "posix"}
+        and decl["name"].rsplit("::", 1)[-1] in interfaces
+    }
+    issues, seen = [], set()
+    for node in walk_operations(
+        [module.get("functions", ()), module.get("globals", ())]
+    ):
+        targets = (
+            [node.get("callee")]
+            if node["op"] == "call"
+            else node.get("targets", ()) if node["op"] == "indirect_call" else ()
+        )
+        for name in targets:
+            if name not in external or (name, node.get("site")) in seen:
+                continue
+            seen.add((name, node.get("site")))
+            issues.append(
+                dict(
+                    stage="B1",
+                    code="missing_execution_boundary_binding",
+                    symbol=name,
+                    provider=external[name]["provider"],
+                    site=node.get("site"),
+                    location=node.get("location"),
+                    detail="native process execution or dynamic loading requires an explicit image/tool binding; a library ABI alone does not close the application graph",
+                )
+            )
+    return issues
+
+
+def _qualify(module, image_context=None):
     requested = module.get("operator_requirements", {})
     if not isinstance(requested, dict):
         raise ValueError("operator requirements must be a family-indexed table")
@@ -108,10 +233,18 @@ def _qualify(module):
                 else:
                     requirement["element"] = next(iter(array_elements), "f64")
             requested[family] = requirement
-    bindings, issues = {}, []
+    bindings, issues = {}, _external_execution_boundaries(module)
     for family, requirement in sorted(requested.items()):
         resolve = _OPERATOR_BINDINGS.get(family)
-        if resolve is None:
+        if family == "process":
+            try:
+                bindings[family] = _process_binding(
+                    requirement, observed.get(family, set()), module, image_context
+                )
+                continue
+            except ValueError as exc:
+                detail = str(exc)
+        elif resolve is None:
             detail = "no target implementation is registered for this operator family"
         elif family == "ndarray" and array_elements - {"f64"}:
             detail = "unsupported CPU array element types: " + ", ".join(
@@ -135,11 +268,16 @@ def _qualify(module):
     return requested, bindings, issues
 
 
-def _schedule_image(path, revision, ir, destination, policy, workers):
+def _schedule_image(
+    path, revision, ir, destination, policy, workers, image_context=None
+):
     module = dict(
         ir["module"], functions=[read_member(path.parent, r) for r in ir["functions"]]
     )
-    requirements, bindings, issues = _qualify(module)
+    module.pop("image_bindings", None)
+    requirements, bindings, issues = _qualify(module, image_context)
+    if "process" in bindings:
+        module["image_bindings"] = bindings["process"]["images"]
     status = "INCOMPLETE" if issues else "READY"
     fields = dict(stage="B1", status=status, ir_sha256=revision)
     if issues:
@@ -205,11 +343,19 @@ def schedule_ir(source, destination, *, policy="auto", workers=None):
         inputs.append((image, child))
 
     scheduled, plans, issues = [], [], []
+    catalog = [
+        {k: image[k] for k in ("id", "entry", "output")} | {"ir_sha256": child[1]}
+        for image, child in inputs
+    ]
     for image, child in inputs:
         identity = {key: image[key] for key in ("id", "entry", "output")}
         child_dir = destination / "images" / image["id"]
         child_path, child_status, child_issues = _schedule_image(
-            *child, child_dir, policy, workers
+            *child,
+            child_dir,
+            policy,
+            workers,
+            image_context=dict(current_image=image["id"], images=catalog),
         )
         identity["status"] = child_status
         issues.extend(dict(issue, image_id=image["id"]) for issue in child_issues)

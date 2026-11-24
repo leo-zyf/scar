@@ -48,19 +48,37 @@ def _profiles(units, default_language):
 
 
 def _image_profiles(spec):
-    """Intern profiles once while retaining link membership in each image."""
+    """Lock explicit profiles and leave script import discovery to F1."""
     root_image, images = spec.get("root_image"), spec["images"]
     validate_images(images, root_image, unit_count=None)
     if any(k in spec for k in ("units", "source", "observe")):
-        raise ValueError(
-            "multi-image requests require explicit compilation profiles per image; observation and script discovery are unavailable"
-        )
+        raise ValueError("declare units or a source script separately for each image")
     table, indices, membership = [], {}, []
     for image in images:
-        if "observe" in image or "source" in image or "source_root" in image:
+        if "observe" in image or "source_root" in image:
             raise ValueError(
-                "image units must be explicit profiles under the shared source_root; observation and script discovery require a single image"
+                "images share source_root and cannot declare a per-image observation"
             )
+        identity = {
+            key: image[key]
+            for key in ("id", "entry", "output", "entry_abi")
+            if key in image
+        }
+        if "source" in image:
+            script = image["source"]
+            if (
+                "units" in image
+                or not isinstance(script, str)
+                or Path(script).suffix.lower() != ".py"
+                or image["entry"] != "__main__"
+                or image.get("entry_abi")
+            ):
+                raise ValueError(
+                    "a script image takes a .py source and the __main__ entry; "
+                    "use explicit units for custom entry ABIs"
+                )
+            membership.append({**identity, "source": script})
+            continue
         profiles = [
             with_entry_abi(p, image.get("entry_abi"))
             for p in _profiles(image.get("units"), spec.get("language"))
@@ -104,15 +122,9 @@ def _image_profiles(spec):
                 indices[key] = len(table)
                 table.append(p)
             image_units.append(indices[key])
-        membership.append(
-            {
-                key: image[key]
-                for key in ("id", "entry", "output", "entry_abi")
-                if key in image
-            }
-            | {"units": image_units}
-        )
-    validate_images(membership, root_image, unit_count=len(table))
+        if len(image_units) != len(set(image_units)):
+            raise ValueError("duplicate compilation profile within one image")
+        membership.append({**identity, "units": image_units})
     root = next(i for i in membership if i["id"] == root_image)
     return tuple(table), membership, root
 
@@ -142,8 +154,10 @@ def read_request(path: Path) -> SourceRequest:
         entry = spec
     locks = spec.get("source_lock", {}).get("files", {})
     python_names = {p["path"] for p in profiles if p["language"].lower() == "python"}
+    scripts = [image["source"] for image in images or () if "source" in image]
+    python_names.update(scripts)
     names = {}
-    for name in dict.fromkeys([*locks, *(p["path"] for p in profiles)]):
+    for name in dict.fromkeys([*locks, *(p["path"] for p in profiles), *scripts]):
         source = (root / name).resolve(strict=True)
         if Path(name).is_absolute() or not source.is_relative_to(root):
             raise ValueError(f"input must be inside source_root: {name}")
