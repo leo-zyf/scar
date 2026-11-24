@@ -1020,6 +1020,12 @@ def _meshgrid(frame, node, args, keywords, steps, discard):
         frame.fail(
             node, "array_layout", "meshgrid needs a proven xy or ij indexing mode"
         )
+    if len(args) > 64:
+        frame.fail(
+            node,
+            "array_rank",
+            "the registered numerical provider supports at most 64 axes",
+        )
     flags = [
         frame.truth(keywords.get(k, literal(v)), node)
         for k, v in (("copy", True), ("sparse", False))

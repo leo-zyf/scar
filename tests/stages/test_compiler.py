@@ -659,6 +659,32 @@ protected()
     native = subprocess.run([result["executable"]], capture_output=True, check=True)
     assert (native.stdout, native.stderr) == (expected.stdout, expected.stderr)
 
+    excessive = tmp_path / "excessive.py"
+    excessive.write_text(
+        "import numpy as np\nnp.meshgrid(" + ",".join(["1.0"] * 65) + ",sparse=True)\n"
+    )
+    _stage(
+        tmp_path,
+        "frontend",
+        "build",
+        "--entry",
+        excessive,
+        "--out",
+        tmp_path / "rank-graph",
+    )
+    _stage(
+        tmp_path,
+        "middle",
+        "plan",
+        "--graph",
+        tmp_path / "rank-graph",
+        "--out",
+        tmp_path / "rank-plan",
+        returncode=2,
+    )
+    rejected = json.loads((tmp_path / "rank-plan/plan.json").read_bytes())
+    assert rejected["issues"][0]["code"] == "python.array_rank"
+
 
 def test_numpy_default_warnings_survive_source_removal(tmp_path):
     entry = tmp_path / "entry.py"
