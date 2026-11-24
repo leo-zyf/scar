@@ -210,6 +210,111 @@ raise SystemExit(main(['compile', '--ir', sys.argv[1], '--out', sys.argv[2], '--
             assert {i["image_id"] for i in report["issues"]} == {"solver"}
 
 
+def test_file_graph_and_workflow_members_survive_schedule_relocation(
+    tmp_path, monkeypatch
+):
+    from scar.backend.planning import schedule_ir
+    from scar.contract import ARTIFACT_FLOW, json_bytes, read_blob, read_member
+    from scar.middle.execution import seal
+
+    source, schedule = tmp_path / "execution", tmp_path / "schedule"
+    images, expected = [], {}
+    for image in ("controller", "solver"):
+        folder = source / "images" / image
+        flow = document(
+            ARTIFACT_FLOW, nodes=[dict(kind="FILE_LOCATOR", id=image)], edges=[]
+        )
+        function = dict(
+            name="main",
+            params=[],
+            result="i32",
+            body=[dict(op="return", value=dict(op="literal", type="i32", value=0))],
+        )
+        module = dict(
+            entry="main",
+            functions=[function],
+            globals=[],
+            resource_model={"artifact_flow": flow},
+        )
+        args = dict(graph_sha256="f" * 64, contract={}, logical_optimization=False)
+        ir = seal(module, folder, status="READY", **args)
+        receipt = member(folder, "analysis", flow)
+        assert (
+            json.loads(ir.read_bytes())["module"]["resource_model"]["artifact_flow"]
+            == receipt
+        )
+        images.append(
+            dict(id=image, entry="main", output=image, ir=file_receipt(source, ir))
+        )
+        expected[image] = json_bytes(flow)
+
+    incomplete = seal(module, tmp_path / "partial", status="INCOMPLETE", **args)
+    partial = json.loads(incomplete.read_bytes())
+    assert partial["functions"] == [] and set(partial["module"]) == {
+        "entry",
+        "resource_model",
+    }
+    assert (
+        read_blob(
+            incomplete.parent, partial["module"]["resource_model"]["artifact_flow"]
+        )
+        == expected["solver"]
+    )
+    workflow = document(
+        "scar.workflow-graph",
+        root_image="controller",
+        images=["controller", "solver"],
+        nodes=[],
+        edges=[],
+    )
+    workflow_receipt = member(source, "analysis", workflow)
+    write_json(
+        source / "exec-ir.json",
+        document(
+            IR,
+            kind="image_bundle",
+            status="READY",
+            root_image="controller",
+            images=images,
+            workflow=workflow_receipt,
+        ),
+    )
+    moved = tmp_path / "moved-execution"
+    source.rename(moved)
+    workflow_file = moved / workflow_receipt["path"]
+    workflow_bytes = workflow_file.read_bytes()
+    workflow_file.write_bytes(b" " + workflow_bytes[1:])
+    with pytest.raises(ValueError, match="checksum mismatch"):
+        schedule_ir(moved, tmp_path / "corrupt-input", policy="serial")
+    assert not (tmp_path / "corrupt-input" / "scheduled-ir.json").exists()
+    workflow_file.write_bytes(workflow_bytes)
+    loads = json.loads
+    audit_members = {*expected.values(), json_bytes(workflow)}
+
+    def reject_audit_decode(data, *a, **kw):
+        raw = data.encode() if isinstance(data, str) else data
+        assert raw not in audit_members, "B1 decoded an audit-only graph"
+        return loads(data, *a, **kw)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(json, "loads", reject_audit_decode)
+        schedule_ir(moved / "exec-ir.json", schedule, policy="serial")
+    moved.rename(tmp_path / "hidden-execution")
+    delivery = tmp_path / "moved-schedule"
+    schedule.rename(delivery)
+    sealed = json.loads((delivery / "scheduled-ir.json").read_bytes())
+    assert sealed["status"] == "READY" and read_blob(
+        delivery, sealed["workflow"]
+    ) == json_bytes(workflow)
+    for image in sealed["images"]:
+        child = read_member(delivery, image["scheduled"])
+        child_folder = (delivery / image["scheduled"]["path"]).parent
+        assert (
+            read_blob(child_folder, child["module"]["resource_model"]["artifact_flow"])
+            == expected[image["id"]]
+        )
+
+
 def test_backend_products_replay_and_reject_changed_bytes(tmp_path):
     def run(layer, source, out, expected=None):
         env = dict(

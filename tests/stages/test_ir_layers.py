@@ -20,6 +20,111 @@ _LAYERS = {
 }
 
 
+def test_workflow_binds_entry_state_without_inventing_child_file_versions(tmp_path):
+    process = dict(kind="handle", resource="process")
+
+    def variable(name):
+        return dict(op="var", name=name, type=process)
+
+    def literal(text):
+        return dict(op="literal", type="text", value=text)
+
+    def launch(name):
+        return dict(
+            op="decl",
+            name=name,
+            type=process,
+            init=dict(
+                op="process_spawn",
+                image_id="worker",
+                argv=[literal("./worker")],
+                cwd="inherit",
+                stdin="inherit",
+                stdout="pipe",
+                stderr="inherit",
+            ),
+        )
+
+    def wait(name):
+        return dict(
+            op="expr",
+            value=dict(op="host_call", interface="process.wait", args=[variable(name)]),
+        )
+
+    body = [
+        dict(
+            op="expr",
+            value=dict(
+                op="host_call",
+                interface="fs.copy_file",
+                args=[literal("source"), literal("input.par")],
+            ),
+        ),
+        launch("p"),
+        dict(op="decl", name="alias", type=process, init=variable("p")),
+        launch("q"),
+        wait("alias"),
+        wait("q"),
+    ]
+    body[3]["init"]["launcher"] = dict(
+        kind="mpi", ranks=dict(op="literal", type="i64", value=2), semantics_version=1
+    )
+    module = dict(
+        entry="main",
+        current_image="driver",
+        functions=[dict(name="main", params=[], result="unit", body=body)],
+    )
+    flow = _layer(
+        "normalization",
+        "from scar.middle.normalization.artifacts import analyze\nprint(json.dumps(analyze(data)['graph']))",
+        module,
+    )
+    code = """from pathlib import Path
+from scar.contract import ARTIFACT_FLOW, document, file_receipt
+from scar.middle.execution import seal
+from scar.middle.workflow import link_images
+out=Path(data['out'])
+consumer=document(ARTIFACT_FLOW,nodes=[
+    dict(id='read-op',kind='CANONICAL_OPERATION',operation='library_call'),
+    dict(id='input',kind='FILE_LOCATOR',path=None,cwd='process_cwd_at_open'),
+    dict(id='read',kind='FILE_VERSION_REQUIREMENT',locator='input',value=None,
+         consumer='read-op',role='runtime_stream_read',requires=['file_bytes_consulted']),
+],edges=[])
+images=[]
+for name,flow in [('driver',data['flow']),('worker',consumer)]:
+    module=dict(entry='main',functions=[],resource_model=dict(artifact_flow=flow))
+    path=seal(module,out/name,status='INCOMPLETE',graph_sha256='source',
+              contract={},logical_optimization=False)
+    images.append(dict(id=name,entry='main',output=name,ir=file_receipt(out,path)))
+relocated=out.with_name('relocated-ir')
+out.rename(relocated)
+print(json.dumps(link_images(relocated,images,'driver')))
+"""
+    workflow = _layer("execution", code, dict(out=str(tmp_path / "ir"), flow=flow))
+    nodes = {node["id"]: node for node in workflow["nodes"]}
+    launches = [node for node in nodes.values() if node["kind"] == "LAUNCH"]
+    assert len(launches) == 2
+    assert {node["child_image"] for node in launches} == {"worker"}
+    assert {node["replication"]["kind"] for node in launches} == {
+        "single_process",
+        "mpi",
+    }
+    bindings = [e for e in workflow["edges"] if e["kind"] == "BINDS_ENTRY_STATE"]
+    assert len(bindings) == 8
+    assert all(e["binding_time"] == "process_entry" for e in bindings)
+    waits = [e for e in workflow["edges"] if e["kind"] == "WAITS_FOR"]
+    assert len(waits) == 2 and all(e["descendants_completed"] is False for e in waits)
+    (read,) = [node for node in nodes.values() if node["kind"] == "FILE_READ"]
+    assert read["path"] is None
+    assert any(node["kind"] == "FILE_COPY" for node in nodes.values())
+    assert workflow["file_version_equivalence_established"] is False
+    assert not any(
+        nodes[e["source"]]["kind"] == "FILE_COPY"
+        and nodes[e["target"]]["kind"] == "FILE_READ"
+        for e in workflow["edges"]
+    )
+
+
 def _layer(name, code, data=None):
     blocked = [module for key, module in _LAYERS.items() if key != name]
     blocked.extend(["scar.frontend", "scar.backend"])
@@ -385,6 +490,234 @@ def test_constant_file_proof_preserves_control_and_handle_boundaries():
     assert not any(
         edge.get("role") == "open_read" for edge in handoff["edges"]
     ), "spawn still invalidates unqualified filesystem state after recording its input"
+    process_type = dict(kind="handle", resource="process")
+    pipe_type = dict(kind="handle", resource="text_stream")
+    child = dict(op="var", name="child", type=process_type)
+    alias = dict(op="var", name="alias", type=process_type)
+    pipe = dict(op="var", name="pipe", type=pipe_type)
+    spawned = {
+        **launch["value"],
+        "type": process_type,
+        "stdout": "pipe",
+        "stderr": "stdout",
+        "stdin": "inherit",
+    }
+    waited = dict(
+        op="expr", value=dict(op="host_call", interface="process.wait", args=[alias])
+    )
+    started = [
+        dict(
+            op="expr",
+            value=dict(op="host_call", interface="fs.mkdir", args=[literal("work")]),
+        ),
+        dict(
+            op="expr",
+            value=dict(
+                op="host_call", interface="process.chdir", args=[literal("work")]
+            ),
+        ),
+        start,
+        write,
+        close,
+        dict(op="decl", name="child", type=process_type, init=spawned),
+        dict(op="decl", name="alias", type=process_type, init=child),
+    ]
+    next_child = dict(
+        op="decl", name="second", type=process_type, init=deepcopy(spawned)
+    )
+    lifecycle = analysis(
+        [
+            *started,
+            dict(
+                op="decl",
+                name="pipe",
+                type=pipe_type,
+                init=dict(op="host_call", interface="process.stdout", args=[alias]),
+            ),
+            dict(
+                op="expr",
+                value=dict(
+                    op="host_call",
+                    interface="stream.readline",
+                    args=[pipe, dict(op="literal", type="i64", value=-1)],
+                ),
+            ),
+            waited,
+            copied,
+            next_child,
+        ]
+    )["graph"]
+    launches = lifecycle["launch_environments"]
+    assert len(launches) == 2 and launches[0]["directory"] == launches[1]["directory"]
+    assert (
+        not launches[1]["prior_live_process_effects"]
+        and launches[1]["prior_external_process_effects"]
+    )
+    templates = {
+        node["id"]: node
+        for node in lifecycle["nodes"]
+        if node["kind"] == "PROCESS_TEMPLATE"
+    }
+    completed = [
+        edge
+        for edge in lifecycle["edges"]
+        if edge["kind"] == "COMPLETES_DIRECT_PROCESS_IF_NORMAL"
+    ]
+    assert len(templates) == 2 and len(completed) == 1
+    assert (
+        completed[0]["source"] == launches[0]["process_template"]
+        and not completed[0]["descendants_completed"]
+    )
+    assert {
+        edge.get("role")
+        for edge in lifecycle["edges"]
+        if edge["kind"] == "USES_PROCESS_HANDLE"
+        and edge["source"] == completed[0]["source"]
+    } >= {"alias", "stdout", "pipe_read", "wait"}
+    assert not any(edge["kind"] == "COPIES_FILE_VERSION" for edge in lifecycle["edges"])
+    for control in (
+        dict(
+            op="if",
+            condition=dict(op="var", name="flag", type="bool"),
+            then=[waited],
+            **{"else": []},
+        ),
+        dict(
+            op="while",
+            condition=dict(op="var", name="flag", type="bool"),
+            body=[waited],
+        ),
+    ):
+        conditional = analysis([*started, control, next_child])["graph"]
+        before, after = conditional["launch_environments"]
+        assert (
+            after["prior_live_process_effects"]
+            and after["directory"] == before["directory"]
+        )
+    rebound = analysis(
+        [
+            *started,
+            dict(
+                op="assign",
+                target=alias,
+                value=dict(op="var", name="unknown", type=process_type),
+            ),
+            waited,
+        ]
+    )["graph"]
+    assert not any(
+        edge["kind"] == "COMPLETES_DIRECT_PROCESS_IF_NORMAL"
+        for edge in rebound["edges"]
+    )
+    spawn_handle = dict(op="decl", name="child", type=process_type, init=spawned)
+    process_alias = dict(op="decl", name="alias", type=process_type, init=child)
+    other = dict(op="var", name="other", type=pipe_type)
+    reader_open = deepcopy(opened)
+    reader_open["args"][:2] = [literal("other"), literal("r")]
+    scoped = analysis(
+        [
+            start,
+            dict(
+                op="resource_scope",
+                resource=handle,
+                body=[
+                    spawn_handle,
+                    process_alias,
+                    dict(
+                        op="if",
+                        condition=dict(op="var", name="flag", type="bool"),
+                        then=[],
+                        **{"else": []},
+                    ),
+                    dict(op="decl", name="other", type=pipe_type, init=reader_open),
+                    dict(op="assign", target=handle, value=other),
+                ],
+            ),
+            waited,
+            close,
+        ]
+    )
+    scoped_nodes = {node["id"]: node for node in scoped["graph"]["nodes"]}
+    (scope_close,) = [
+        node
+        for node in scoped_nodes.values()
+        if node.get("operation") == "resource_scope_close"
+    ]
+    assert {
+        "resource_scope_enter_succeeded",
+        "body_normal_completion",
+        "stream_close_succeeded",
+    } <= set(scope_close["requires"])
+    assert any(
+        node["kind"] == "FILE_VERSION_TEMPLATE"
+        and node["completion"] == scope_close["id"]
+        for node in scoped_nodes.values()
+    )
+    assert (
+        sum(
+            edge["kind"] == "COMPLETES_DIRECT_PROCESS_IF_NORMAL"
+            for edge in scoped["graph"]["edges"]
+        )
+        == 1
+    )
+    pipe_open = dict(
+        op="decl",
+        name="pipe",
+        type=pipe_type,
+        init=dict(op="host_call", interface="process.stdout", args=[alias]),
+    )
+    pipe_scope = dict(op="resource_scope", resource=pipe, body=[])
+    pipe_flow = analysis([spawn_handle, process_alias, pipe_open, pipe_scope, waited])[
+        "graph"
+    ]
+    assert any(
+        edge["kind"] == "USES_PROCESS_HANDLE" and edge.get("role") == "pipe_close"
+        for edge in pipe_flow["edges"]
+    )
+    assert (
+        sum(
+            edge["kind"] == "COMPLETES_DIRECT_PROCESS_IF_NORMAL"
+            for edge in pipe_flow["edges"]
+        )
+        == 1
+    )
+    for abrupt in (dict(op="return"), dict(op="throw"), dict(op="unsupported")):
+        interrupted = analysis(
+            [
+                spawn_handle,
+                process_alias,
+                pipe_open,
+                {**pipe_scope, "body": [abrupt]},
+                waited,
+            ]
+        )
+        assert not any(
+            edge["kind"]
+            in {"RESOURCE_SCOPE_CLOSE_IF_NORMAL", "COMPLETES_DIRECT_PROCESS_IF_NORMAL"}
+            for edge in interrupted["graph"]["edges"]
+        )
+        assert any(
+            row.get("field") == "resource_scope_exit"
+            and row.get("reason") == "non_normal_cleanup_unmodeled"
+            for row in interrupted["boundaries"]
+        )
+    loop_scope = analysis(
+        [
+            start,
+            write,
+            dict(
+                op="while",
+                condition=dict(op="var", name="flag", type="bool"),
+                body=[dict(op="resource_scope", resource=handle, body=[])],
+            ),
+            close,
+        ]
+    )
+    assert not loop_scope["constant_materializations"]
+    assert any(
+        row.get("field") == "loop_effect_summary" and row["file_havoc"]
+        for row in loop_scope["boundaries"]
+    )
     parameters = [dict(name=name, type="text") for name in ("source", "destination")]
     source, destination = [dict(op="var", **item) for item in parameters]
     helper_copy, helper_read = deepcopy(copied), deepcopy(read)

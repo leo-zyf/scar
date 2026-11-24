@@ -2,7 +2,9 @@
 
 from copy import deepcopy
 from scar.contract import (
+    ARTIFACT_FLOW,
     IR,
+    VERSION,
     digest,
     document,
     json_bytes,
@@ -248,27 +250,36 @@ def seal(module, out, *, status, graph_sha256, contract, logical_optimization):
     ):
         raise ValueError("execution IR cannot contain unresolved source protocols")
     payload = dict(module)
-    # This is an audit product. Its graph already lives once in resource_model;
-    # source-protocol prefixes must never become executable function members.
+    # Only the versioned file graph crosses the execution boundary. Incomplete
+    # protocol fragments remain in the logical planning report.
     payload.pop("artifact_analysis", None)
     payload.pop("resource_analysis", None)
-    if status == "READY" and "resource_flow" in payload.get("resource_model", {}):
-        inventory = dict(payload["resource_model"])
+    inventory = dict(payload.get("resource_model", {}))
+    if "artifact_flow" in inventory:
+        flow = inventory["artifact_flow"]
+        if not isinstance(flow, dict) or (
+            flow.get("schema"),
+            flow.get("schema_version"),
+        ) != (ARTIFACT_FLOW, VERSION):
+            raise ValueError("M4 requires an artifact flow graph before sealing")
+        inventory["artifact_flow"] = member(out, "analysis", flow)
+    if status == "READY" and "resource_flow" in inventory:
         inventory["resource_flow"] = member(
             out, "resources", inventory["resource_flow"]
         )
+    if "resource_model" in payload:
         payload["resource_model"] = inventory
-    functions = (
-        [member(out, "functions", f) for f in payload.pop("functions", [])]
-        if status == "READY"
-        else []
-    )
+    if status != "READY":
+        payload = {"entry": module["entry"]}
+        if "artifact_flow" in inventory:
+            payload["resource_model"] = {"artifact_flow": inventory["artifact_flow"]}
+    functions = [member(out, "functions", f) for f in payload.pop("functions", [])]
     product = document(
         IR,
         status=status,
         graph_sha256=graph_sha256,
         contract=contract,
-        module=payload if status == "READY" else {"entry": module["entry"]},
+        module=payload,
         functions=functions,
         logical_optimization=logical_optimization,
     )

@@ -112,6 +112,17 @@ class _Stream:
     last_operation: str | None = None
 
 
+@dataclass(frozen=True)
+class _Process:
+    identity: str
+
+
+@dataclass(frozen=True)
+class _Pipe:
+    process: str
+    channel: str
+
+
 @dataclass(frozen=True, eq=False)
 class _Product:
     fields: tuple
@@ -201,6 +212,7 @@ def analyze(module):
                 "process_request",
                 "array_text_read",
                 "array_source_open",
+                "resource_scope",
             }:
                 effects.add("FILE")
             elif op in {
@@ -394,7 +406,9 @@ def analyze(module):
             )
         state = incoming or {}
         fact_epoch_clean = state.get("fact_epoch_clean", True)
-        live_process_effects = state.get("live_process_effects", False)
+        external_process_effects = state.get("external_process_effects", False)
+        process_states = deepcopy(state.get("process_states", {}))
+        unresolved_process_instances = state.get("unresolved_process_instances", False)
         file_versions, filesystem_epoch = dict(
             state.get("file_versions", {})
         ), state.get("epoch", 0)
@@ -507,6 +521,24 @@ def analyze(module):
                     )
                 )
             last_file_operation = site
+
+        def use_process(handle, site, role):
+            process = (
+                handle.identity if isinstance(handle, _Process) else handle.process
+            )
+            edges.append(
+                dict(
+                    kind="USES_PROCESS_HANDLE",
+                    source=process,
+                    target=site,
+                    role=role,
+                    conditional=True,
+                    **(
+                        {"channel": handle.channel} if isinstance(handle, _Pipe) else {}
+                    ),
+                )
+            )
+            return process
 
         def invalidate(
             reason, site=None, *, changes_cwd=False, changes_namespace=False, retain=()
@@ -763,7 +795,7 @@ def analyze(module):
                     "prior_file_content",
                     "branch_dependent_stream_state",
                 }
-                and not live_process_effects
+                and not external_process_effects
             ):
                 file_versions[stream.path_key] = version
             if value is None:
@@ -876,7 +908,7 @@ def analyze(module):
                     )
                 )
                 return _UNKNOWN
-            if live_process_effects:
+            if external_process_effects:
                 source_version = None
             source_requirement = None
             if source_version is None:
@@ -983,7 +1015,7 @@ def analyze(module):
                 )
                 if value is not None:
                     edges.append(dict(kind="HAS_CONTENT", source=version, target=value))
-                if not ambiguous and key is not None and not live_process_effects:
+                if not ambiguous and key is not None and not external_process_effects:
                     file_versions[key] = version
                 templates.append(
                     dict(
@@ -1008,8 +1040,8 @@ def analyze(module):
             )
 
         def expression(node):
-            nonlocal fact_epoch_clean, live_process_effects, cwd
-            nonlocal file_versions, filesystem_epoch, last_file_operation, directories
+            nonlocal fact_epoch_clean, external_process_effects, cwd
+            nonlocal file_versions, filesystem_epoch, last_file_operation, directories, process_states, unresolved_process_instances
             if not isinstance(node, dict):
                 return _UNKNOWN
             op = node["op"]
@@ -1132,7 +1164,9 @@ def analyze(module):
                             epoch=filesystem_epoch,
                             last_operation=last_file_operation,
                             fact_epoch_clean=fact_epoch_clean,
-                            live_process_effects=live_process_effects,
+                            external_process_effects=external_process_effects,
+                            process_states=process_states,
+                            unresolved_process_instances=unresolved_process_instances,
                             root_activation=root_activation,
                             directories=directories,
                         ),
@@ -1149,7 +1183,11 @@ def analyze(module):
                     )
                     filesystem_epoch = child_state["epoch"]
                     last_file_operation = child_state["last_operation"]
-                    live_process_effects = child_state["live_process_effects"]
+                    external_process_effects = child_state["external_process_effects"]
+                    process_states = child_state["process_states"]
+                    unresolved_process_instances = child_state[
+                        "unresolved_process_instances"
+                    ]
                     fact_epoch_clean = child_state["fact_epoch_clean"]
                     locals_ = {
                         key: value
@@ -1244,7 +1282,7 @@ def analyze(module):
                     if (
                         version is not None
                         and not stream.unresolved
-                        and not live_process_effects
+                        and not external_process_effects
                     ):
                         requires(
                             version,
@@ -1285,6 +1323,95 @@ def analyze(module):
                     for i, arg in enumerate(node["args"])
                 ]
                 interface, site = node["interface"], operation(node)
+                if interface in {"process.stdout", "process.wait"}:
+                    ordered(site)
+                    if interface == "process.wait":
+                        fact_epoch_clean = False
+                        for key in list(environment):
+                            if key[0] == "global":
+                                del environment[key]
+                    handle = args[0] if args else _UNKNOWN
+                    if (
+                        isinstance(handle, _Process)
+                        and handle.identity in process_states
+                    ):
+                        use_process(handle, site, interface.split(".")[1])
+                        process = process_states[handle.identity]
+                        if (
+                            interface == "process.stdout"
+                            and process["routes"].get("stdout") == "pipe"
+                        ):
+                            process["pipes"].setdefault("stdout", "open")
+                            return _Pipe(handle.identity, "stdout")
+                        if interface == "process.wait":
+                            process["termination"] = "terminated"
+                            edges.append(
+                                dict(
+                                    kind="COMPLETES_DIRECT_PROCESS_IF_NORMAL",
+                                    source=handle.identity,
+                                    target=site,
+                                    conditional=True,
+                                    descendants_completed=False,
+                                )
+                            )
+                            invalidate(
+                                "unresolved_process_descendant_effects",
+                                site,
+                                changes_namespace=True,
+                            )
+                            return _UNKNOWN
+                    boundaries.append(
+                        dict(
+                            symbol=symbol,
+                            field="process_handle",
+                            source=site,
+                            reason="process_identity_or_pipe_route_unproven",
+                        )
+                    )
+                    if interface == "process.wait":
+                        unresolved_process_instances = True
+                        external_process_effects = True
+                        invalidate(
+                            "unresolved_process_descendant_effects",
+                            site,
+                            changes_namespace=True,
+                        )
+                    return _UNKNOWN
+                if (
+                    interface.startswith("stream.")
+                    and args
+                    and isinstance(args[0], _Pipe)
+                ):
+                    pipe = args[0]
+                    ordered(site)
+                    use_process(
+                        pipe,
+                        site,
+                        (
+                            "pipe_close"
+                            if interface == "stream.close"
+                            else (
+                                "pipe_read"
+                                if interface in {"stream.read", "stream.readline"}
+                                else "pipe_operation"
+                            )
+                        ),
+                    )
+                    state = process_states.get(pipe.process)
+                    if state is not None:
+                        if interface == "stream.close":
+                            state["pipes"][pipe.channel] = "closed"
+                            return None
+                        if state["pipes"].get(pipe.channel) == "closed":
+                            boundaries.append(
+                                dict(
+                                    symbol=symbol,
+                                    field="process_pipe",
+                                    source=site,
+                                    reason="pipe_operation_after_close",
+                                )
+                            )
+                    return _UNKNOWN
                 if interface == "path.join":
                     return (
                         posixpath.join(*args)
@@ -1355,7 +1482,7 @@ def analyze(module):
                     ordered(site)
                     if overlapping:
                         stream.unresolved.add("possible_overlapping_file_handle")
-                    if live_process_effects:
+                    if external_process_effects:
                         stream.unresolved.add("unmodeled_live_process")
                     if (
                         not isinstance(args[2], str)
@@ -1406,7 +1533,7 @@ def analyze(module):
                         if (
                             version is not None
                             and not stream.unresolved
-                            and not live_process_effects
+                            and not external_process_effects
                         ):
                             requires(
                                 version,
@@ -1492,42 +1619,81 @@ def analyze(module):
             if op in {"process_spawn", "process_request"}:
                 site = operation(node)
                 visible = sorted(set(file_versions.values()))
-                launch_environments.append(
+                launch_environment = dict(
+                    id="launch-environment:"
+                    + digest(json_bytes([site, context, filesystem_epoch, visible])),
+                    operation=site,
+                    source_site=node.get("site"),
+                    owner_image=module.get("current_image"),
+                    symbol=symbol,
+                    activation=root_activation,
+                    context=context,
+                    image_id=node.get("image_id"),
+                    target_binding=(
+                        "declared_image" if op == "process_spawn" else "unbound"
+                    ),
+                    argument_ports=(
+                        [["argv", i] for i in range(len(node.get("argv", ())))]
+                        if op == "process_spawn"
+                        else [["command"]]
+                    ),
+                    launcher=node.get("launcher"),
+                    cwd_policy=node.get("cwd"),
+                    directory=(
+                        directories.cwd if node.get("cwd") == "inherit" else None
+                    ),
+                    filesystem_epoch=filesystem_epoch,
+                    visible_versions=visible,
+                    prior_live_process_effects=unresolved_process_instances
+                    or any(
+                        value["termination"] != "terminated"
+                        for value in process_states.values()
+                    ),
+                    prior_external_process_effects=external_process_effects,
+                    availability="before_launch_on_the_normal_control_path",
+                    historical_instance="not_established",
+                    requires=[
+                        "source_call_reached_and_spawn_success",
+                        "preserve_worker_argv_and_cwd_protocol",
+                        "shared_parent_child_filesystem_namespace",
+                        "no_intervening_alias_or_external_writes_through_child_read",
+                    ],
+                )
+                process = add(
+                    "PROCESS_TEMPLATE",
+                    [site, context],
+                    symbol=symbol,
+                    owner_image=module.get("current_image"),
+                    producer=site,
+                    activation=root_activation,
+                    context=context,
+                    source_site=node.get("site"),
+                    image_id=node.get("image_id"),
+                    launch_environment=launch_environment["id"],
+                    instance_scope="per_successful_dynamic_launch",
+                    state="running_after_normal_launch",
+                    descendant_effects="unresolved",
+                    routes={
+                        name: node.get(name, "unknown")
+                        for name in ("stdin", "stdout", "stderr")
+                    },
+                )
+                launch_environment["process_template"] = process
+                launch_environments.append(launch_environment)
+                process_states[process] = dict(
+                    termination="unproven",
+                    routes={
+                        name: node.get(name, "unknown")
+                        for name in ("stdin", "stdout", "stderr")
+                    },
+                    pipes={},
+                )
+                edges.append(
                     dict(
-                        id="launch-environment:"
-                        + digest(
-                            json_bytes([site, context, filesystem_epoch, visible])
-                        ),
-                        operation=site,
-                        source_site=node.get("site"),
-                        owner_image=module.get("current_image"),
-                        symbol=symbol,
-                        activation=root_activation,
-                        context=context,
-                        image_id=node.get("image_id"),
-                        target_binding=(
-                            "declared_image" if op == "process_spawn" else "unbound"
-                        ),
-                        argument_ports=(
-                            [["argv", i] for i in range(len(node.get("argv", ())))]
-                            if op == "process_spawn"
-                            else [["command"]]
-                        ),
-                        cwd_policy=node.get("cwd"),
-                        directory=(
-                            directories.cwd if node.get("cwd") == "inherit" else None
-                        ),
-                        filesystem_epoch=filesystem_epoch,
-                        visible_versions=visible,
-                        prior_live_process_effects=live_process_effects,
-                        availability="before_launch_on_the_normal_control_path",
-                        historical_instance="not_established",
-                        requires=[
-                            "source_call_reached_and_spawn_success",
-                            "preserve_worker_argv_and_cwd_protocol",
-                            "shared_parent_child_filesystem_namespace",
-                            "no_intervening_alias_or_external_writes_through_child_read",
-                        ],
+                        kind="STARTS_PROCESS",
+                        source=site,
+                        target=process,
+                        conditional=True,
                     )
                 )
                 edges.extend(
@@ -1540,10 +1706,13 @@ def analyze(module):
                     )
                     for version in visible
                 )
-                live_process_effects = True
+                external_process_effects = True
                 fact_epoch_clean = False
-                environment.clear()
-                invalidate("unmodeled_live_process", site, changes_cwd=True)
+                for key, value in list(environment.items()):
+                    if key[0] == "global" or isinstance(value, _Stream):
+                        del environment[key]
+                invalidate("unmodeled_live_process", site, changes_namespace=True)
+                return _Process(process)
             elif op in {"call", "indirect_call", "library_call"}:
                 call_origin_writes(node)
                 fact_epoch_clean = False
@@ -1577,6 +1746,19 @@ def analyze(module):
             return _UNKNOWN
 
         def stored(value, spec):
+            if isinstance(value, _Process):
+                return (
+                    value
+                    if spec is None or spec == dict(kind="handle", resource="process")
+                    else _UNKNOWN
+                )
+            if isinstance(value, _Pipe):
+                return (
+                    value
+                    if spec is None
+                    or spec == dict(kind="handle", resource="text_stream")
+                    else _UNKNOWN
+                )
             if isinstance(value, _Product):
                 if not isinstance(spec, dict) or spec.get("kind") != "product_ref":
                     return _UNKNOWN
@@ -1607,7 +1789,9 @@ def analyze(module):
                     epoch=filesystem_epoch,
                     last_operation=last_file_operation,
                     fact_epoch_clean=fact_epoch_clean,
-                    live_process_effects=live_process_effects,
+                    external_process_effects=external_process_effects,
+                    process_states=process_states,
+                    unresolved_process_instances=unresolved_process_instances,
                     return_value=return_value,
                     context=context,
                     stable_origins=stable_origins,
@@ -1619,8 +1803,8 @@ def analyze(module):
 
         def restore(saved):
             nonlocal environment, streams, file_versions, filesystem_epoch, last_file_operation
-            nonlocal fact_epoch_clean, live_process_effects, return_value, directories, cwd
-            nonlocal stable_origins
+            nonlocal fact_epoch_clean, external_process_effects, return_value, directories, cwd
+            nonlocal stable_origins, process_states, unresolved_process_instances
             copied = deepcopy(
                 {k: v for k, v in saved.items() if k != "directories"},
                 {id(_UNKNOWN): _UNKNOWN},
@@ -1628,12 +1812,14 @@ def analyze(module):
             environment, streams = copied["environment"], copied["streams"]
             file_versions, filesystem_epoch = copied["file_versions"], copied["epoch"]
             last_file_operation = copied["last_operation"]
-            fact_epoch_clean, live_process_effects = (
+            fact_epoch_clean, external_process_effects = (
                 copied["fact_epoch_clean"],
-                copied["live_process_effects"],
+                copied["external_process_effects"],
             )
             return_value = copied["return_value"]
             stable_origins = copied["stable_origins"]
+            process_states = copied["process_states"]
+            unresolved_process_instances = copied["unresolved_process_instances"]
             directories = saved["directories"].clone()
             directories.create, directories.parent_edge = (
                 directory_node,
@@ -1763,13 +1949,53 @@ def analyze(module):
             return dict(
                 environment=env,
                 streams=list(merged_streams.values()),
+                process_states={
+                    identity: dict(
+                        termination=(
+                            "terminated"
+                            if left["process_states"]
+                            .get(identity, {})
+                            .get("termination")
+                            == right["process_states"]
+                            .get(identity, {})
+                            .get("termination")
+                            == "terminated"
+                            else "unproven"
+                        ),
+                        routes=deepcopy(
+                            (
+                                left["process_states"].get(identity)
+                                or right["process_states"][identity]
+                            )["routes"]
+                        ),
+                        pipes={
+                            channel: (
+                                status
+                                if right["process_states"]
+                                .get(identity, {})
+                                .get("pipes", {})
+                                .get(channel)
+                                == status
+                                else "unknown"
+                            )
+                            for channel, status in left["process_states"]
+                            .get(identity, {})
+                            .get("pipes", {})
+                            .items()
+                        },
+                    )
+                    for identity in left["process_states"].keys()
+                    | right["process_states"].keys()
+                },
+                unresolved_process_instances=left["unresolved_process_instances"]
+                or right["unresolved_process_instances"],
                 file_versions=files,
                 directories=domain,
                 epoch=max(left["epoch"], right["epoch"]),
                 last_operation=joining,
                 fact_epoch_clean=left["fact_epoch_clean"] and right["fact_epoch_clean"],
-                live_process_effects=left["live_process_effects"]
-                or right["live_process_effects"],
+                external_process_effects=left["external_process_effects"]
+                or right["external_process_effects"],
                 return_value=(
                     left["return_value"]
                     if identical(left["return_value"], right["return_value"])
@@ -1841,7 +2067,7 @@ def analyze(module):
             )
 
         def loop_summary(statement):
-            nonlocal fact_epoch_clean, live_process_effects, return_value
+            nonlocal fact_epoch_clean, external_process_effects, return_value, unresolved_process_instances
             site = operation(statement)
             ordered(site)
             effects, opaque, namespace, changes_cwd, returns = (
@@ -1885,13 +2111,19 @@ def analyze(module):
                         "process.getcwd",
                         "process.chdir",
                         "process.stdout",
+                        "process.wait",
                     }:
                         effects = opaque = True
+                    if interface == "process.wait":
+                        effects = namespace = external_process_effects = True
                 elif op == "text_print":
                     effects = True
+                elif op == "resource_scope":
+                    effects = True
                 elif op in {"process_spawn", "process_request"}:
-                    effects = opaque = True
-                    live_process_effects = True
+                    effects = namespace = True
+                    external_process_effects = True
+                    unresolved_process_instances = True
                 elif op == "array_source_open":
                     effects = namespace = True
                 elif op != "array_text_read" and "filesystem" in item.get("writes", ()):
@@ -1949,6 +2181,8 @@ def analyze(module):
                     file_havoc=effects,
                     namespace_havoc=namespace,
                     cwd_havoc=opaque or changes_cwd,
+                    process_instances="not_unrolled_or_proven_all_terminated",
+                    resource_scope_close="summarized_not_proven_per_iteration",
                 )
             )
             if returns:
@@ -1981,6 +2215,9 @@ def analyze(module):
                         if "init" in statement
                         else _UNKNOWN
                     )
+                    value = environment[statement.get("scope"), statement["name"]]
+                    if isinstance(value, (_Process, _Pipe)):
+                        use_process(value, operation(statement), "alias")
                     copy_origin(
                         {**statement, "op": "var"},
                         statement.get("init"),
@@ -1993,6 +2230,8 @@ def analyze(module):
                         environment[target.get("scope"), target["name"]] = stored(
                             value, target.get("type")
                         )
+                        if isinstance(value, (_Process, _Pipe)):
+                            use_process(value, operation(statement), "alias")
                         copy_origin(target, statement["value"], target.get("type"))
                     elif isinstance(value, _Stream):
                         stable_origins.clear()
@@ -2015,6 +2254,110 @@ def analyze(module):
                     flow = loop_summary(statement)
                     if flow != "normal":
                         return flow
+                elif op == "resource_scope":
+                    captured = expression(statement["resource"])
+                    entering = operation(statement)
+                    ordered(entering)
+                    if not isinstance(captured, (_Stream, _Pipe)):
+                        invalidate("resource_scope_identity_unproven", entering)
+                        boundaries.append(
+                            dict(
+                                symbol=symbol,
+                                field="resource_scope_exit",
+                                source=entering,
+                                reason="captured_text_stream_identity_unproven",
+                            )
+                        )
+                        return "unresolved"
+                    identity = (
+                        captured.identity if isinstance(captured, _Stream) else None
+                    )
+                    if isinstance(captured, _Stream):
+                        edges.append(
+                            dict(
+                                kind="CAPTURES_RESOURCE_IF_NORMAL",
+                                source=captured.open_operation,
+                                target=entering,
+                                conditional=True,
+                                requires=["resource_scope_enter_succeeded"],
+                            )
+                        )
+                    else:
+                        use_process(captured, entering, "scope_enter")
+                    flow = sequence(statement["body"])
+                    current = (
+                        next(
+                            (
+                                stream
+                                for stream in streams
+                                if stream.identity == identity
+                            ),
+                            None,
+                        )
+                        if identity is not None
+                        else captured
+                    )
+                    if flow != "normal" or current is None:
+                        invalidate("resource_scope_cleanup_unproven", entering)
+                        boundaries.append(
+                            dict(
+                                symbol=symbol,
+                                field="resource_scope_exit",
+                                source=entering,
+                                reason=(
+                                    "non_normal_cleanup_unmodeled"
+                                    if flow != "normal"
+                                    else "captured_stream_identity_lost"
+                                ),
+                                body_flow=flow,
+                            )
+                        )
+                        return "unresolved"
+                    closing = add(
+                        "CANONICAL_OPERATION",
+                        [entering, "resource_scope_close", context],
+                        symbol=symbol,
+                        site=statement.get("site"),
+                        operation="resource_scope_close",
+                        instance_scope="per_normal_resource_scope_exit",
+                        requires=[
+                            "resource_scope_enter_succeeded",
+                            "body_normal_completion",
+                            "stream_close_succeeded",
+                        ],
+                    )
+                    edges.append(
+                        dict(
+                            kind="RESOURCE_SCOPE_CLOSE_IF_NORMAL",
+                            source=entering,
+                            target=closing,
+                            conditional=True,
+                            requires=[
+                                "resource_scope_enter_succeeded",
+                                "body_normal_completion",
+                                "stream_close_succeeded",
+                            ],
+                        )
+                    )
+                    ordered(closing)
+                    if isinstance(current, _Stream):
+                        if current.last_operation != closing:
+                            edges.append(
+                                dict(
+                                    kind="STREAM_ORDER_IF_NORMAL",
+                                    source=current.last_operation,
+                                    target=closing,
+                                )
+                            )
+                        current.last_operation = closing
+                        if not current.closed:
+                            finish(current, closing)
+                    else:
+                        use_process(current, closing, "pipe_close")
+                        if current.process in process_states:
+                            process_states[current.process]["pipes"][
+                                current.channel
+                            ] = "closed"
                 elif op == "block":
                     shadows = {
                         (item.get("scope"), item["name"]): environment.get(
@@ -2043,9 +2386,7 @@ def analyze(module):
                                     "escaped_returned_stream", operation(statement)
                                 )
                         else:
-                            return_value = exact_scalar(
-                                returned, function.get("result")
-                            )
+                            return_value = stored(returned, function.get("result"))
                     else:
                         return_value = None
                     return_exits.append(snapshot())
@@ -2107,7 +2448,9 @@ def analyze(module):
                 file_versions=file_versions,
                 epoch=filesystem_epoch,
                 last_operation=last_file_operation,
-                live_process_effects=live_process_effects,
+                external_process_effects=external_process_effects,
+                process_states=process_states,
+                unresolved_process_instances=unresolved_process_instances,
                 fact_epoch_clean=fact_epoch_clean,
                 root_activation=root_activation,
                 directories=directories,
@@ -2142,6 +2485,7 @@ def analyze(module):
         directory_kind="normal_creation_and_resolved_directory_identity",
         branch_state="normal_exit_intersection_and_version_phi",
         loop_state="normal_exit_effect_havoc_without_unrolling",
+        process_lifetime="direct_child_wait_with_unresolved_descendant_effects",
         read_value="not_constant_folded",
     )
     validate_artifact_flow(graph)

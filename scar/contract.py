@@ -14,6 +14,7 @@ IR = "scar.execution-ir"
 PHYSICAL = "scar.physical-plan"
 ARTIFACT_FLOW = "scar.artifact-flow"
 RESOURCE_FLOW = "scar.resource-flow"
+WORKFLOW = "scar.workflow-graph"
 VERSION = 1
 
 
@@ -389,6 +390,7 @@ def validate_artifact_flow(flow):
         "BYTE_EXPRESSION",
         "COMMAND_REQUEST",
         "PROCESS_INTENT",
+        "PROCESS_TEMPLATE",
         "DIRECTORY_TEMPLATE",
     }
     records = {}
@@ -484,6 +486,18 @@ def validate_artifact_flow(flow):
                 and records.get(node["source_value"], {}).get("kind") != "BYTE_VALUE"
             ):
                 raise ValueError("command request references an absent byte value")
+        if node["kind"] == "PROCESS_TEMPLATE":
+            if (
+                records.get(node.get("producer"), {}).get("kind")
+                not in {"SOURCE_OPERATION", "CANONICAL_OPERATION"}
+                or node.get("instance_scope") != "per_successful_dynamic_launch"
+                or node.get("descendant_effects") != "unresolved"
+                or not isinstance(node.get("symbol"), str)
+                or not isinstance(node.get("routes"), dict)
+            ):
+                raise ValueError(
+                    "process template requires its logical launch contract"
+                )
     for relation in flow["edges"]:
         if relation["source"] not in records or relation["target"] not in records:
             raise ValueError("artifact edge references an absent node")
@@ -524,6 +538,26 @@ def validate_artifact_flow(flow):
             raise ValueError(
                 "directory parent requires conditional directory identities"
             )
+        if relation["kind"] in {
+            "STARTS_PROCESS",
+            "USES_PROCESS_HANDLE",
+            "COMPLETES_DIRECT_PROCESS_IF_NORMAL",
+        }:
+            source, target = (records[relation[key]] for key in ("source", "target"))
+            process = target if relation["kind"] == "STARTS_PROCESS" else source
+            operation = source if relation["kind"] == "STARTS_PROCESS" else target
+            if (
+                process["kind"] != "PROCESS_TEMPLATE"
+                or operation["kind"] not in {"SOURCE_OPERATION", "CANONICAL_OPERATION"}
+                or (
+                    relation["kind"] == "COMPLETES_DIRECT_PROCESS_IF_NORMAL"
+                    and (
+                        relation.get("conditional") is not True
+                        or relation.get("descendants_completed") is not False
+                    )
+                )
+            ):
+                raise ValueError("process relationship requires its instance template")
         if relation["kind"] == "LOCATES_DIRECTORY" and (
             records[relation["source"]]["kind"] != "FILE_LOCATOR"
             or records[relation["target"]]["kind"] != "DIRECTORY_TEMPLATE"
@@ -565,6 +599,14 @@ def validate_artifact_flow(flow):
             )
         ):
             raise ValueError("launch environment requires conditional operation state")
+        process = environment.get("process_template")
+        if process is not None and (
+            records.get(process, {}).get("kind") != "PROCESS_TEMPLATE"
+            or records[process].get("launch_environment") != environment["id"]
+        ):
+            raise ValueError(
+                "launch environment references a different process template"
+            )
     processes = {}
     for process in flow.get("source_processes", ()):
         operation = records.get(process.get("operation"), {})
@@ -703,6 +745,54 @@ def validate_artifact_flow(flow):
             binding.get("source_operation") is None or binding.get("invocation") is None
         ):
             raise ValueError("bound launch observation requires both endpoints")
+    return flow
+
+
+def validate_workflow(flow):
+    """Check cross-image entry bindings without assuming file-version equality."""
+    if (flow.get("schema"), flow.get("schema_version")) != (WORKFLOW, VERSION):
+        raise ValueError("unsupported workflow graph contract")
+    images = {image["id"] for image in flow["images"]}
+    if len(images) != len(flow["images"]) or flow["root_image"] not in images:
+        raise ValueError("workflow requires distinct declared images and its root")
+    kinds = {"IMAGE", "ENTRY_STATE", "LAUNCH", "WAIT", "FILE_COPY", "FILE_READ"}
+    nodes = {node["id"]: node for node in flow["nodes"]}
+    if len(nodes) != len(flow["nodes"]) or any(
+        node.get("kind") not in kinds or node.get("image_id") not in images
+        for node in nodes.values()
+    ):
+        raise ValueError("workflow nodes require a declared image and explicit kind")
+    relationships = {
+        "EXPANDS_TO": ({"IMAGE"}, kinds - {"IMAGE"}),
+        "LAUNCHES_IMAGE": ({"LAUNCH"}, {"IMAGE"}),
+        "BINDS_ENTRY_STATE": ({"LAUNCH"}, {"ENTRY_STATE"}),
+        "WAITS_FOR": ({"LAUNCH"}, {"WAIT"}),
+    }
+    for edge in flow["edges"]:
+        types = relationships.get(edge.get("kind"))
+        source, target = nodes.get(edge.get("source")), nodes.get(edge.get("target"))
+        if (
+            types is None
+            or source is None
+            or target is None
+            or source["kind"] not in types[0]
+            or target["kind"] not in types[1]
+        ):
+            raise ValueError("invalid workflow relationship")
+        if edge["kind"] == "BINDS_ENTRY_STATE" and (
+            edge.get("conditional") is not True
+            or edge.get("binding_time") != "process_entry"
+            or target.get("state")
+            not in {"argv", "cwd", "environment", "filesystem_namespace"}
+        ):
+            raise ValueError("entry binding requires its launch-time conditions")
+        if edge["kind"] == "WAITS_FOR" and (
+            edge.get("conditional") is not True
+            or edge.get("descendants_completed") is not False
+        ):
+            raise ValueError("a wait only closes the direct process")
+    if flow.get("file_version_equivalence_established") is not False:
+        raise ValueError("entry bindings do not prove child file-version equality")
     return flow
 
 
@@ -896,6 +986,31 @@ def read_blob(folder, receipt):
 
 def read_member(folder, receipt):
     return json.loads(read_blob(folder, receipt))
+
+
+def copy_member(source_folder, receipt, destination, group):
+    """Publish a sealed JSON member in another package without decoding its data."""
+    if (
+        not isinstance(receipt, dict)
+        or not {"path", "sha256", "size"} <= receipt.keys()
+    ):
+        raise ValueError("expected a sealed member receipt")
+    group = Path(group)
+    if group.is_absolute() or not group.parts or ".." in group.parts:
+        raise ValueError("artifact group must stay within its destination package")
+    data = read_blob(source_folder, receipt)
+    sha = digest(data)
+    destination = Path(destination).resolve()
+    relative = group / (sha + ".json")
+    path = (destination / relative).resolve()
+    if not path.is_relative_to(destination):
+        raise ValueError("artifact destination escapes its package")
+    if path.exists():
+        if path.read_bytes() != data:
+            raise ValueError("existing sealed member has different bytes")
+    else:
+        publish(path, data)
+    return dict(path=relative.as_posix(), sha256=sha, size=len(data))
 
 
 def file_receipt(folder, path):

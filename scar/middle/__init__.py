@@ -190,8 +190,15 @@ def plan(graph_path, out, *, optimize_graph=True, shape=None, trip_count=None):
             )
         )
     status = "READY" if all(p["status"] == "READY" for p in plans) else "INCOMPLETE"
+    from .workflow import link_images
+
+    workflow = member(out, "analysis", link_images(out, products, root))
     fields = dict(
-        kind="image_bundle", root_image=root, graph_sha256=revision, status=status
+        kind="image_bundle",
+        root_image=root,
+        graph_sha256=revision,
+        status=status,
+        workflow=workflow,
     )
     ir_path = out / "exec-ir.json"
     write_json(

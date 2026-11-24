@@ -6,6 +6,7 @@ from scar.contract import (
     IR,
     PHYSICAL,
     array_rank_domain,
+    copy_member,
     digest,
     document,
     file_receipt,
@@ -454,6 +455,12 @@ def _schedule_image(
     path, revision, ir, destination, policy, workers, image_context=None
 ):
     module = _load_module(path, ir)
+    inventory = dict(module.get("resource_model", {}))
+    if "artifact_flow" in inventory:
+        inventory["artifact_flow"] = copy_member(
+            path.parent, inventory["artifact_flow"], destination, "analysis"
+        )
+        module["resource_model"] = inventory
     module.pop("image_bindings", None)
     module.pop("process_launch_bindings", None)
     requirements, bindings, issues = _qualify(module, image_context)
@@ -470,6 +477,11 @@ def _schedule_image(
         fields["issues"] = issues
         physical = document(PHYSICAL, target="cpu-cxx20", **fields)
         scheduled = dict(entry=module["entry"])
+        if "artifact_flow" in inventory:
+            scheduled["module"] = dict(
+                entry=module["entry"],
+                resource_model={"artifact_flow": inventory["artifact_flow"]},
+            )
     else:
         from .cpu import schedule
 
@@ -545,6 +557,11 @@ def schedule_ir(source, destination, *, policy="auto", workers=None):
 
     images, root = ir["images"], ir["root_image"]
     validate_images(images, root)
+    audit = (
+        {"workflow": copy_member(path.parent, ir["workflow"], destination, "analysis")}
+        if "workflow" in ir
+        else {}
+    )
     inputs = []
     for image in images:
         child = read_image_product(path.parent, image, "ir", "exec-ir.json", IR)
@@ -634,6 +651,7 @@ def schedule_ir(source, destination, *, policy="auto", workers=None):
     package = document(
         "scar.scheduled-ir",
         **fields,
+        **audit,
         images=scheduled,
         physical=file_receipt(destination, physical_path),
     )
