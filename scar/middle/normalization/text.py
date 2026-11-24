@@ -8,6 +8,7 @@ from .values import (
     Value,
     literal,
     is_array,
+    is_product,
     runtime,
     protocols,
     wire,
@@ -231,11 +232,14 @@ def _scalar_field(frame, node, value, conversion, spec, steps, discard=False):
 
 
 def _container(frame, node, value, steps, *, ascii_only=False):
+    from .products import elements
+
+    items = elements(frame, node, value, steps)
     opening, closing = ("[", "]") if value.kind == "list" else ("(", ")")
-    if value.kind == "tuple" and len(value.value) == 1:
+    if value.kind != "list" and len(items) == 1:
         closing = ",)"
     parts = [literal(opening)]
-    for i, item in enumerate(value.value):
+    for i, item in enumerate(items):
         if i:
             parts.append(literal(", "))
         parts.append(
@@ -248,7 +252,7 @@ def _container(frame, node, value, steps, *, ascii_only=False):
 
 def display(frame, node, value, steps):
     """Prepare aggregates for the existing stream-print scalar contract."""
-    if value.kind in {"list", "tuple"}:
+    if value.kind in {"list", "tuple"} or is_product(value.kind):
         return _container(frame, node, value, steps)
     if is_array(value.kind):
         return array_text(frame, node, value, steps)
@@ -288,7 +292,7 @@ def render(frame, node, value, conversion, source_spec, steps, discard=False):
                 "nonempty array presentation requires a rank-specific format contract",
             )
         value = array_text(frame, node, value, steps)
-    elif source in {"list", "tuple"}:
+    elif source in {"list", "tuple"} or is_product(source):
         if conversion == "none" and not spec["empty"]:
             frame.fail(
                 node,

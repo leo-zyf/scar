@@ -14,6 +14,7 @@ from .facts import (
     assigned_names,
     provider,
     scope_nodes,
+    tuple_position,
 )
 
 _PROCESS_METHODS = {"wait", "communicate", "poll"}
@@ -358,8 +359,20 @@ class _ModuleGraph:
         self.providers = parsed.providers
         self.runtime = parsed.runtime_facts
         self.text_profile = next(iter(parsed.text_profiles), None)
+        self.tuple_sites = parsed.tuple_sites
         self.source_lines = parsed.source_text.splitlines()
         self.diagnostic_file = str(parsed.path)
+
+    def tuple_identity(self, node):
+        fact = self.tuple_sites.get(tuple_position(node), {"kind": "unresolved"})
+        if "unit" in fact:
+            context = "main" if self.main else "import"
+            return {
+                "kind": "constant_pool",
+                "pool": f"{fact['unit']}:{context}:{self.module}",
+                "slot": fact["slot"],
+            }
+        return dict(fact)
 
     def location(self, node):
         result = dict(
@@ -1189,10 +1202,12 @@ class _Scope:
                 len(x.get("values", [])) == 1 for _, x in items
             ):
                 f["values"] = [[x["values"][0] for _, x in items]]
-            return (
-                R(node, "aggregate", kind=kind.lower(), items=[op for op, _ in items]),
-                f,
+            aggregate = R(
+                node, "aggregate", kind=kind.lower(), items=[op for op, _ in items]
             )
+            if isinstance(node, ast.Tuple):
+                aggregate["identity"] = self.unit.tuple_identity(node)
+            return aggregate, f
         if isinstance(node, ast.Compare):
             return (
                 R(

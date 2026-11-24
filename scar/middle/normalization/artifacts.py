@@ -12,6 +12,7 @@ from scar.contract import (
     digest,
     document,
     json_bytes,
+    product_items,
     validate_artifact_flow,
     walk_operations,
 )
@@ -65,6 +66,9 @@ _FILE_FREE_OPERATIONS = {
     "error_make",
     "process_error_make",
     "aggregate",
+    "product_make",
+    "product_get",
+    "product_identity",
     "buffer",
     "runtime_array",
     "allocate",
@@ -106,6 +110,24 @@ class _Stream:
     locator: str | None = None
     path_key: tuple | None = None
     last_operation: str | None = None
+
+
+@dataclass(frozen=True, eq=False)
+class _Product:
+    fields: tuple
+
+    def __eq__(self, other):
+        return type(other) is _Product and identical(self.fields, other.fields)
+
+
+def _common_value(left, right):
+    if isinstance(left, _Product) and isinstance(right, _Product):
+        if len(left.fields) == len(right.fields):
+            return _Product(
+                tuple(_common_value(a, b) for a, b in zip(left.fields, right.fields))
+            )
+        return _UNKNOWN
+    return left if identical(left, right) else _UNKNOWN
 
 
 def analyze(module):
@@ -930,6 +952,28 @@ def analyze(module):
                 return exact_scalar(node["value"], node.get("type"))
             if op == "var":
                 return environment.get((node.get("scope"), node["name"]), _UNKNOWN)
+            if op == "product_make":
+                fields = tuple(expression(item) for item in node["items"])
+                # This domain tracks scalar field facts, not hidden stream aliases.
+                for value in fields:
+                    if isinstance(value, _Stream):
+                        value.unresolved.add("product_stream_alias_untracked")
+                        invalidate("product_stream_alias_untracked", operation(node))
+                return stored(_Product(fields), node["type"])
+            if op == "product_get":
+                base, index = expression(node["base"]), node["index"]
+                return (
+                    stored(base.fields[index], node.get("type"))
+                    if isinstance(base, _Product)
+                    and type(index) is int
+                    and 0 <= index < len(base.fields)
+                    else _UNKNOWN
+                )
+            if op == "product_identity":
+                expression(node["left"])
+                expression(node["right"])
+                # Equal field facts do not establish equal allocation identity.
+                return _UNKNOWN
             if op == "call" and node.get("callee") in functions:
                 callee = functions[node["callee"]]
                 args = [
@@ -1409,6 +1453,18 @@ def analyze(module):
             return _UNKNOWN
 
         def stored(value, spec):
+            if isinstance(value, _Product):
+                if not isinstance(spec, dict) or spec.get("kind") != "product_ref":
+                    return _UNKNOWN
+                types = product_items(spec)
+                if len(types) != len(value.fields):
+                    return _UNKNOWN
+                return _Product(
+                    tuple(
+                        _UNKNOWN if isinstance(field, _Stream) else stored(field, kind)
+                        for field, kind in zip(value.fields, types)
+                    )
+                )
             if isinstance(value, _Stream):
                 return (
                     value
@@ -1579,7 +1635,7 @@ def analyze(module):
                 ):
                     env[key] = merged_streams[a.identity]
                 else:
-                    env[key] = a if identical(a, b) else _UNKNOWN
+                    env[key] = _common_value(a, b)
             return dict(
                 environment=env,
                 streams=list(merged_streams.values()),

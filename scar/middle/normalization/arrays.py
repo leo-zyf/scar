@@ -6,13 +6,15 @@ import re
 
 from scar.contract import walk_operations
 
-from . import exceptions, scalars, text
+from . import exceptions, products, scalars, text
 from .scalars import as_float as _as_float
 from .values import (
     Value,
     _UNKNOWN,
     array_kind,
     is_array,
+    is_product,
+    product_members,
     rank_domain,
     binding_targets,
     literal,
@@ -352,7 +354,9 @@ def _reshape(frame, node, source, args, options, steps, discard):
             "reshape requires positional dimensions, C order and the default copy policy",
         )
     dims = (
-        args[0].value if len(args) == 1 and args[0].kind in {"list", "tuple"} else args
+        products.elements(frame, node, args[0], steps)
+        if len(args) == 1 and products.is_sequence(args[0])
+        else args
     )
     if any(value.kind != "i64" for value in dims):
         frame.fail(node, "array_shape", "reshape dimensions need index-width integers")
@@ -913,12 +917,15 @@ def capture_sequence(frame, node, steps):
         frame.fail(
             node, "sequence_contract", f"{kind} has no ordered array or shape contract"
         )
-    return _capture_values(
+    result = _capture_values(
         frame,
         node,
         kind,
         (frame.evaluate(child, steps) for child in node["items"]),
         steps,
+    )
+    return (
+        products.make(frame, node, result.value, steps) if kind == "tuple" else result
     )
 
 
@@ -949,10 +956,11 @@ def _capture_values(frame, node, kind, source, steps):
     return Value(kind, tuple(items))
 
 
-def _tree(frame, node, item):
-    if item.kind not in {"list", "tuple"}:
+def _tree(frame, node, item, steps):
+    elements = products.elements(frame, node, item, steps)
+    if elements is None:
         return (), [item]
-    branches = [_tree(frame, node, part) for part in item.value]
+    branches = [_tree(frame, node, part, steps) for part in elements]
     shape = branches[0][0] if branches else ()
     if any(dims != shape for dims, _ in branches):
         frame.fail(
@@ -964,7 +972,7 @@ def _tree(frame, node, item):
 
 
 def _literal_array(frame, node, source, steps, *, force, discard=False):
-    shape, items = _tree(frame, node, source)
+    shape, items = _tree(frame, node, source, steps)
     if not force and items and all(v.kind == "i64" for v in items):
         frame.fail(
             node,
@@ -1499,7 +1507,11 @@ def construct(frame, node, target, args, keywords, steps, discard):
             node, "array_arguments", f"unsupported {name} options: {', '.join(options)}"
         )
     if name == "zeros":
-        dims = source.value if source.kind in {"list", "tuple"} else (source,)
+        dims = (
+            products.elements(frame, node, source, steps)
+            if products.is_sequence(source)
+            else (source,)
+        )
         if any(
             v.kind != "i64" or v.exact is not _UNKNOWN and v.exact < 0 for v in dims
         ):
@@ -1539,21 +1551,30 @@ def index(frame, node, steps, rhs=None, discard=False):
     axes = []
     for port in node["indices"]:
         item = frame.evaluate(port, steps)
-        axes.extend(item.value if item.kind == "tuple" else (item,))
-    if base.kind in {"tuple", "list"}:
+        axes.extend(
+            products.elements(frame, node, item, steps)
+            if item.kind == "tuple" or is_product(item.kind)
+            else (item,)
+        )
+    if products.is_sequence(base):
         if rhs is not None:
             frame.fail(
                 node,
                 "sequence_mutation",
                 "a mutable Python sequence cannot be eliminated when any alias writes it",
             )
+        length = (
+            len(product_members(base.kind))
+            if is_product(base.kind)
+            else len(base.value)
+        )
         if (
             len(axes) == 1
             and axes[0].kind == "i64"
             and type(axes[0].exact) is int
-            and -len(base.value) <= axes[0].exact < len(base.value)
+            and -length <= axes[0].exact < length
         ):
-            return base.value[axes[0].exact]
+            return products.get(frame, node, base, axes[0].exact, steps)
         frame.fail(
             node,
             "sequence_index",
@@ -1575,7 +1596,7 @@ def index(frame, node, steps, rhs=None, discard=False):
     indices = [v.value for v in axes]
     result = shape[len(axes) :]
     if rhs is not None:
-        if rhs.kind in {"tuple", "list"}:
+        if products.is_sequence(rhs):
             rhs = _literal_array(frame, node, rhs, steps, force=True)
         source_rank = rank(rhs.kind)
         if is_array(rhs.kind) and source_rank is None:

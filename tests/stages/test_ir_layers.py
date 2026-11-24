@@ -262,6 +262,49 @@ def test_constant_file_proof_preserves_control_and_handle_boundaries():
         for edge in copied_flow["edges"]
         if edge["kind"] == "REQUIRES_FILE_VERSION"
     } == {"copy_source", "open_read", "stream_read"}
+    product_type = dict(kind="product_ref", items=["text", "i64"])
+    product = dict(op="var", name="paths", type=product_type)
+
+    def packed(path, count):
+        return dict(
+            op="product_make",
+            type=product_type,
+            items=[literal(path), dict(op="literal", type="i64", value=count)],
+            identity=dict(kind="fresh"),
+            effects=["MEM", "STATE"],
+            may_raise=True,
+        )
+
+    product_copy = deepcopy(copied)
+    product_copy["value"]["args"][0] = dict(
+        op="product_get", type="text", base=product, index=0, effects=["STATE"]
+    )
+    for alternate, expected in (("out.h", 1), ("other.h", 0)):
+        paths = analysis(
+            [
+                start,
+                write,
+                close,
+                dict(op="decl", name="paths", type=product_type),
+                dict(
+                    op="if",
+                    condition=dict(op="var", name="choice", type="bool"),
+                    then=[dict(op="assign", target=product, value=packed("out.h", 1))],
+                    **{
+                        "else": [
+                            dict(
+                                op="assign", target=product, value=packed(alternate, 2)
+                            )
+                        ]
+                    },
+                ),
+                product_copy,
+            ]
+        )["graph"]
+        assert (
+            sum(edge["kind"] == "COPIES_FILE_VERSION" for edge in paths["edges"])
+            == expected
+        )
     for boundary in (
         dict(op="call", callee="unknown", args=[]),
         dict(op="process_request", request_id="unbound"),
@@ -454,6 +497,122 @@ def test_constant_file_proof_preserves_control_and_handle_boundaries():
         dict(functions=[], protocol_analysis=dict(prefix_fragments=[prefix])),
     )
     assert not negative["constant_materializations"]
+
+
+def test_immutable_products_preserve_types_identity_and_activation_boundaries():
+    result = _layer(
+        "normalization",
+        """from scar.middle.normalization import arrays, products, values
+from scar.middle.normalization.protocols import _Project, _Frame, _Unclosed
+from scar.contract import walk_operations
+
+def var(name):
+    return dict(op='var',name=name)
+def literal(value):
+    return dict(op='literal',value=value)
+def function(name,params=(),body=()):
+    return dict(name=name,execution_kind='python_protocol',
+        python_scope=dict(kind='function',module='test'),
+        call_protocol=dict(kind='regular'),
+        params=[dict(name=p,binding='positional') for p in params],body=list(body))
+def aggregate(items,identity=None,kind='tuple'):
+    return dict(op='aggregate',kind=kind,items=items,
+        identity=identity or dict(kind='fresh'))
+
+pack=function('pack',('a','b'),[
+    dict(op='return',value=aggregate([var('a'),var('b')]))])
+mutation=function('mutate',('pair',),[
+    dict(op='assign',target=dict(op='index',base=dict(op='index',base=var('pair'),
+        indices=[literal(0)]),indices=[literal(0)]),value=literal(9.0))])
+caller=function('caller')
+project=_Project({f['name']:f for f in (pack,mutation,caller)})
+array=values.array_kind(1)
+closed=project.compile('pack',(array,'numpy_f64'))
+kind=project.result_kinds['pack']
+assert values.product_members(kind)==(array,'numpy_f64')
+assert closed['result']==dict(kind='product_ref',items=[values.wire(array),'f64'])
+assert any(op['op']=='product_make' for op in walk_operations(closed['body']))
+assert project.result_facts['pack']['product_members']==[{},{}]
+assert arrays.may_write_external(project.compile('mutate',(kind,)),project.closed)
+
+frame=_Frame(project,caller,())
+facts=project.array_state.create((2,),[1.,2.])
+frame.env['a']=values.Value(array,None,facts).at('input')
+steps=[]
+pair=arrays.capture_sequence(frame,aggregate([var('a'),var('a')]),steps)
+members=products.elements(frame,{},pair,steps)
+assert members[0].facts['array_allocation']==members[1].facts['array_allocation']
+project.array_state.invalidate(members[0])
+assert facts['array_allocation'] not in project.array_state.contents
+returned=products.returned_facts(pair)
+assert returned['product_members']==[dict(shape=(2,)),dict(shape=(2,))]
+assert 'array_allocation' not in repr(returned) and 'literal_region' not in repr(returned)
+frame.env['pair']=pair
+made=sum(op['op']=='product_make' for op in walk_operations(steps))
+forward=frame.call(dict(op='python_invoke',target=dict(op='python_builtin',name='tuple'),
+    args=[var('pair')],keywords=[]),steps,False)
+assert forward.kind==pair.kind
+assert sum(op['op']=='product_make' for op in walk_operations(steps))==made
+assert frame.truth(pair,{}).exact is True
+length=frame.call(dict(op='python_invoke',target=dict(op='python_builtin',name='len'),
+    args=[var('pair')],keywords=[]),steps,False)
+assert length.exact==2
+assert products.get(frame,{},pair,-1,steps).kind==array
+for _ in range(2):
+    called=frame.invoke_project({},'pack',[members[0],values.Value('numpy_f64',
+        dict(op='literal',type='f64',value=4.0),dict(exact=4.0))],{},steps,False)
+    assert called.facts['product_members']==[{},{}]
+
+pool=dict(kind='constant_pool',pool='test-code',slot=1)
+constant=arrays.capture_sequence(frame,aggregate([
+    dict(op='unary',operator='usub',value=literal(1)),
+    dict(op='binary',operator='add',left=literal(1),right=literal(1))],pool),steps)
+assert constant.facts['constant_expr']['op']=='product_make'
+assert all(item['op']=='literal' for item in constant.facts['constant_expr']['items'])
+assert [item['value'] for item in constant.facts['constant_expr']['items']]==[-1,2]
+shape=arrays.capture_sequence(frame,aggregate([literal(2),literal(3)]),steps)
+zeros=arrays.construct(frame,{},values.Value('array_constructor','zeros'),[shape],{},steps,False)
+assert zeros.facts['shape']==(2,3)
+index_pair=arrays.capture_sequence(frame,aggregate([literal(1),literal(7.0)]),steps)
+frame.env['target']=values.Value(array,None,dict(shape=(2,))).at('target')
+first=len(steps)
+frame.store(dict(op='unpack',items=[var('index'),dict(op='index',base=var('target'),
+    indices=[var('index')])]),index_pair,steps)
+ordered=steps[first:]
+assert next(i for i,s in enumerate(ordered) if s['op']=='assign' and s['target']['name']=='index') < next(i for i,s in enumerate(ordered) if s['op']=='array_store')
+unresolved=arrays.capture_sequence(frame,aggregate([var('a')],dict(kind='unresolved')),steps)
+mutable=arrays.capture_sequence(frame,aggregate([var('a')],kind='list'),steps)
+assert unresolved.kind=='tuple' and mutable.kind=='list'
+for item in (unresolved,mutable):
+    try:
+        frame.scalar(item,{})
+    except _Unclosed as error:
+        assert error.issue['code']=='python.value_contract'
+    else:
+        raise AssertionError('an unresolved sequence escaped as a runtime product')
+frame.env['local']=values.literal(1).at('local')
+try:
+    arrays.capture_sequence(frame,aggregate([var('local')],pool),steps)
+except _Unclosed as error:
+    assert error.issue['code']=='python.product_constant_pool'
+else:
+    raise AssertionError('a local exact value entered the source constant pool')
+assert values.product_kind(('f64',))!=values.product_kind(('numpy_f64',))
+assert values.wire(values.product_kind(('f64',)))==values.wire(values.product_kind(('numpy_f64',)))
+different=function('different',('flag','number'),[dict(op='if',condition=var('flag'),
+    then=[dict(op='return',value=aggregate([var('number')]))],
+    **{'else':[dict(op='return',value=aggregate([literal(1.0)]))]})])
+project.functions['different']=different
+try:
+    project.compile('different',('bool','numpy_f64'))
+except _Unclosed as error:
+    assert error.issue['code']=='python.result_contract'
+else:
+    raise AssertionError('wire-equal but logically different product returns merged')
+print(json.dumps(dict(result=closed['result'])))
+""",
+    )
+    assert result["result"]["kind"] == "product_ref"
 
 
 def test_resource_flow_projects_copies_without_unrolling_or_placement_claims():
@@ -661,6 +820,120 @@ print(json.dumps(flows))
         "closed",
         "prefix",
     }
+
+
+def test_resource_flow_preserves_local_product_fields_without_call_aliases():
+    array = dict(kind="ndarray", element="f64", rank=1)
+    product = dict(kind="product_ref", items=[array])
+
+    def variable(name, kind=product):
+        return dict(op="var", name=name, type=kind)
+
+    def create():
+        return dict(
+            op="array_create",
+            type=array,
+            shape=[dict(op="literal", type="i64", value=2)],
+        )
+
+    def make(value):
+        return dict(
+            op="product_make",
+            type=dict(kind="product_ref", items=[value["type"]]),
+            items=[value],
+            identity=dict(kind="fresh"),
+            effects=["MEM", "STATE"],
+        )
+
+    def get(value):
+        return dict(
+            op="product_get",
+            type=value["type"]["items"][0],
+            base=value,
+            index=0,
+            effects=["STATE"],
+        )
+
+    def copy(value, site):
+        return dict(
+            op="expr", value=dict(op="array_copy", type=array, value=value, site=site)
+        )
+
+    alias, unknown = variable("alias"), variable("unknown")
+    body = [
+        copy(get(unknown), "parameter"),
+        dict(op="decl", name="a", type=array, init=create()),
+        copy(variable("a", array), "direct"),
+        dict(op="decl", name="p", type=product, init=make(variable("a", array))),
+        dict(op="decl", name="alias", type=product, init=variable("p")),
+        dict(
+            op="decl",
+            name="nested",
+            type=dict(kind="product_ref", items=[product]),
+            init=make(alias),
+        ),
+        copy(
+            get(get(variable("nested", dict(kind="product_ref", items=[product])))),
+            "nested",
+        ),
+        copy(get(alias), "field"),
+        dict(
+            op="if",
+            condition=variable("flag", "bool"),
+            then=[dict(op="assign", target=alias, value=make(create()))],
+            **{"else": []},
+        ),
+        copy(get(alias), "branch"),
+        dict(op="assign", target=alias, value=unknown),
+        copy(get(alias), "rebound"),
+        dict(op="assign", target=alias, value=variable("p")),
+        dict(
+            op="while",
+            condition=variable("flag", "bool"),
+            body=[
+                copy(get(alias), "loop"),
+                dict(op="assign", target=alias, value=unknown),
+            ],
+        ),
+        copy(get(alias), "after-loop"),
+        dict(
+            op="decl",
+            name="returned",
+            type=product,
+            init=dict(op="call", callee="unknown", args=[], type=product),
+        ),
+        copy(get(variable("returned")), "call"),
+    ]
+    flow = _layer(
+        "execution",
+        """from scar.middle.resource_flow import analyze
+from scar.contract import validate_resource_flow
+flow=analyze(data)
+validate_resource_flow(flow)
+print(json.dumps(flow))
+""",
+        dict(
+            functions=[
+                dict(
+                    name="main", params=[dict(name="unknown", type=product)], body=body
+                )
+            ]
+        ),
+    )
+    nodes = {node["id"]: node for node in flow["nodes"]}
+    copies = {node["site"]: node for node in nodes.values() if node["kind"] == "COPY"}
+    origin = dict(owner="main", path=["body", 1, "init"])
+    for site in ("direct", "nested", "field", "branch"):
+        assert copies[site]["byte_count"] == dict(kind="constant", value=16)
+        source = nodes[copies[site]["source"]]
+        assert source["region"]["storage"]["origin"] == (
+            None if site == "branch" else origin
+        )
+        assert "_members" not in source["region"]
+    for site in ("parameter", "rebound", "loop", "after-loop", "call"):
+        assert copies[site]["byte_count"]["kind"] == "operand_nbytes"
+        assert nodes[copies[site]["source"]]["region"]["storage"]["origin"] is None
+    assert len(copies) == 9 and copies["loop"]["scope"][0]["kind"] == "while"
 
 
 def test_file_versions_preserve_stable_aliases_and_closed_writer_returns():

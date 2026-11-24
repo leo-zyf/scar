@@ -12,6 +12,35 @@ def _capture(frame, item, steps):
 
 def apply_binary(frame, node, operator, lhs, rhs, steps, discard=False):
     """Bind one operation after both operands have been evaluated in source order."""
+    if any(values.is_product(item.kind) for item in (lhs, rhs)):
+        if operator in {"is", "isnot"}:
+            if all(values.is_product(item.kind) for item in (lhs, rhs)):
+                return frame.effect(
+                    dict(
+                        op="product_identity",
+                        type="bool",
+                        left=frame.scalar(lhs, node),
+                        right=frame.scalar(rhs, node),
+                        operator="eq" if operator == "is" else "ne",
+                        effects=["STATE"],
+                    ),
+                    "bool",
+                    steps,
+                    discard,
+                )
+            if any(item.kind == "tuple" for item in (lhs, rhs)):
+                frame.fail(
+                    node,
+                    "product_identity_source",
+                    "tuple construction identity is unresolved",
+                )
+            # The closed product protocol denotes an exact immutable tuple.
+            return literal(operator == "isnot")
+        frame.fail(
+            node,
+            "product_comparison",
+            "tuple value operators require elementwise source comparison contracts",
+        )
     if operator in {"is", "isnot"} and any(
         item.kind in {"numpy_bool", "numpy_f64", "binary64_choice", "boolean_choice"}
         or values.is_array(item.kind)

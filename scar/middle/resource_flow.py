@@ -84,9 +84,16 @@ def _region(node, shape=None, *, contiguous=False):
 
 def _common(left, right):
     """Join fields independently; different origins do not erase common shapes."""
-    return {
+    result = {
         key: value if right.get(key) == value else None for key, value in left.items()
     }
+    a, b = left.get("_members"), right.get("_members")
+    if isinstance(a, list) and isinstance(b, list) and len(a) == len(b):
+        result["_members"] = [
+            _common(x, y) if isinstance(x, dict) and isinstance(y, dict) else None
+            for x, y in zip(a, b)
+        ]
+    return result
 
 
 def analyze(module, *, partial=False):
@@ -168,7 +175,11 @@ def analyze(module, *, partial=False):
                 ),
                 domain=domain,
                 region={
-                    **{key: value for key, value in region.items() if key != "_origin"},
+                    **{
+                        key: value
+                        for key, value in region.items()
+                        if not key.startswith("_")
+                    },
                     **(
                         {"requested_destination": reference}
                         if role == "target" and domain == "filesystem"
@@ -311,6 +322,31 @@ def analyze(module, *, partial=False):
             op = value.get("op")
             if op == "var":
                 return deepcopy(environment.get(_slot(value), _region(value)))
+            if op == "product_make":
+                members = [
+                    visit(item, [*path, "items", index], scope) or _region(item)
+                    for index, item in enumerate(value["items"])
+                ]
+                if any(
+                    child["op"] in _CALLS
+                    or child["op"] == "store_bytes"
+                    or child["op"].startswith("object_")
+                    for child in walk_operations(value["items"])
+                ):
+                    members = [_region(item) for item in value["items"]]
+                return {**_region(value), "_members": members}
+            if op == "product_get":
+                base = visit(value["base"], [*path, "base"], scope)
+                members = base.get("_members") if isinstance(base, dict) else None
+                index = value.get("index")
+                if (
+                    isinstance(members, list)
+                    and type(index) is int
+                    and 0 <= index < len(members)
+                    and isinstance(members[index], dict)
+                ):
+                    return deepcopy(members[index])
+                return _region(value)
             if op in _BRANCHES:
                 visit(value["condition"], [*path, "condition"], scope)
                 before, states, regions = dict(environment), [], []
@@ -411,7 +447,9 @@ def analyze(module, *, partial=False):
                 if value.get("storage") in {"static", "thread_local", "extern"}:
                     region = None
                 region = region or _region(value)
-                if region["dtype"] is not None:
+                if region["dtype"] is not None or isinstance(
+                    region.get("_members"), list
+                ):
                     environment[_slot(value)] = region
                 else:
                     environment.pop(_slot(value), None)
@@ -424,7 +462,9 @@ def analyze(module, *, partial=False):
                     environment.clear()
                 else:
                     region = region or _region(value["target"])
-                    if region["dtype"] is not None:
+                    if region["dtype"] is not None or isinstance(
+                        region.get("_members"), list
+                    ):
                         environment[slot] = region
                     else:
                         environment.pop(slot, None)

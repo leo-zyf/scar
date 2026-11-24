@@ -93,6 +93,60 @@ def array_rank_domain(spec):
     raise ValueError("invalid array rank domain")
 
 
+def product_items(spec):
+    """Validate an immutable managed product; members are values, not raw ABI refs."""
+    scalars = {
+        "unit",
+        "text",
+        "bool",
+        "char",
+        "i8",
+        "u8",
+        "i16",
+        "u16",
+        "i32",
+        "u32",
+        "i64",
+        "u64",
+        "f32",
+        "f64",
+        "f80",
+        "c64",
+        "c128",
+    }
+
+    def member(value):
+        if isinstance(value, str):
+            return value in scalars
+        if not isinstance(value, dict):
+            return False
+        kind = value.get("kind")
+        if kind == "product_ref":
+            product_items(value)
+            return True
+        if kind == "ndarray":
+            array_rank_domain(value)
+            return value["element"] in scalars - {"unit", "text"}
+        if kind in {"handle", "object_ref"}:
+            field = "resource" if kind == "handle" else "record"
+            return (
+                set(value) == {"kind", field}
+                and isinstance(value[field], str)
+                and bool(value[field])
+            )
+        return False
+
+    if (
+        not isinstance(spec, dict)
+        or set(spec) != {"kind", "items"}
+        or spec["kind"] != "product_ref"
+        or not isinstance(spec["items"], list)
+        or any(not member(item) for item in spec["items"])
+    ):
+        raise ValueError("product requires fixed ordered managed value types")
+    return tuple(spec["items"])
+
+
 def validate_resource_flow(flow, resources=None):
     """Validate symbolic copies and materializations, never physical IO claims."""
     if (flow.get("schema"), flow.get("schema_version")) != (RESOURCE_FLOW, VERSION):

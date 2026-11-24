@@ -4,6 +4,7 @@ import ast
 import builtins
 from collections import deque
 from dataclasses import dataclass, field, replace
+import dis
 from functools import cache
 from hashlib import sha256
 from io import BytesIO, TextIOWrapper
@@ -12,6 +13,7 @@ from pathlib import Path
 import symtable
 import sys
 import tokenize
+from types import CodeType
 import unicodedata
 
 from scar.contract import digest, json_bytes
@@ -66,12 +68,88 @@ class ParsedUnit:
     runtime_facts: dict = field(default_factory=dict)
     source_text: str = ""
     text_profiles: dict = field(default_factory=dict)
+    tuple_sites: dict = field(default_factory=dict)
 
     @property
     def source_digests(self):
         return {self.path.relative_to(self.root).as_posix(): self.source_hash}
 
     compiler_id = f"{sys.implementation.name} {sys.version.split()[0]}"
+
+
+def tuple_position(node):
+    return node.lineno, node.end_lineno, node.col_offset, node.end_col_offset
+
+
+def _tuple_sites(tree, text, path, relative, source_hash):
+    """Match actual tuple constructors to exact UTF-8 source spans."""
+    if sys.implementation.name != "cpython" or not hasattr(CodeType, "co_positions"):
+        return {}
+    nodes, syntax = {}, deque([tree])
+    while syntax:
+        node = syntax.popleft()
+        syntax.extend(ast.iter_child_nodes(node))
+        if (
+            isinstance(node, ast.Tuple)
+            and isinstance(node.ctx, ast.Load)
+            and not any(isinstance(e, ast.Starred) for e in node.elts)
+        ):
+            nodes[tuple_position(node)] = node
+    if not nodes:
+        return {}
+    optimize = sys.flags.optimize
+    program = compile(text, str(path), "exec", dont_inherit=True, optimize=optimize)
+    unit = digest(json_bytes([relative, source_hash, ParsedUnit.compiler_id, optimize]))
+    fresh, conflict = object(), object()
+    origins = {}
+
+    def observe(node, origin):
+        if origins.setdefault(node, origin) is not origin:
+            origins[node] = conflict
+
+    pending = [program]
+    while pending:
+        code = pending.pop()
+        pending.extend(c for c in reversed(code.co_consts) if isinstance(c, CodeType))
+        for instruction in dis.get_instructions(code):
+            node = nodes.get(instruction.positions)
+            if node is None:
+                continue
+            size = len(node.elts)
+            opcode = getattr(instruction, "baseopname", instruction.opname)
+            if opcode == "BUILD_TUPLE" and instruction.arg == size:
+                observe(node, fresh if size else ())
+            elif opcode in {"LOAD_CONST", "RETURN_CONST"}:
+                value = code.co_consts[instruction.arg]
+                if type(value) is tuple and len(value) == size:
+                    observe(node, value)
+
+    sites, slots = {}, {}
+    # Parents precede children. A folded constant supplies its direct tuple
+    # members, never intermediate operands of an expression folded into one member.
+    for span, node in nodes.items():
+        value = origins.get(node)
+        if value is fresh:
+            sites[span] = {"kind": "fresh"}
+        elif type(value) is tuple:
+            if not value:
+                sites[span] = {
+                    "kind": "constant_pool",
+                    "pool": "cpython:empty_tuple",
+                    "slot": 0,
+                }
+                continue
+            slot = slots.setdefault(id(value), len(slots))
+            sites[span] = {"kind": "constant_pool", "unit": unit, "slot": slot}
+            for child, member in zip(node.elts, value):
+                if (
+                    isinstance(child, ast.Tuple)
+                    and nodes.get(tuple_position(child)) is child
+                    and type(member) is tuple
+                    and len(member) == len(child.elts)
+                ):
+                    observe(child, member)
+    return sites
 
 
 @cache
@@ -126,6 +204,7 @@ def parse_unit(
             text = source.read()
         tree = ast.parse(text, filename=str(path))
         scopes = LexicalScope.capture(symtable.symtable(text, str(path), "exec"))
+        tuple_sites = _tuple_sites(tree, text, path, relative, source_hash)
     except (SyntaxError, UnicodeError) as error:
         location = dict(
             file=path.relative_to(root).as_posix(),
@@ -169,6 +248,7 @@ def parse_unit(
         runtime_facts=imports.runtime,
         source_text=text,
         text_profiles=_text_profiles(),
+        tuple_sites=tuple_sites,
     )
 
 

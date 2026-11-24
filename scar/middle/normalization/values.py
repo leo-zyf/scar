@@ -1,11 +1,12 @@
 """M2 value identities, physical type keys and conservative scalar facts."""
 
 from dataclasses import dataclass, field
+import json
 import math
 import posixpath
 import struct
 
-from scar.contract import array_rank_domain
+from scar.contract import array_rank_domain, product_items
 
 _NUMPY_SCALAR_TYPES = {"numpy_bool": "bool", "numpy_f64": "f64"}
 # These are compile-time sets of possible protocols, never runtime tags. A
@@ -20,6 +21,7 @@ _MIN, _MAX = -(1 << 63), (1 << 63) - 1
 _ARRAY_PREFIX = "ndarray:f64:"
 _HANDLE_PREFIX = "handle:"
 _OBJECT_PREFIX = "object_ref:"
+_PRODUCT_PREFIX = "product_ref:"
 
 
 def is_array(kind):
@@ -62,6 +64,40 @@ def storage_compatible(left, right):
     return wire(left) == wire(right) or is_array(left) and is_array(right)
 
 
+def is_product(kind):
+    return kind.startswith(_PRODUCT_PREFIX)
+
+
+def product_kind(members):
+    # Nested products are nested descriptors, not recursively escaped strings.
+    members = tuple(members)
+    if any(not isinstance(kind, str) for kind in members):
+        raise ValueError("product members require logical protocol names")
+    description = [
+        json.loads(kind[len(_PRODUCT_PREFIX) :]) if is_product(kind) else kind
+        for kind in members
+    ]
+    result = _PRODUCT_PREFIX + json.dumps(description, separators=(",", ":"))
+    product_items(wire(result))
+    return result
+
+
+def product_members(kind):
+    if not is_product(kind):
+        raise ValueError("not an immutable product protocol")
+    description = json.loads(kind[len(_PRODUCT_PREFIX) :])
+    if not isinstance(description, list):
+        raise ValueError("product protocol requires an ordered member descriptor")
+    return tuple(
+        (
+            _PRODUCT_PREFIX + json.dumps(member, separators=(",", ":"))
+            if isinstance(member, list)
+            else member
+        )
+        for member in description
+    )
+
+
 def object_kind(name):
     return _OBJECT_PREFIX + name
 
@@ -85,6 +121,8 @@ def choice(kinds):
 
 
 def wire(kind):
+    if is_product(kind):
+        return dict(kind="product_ref", items=[wire(k) for k in product_members(kind)])
     if kind.startswith("handle:process:"):
         return dict(kind="handle", resource="process")
     if kind in _SCALAR_CHOICES:
@@ -113,6 +151,8 @@ def wire(kind):
 def from_wire(spec):
     if not isinstance(spec, dict):
         return spec
+    if spec.get("kind") == "product_ref":
+        return product_kind([from_wire(member) for member in product_items(spec)])
     if spec.get("kind") == "ndarray":
         if spec.get("element") != "f64":
             raise ValueError("unregistered array element protocol")
@@ -129,6 +169,7 @@ def runtime(kind):
         kind in SCALARS
         or kind.startswith("handle:process:")
         or is_array(kind)
+        or is_product(kind)
         or object_name(kind) is not None
         or kind
         in {

@@ -834,6 +834,59 @@ with open("empty.txt", encoding="UTF-8") as stream:
     )
 
 
+def test_products_cross_calls_without_losing_identity_or_array_aliases(tmp_path):
+    from scar.contract import read_member, walk_operations
+
+    entry = tmp_path / "products.py"
+    entry.write_text("""import numpy as np
+def packed(x):
+    return x, x.copy(), ("value", True, 2)
+def echo(value):
+    return value
+def pooled():
+    return (1 + 1, -3, ("q",))
+def fresh(value):
+    return (np.array([value]),)
+a = np.array([1.0, 2.0])
+p = packed(a)
+x, y, meta = p
+x[0] = 7.0
+print(a[0], y[0], meta)
+q = echo(p)
+print(p is q, p is packed(a), tuple(p) is p, len(p))
+print(pooled() is pooled(), pooled(), meta[-1])
+e = ()
+f = ()
+print(e is f, len(e))
+first, = fresh(3.0)
+second, = fresh(4.0)
+print(first[0], second[0])
+index = 0
+target = np.array([0.0, 0.0])
+index, target[index] = (1, 8.0)
+print(index, target)
+""")
+    expected = _run([sys.executable, "-B", entry], tmp_path)
+    graph, plan, delivery = (tmp_path / name for name in ("graph", "plan", "delivery"))
+    _stage(tmp_path, "frontend", "build", "--entry", entry, "--out", graph)
+    entry.unlink()
+    _stage(tmp_path, "middle", "plan", "--graph", graph, "--out", plan)
+    execution = json.loads((plan / "exec-ir.json").read_bytes())
+    functions = [read_member(plan, ref) for ref in execution["functions"]]
+    assert {"product_make", "product_get", "product_identity"} <= {
+        node["op"] for node in walk_operations(functions)
+    }
+    assert any(
+        fn["result"].get("kind") == "product_ref"
+        for fn in functions
+        if isinstance(fn["result"], dict)
+    )
+    shutil.rmtree(graph)
+    result = _stage(tmp_path, "backend", "compile", "--ir", plan, "--out", delivery)
+    shutil.rmtree(plan)
+    assert _run([result["executable"]], tmp_path) == expected
+
+
 def test_numeric_domains_broadcast_and_array_display(tmp_path):
     entry = tmp_path / "entry.py"
     entry.write_text("""import numpy as np

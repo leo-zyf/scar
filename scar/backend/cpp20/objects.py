@@ -1,4 +1,6 @@
-"""Map object lifetime, native class layout and dispatch to C++ target declarations."""
+"""Lower identity-bearing aggregate values and native class lifetimes to C++."""
+
+from scar.contract import digest, json_bytes, product_items
 
 from .model import (
     Decl,
@@ -9,12 +11,183 @@ from .model import (
     call,
     cast,
     construct,
+    declaration,
+    integer,
     member,
+    name,
     named,
     template,
     unary,
     utf8_literal,
+    variable,
 )
+
+
+class ProductModel:
+    """Immutable, heterogeneous aggregates with allocation identity."""
+
+    def __init__(self):
+        self.constants = {}
+
+    @staticmethod
+    def contains(spec):
+        if isinstance(spec, dict):
+            return spec.get("kind") == "product_ref" or any(
+                ProductModel.contains(v) for v in spec.values()
+            )
+        return isinstance(spec, list) and any(ProductModel.contains(v) for v in spec)
+
+    @classmethod
+    def in_signature(cls, fn):
+        return cls.contains(fn.get("result")) or any(
+            cls.contains(p.get("type")) for p in fn.get("params", ())
+        )
+
+    @staticmethod
+    def _tuple(spec, lower):
+        lower.headers.update(("memory", "tuple"))
+        return Type(
+            "template",
+            name="std::tuple",
+            args=tuple(lower.type_name(t) for t in product_items(spec)),
+        )
+
+    def reference(self, spec, lower):
+        value = self._tuple(spec, lower)
+        return Type(
+            "template", name="std::shared_ptr", args=(Type("const", element=value),)
+        )
+
+    def make(self, node, lower):
+        spec = node["type"]
+        fields = product_items(spec)
+        values = node.get("items")
+        if (
+            not isinstance(values, list)
+            or len(values) != len(fields)
+            or any(
+                not isinstance(v, dict) or v.get("type") != t
+                for v, t in zip(values, fields)
+            )
+            or set(node.get("effects", ())) != {"MEM", "STATE"}
+            or node.get("may_raise") is not True
+        ):
+            raise ValueError("invalid product construction type, arity or effects")
+        identity = node.get("identity")
+        key = None
+        if identity != {"kind": "fresh"}:
+            if (
+                not isinstance(identity, dict)
+                or set(identity) != {"kind", "pool", "slot"}
+                or identity["kind"] != "constant_pool"
+                or not isinstance(identity["pool"], str)
+                or not identity["pool"]
+                or type(identity["slot"]) is not int
+                or identity["slot"] < 0
+            ):
+                raise ValueError(
+                    "product requires an explicit allocation or constant pool identity"
+                )
+            key = (identity["pool"], identity["slot"])
+            if not all(
+                v.get("op") == "literal"
+                or (
+                    v.get("op") == "product_make"
+                    and isinstance(v.get("identity"), dict)
+                    and v["identity"].get("kind") == "constant_pool"
+                )
+                for v in values
+            ):
+                raise ValueError(
+                    "product constant pool requires literal or pooled constant members"
+                )
+
+        storage = self._tuple(spec, lower)
+        # Braces sequence explicit value captures before the allocation call.
+        members = (cast(t, lower.expression(v)) for t, v in zip(storage.args, values))
+        payload = construct(storage, *members, form="brace")
+        init = call(
+            template("std::make_shared", Type("const", element=storage)), payload
+        )
+        if key is None:
+            return init
+        symbol = "slot_" + digest(json_bytes(key))
+        if key in self.constants:
+            wire_type, registered, _ = self.constants[key]
+            if wire_type != spec or registered != init:
+                raise ValueError(
+                    "conflicting type or contents for product constant pool slot"
+                )
+        else:
+            # An inline function's local static is one object across translation units.
+            handle = self.reference(spec, lower)
+            local = variable(
+                "value", Type("const", element=handle), init, storage=("static",)
+            )
+            accessor = Decl(
+                "function",
+                name=symbol,
+                type=handle,
+                storage=("inline",),
+                body=(declaration(local), Stmt("return", value=name("value"))),
+            )
+            self.constants[key] = (spec, init, accessor)
+        return call("::scar::generated_products::" + symbol)
+
+    def expression(self, node, lower):
+        op = node["op"]
+        if op == "product_make":
+            return self.make(node, lower)
+        if set(node.get("effects", ())) != {"STATE"}:
+            raise ValueError("invalid product read effects")
+        if op == "product_get":
+            base = node["base"]
+            members = product_items(base.get("type"))
+            index = node.get("index")
+            if (
+                type(index) is not int
+                or not 0 <= index < len(members)
+                or members[index] != node.get("type")
+            ):
+                raise ValueError(
+                    "product projection requires an in-range index and matching result type"
+                )
+            self.reference(base["type"], lower)
+            return call(
+                template("std::get", integer(index)), unary("*", lower.expression(base))
+            )
+        if (
+            op != "product_identity"
+            or node.get("type") != "bool"
+            or node.get("operator") not in {"eq", "ne"}
+        ):
+            raise ValueError("invalid product identity comparison")
+        operands = (node["left"], node["right"])
+        types = tuple(self.reference(v.get("type"), lower) for v in operands)
+        # Keep both owners alive until address comparison, even if RHS rebinds the LHS.
+        held = construct(
+            Type("template", name="std::tuple", args=types),
+            *(cast(t, lower.expression(v)) for t, v in zip(types, operands)),
+            form="brace",
+        )
+        address = Type("ptr", element=Type("const", element=named("void")))
+        borrowed = Type("ref", element=Type("const", element=Type("auto")))
+        params = tuple(Decl("param", name=n, type=borrowed) for n in ("left", "right"))
+        addresses = (cast(address, call(member(name(p.name), "get"))) for p in params)
+        result = binary("==" if node["operator"] == "eq" else "!=", *addresses)
+        compare = Expr("lambda", params=params, body=(Stmt("return", value=result),))
+        return call("std::apply", compare, held)
+
+    def declarations(self):
+        if not self.constants:
+            return ()
+        return (
+            Decl(
+                "namespace",
+                name="scar::generated_products",
+                members=tuple(decl for _, _, decl in self.constants.values()),
+            ),
+        )
 
 
 class ObjectModel:

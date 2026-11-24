@@ -30,7 +30,7 @@ from .model import (
     utf8_literal,
     variable,
 )
-from .objects import ObjectModel
+from .objects import ObjectModel, ProductModel
 
 _SCALARS = {
     "void": "void",
@@ -201,12 +201,15 @@ def ndarray_rank(spec):
 
 
 class Lowerer:
+    unit_weight_limit = 4000
+
     def __init__(self, module, physical):
         self.module = module
         self.regions = physical.get("regions", {})
         self.operator_backends = physical.get("operator_backends", {})
         self.libraries = Libraries()
         self.objects = ObjectModel(symbol_name, module.get("records", ()))
+        self.products = ProductModel()
         self.receiver = None
         self.headers = self.libraries.headers
         self.used_sdk_headers = set()
@@ -233,6 +236,8 @@ class Lowerer:
             if symbol in self.globals:
                 raise ValueError(f"duplicate global {symbol!r}")
             if declaration_.get("external"):
+                if self.products.contains(declaration_.get("type")):
+                    raise ValueError("external global requires an explicit product ABI")
                 target = self.libraries.global_value(declaration_)
             elif _IDENTIFIER.fullmatch(symbol) and symbol not in _KEYWORDS:
                 target = symbol
@@ -274,6 +279,10 @@ class Lowerer:
             return self.functions[symbol]
         if symbol not in self.externs:
             raise ValueError(f"missing external declaration for {symbol!r}")
+        if self.products.in_signature(self.externs[symbol]):
+            raise ValueError(
+                f"external function {symbol!r} requires an explicit product ABI"
+            )
         return self.libraries.function(self.externs[symbol], self.type_name)
 
     def type_name(self, spec):
@@ -288,6 +297,8 @@ class Lowerer:
                 raise ValueError(f"unsupported scalar {spec!r}")
             return named(_SCALARS[spec])
         kind = spec["kind"]
+        if kind == "product_ref":
+            return self.products.reference(spec, self)
         if spec == TEXT_STREAM_TYPE:
             self.use_sdk("host.hpp")
             return named("scar::host::text_stream")
@@ -1147,6 +1158,8 @@ class Lowerer:
             return self.libraries.cpp_expression(expr, E, self.type_name)
         if op.startswith("object_") or op == "base_cast":
             return self.objects.expression(expr, self)
+        if op.startswith("product_"):
+            return self.products.expression(expr, self)
         if op == "literal":
             return self.literal(expr["type"], expr["value"])
         if op == "text_print":
@@ -1246,6 +1259,13 @@ class Lowerer:
                 return name("this")
             return name(symbol_name(symbol, "v"))
         if op == "binary":
+            if any(
+                self.products.contains(expr[key].get("type"))
+                for key in ("left", "right")
+            ):
+                raise ValueError(
+                    "product operands require an explicit product comparison"
+                )
             return binary(_BINARY[expr["operator"]], E(expr["left"]), E(expr["right"]))
         if op == "unary":
             operator = expr["operator"]
@@ -1259,6 +1279,16 @@ class Lowerer:
                 _UPDATE[expr["operator"]], E(expr["target"]), E(expr["value"])
             )
         if op == "indirect_call":
+            if self.products.contains(expr.get("type")) or any(
+                self.products.contains(arg.get("type")) for arg in expr["args"]
+            ):
+                targets = expr.get("targets", ())
+                if not targets or any(
+                    symbol not in self.functions for symbol in targets
+                ):
+                    raise ValueError(
+                        "indirect product call requires resolved internal C++ targets"
+                    )
             return call(E(expr["target"]), *map(E, expr["args"]))
         if op == "allocate":
             init = expr.get("init")
@@ -1292,6 +1322,11 @@ class Lowerer:
             return Expr("subscript", args=(E(expr["base"]), *map(E, expr["indices"])))
         if op == "cast":
             mode = expr.get("mode", "static")
+            if (
+                self.products.contains(expr["type"])
+                and expr["value"].get("type") != expr["type"]
+            ):
+                raise ValueError("cast cannot establish product allocation identity")
             ty = self.type_name(expr["type"])
             v = E(expr["value"])
             if mode == "explicit_pointer":
@@ -1308,6 +1343,10 @@ class Lowerer:
             symbol = expr["callee"]
             target = self.callee(symbol)
             if symbol not in self.functions:
+                if any(self.products.contains(arg.get("type")) for arg in expr["args"]):
+                    raise ValueError(
+                        f"external call {symbol!r} requires an explicit product ABI"
+                    )
                 target = (
                     self.libraries.format_operator(self.externs[symbol], expr["args"])
                     or target
@@ -1694,6 +1733,9 @@ class Lowerer:
         return Stmt("if", condition=condition, body=body, else_body=(fallback,))
 
     def signature(self, function):
+        product = self.products.in_signature(function)
+        if product and function.get("linkage") == "C":
+            raise ValueError("C linkage requires an explicit product ABI")
         params = tuple(
             Decl(
                 "param",
@@ -1711,7 +1753,8 @@ class Lowerer:
             params=params,
             linkage=(
                 None
-                if function["name"] == "main"
+                if product
+                or function["name"] == "main"
                 or function["result"] == "text"
                 or (
                     isinstance(function["result"], dict)
@@ -1729,6 +1772,8 @@ class Lowerer:
         if not symbol:
             raise ValueError(f"missing entry {entry!r}")
         fn = next(f for f in self.module["functions"] if f["name"] == entry)
+        if self.products.in_signature(fn):
+            raise ValueError("executable entry requires an explicit product ABI")
         if entry == "main":
             if abi:
                 raise ValueError("main may not also declare an entry adapter")
@@ -1954,6 +1999,7 @@ class Lowerer:
             if storage not in (None, "auto", "static", "thread_local"):
                 raise ValueError(f"unsupported global duration {storage}")
             duration = ("thread_local",) if storage == "thread_local" else ()
+            linkage = None if self.products.contains(decl["type"]) else "C"
             globals_.append(
                 replace(
                     variable(
@@ -1962,7 +2008,7 @@ class Lowerer:
                         alignment=alignment(decl),
                         storage=("extern", *duration),
                     ),
-                    linkage="C",
+                    linkage=linkage,
                 )
             )
             parts.append(
@@ -1970,7 +2016,7 @@ class Lowerer:
                     self.variable_decl(
                         {**decl, "storage": duration[0] if duration else None}, symbol
                     ),
-                    linkage="C",
+                    linkage=linkage,
                 )
             )
         parts.extend(self.entry_wrapper())
@@ -2015,7 +2061,7 @@ class Lowerer:
                 definition = replace(
                     decl, body=self.control.finish_function(fn["name"], body)
                 )
-            if parts and group_weight + self.weight > 4000:
+            if parts and group_weight + self.weight > self.unit_weight_limit:
                 flush()
                 group_weight = 0
             parts.append(definition)
@@ -2069,6 +2115,7 @@ class Lowerer:
                 *tables,
                 *forwards,
                 *providers,
+                *self.products.declarations(),
                 *prototypes,
                 *globals_,
                 *records,

@@ -33,6 +33,9 @@ class Boundary:
             raise RuntimeError("layer import violation " + name)
 sys.meta_path.insert(0, Boundary())
 implementation = importlib.import_module(module)
+if layer == "B2a" and settings:
+    from scar.backend.cpp20.lowering import Lowerer
+    Lowerer.unit_weight_limit = int(settings[0])
 if layer == "B2b":
     # A target package carries the exact SDK revision. Printing must also work
     # without consulting the SDK of the currently installed compiler.
@@ -743,3 +746,173 @@ def test_copy_costs_share_one_calibration_and_preserve_runtime_binding(tmp_path)
     assert measure(source, "serial")[0] == 0
     files_only = execution("files", [dict(op="expr", value=filesystem)])
     assert measure(files_only, "auto")[0] == 0
+
+
+def test_product_identity_pool_and_shared_arrays_across_target_units(tmp_path):
+    def lit(value, ty):
+        return dict(op="literal", type=ty, value=value)
+
+    def var(name, ty):
+        return dict(op="var", name=name, type=ty)
+
+    def make(*values, slot=None):
+        identity = (
+            dict(kind="fresh")
+            if slot is None
+            else dict(kind="constant_pool", pool="module-code", slot=slot)
+        )
+        return dict(
+            op="product_make",
+            type=dict(kind="product_ref", items=[v["type"] for v in values]),
+            items=list(values),
+            identity=identity,
+            effects=["MEM", "STATE"],
+            may_raise=True,
+        )
+
+    def field(value, i):
+        return dict(
+            op="product_get",
+            type=value["type"]["items"][i],
+            base=value,
+            index=i,
+            effects=["STATE"],
+        )
+
+    def identical(left, right, operator="eq"):
+        return dict(
+            op="product_identity",
+            type="bool",
+            left=left,
+            right=right,
+            operator=operator,
+            effects=["STATE"],
+        )
+
+    def invoke(name, result, *args):
+        return dict(op="call", callee=name, type=result, args=list(args))
+
+    def decl(name, init):
+        return dict(op="decl", name=name, type=init["type"], init=init)
+
+    def returned(name, value, params=()):
+        return dict(
+            name=name,
+            result=value["type"],
+            params=[dict(name=n, type=t) for n, t in params],
+            body=[dict(op="return", value=value)],
+        )
+
+    arr = dict(kind="ndarray", element="f64", rank=1)
+    x = var("x", arr)
+    pooled = make(make(slot=0), lit("abc", "text"), slot=1)
+    other_slot = {**pooled, "identity": {**pooled["identity"], "slot": 2}}
+    p = pooled["type"]
+    fields = make(x, x, pooled)
+    box = var("box", fields["type"])
+    alias = var("alias", fields["type"])
+    position = [lit(0, "i64")]
+    updated = lit(9.0, "f64")
+    load = dict(
+        op="array_load",
+        type="f64",
+        base=field(alias, 1),
+        indices=position,
+        effects=["STATE"],
+    )
+    body = [
+        decl(
+            "x",
+            dict(
+                op="array_literal",
+                type=arr,
+                shape=[lit(1, "i64")],
+                values=[lit(0.0, "f64")],
+                effects=["MEM", "VAL"],
+            ),
+        ),
+        decl("box", fields),
+        decl("alias", invoke("same_handle", box["type"], box)),
+        dict(
+            op="array_store",
+            base=field(box, 0),
+            indices=position,
+            value=updated,
+            broadcasting="trailing",
+            effects=["STATE"],
+        ),
+    ]
+    checks = [
+        identical(box, alias),
+        identical(box, fields, "ne"),
+        identical(invoke("pool_a", p), invoke("pool_b", p)),
+        identical(invoke("pool_a", p), other_slot, "ne"),
+        identical(field(box, 2), box, "ne"),
+        invoke("is_pooled", "bool", field(box, 2)),
+        dict(op="binary", operator="eq", left=load, right=updated),
+    ]
+    for code, condition in enumerate(checks, 1):
+        body.append(
+            dict(
+                op="if",
+                condition=dict(op="unary", operator="not", value=condition),
+                then=[dict(op="return", value=lit(code, "i32"))],
+                **{"else": []},
+            )
+        )
+    body.append(dict(op="return", value=lit(0, "i32")))
+    functions = [
+        dict(name="main", result="i32", params=[], body=body),
+        returned("pool_a", dict(pooled, site="first")),
+        returned("pool_b", dict(pooled, site="second")),
+        returned("same_handle", box, [("box", box["type"])]),
+        returned("is_pooled", identical(var("p", p), pooled), [("p", p)]),
+    ]
+    source = tmp_path / "exec-ir.json"
+    write_json(
+        source,
+        document(
+            IR,
+            status="READY",
+            module=dict(entry="main", externs=[]),
+            functions=[member(tmp_path, "functions", f) for f in functions],
+        ),
+    )
+    for stage, file in (
+        ("B1", "exec-ir.json"),
+        ("B2a", "scheduled-ir.json"),
+        ("B2b", "target-ir.json"),
+        ("B3", "cpp20.json"),
+    ):
+        subprocess.run(
+            [
+                sys.executable,
+                "-B",
+                "-c",
+                _RUN_LAYER,
+                stage,
+                tmp_path / file,
+                tmp_path,
+                *(["1"] if stage == "B2a" else []),
+            ],
+            env=dict(
+                os.environ, PYTHONPATH=str(Path(scar.__file__).resolve().parents[1])
+            ),
+            check=True,
+            capture_output=True,
+            timeout=60,
+        )
+    project = tmp_path / "project"
+    assert len(list((project / "src").glob("*.cpp"))) >= 3
+    assert subprocess.run([project / "bin/scar_entry"], check=True).returncode == 0
+    header = (project / "include/scar/program.hpp").read_text()
+    assert 'extern "C" bool is_pooled' not in header and "bool is_pooled" in header
+
+    from scar.backend.cpp20.lowering import Lowerer
+
+    lower = Lowerer(dict(functions=[]), {})
+    lower.expression(pooled)
+    with pytest.raises(ValueError, match="conflicting.*constant pool slot"):
+        lower.expression(make(make(slot=0), lit("changed", "text"), slot=1))
+    with pytest.raises(ValueError, match="requires literal"):
+        lower.expression(make(var("local", "text"), slot=3))

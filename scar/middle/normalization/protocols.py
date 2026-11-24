@@ -9,6 +9,7 @@ from . import (
     host_protocols,
     objects,
     processes,
+    products,
     scalars,
     text,
     values,
@@ -425,6 +426,8 @@ class _Frame:
             elif values.is_array(value.kind) and "shape" in value.facts:
                 # A fixed handle and immutable region layout do not prove content.
                 facts = {"shape": value.facts["shape"]}
+            elif values.is_product(value.kind):
+                facts = products.returned_facts(value)
             elif "stream_origin" in value.facts:
                 facts = {"stream_origin": value.facts["stream_origin"]}
         return _Value(value.kind, value.value, facts)
@@ -441,7 +444,17 @@ class _Frame:
             slot = _slot(self.module, name)
             result = self.env.get(name, self.project.names.get(slot))
             if result is None and slot not in self.project.shadow:
-                if name in {"print", "range", "int", "float", "abs", "min", "max"}:
+                if name in {
+                    "print",
+                    "range",
+                    "int",
+                    "float",
+                    "abs",
+                    "min",
+                    "max",
+                    "len",
+                    "tuple",
+                }:
                     result = _Value("builtin", name)
                 else:
                     result = exceptions.builtin(name) or host_protocols.builtin(
@@ -488,6 +501,8 @@ class _Frame:
                             "abs",
                             "min",
                             "max",
+                            "len",
+                            "tuple",
                         }:
                             return _Value("builtin", name)
                         return exceptions.builtin(name) or host_protocols.builtin(
@@ -522,21 +537,24 @@ class _Frame:
                         "unpack_starred",
                         "a starred target requires a list of the remaining values",
                     )
-            if value.kind not in {"tuple", "list"}:
+            if values.is_product(value.kind):
+                value = self.effect(value.value, value.kind, steps, facts=value.facts)
+            elements = products.elements(self, target, value, steps)
+            if elements is None:
                 self.fail(
                     target,
                     "unpack_iterable",
                     f"unpacking {value.kind} requires a closed iterator contract",
                 )
-            if len(items) != len(value.value):
+            if len(items) != len(elements):
                 self.fail(
                     target,
                     "unpack_arity",
-                    f"assignment expects {len(items)} items, received {len(value.value)}",
+                    f"assignment expects {len(items)} items, received {len(elements)}",
                 )
             # Check each nested sequence upon reaching its target. Earlier targets
             # can rebind names used to evaluate a later receiver or index.
-            for item, element in zip(items, value.value):
+            for item, element in zip(items, elements):
                 self.store(item, element, steps)
             return
         if target.get("op") == "index":
@@ -1017,6 +1035,27 @@ class _Frame:
             return process_call
         if target.kind == "builtin" and target.value in {"min", "max"}:
             return scalars.extreme(self, node, target.value, args, kwargs, steps)
+        if target.kind == "builtin" and target.value == "len":
+            if kwargs or len(args) != 1 or not products.is_sequence(args[0]):
+                self.fail(node, "length_contract", "len requires one closed sequence")
+            return _literal(
+                len(values.product_members(args[0].kind))
+                if values.is_product(args[0].kind)
+                else len(args[0].value)
+            )
+        if target.kind == "builtin" and target.value == "tuple":
+            if (
+                kwargs
+                or len(args) != 1
+                or args[0].kind != "tuple"
+                and not values.is_product(args[0].kind)
+            ):
+                self.fail(
+                    node,
+                    "product_constructor",
+                    "tuple conversion requires an existing immutable tuple",
+                )
+            return args[0]
         if target.kind == "builtin" and target.value in {"int", "float", "abs"}:
             result = scalars.construct(self, node, target.value, args, kwargs)
             self.project.decisions.append(
@@ -1202,19 +1241,19 @@ class _Frame:
 
     def record_return(self, value):
         self.returns.add(value.kind)
-        facts = (
-            values.numeric_facts(value.exact)
-            if value.kind in values.SCALARS and value.exact is not values._UNKNOWN
-            else {}
-        )
-        if "stream_origin" in value.facts:
-            facts["stream_origin"] = value.facts["stream_origin"]
+        facts = products.returned_facts(value)
         if self.return_facts is None:
             self.return_facts = facts
         elif not values.identical(self.return_facts, facts):
             self.return_facts = {}
 
     def truth(self, value, node):
+        if products.is_sequence(value):
+            return _literal(
+                bool(values.product_members(value.kind))
+                if values.is_product(value.kind)
+                else bool(value.value)
+            )
         if values.object_name(value.kind) is not None:
             return _literal(True)
         if values.is_array(value.kind):

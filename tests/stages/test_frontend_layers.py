@@ -289,6 +289,93 @@ def test_python_capture_then_offline_normalization(tmp_path, monkeypatch):
     }
 
 
+def test_python_tuple_identity_tracks_compiled_objects_offline(tmp_path, monkeypatch):
+    from dataclasses import replace
+    import dis
+    import sys
+    from types import CodeType
+
+    from scar.contract import walk_operations
+    from scar.frontend.languages.python import normalize
+
+    entry = tmp_path / "items.py"
+    source = (
+        "def fresh(x): return x, x\n"
+        "def first(): return (1, 7)\n"
+        "def second(): return (1, 7)\n"
+        "def equal(): return (True, 7)\n"
+        "def empty(): return ()\n"
+        "def nested(): return (1 + 1, -3, ('q', ()), ('x',) * 2)\n"
+        "def child(): return ('q', ())\n"
+        "def elided(x, y):\n    a, b = x, y\n    return a\n"
+        "def mutable(x): return [x]\n"
+    )
+    entry.write_text(source)
+    facts = python.capture_project(entry, tmp_path).units[0]
+    other = tmp_path / "other.py"
+    other.write_text(source)
+    separate = python.capture_project(other, tmp_path).units[0]
+    other.unlink()
+    program = compile(source, str(entry), "exec", dont_inherit=True)
+    constants = {
+        c.co_name: next(v for v in c.co_consts if type(v) is tuple)
+        for c in program.co_consts
+        if isinstance(c, CodeType)
+        and c.co_name in {"first", "second", "equal", "nested", "child"}
+    }
+    entry.unlink()
+
+    def aggregates(unit):
+        result = _offline(
+            monkeypatch,
+            normalize,
+            unit,
+            (builtins, "compile"),
+            (dis, "get_instructions"),
+        )
+        by_function = {}
+        for fn in result["functions"]:
+            for node in walk_operations(fn.get("partial_body", [])):
+                if node["op"] == "aggregate":
+                    by_function[fn["name"].rsplit(":", 1)[-1]] = node
+                    break
+        return by_function
+
+    entry_ops = aggregates(facts)
+    assert "identity" not in entry_ops["mutable"]
+    identity = {
+        k: op["identity"] for k, op in entry_ops.items() if op["kind"] == "tuple"
+    }
+    if sys.implementation.name != "cpython" or not any(
+        col is not None
+        for _, _, col, _ in getattr(program, "co_positions", lambda: ())()
+    ):
+        assert all(f["kind"] == "unresolved" for f in identity.values())
+        return
+    assert identity["fresh"] == {"kind": "fresh"}
+    assert identity["elided"]["kind"] == "unresolved"
+    assert identity["empty"]["kind"] == "constant_pool"
+    assert constants["equal"] == constants["first"]
+    assert constants["equal"] is not constants["first"]
+    for name, value in constants.items():
+        assert identity[name]["kind"] == "constant_pool"
+        assert (identity[name] == identity["first"]) == (value is constants["first"])
+    nested = entry_ops["nested"]["items"]
+    assert nested[2]["identity"]["kind"] == "constant_pool"
+    assert (nested[2]["identity"] == identity["child"]) == (
+        constants["nested"][2] is constants["child"]
+    )
+    assert nested[2]["items"][1]["identity"] == identity["empty"]
+    assert nested[3]["left"]["identity"]["kind"] == "unresolved"
+
+    imported = aggregates(replace(facts, abi={**facts.abi, "main": False}))
+    assert imported["first"]["identity"]["pool"] != identity["first"]["pool"]
+    assert imported["empty"]["identity"] == identity["empty"]
+    other_ops = aggregates(separate)
+    assert other_ops["first"]["identity"]["pool"] != identity["first"]["pool"]
+    assert other_ops["empty"]["identity"] == identity["empty"]
+
+
 def test_scalar_annotation_contract_uses_captured_compiler_semantics(
     tmp_path, monkeypatch
 ):
