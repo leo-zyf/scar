@@ -1730,6 +1730,39 @@ def walk_operations(value, *, exclude_fields=()):
             yield item
 
 
+def source_call_operands(operation):
+    """Yield imported-name reads feeding actual calls in this operation's port domain."""
+
+    def edge(call, preceding):
+        def resolve(ref):
+            return preceding.get(ref.get("from_offset"), ref)
+
+        target = resolve(call["target"])
+        attribute = target if target.get("op") == "source_object_attribute" else None
+        load = resolve(attribute["base"]) if attribute is not None else target
+        publication = load.get("source_evidence", {}).get("prior_publication", {})
+        if load.get("op") == "module_name_load" and publication.get("occurrence"):
+            yield call, load, attribute, publication
+
+    if operation["op"] == "source_object_call" and "op" in operation["target"]:
+        yield from edge(operation, {})
+    for field in ("steps", "evaluation"):
+        steps = operation.get(field)
+        if not isinstance(steps, list):
+            continue
+        preceding = {}
+        for step in steps:
+            if not isinstance(step, dict):
+                continue
+            if (
+                step.get("op") == "source_object_call"
+                and "from_offset" in step["target"]
+            ):
+                yield from edge(step, preceding)
+            if "offset" in step:
+                preceding[step["offset"]] = step
+
+
 def publish(path, data):
     """Publish a complete file; readers see either revision during a rerun."""
     path = Path(path)

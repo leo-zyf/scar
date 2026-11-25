@@ -9,6 +9,7 @@ from scar.contract import (
     digest,
     json_bytes,
     python_constant_rhs_sha256,
+    source_call_operands,
     walk_operations,
 )
 from . import source_frames
@@ -996,18 +997,6 @@ def _call_import_bindings(op, owners):
                     ]
 
 
-def _call_and_lookup(call, by_offset):
-    def operand(ref):
-        return by_offset.get(ref.get("from_offset"), ref)
-
-    target = operand(call["target"])
-    attribute = target if target.get("op") == "source_object_attribute" else None
-    name = operand(attribute["base"]) if attribute else target
-    if name.get("op") == "module_name_load":
-        return call, name, attribute
-    return None
-
-
 def link_conditional_function_calls(project, conditional):
     """Connect already evaluated callees to optional function creations in sealed modules."""
     exports = _published_functions(project, conditional)
@@ -1035,24 +1024,8 @@ def link_conditional_function_calls(project, conditional):
                     imports.setdefault(key, []).append(
                         (owner, member, offset, binding, op["frame_globals"]["owner"])
                     )
-            if op["op"] == "source_object_call" and "op" in op["target"]:
-                calls.append(_call_and_lookup(op, {}))
-            for field in ("steps", "evaluation"):
-                steps = op.get(field)
-                if isinstance(steps, list):
-                    by_offset = {}
-                    for step in steps:
-                        if not isinstance(step, dict):
-                            continue
-                        if step.get("op") == "source_object_call":
-                            calls.append(_call_and_lookup(step, by_offset))
-                        if "offset" in step:
-                            by_offset[step["offset"]] = step
-        for edge in calls:
-            if edge is None:
-                continue
-            call, name, attribute = edge
-            previous = name.get("source_evidence", {}).get("prior_publication", {})
+            calls.extend(source_call_operands(op))
+        for call, name, attribute, previous in calls:
             key = tuple(previous.get(k) for k in ("occurrence", "site", "slot"))
             for owner, member, offset, binding, importer in imports.get(key, ()):
                 if (attribute is None) != (member is not None):
