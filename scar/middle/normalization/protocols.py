@@ -2,7 +2,12 @@
 
 import math
 
-from scar.contract import json_bytes, python_provider_id, walk_operations
+from scar.contract import (
+    EXECUTION_ANNOTATIONS,
+    json_bytes,
+    python_provider_id,
+    walk_operations,
+)
 from . import (
     arrays,
     effects,
@@ -281,6 +286,7 @@ class _Project:
         entry_environment=None,
         function_definitions=None,
         source_index=None,
+        conditional_owner=None,
     ):
         self.functions = functions
         self.function_definitions = function_definitions or {}
@@ -341,7 +347,13 @@ class _Project:
         else:
             sites, bindings, sequence_facts = source_index
         self.source_imports = host_protocols.ImportOccurrences(
-            functions, entry_environment=entry_environment, sites=sites
+            functions,
+            entry_environment=entry_environment,
+            sites=(
+                (site for site in sites if site[0] == conditional_owner)
+                if conditional_owner is not None
+                else sites
+            ),
         )
         self.shadow, self.single_bind_globals, self.global_writers = bindings
         self.sequences = sequences.Domains(
@@ -3465,6 +3477,18 @@ class _Frame:
             ):
                 continue
             if op == "expr":
+                if (
+                    self.initializing
+                    and self.project.imports.open_namespace
+                    and node is self.fn["body"][0]
+                    and node["value"].get("op") == "literal"
+                    and isinstance(node["value"].get("value"), str)
+                ):
+                    self.fail(
+                        node,
+                        "module_docstring_store",
+                        "the leading string needs its source __doc__ publication or proven compiler omission",
+                    )
                 self.evaluate(node["value"], steps, discard=True)
             elif op == "assign":
                 if not (
@@ -3597,7 +3621,7 @@ class _Frame:
         return record
 
     def lower(self):
-        if self.initializing:
+        if self.initializing and not self.project.imports.open_namespace:
             self.project.names[namespace_slot(self.module, "__name__")] = _literal(
                 "__main__" if self.scope["main"] else self.module
             )
@@ -3647,36 +3671,170 @@ class _Frame:
         )
 
 
-def _nested_loader_sites(project, symbol):
-    """Find conditional imports referenced by this body and its ordinary callees."""
-    pending, seen, dependencies = [symbol], set(), {}
-    while pending:
-        owner = pending.pop()
-        if owner in seen:
-            continue
-        seen.add(owner)
-        for operation in walk_operations(project.closed[owner]["body"]):
-            if operation["op"] == "call" and operation.get("callee") in project.closed:
-                pending.append(operation["callee"])
-            if operation["op"] == "module_import_publish":
-                site = operation.get("site")
-                if (owner, site) in project.loader_activations:
-                    dependencies[owner, site] = {"owner": owner, "site": site}
-    return list(dependencies.values())
+def _loader_handoff(trial, candidate, function, issue):
+    """Record source dependencies at their producing operation, without calling them."""
+    symbol = candidate["symbol"]
+    nested, functions = [], []
+    unresolved = [dict(kind="match_actual_frame_or_resume_source")]
+    operations = list(
+        walk_operations(function["body"], exclude_fields=EXECUTION_ANNOTATIONS)
+    )
+    for op in reversed(operations):
+        site = values.source_site(op)
+        kind = op["op"]
+        if kind == "module_import_publish":
+            key = symbol, op.get("site")
+            selected = trial.loader_activations.get(key)
+            if selected:
+                nested.append(dict(owner=symbol, site=key[1]))
+            candidates = op["import_call"].get("body", {}).get("candidates", ())
+            remaining = [
+                c
+                for c in candidates
+                if not selected or c["initializer"] != selected["symbol"]
+            ]
+            if remaining:
+                unresolved.append(
+                    dict(
+                        kind="importer_selected_code_activation",
+                        candidates=remaining,
+                        **site,
+                    )
+                )
+        elif kind == "module_fromlist_publish":
+            checks = [
+                check
+                for check in op["fromlist_checks"]
+                if check.get("child_candidate") or check.get("hook_candidates")
+            ]
+            if op["initializers"] or checks:
+                unresolved.append(
+                    dict(
+                        kind="importer_selected_fromlist_activations",
+                        initializers=op["initializers"],
+                        checks=checks,
+                        **site,
+                    )
+                )
+            if "mapping_qualification" in op:
+                unresolved.append(
+                    dict(
+                        kind="fromlist_mapping_qualification",
+                        requirement=op["mapping_qualification"],
+                        **site,
+                    )
+                )
+        elif kind == "source_object_make_function":
+            child = op["symbol"]
+            definition = trial.functions.get(child) or trial.function_definitions[child]
+            functions.append(
+                dict(
+                    symbol=child,
+                    code=definition["python_scope"]["definition_code"],
+                    **site,
+                )
+            )
+        elif kind == "call" and op.get("callee") in trial.closed:
+            unresolved.append(
+                dict(kind="called_body_activation", symbol=op["callee"], **site)
+            )
+    if functions:
+        unresolved.append(
+            dict(
+                kind="published_function_activation",
+                when="if_actual_created_function_is_called",
+                inputs=["creation_globals", "creation_builtins", "actual_arguments"],
+                completion="return_to_actual_caller_or_propagate",
+            )
+        )
+    if issue:
+        unresolved.append(dict(kind="source_frontier", code=issue["code"]))
+    return nested, dict(
+        semantics_version=1,
+        status="INCOMPLETE",
+        entry=dict(
+            selection=candidate["loader_ports"]["body"]["selection"],
+            code=trial.functions[symbol]["python_scope"]["source_code"],
+            inputs=[
+                "active_frame",
+                "actual_frame_locals",
+                "actual_frame_globals",
+                "actual_frame_builtins",
+                "current_module_registry",
+            ],
+            on_mismatch="resume_source_equivalent_execution_before_module_body",
+        ),
+        function_activations=functions,
+        unresolved=unresolved,
+        **({"source_issue": issue} if issue else {}),
+    )
+
+
+def _conditional_module(project, candidate):
+    """Normalize a body only for an actual loader activation with a matching code object."""
+    symbol = candidate["symbol"]
+    fn = project.functions[symbol]
+    scope = fn["python_scope"]
+    trial = _Project(
+        project.functions,
+        function_definitions=project.function_definitions,
+        source_index=project.source_index,
+        conditional_owner=symbol,
+    )
+    trial.loader_refinements = project.loader_refinements
+    trial.execution_images = project.execution_images
+    trial.text_profiles = project.text_profiles
+    unknown = dict(state="unresolved", owner=symbol, reason="actual_loader_activation")
+    trial.imports.open_namespace = unknown
+    trial.imports.bind_registry(trial.imports.registry_key(scope["module"]), unknown)
+    issue = None
+    try:
+        trial.compile(symbol, ())
+    except _Unclosed as error:
+        issue = error.issue
+    trial.finish_imports()
+    try:
+        trial.sequences.freeze(trial, partial=issue is not None)
+    except ValueError as error:
+        issue = _Unclosed(symbol, fn, "sequence_element_type", str(error)).issue
+    if issue:
+        function = next(
+            (fragment for fragment in trial.prefixes if fragment["symbol"] == symbol),
+            dict(symbol=symbol, completion="prefix", body=[], **values.source_site(fn)),
+        )
+    else:
+        function = trial.closed[symbol]
+    nested, handoff = _loader_handoff(trial, candidate, function, issue)
+    rows = trial.source_imports.product(trial.skipped_sites, set())["occurrences"]
+    return dict(
+        **candidate,
+        nested_imports=nested,
+        completion="conditional_source_prefix" if issue else "conditional_source_body",
+        qualification="matching_live_module_code_and_source_equivalent_continuation",
+        function=function,
+        source_imports=dict(
+            semantics_version=1,
+            scope="conditional_source_import_occurrences",
+            occurrences=[row for row in rows if row["owner"] == symbol],
+        ),
+        operator_requirements=trial.operator_requirements(),
+        activation_handoff=handoff,
+    )
 
 
 def _conditional_loader_fragments(project):
-    """Retain exactly the trial bodies reachable from final caller-owned imports."""
+    """Rebuild only candidates reached by finalized source imports, in their own scopes."""
     pending = list(reversed(project.loader_activations))
     result = {}
     while pending:
         key = pending.pop()
         if key in result:
             continue
-        body = project.loader_refinements[key]
-        result[key] = body
+        fragment = _conditional_module(project, project.loader_refinements[key])
+        result[key] = fragment
         pending.extend(
-            (edge["owner"], edge["site"]) for edge in reversed(body["nested_imports"])
+            (edge["owner"], edge["site"])
+            for edge in reversed(fragment["nested_imports"])
         )
     return list(result.values())
 
@@ -3727,14 +3885,6 @@ def _compile_protocol_entry(module, functions):
                 == evidence["initializer"]
                 and evidence["initializer"] in project.closed
             ):
-                project.finish_imports()
-                try:
-                    body = project.sequences.resolve(
-                        project.closed[evidence["initializer"]]
-                    )
-                except ValueError:
-                    # A trial with unresolved element types has no sealed body.
-                    return project, issue
                 refinements[key] = dict(
                     owner=key[0],
                     site=key[1],
@@ -3742,12 +3892,6 @@ def _compile_protocol_entry(module, functions):
                     location=issue["location"],
                     loader_ports=ports,
                     rejected_assumption=evidence,
-                    completion="conditional_source_body",
-                    qualification="requires_actual_activation_frame_and_all_specialized_entry_facts",
-                    nested_imports=_nested_loader_sites(
-                        project, evidence["initializer"]
-                    ),
-                    function=body,
                 )
                 source_index = project.source_index
                 continue
@@ -3768,19 +3912,34 @@ def normalize_protocols(module):
     omitted = set()
     obligation_analysis = None
     resolved_symbols = None
+    conditional = _conditional_loader_fragments(project)
+    if issue is None:
+        issue = next(
+            (
+                f["activation_handoff"]["source_issue"]
+                for f in conditional
+                if "source_issue" in f["activation_handoff"]
+            ),
+            None,
+        )
     if issue is None:
         try:
-            if project.loader_activations:
-                candidate = next(iter(project.loader_activations.values()))
+            if conditional:
+                candidate = conditional[0]
                 error = _Unclosed(
                     candidate["owner"],
                     candidate,
                     "loader_activation_contract",
-                    "the source importer owns the caller result; executing its conditional graph body requires the actual activation frame and entry facts",
+                    f"{len(conditional)} caller-owned conditional module activation(s) need matching live frames or source continuations; "
+                    f"{sum(len(f['activation_handoff']['function_activations']) for f in conditional)} published function creation site(s) need subsequent call semantics",
                 )
                 error.issue["source_evidence"] = {
                     "initializer": candidate["symbol"],
                     "loader_ports": candidate["loader_ports"],
+                    "conditional_entries": [
+                        {key: f[key] for key in ("owner", "site", "symbol")}
+                        for f in conditional
+                    ],
                 }
                 raise error
             omitted = set(module.get("python_candidate_only", ())).difference(
@@ -3864,11 +4023,7 @@ def normalize_protocols(module):
         single_bind_globals=sorted(project.single_bind_globals),
         status="INCOMPLETE" if issue else "READY",
         source_obligation_groups=obligation_analysis["groups"],
-        **(
-            {"conditional_loader_fragments": _conditional_loader_fragments(project)}
-            if project.loader_activations
-            else {}
-        ),
+        **({"conditional_loader_fragments": conditional} if conditional else {}),
         **(
             {"operator_requirements": project.operator_requirements()}
             if project.required_operators

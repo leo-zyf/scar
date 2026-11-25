@@ -9899,3 +9899,98 @@ def test_module_for_uses_actual_callable_iterator_mapping_and_exhaustion(tmp_pat
         assert events.count("body") == int(
             mode in {"normal", "body_stop", "release_reentry"}
         )
+
+
+def test_conditional_module_rebuilds_from_unknown_bindings_and_owns_its_imports(
+    tmp_path,
+):
+    from copy import deepcopy
+
+    from scar.contract import walk_operations
+    from scar.frontend import build
+    from scar.middle.binding import bind
+    from scar.middle.normalization.protocols import normalize_protocols
+
+    package = tmp_path / "pkg"
+    package.mkdir()
+    (package / "child.py").write_text("pass\n")
+    (package / "__init__.py").write_text(
+        '"""module documentation"""\n'
+        "import math\n"
+        "from . import child as unused\ndel unused\n"
+        "observed = __name__\n"
+        "def callback():\n    return observed\n"
+        "touch()\n"
+    )
+    entry = tmp_path / "entry.py"
+    entry.write_text("import pkg\n")
+    graph = tmp_path / "graph"
+    build(entry, graph)
+    bound, issues, _ = bind(json.loads((graph / "graph.json").read_bytes()), graph)
+    assert not issues
+    legacy = deepcopy(bound)
+    module, _, [gap] = normalize_protocols(bound)
+    assert gap["code"] == "python.loader_activation_contract"
+    [candidate] = module["protocol_analysis"]["conditional_loader_fragments"]
+    handoff = candidate["activation_handoff"]
+    assert candidate["completion"] == "conditional_source_body"
+    assert handoff["status"] == "INCOMPLETE" and "source_issue" not in handoff
+    symbol = candidate["symbol"]
+    source = next(f for f in bound["functions"] if f["name"] == symbol)
+    assert handoff["entry"]["code"] == source["python_scope"]["source_code"]
+    ops = list(walk_operations(candidate["function"]["body"]))
+    assert ops and {
+        o["location"]["line"] for o in ops if o["op"] == "module_import_publish"
+    } == {2}
+    assert any(
+        o["op"] == "module_name_load" and o["location"]["line"] == 5 for o in ops
+    )
+    assert any(
+        o["op"] == "module_global_store" and o["location"]["line"] == 1 for o in ops
+    )
+    [created] = handoff["function_activations"]
+    assert (
+        created["code"]["name"] == "callback"
+        and len(created["code"]["code_sha256"]) == 64
+    )
+    unresolved = {d["kind"]: d for d in handoff["unresolved"]}
+    assert (
+        unresolved["published_function_activation"]["when"]
+        == "if_actual_created_function_is_called"
+    )
+    [child] = unresolved["importer_selected_fromlist_activations"]["checks"]
+    assert child["child_candidate"]["module"] == "pkg.child"
+    rows = candidate["source_imports"]["occurrences"]
+    assert {row["location"]["line"] for row in rows} == {2, 3}
+    assert all(
+        row["owner"] == symbol
+        and row["producer_sites"]
+        and row["activation"] == "visited"
+        for row in rows
+    )
+    assert all(
+        not row["producer_sites"]
+        for row in module["source_imports"]["occurrences"]
+        if row["owner"] == symbol
+    )
+    assert (
+        "module_import_publish"
+        in candidate["operator_requirements"]["module_registry"]["operations"]
+    )
+    fn = next(f for f in legacy["functions"] if f["name"] == symbol)
+    first = fn["body"][0]
+    assert first["op"] == "assign" and first["target"]["name"].endswith(":__doc__")
+    fn["body"][0] = {key: first[key] for key in ("site", "location", "value")} | {
+        "op": "expr"
+    }
+    module, _, [gap] = normalize_protocols(legacy)
+    [candidate] = module["protocol_analysis"]["conditional_loader_fragments"]
+    assert (
+        gap["code"] == "python.module_docstring_store" and gap["location"]["line"] == 1
+    )
+    assert candidate["completion"] == "conditional_source_prefix"
+    assert candidate["activation_handoff"]["source_issue"] == gap
+    assert not candidate["function"]["body"]
+    assert not any(
+        row["producer_sites"] for row in candidate["source_imports"]["occurrences"]
+    )
