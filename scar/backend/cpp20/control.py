@@ -346,6 +346,10 @@ class ControlFlow:
             caught = f"scar_caught_{n}"
             following = (Stmt("throw"),)
             for handler in reversed(handlers):
+                if any(field in handler for field in ("match", "on_match", "cleanup")):
+                    raise ValueError(
+                        "dynamic exception handlers require a qualified native object and namespace implementation"
+                    )
                 categories = handler["categories"]
                 if not isinstance(categories, list) or not all(
                     isinstance(c, str) and c for c in categories

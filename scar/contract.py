@@ -37,6 +37,9 @@ MODULE_REGISTRY_OPERATIONS = frozenset(
         "module_name_load",
         "module_namespace_initialize",
         "module_object_expression",
+        "source_exception_match",
+        "source_exception_bind",
+        "source_exception_clear",
         "source_object_region",
         "source_object_attribute",
         "source_object_constant",
@@ -1569,7 +1572,11 @@ def control_regions(statement):
     for field in _CONTROL_REGIONS.get(statement["op"], ()):
         if field == "handlers":
             for handler in statement.get(field, ()):
+                if "on_match" in handler:
+                    yield handler, "on_match", None
                 yield handler, "body", handler.get("binding")
+                if "cleanup" in handler:
+                    yield handler, "cleanup", None
         elif field in statement:
             yield statement, field, None
 

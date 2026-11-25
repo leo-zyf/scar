@@ -168,10 +168,12 @@ class _Region:
         self.source = source
         self.current = None
         self.children = []
+        self.handler_entries = {}
 
     def boundary(self, node):
         self.current, self.end = node, len(self.steps)
         self.children.clear()
+        self.handler_entries.clear()
 
     def fragment(self):
         record = dict(
@@ -214,9 +216,54 @@ class _Region:
                     None,
                 )
             if path is not None:
-                frontier["regions"].append(dict(path=path, **child.fragment()))
+                region = dict(path=path, **child.fragment())
+                if path[0] == "handlers" and path[1] in self.handler_entries:
+                    region["handler"] = self.handler_entries[path[1]]
+                frontier["regions"].append(region)
         record["frontier"] = frontier
         return record
+
+
+def _binding_use(node, evaluating):
+    """Follow only connected operand edges of the current normalization visit."""
+    if not evaluating or evaluating[-1] is not node:
+        return None
+    attributes = []
+    child = node
+    for index in range(len(evaluating) - 2, -1, -1):
+        parent = evaluating[index]
+        site = parent.get("site")
+        if not site:
+            break
+        if (
+            parent.get("op") in {"member", "process_stream"}
+            and parent.get("base") is child
+        ):
+            attributes.append(dict(name=parent["field"], site=site))
+            child = parent
+            continue
+        if parent.get("target") is child and parent["op"] in {
+            "call",
+            "library_call",
+            "python_invoke",
+            "process_launch",
+            "process_wait",
+            "process_poll",
+            "process_communicate",
+        }:
+            return dict(
+                attributes=attributes, consumer=dict(role="call_target", site=site)
+            )
+        for arg, item in enumerate(parent.get("args", ())):
+            if item is child:
+                return dict(
+                    attributes=attributes,
+                    consumer=dict(role="argument", index=arg, site=site),
+                )
+        break
+    if attributes:
+        return dict(attributes=attributes)
+    return None
 
 
 class _Project:
@@ -382,10 +429,10 @@ class _Project:
                         pending.append(function["body"])
         return False
 
-    def global_read(self, name, value, node=None):
+    def global_read(self, name, value, node=None, evaluating=()):
         parts = name.split(":", 2)
         if len(parts) == 3 and parts[0] == "py":
-            self.observe_import(parts[1], "namespace", node, parts[2])
+            self.observe_import(parts[1], "namespace", node, parts[2], evaluating)
         for active in self.active:
             if self.functions[active]["python_scope"]["kind"] == "function":
                 self.global_reads[active][name] = (value.kind, value.value)
@@ -500,7 +547,7 @@ class _Project:
         )
         return expected
 
-    def observe_import(self, name, domain, node, member=None):
+    def observe_import(self, name, domain, node, member=None, evaluating=()):
         key = self.imports.registry_key(name) if domain == "namespace" else name
         version = (
             self.imports.binding_version(namespace_slot(name, member))
@@ -555,10 +602,13 @@ class _Project:
                     consumer=self.active[-1],
                     **values.source_site(node or {}),
                 )
+                use = _binding_use(node, evaluating)
+                if use:
+                    read["operand_use"] = use
                 if read not in reads:
                     reads.append(read)
-                # Binding reads are precise. Which reachable object fields are
-                # needed remains a separate obligation; do not call them pure.
+                # A field or call edge identifies a consumer. Its implementation
+                # may still observe additional state or escape the object.
                 requirement["value_state_projection"] = "unproven"
             if marker["op"] == "block":
                 captured_effect = (
@@ -570,6 +620,12 @@ class _Project:
                     if captured_effect
                     else "module_import_continuation_required"
                 )
+                if not captured_effect and not operation["producer_sites"]:
+                    ledger = self.source_imports
+                    row = ledger.rows[operation["occurrence"]]
+                    point = ledger.initialization_points.get(row["id"])
+                    if point is not None:
+                        host_protocols.retain_import_result(self, row, point, operation)
                 for op in (operation["op"], continuation):
                     namespace_operations.require_registry_operator(self, op)
                 if captured_effect:
@@ -600,7 +656,10 @@ class _Project:
                                             resume="continue_after_original_action_with_captured_result_and_actual_post_state",
                                         )
                                         if captured_effect
-                                        else {}
+                                        else dict(
+                                            occurrence=operation["occurrence"],
+                                            resume="continue_from_original_import_result_and_post_state_without_reexecuting_loader",
+                                        )
                                     ),
                                     **values.source_site(operation),
                                 ),
@@ -844,7 +903,7 @@ class _Frame:
         self.handler_depth = 0
         self.region = None
         self.root_region = None
-        self.source_expression = None
+        self.evaluating = []
         self.dynamic = 0
         self.control_regions = []
         self.params = []
@@ -892,11 +951,7 @@ class _Frame:
         self.next_temp += 1
         return f"@evaluation/{self.next_temp}"
 
-    def effect(self, node, kind, steps, discard=False, *, facts=None):
-        source = self.source_expression or (
-            self.region.current if self.region is not None else None
-        )
-        node = {**values.source_site(source or {}), **node}
+    def observe_effect(self, node):
         writes = node.get("writes", ())
         before_effect = None
         if (
@@ -909,6 +964,14 @@ class _Frame:
             if isinstance(node.get("capture"), str) and node["capture"]:
                 before_effect = self.project.imports.snapshot()
             self.project.unknown_registry(self.name, node)
+        return before_effect
+
+    def effect(self, node, kind, steps, discard=False, *, facts=None):
+        source = (self.evaluating[-1] if self.evaluating else None) or (
+            self.region.current if self.region is not None else None
+        )
+        node = {**values.source_site(source or {}), **node}
+        before_effect = self.observe_effect(node)
         if discard:
             steps.append(dict(op="expr", value=node))
             result = _literal(None)
@@ -924,7 +987,9 @@ class _Frame:
         self.project.global_read(
             name,
             value,
-            self.source_expression or (self.region.current if self.region else None),
+            (self.evaluating[-1] if self.evaluating else None)
+            or (self.region.current if self.region else None),
+            self.evaluating,
         )
         if (
             self.initializing
@@ -1479,7 +1544,7 @@ class _Frame:
     def module_member(self, node, module, member, steps, *, optional=False):
         """Read current bindings before considering a missing-attribute hook."""
         module = self.project.imports.namespace_owner(module)
-        self.project.observe_import(module, "namespace", node, member)
+        self.project.observe_import(module, "namespace", node, member, self.evaluating)
         slot = namespace_slot(module, member)
         candidates = list(node.get("missing_attribute_hooks", ()))
         if candidate := node.get("missing_attribute_hook"):
@@ -1992,15 +2057,14 @@ class _Frame:
         self.store(node["binding"], value, steps)
 
     def evaluate(self, node, steps, discard=False, *, truth_context=False):
-        previous = self.source_expression
-        self.source_expression = node
+        self.evaluating.append(node)
         try:
             result = self._evaluate(node, steps, discard, truth_context=truth_context)
             if node.get("site") is not None:
                 self.project.normalized_sites.add((self.name, node["site"]))
             return result
         finally:
-            self.source_expression = previous
+            self.evaluating.pop()
 
     def _evaluate(self, node, steps, discard=False, *, truth_context=False):
         op = node["op"]

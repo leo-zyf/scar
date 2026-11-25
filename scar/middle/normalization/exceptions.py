@@ -1,7 +1,7 @@
 """M2 contracts for exceptional control flow and lexical resource cleanup."""
 
 from scar.contract import walk_operations
-from . import host_protocols
+from . import host_protocols, namespace_operations
 from .values import Value, literal, runtime, wire, written_targets
 
 ERROR = "handle:error"
@@ -208,28 +208,39 @@ def _unbind(alias, state):
         state[int(alias.get("scope") == "global")].pop(alias["name"], None)
 
 
-def _handler(frame, node, exceptional):
+def _handler(frame, node, exceptional, index, count):
     frame.restore(exceptional)
-    cats = _categories(frame, node)
+    header = namespace_operations.open_exception_handler(frame, node, index, count)
+    dynamic = header is not None
     alias = node.get("binding")
-    if node.get("name") and (
-        not alias or alias.get("op") != "var" or alias.get("cell")
-    ):
-        frame.fail(
-            node,
-            "handler_binding",
-            "the handler needs an identified lexical or module error slot",
-        )
-    binding = None
-    if alias:
-        # The handler operation binds and clears this real slot, including global
-        # aliases visible to a called function. Other saved handles retain ownership.
-        name = alias["name"]
-        global_ = alias.get("scope") == "global"
-        slot = Value(ERROR, None).at(name, **({"scope": "global"} if global_ else {}))
-        # The binding operation itself performs the checked assignment.
-        frame.store(alias, slot, [])
-        binding = slot.value
+    if dynamic:
+        namespace_operations.observe_handler_effect(frame, header["match"])
+        # Lookup can reenter or change bindings even when CHECK_EXC_MATCH is false.
+        on_miss = frame.snapshot()
+        for statement in header["on_match"]:
+            namespace_operations.observe_handler_effect(frame, statement["value"])
+        frame.region.handler_entries[index] = header
+    else:
+        on_miss = exceptional
+        cats = _categories(frame, node)
+        if node.get("name") and (
+            not alias or alias.get("op") != "var" or alias.get("cell")
+        ):
+            frame.fail(
+                node,
+                "handler_binding",
+                "the handler needs an identified lexical or module error slot",
+            )
+        binding = None
+        if alias:
+            name = alias["name"]
+            global_ = alias.get("scope") == "global"
+            slot = Value(ERROR, None).at(
+                name, **({"scope": "global"} if global_ else {})
+            )
+            frame.store(alias, slot, [])
+            binding = slot.value
+        header = dict(categories=cats, binding=binding)
     code = []
     marks = _marks(frame)
     frame.handler_depth += 1
@@ -239,13 +250,32 @@ def _handler(frame, node, exceptional):
     finally:
         frame.leave_control()
         frame.handler_depth -= 1
-    state = frame.snapshot() if falls else None
-    if state:
+    if (
+        dynamic
+        and falls
+        and not header["match"]["source_exception_handler"]["normal_exit"]
+    ):
+        frame.fail(
+            node,
+            "handler_exit",
+            "the source arm has no normal continuation for this handler body",
+        )
+
+    def exited(state):
+        if dynamic and header["cleanup"]:
+            frame.restore(state)
+            namespace_operations.observe_handler_effect(
+                frame, header["cleanup"][0]["value"]
+            )
+            state = frame.snapshot()
         _unbind(alias, state)
+        return state
+
+    state = exited(frame.snapshot()) if falls else None
     for flow, tag, before in marks:
-        for pending in flow[tag][before:]:
-            _unbind(alias, pending)
-    return dict(categories=cats, binding=binding, body=code), state
+        pending = flow[tag]
+        pending[before:] = [exited(path) for path in pending[before:]]
+    return dict(header, body=code), state, on_miss
 
 
 def _project_final(frame, path, modifications, before, after):
@@ -280,8 +310,10 @@ def protected(frame, node, steps):
             finally:
                 frame.leave_control()
         exceptional = _prefix(frame, start, node["body"], body_state, body)
-        for arm in node["handlers"]:
-            handler, state = _handler(frame, arm, exceptional)
+        for index, arm in enumerate(node["handlers"]):
+            handler, state, exceptional = _handler(
+                frame, arm, exceptional, index, len(node["handlers"])
+            )
             handlers.append(handler)
             if state is not None:
                 normal.append(state)

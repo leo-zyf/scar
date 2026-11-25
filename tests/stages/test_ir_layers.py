@@ -83,6 +83,34 @@ def test_binding_checks_import_result_against_its_source_publication(tmp_path):
         bind(graph, folder)
 
 
+def test_binding_rejects_exception_edge_to_a_different_handler(tmp_path):
+    from scar.contract import read_member
+    from scar.frontend import build
+    from scar.middle.binding import bind
+
+    source = tmp_path / "entry.py"
+    source.write_text(
+        "try:\n    action()\nexcept ValueError as err:\n    first(err)\nexcept TypeError:\n    second()\n"
+    )
+    folder = tmp_path / "graph"
+    build(source, folder)
+    graph = json.loads((folder / "graph.json").read_bytes())
+    unit = graph["units"][0]
+    payload = read_member(folder, unit["graph"])
+    source.unlink()
+    bind(graph, folder)
+    proof = next(
+        n["source_exception_handler"]
+        for fn in payload["functions"]
+        for n in fn["nodes"]
+        if n.get("source_exception_handler", {}).get("arm_index") == 0
+    )
+    proof["branch"]["target"] = proof["body_offset"]
+    unit["graph"] = member(folder, "units", payload)
+    with pytest.raises(ValueError, match="dispatch edges"):
+        bind(graph, folder)
+
+
 def test_middle_products_reject_out_of_order_passes_and_keep_inputs_owned(tmp_path):
     canonical = dict(
         entry="main",
@@ -240,8 +268,29 @@ print(json.dumps(module))
         if node["op"] == "module_import_preserves" and node["module"] == "time"
     ]
     assert len(guards) == 1
-    requirement = guards[0]["checks"]["__main__"]["namespace"]
+    guard = guards[0]
+    assert guard["occurrence_effect_coverage"] == "MODELED"
+    producers = [
+        n
+        for fn in normalized["functions"]
+        for n in walk_operations(fn["body"])
+        if n.get("source_import_occurrence") == guard["occurrence"]
+    ]
+    assert len(producers) == 1
+    assert producers[0]["op"] == "module_namespace_initialize"
+    assert producers[0]["state_capture"]["occurrence"] == guard["occurrence"]
+    requirement = guard["checks"]["__main__"]["namespace"]
     assert {read["member"] for read in requirement["binding_reads"]} == {"os", "alias"}
+    uses = {
+        read["member"]: read["operand_use"] for read in requirement["binding_reads"]
+    }
+    assert [edge["name"] for edge in uses["os"]["attributes"]] == ["getcwd"]
+    assert [edge["name"] for edge in uses["alias"]["attributes"]] == ["path", "exists"]
+    assert all(use["consumer"]["role"] == "call_target" for use in uses.values())
+    assert all(
+        use["consumer"]["site"] != use["attributes"][-1]["site"]
+        for use in uses.values()
+    )
     assert requirement["value_state_projection"] == "unproven"
     assert (
         requirement["requires"] == "same_namespace_bindings_and_reachable_value_state"
@@ -7964,3 +8013,232 @@ def test_open_source_call_preserves_descriptor_format_and_keyword_order(tmp_path
         and miss["location"]["line"] == 3
     )
     assert len(prefix) == 2
+
+
+def test_open_named_exception_arms_dispatch_and_release_the_actual_exception(tmp_path):
+    from types import SimpleNamespace
+
+    from scar.contract import read_member
+    from scar.frontend import build
+    from scar.middle import plan
+
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    source = pkg / "__init__.py"
+    source.write_text(
+        "from . import child as unused\ndel unused\n"
+        "try:\n    operation()\nexcept First:\n    first()\n"
+        "except Second as caught:\n    selected(caught)\n"
+        "try:\n    other()\nexcept Second as pending:\n    boundary = 37\n"
+        "tail = 1\n"
+    )
+    (pkg / "child.py").write_text("pass\n")
+    entry = tmp_path / "main.py"
+    entry.write_text("import pkg\n")
+    code = compile(source.read_bytes(), str(source), "exec")
+    graph, out = tmp_path / "graph", tmp_path / "out"
+    build(entry, graph)
+    source.unlink()
+    assert plan(graph, out)["status"] == "INCOMPLETE"
+    report = json.loads((out / "plan.json").read_bytes())
+    [issue] = report["issues"]
+    assert (issue["code"], issue["location"]["line"]) == (
+        "python.global_store_after_callback",
+        12,
+    )
+    row = next(
+        r
+        for r in report["protocol_analysis"]["prefix_fragments"]
+        if r["symbol"] == "py:pkg:<init>"
+    )
+    fragment = read_member(out, row["fragment"])
+    [closed] = [s for s in fragment["body"] if s["op"] == "try"]
+    arms = closed["handlers"]
+    assert not arms[0]["on_match"] and not arms[0]["cleanup"]
+    for index, arm in enumerate(arms):
+        match = arm["match"]
+        assert match["op"] == "source_exception_match" and match["may_raise"]
+        assert (
+            match["external_effect"] == "UNKNOWN"
+            and match["matcher"]["op"] == "module_name_load"
+        )
+        assert match["source_exception_handler"]["arm_index"] == index
+        assert "source_exception_dispatch" in match["on_code_mismatch"]
+    bind = arms[1]["on_match"][0]["value"]
+    clear = arms[1]["cleanup"][0]["value"]
+    assert (
+        bind["op"] == "source_exception_bind"
+        and bind["value"] == arms[1]["match"]["exception"]
+    )
+    assert (
+        clear["op"] == "source_exception_clear"
+        and clear["exceptional_cleanup"][-1]["opcode"] == "RERAISE"
+    )
+    assert [i["opcode"] for i in clear["normal_exit"]][-3:] == [
+        "LOAD_CONST",
+        "STORE_NAME",
+        "DELETE_NAME",
+    ]
+
+    frontier = fragment["frontier"]
+    assert frontier["operator"] == "try" and not frontier.get("evaluation")
+    partial = next(
+        r for r in frontier["regions"] if r["path"] == ["handlers", 0, "body"]
+    )
+    assert (
+        partial["completion"] == "prefix"
+        and partial["frontier"]["operator"] == "assign"
+    )
+    assert (
+        partial["handler"]["match"]["source_exception_handler"]["load"]["name"]
+        == "Second"
+    )
+    assert partial["handler"]["on_match"][0]["value"]["name"] == "pending"
+    assert partial["handler"]["cleanup"][0]["value"]["name"] == "pending"
+
+    def execute(mode, lowered):
+        log = []
+        original = ValueError("original")
+
+        class Local(dict):
+            def __getitem__(self, key):
+                if key in ("First", "Second"):
+                    log.append(("lookup", key, sys.exception() is original))
+                    if key == "First":
+                        if mode == "lookup_error":
+                            raise RuntimeError("lookup")
+                        # A failed match can replace the next handler's target.
+                        self["Second"] = (
+                            7 if mode == "invalid" else (ValueError, KeyError)
+                        )
+                return super().__getitem__(key)
+
+            def __setitem__(self, key, value):
+                if key == "caught":
+                    log.append(("store", value is original, value is None))
+                    if (
+                        mode == "bind_error"
+                        and value is original
+                        or mode == "cleanup_error"
+                        and value is None
+                    ):
+                        raise RuntimeError("store")
+                super().__setitem__(key, value)
+                if key == "caught" and value is original and mode == "reentrant_store":
+                    super().__setitem__(key, "replacement")
+
+            def __delitem__(self, key):
+                if key == "caught":
+                    log.append(("delete", self[key] is None))
+                super().__delitem__(key)
+
+        loc = Local(First=ValueError if mode == "first" else KeyError, Second=object())
+        global_ = {
+            "__builtins__": {"__import__": lambda *args: SimpleNamespace(child=0)}
+        }
+
+        def operation():
+            log.append("protected")
+            if mode != "normal":
+                if mode == "miss":
+                    raise ArithmeticError("miss")
+                raise original
+
+        def selected(e):
+            log.append(("selected", e is original, sys.exception() is original))
+            if mode == "body_error":
+                raise RuntimeError("body")
+
+        loc.update(
+            operation=operation,
+            first=lambda: log.append("first"),
+            selected=selected,
+            other=lambda: None,
+        )
+
+        def lookup(arm):
+            load = arm["match"]["matcher"]
+            assert load["lookup_order"] == [
+                "frame.locals",
+                "frame.globals",
+                "frame.builtins",
+            ]
+            return loc[load["instruction"]["name"]]
+
+        def cleanup(arm, exit_kind):
+            step = arm["cleanup"][0]["value"]
+            mapping = loc if step["namespace"] == "frame.locals" else global_
+            for instruction in step[exit_kind]:
+                if instruction["opcode"] == "STORE_NAME":
+                    mapping[instruction["name"]] = None
+                elif instruction["opcode"] == "DELETE_NAME":
+                    del mapping[instruction["name"]]
+
+        try:
+            if lowered:
+                finished = None
+                try:
+                    operation()
+                except lookup(arms[0]):
+                    loc["first"]()
+                except lookup(arms[1]):
+                    alias = arms[1]["on_match"][0]["value"]
+                    loc[alias["name"]] = sys.exception()
+                    try:
+                        loc["selected"](loc[alias["name"]])
+                    except BaseException:
+                        cleanup(arms[1], "exceptional_cleanup")
+                        raise
+                    finished = arms[1]
+                if finished is not None:
+                    cleanup(finished, "normal_exit")
+            else:
+                exec(code, global_, loc)
+        except BaseException as raised:
+            log.append(
+                (
+                    "raised",
+                    type(raised),
+                    raised is original,
+                    raised.__context__ is original,
+                )
+            )
+        return log, "caught" in loc
+
+    for mode in (
+        "normal",
+        "first",
+        "second",
+        "miss",
+        "invalid",
+        "lookup_error",
+        "bind_error",
+        "body_error",
+        "cleanup_error",
+        "reentrant_store",
+    ):
+        seen = execute(mode, False)
+        assert execute(mode, True) == seen
+        assert seen[0].count("protected") == 1
+        if mode == "normal":
+            assert seen == (["protected"], False)
+        if mode == "invalid":
+            assert seen[0][-1] == ("raised", TypeError, False, True)
+
+    index = json.loads((graph / "graph.json").read_bytes())
+    unit = next(u for u in index["units"] if u["path"] == "pkg/__init__.py")
+    definition = read_member(graph, unit["graph"])
+    arm = next(
+        n
+        for fn in definition["functions"]
+        for n in fn["nodes"]
+        if n["op"] == "exception_handler" and n["location"]["line"] == 5
+    )
+    del arm["source_exception_handler"]
+    unit["graph"] = member(graph, "units", definition)
+    old = graph / "old.json"
+    write_json(old, index)
+    prior = tmp_path / "old-plan"
+    assert plan(old, prior)["status"] == "INCOMPLETE"
+    [gap] = json.loads((prior / "plan.json").read_bytes())["issues"]
+    assert gap["location"]["line"] == 5 and gap["code"] == "python.name_binding"

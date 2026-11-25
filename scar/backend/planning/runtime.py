@@ -150,6 +150,26 @@ def _fields(record, fields):
     return {key: record[key] for key in fields if key in record}
 
 
+def _binding_read(read):
+    result = _fields(read, _READ_FIELDS)
+    if (use := read.get("operand_use")) is not None:
+        if not isinstance(use, dict) or not isinstance(use.get("attributes"), list):
+            raise QualificationFailure(
+                "semantic_contract",
+                "module_registry.operand_use",
+                "a binding use requires ordered attribute edges",
+                field="operand_use",
+            )
+        attrs = use["attributes"]
+        result["operand_use"] = dict(
+            attributes=attrs[:_BINDING_READS],
+            omitted_attributes=max(0, len(attrs) - _BINDING_READS),
+        )
+        if "consumer" in use:
+            result["operand_use"]["consumer"] = use["consumer"]
+    return result
+
+
 def is_registry_operation(operation):
     return (
         operation.get("operator_family") == "module_registry"
@@ -210,7 +230,7 @@ def _guard_details(checks):
             )
             if domain == "namespace" or reads:
                 row.update(
-                    binding_reads=[_fields(read, _READ_FIELDS) for read in shown],
+                    binding_reads=[_binding_read(read) for read in shown],
                     binding_read_count=len(reads),
                     omitted_binding_reads=len(reads) - len(shown),
                 )

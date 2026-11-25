@@ -706,6 +706,11 @@ def _initialize_source_namespace(frame, node, namespace):
             "source_import_position",
             "the namespace lookup has no preceding source IMPORT_NAME position",
         )
+    return retain_import_result(frame.project, row, point, namespace)
+
+
+def retain_import_result(project, row, point, namespace):
+    """Insert the actual loader call at the source occurrence, shared by its users."""
     marker, original = point
     operation = dict(
         op="module_namespace_initialize",
@@ -743,6 +748,12 @@ def _initialize_source_namespace(frame, node, namespace):
             instance_scope="per_successful_dynamic_import",
             retains="actual_IMPORT_NAME_result",
         ),
+        state_capture=dict(
+            occurrence=row["id"],
+            before="immediately_before_original_IMPORT_NAME",
+            after="on_normal_return_with_original_result_before_following_binding",
+            exceptional="propagate_without_check_or_retry",
+        ),
         initialization=dict(
             policy="one_original_IMPORT_NAME_at_its_source_position",
             fromlist="perform_complete_source_fromlist_precheck_before_any_IMPORT_FROM",
@@ -751,8 +762,8 @@ def _initialize_source_namespace(frame, node, namespace):
         ),
         **source_site(original),
     )
-    namespace_operations.require_registry_operator(frame.project, operation["op"])
-    ledger.producer(row, operation, "source_import")
+    namespace_operations.require_registry_operator(project, operation["op"])
+    project.source_imports.producer(row, operation, "source_import")
     marker["body"].append(dict(op="expr", value=operation))
     return row
 

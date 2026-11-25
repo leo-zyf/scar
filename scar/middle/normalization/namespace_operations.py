@@ -716,6 +716,15 @@ def _object_truth(frame, node, code):
         )
 
 
+def _register_expression(frame, expression):
+    for item in walk_operations(expression, exclude_fields={"source_evidence"}):
+        if item["op"] in MODULE_REGISTRY_OPERATIONS:
+            require_registry_operator(frame.project, item["op"])
+        if item.get("site") is not None:
+            frame.project.normalized_sites.add((frame.name, item["site"]))
+            frame.project.live_sites.add((frame.name, item["site"]))
+
+
 def open_object_expression(frame, node, steps, *, truth_context, discard):
     """Only a truth value or completed discard may leave this source evaluation stack."""
     if not (truth_context or discard) or not (code := _open_module_code(frame)):
@@ -750,12 +759,7 @@ def open_object_expression(frame, node, steps, *, truth_context, discard):
         )
     if expression is None:
         return None
-    for item in walk_operations(expression, exclude_fields={"source_evidence"}):
-        if item["op"] in MODULE_REGISTRY_OPERATIONS:
-            require_registry_operator(frame.project, item["op"])
-        if item.get("site") is not None:
-            frame.project.normalized_sites.add((frame.name, item["site"]))
-            frame.project.live_sites.add((frame.name, item["site"]))
+    _register_expression(frame, expression)
     return namespace_effect(
         frame,
         node,
@@ -774,8 +778,8 @@ def open_object_expression(frame, node, steps, *, truth_context, discard):
     )
 
 
-def namespace_effect(
-    frame, node, steps, opcode, *, result="unit", reads=(), writes=(), **operands
+def _namespace_operation(
+    frame, node, opcode, *, result="unit", reads=(), writes=(), **operands
 ):
     action = dict(
         op=opcode,
@@ -813,14 +817,124 @@ def namespace_effect(
         **operands,
     )
     require_registry_operator(frame.project, opcode)
+    return action
+
+
+def _open_namespace_after(frame, action):
+    frame.project.names.clear()
+    frame.project.imports.open_namespace = dict(
+        owner=frame.name, operation=action["op"], **source_site(action)
+    )
+
+
+def observe_handler_effect(frame, action):
+    """Transfer analysis state along an actual arm edge without emitting a second operation."""
+    frame.observe_effect(action)
+    _open_namespace_after(frame, action)
+
+
+def namespace_effect(frame, node, steps, opcode, *, result="unit", **operands):
+    action = _namespace_operation(frame, node, opcode, result=result, **operands)
     if opcode in {"module_fromlist_publish", "module_import_publish"}:
         row = frame.project.source_imports.get(frame.name, node)
         frame.project.source_imports.producer(row, action, "source_import")
     value = frame.effect(action, result, steps, discard=result == "unit")
-    # Import callbacks and releasing arbitrary objects can reenter Python and
-    # replace bindings, including names that never appeared in the source.
-    frame.project.names.clear()
-    frame.project.imports.open_namespace = dict(
-        owner=frame.name, operation=opcode, **source_site(node)
-    )
+    _open_namespace_after(frame, action)
     return value
+
+
+def open_exception_handler(frame, node, index, count):
+    """Build the conditional entry and cleanup operations for one verified arm."""
+    code = _open_module_code(frame)
+    if not code or node.get("test") is None:
+        return None
+    receipt = node.get("source_exception_handler")
+    if receipt is None:
+        return None
+    test = node["test"]
+    matcher = _object_operand(frame, test, code)
+    if not (
+        matcher is not None
+        and matcher["op"] == "module_name_load"
+        and receipt["code_sha256"] == code["code_sha256"]
+        and receipt["load"] == matcher["instruction"]
+        and receipt["arm_index"] == index
+        and receipt["arm_count"] == count
+    ):
+        frame.fail(
+            test,
+            "exception_match_operands",
+            "the handler's position or name lookup differs from its source exception dispatch",
+        )
+    _register_expression(frame, matcher)
+    active = {
+        "source": "currently_dispatched_exception",
+        "identity": "original_exception_object",
+        "lifetime": "per_exception_dispatch_in_current_activation",
+        "entry_offset": receipt["entry"]["offset"],
+    }
+    match = _namespace_operation(
+        frame,
+        node,
+        "source_exception_match",
+        result="bool",
+        reads=("frame.code", "frame.locals", "python.exception_state"),
+        writes=("python.exception_state",),
+        exception=active,
+        matcher=matcher,
+        source_code=code,
+        source_exception_handler=receipt,
+        code_match="qualify_current_activation_code_exception_table_and_current_handler_stack_before_lookup",
+        on_code_mismatch="resume_source_exception_dispatch_before_this_matcher_with_original_exception_traceback_and_stack",
+        dispatch="source_CHECK_EXC_MATCH_validate_actual_class_or_tuple_then_match_against_original_exception",
+        exception_state="enter_dispatch_once_preserve_previous_handled_exception_and_restore_at_source_POP_EXCEPT_or_unwind",
+        on_match="run_on_match_then_body_with_source_active_exception",
+        on_miss="continue_ordered_dispatch_with_same_exception_and_post_lookup_state_or_reraise",
+        on_error="unwind_match_failure_follow_source_exception_table_and_preserve_original_exception_context",
+    )
+    header = dict(match=match, binding=None, on_match=[], cleanup=[])
+    alias = node.get("binding")
+    if alias is None:
+        return header
+    if alias.get("cell"):
+        frame.fail(
+            alias,
+            "handler_binding",
+            "exception alias requires its current module mapping",
+        )
+    store = receipt["matched"][-1]
+    mapping = "frame.locals" if store["opcode"] == "STORE_NAME" else "frame.globals"
+    common = dict(
+        slot=alias["name"],
+        name=store["name"],
+        key_index=store["index"],
+        namespace=mapping,
+        arm_index=index,
+        source_code_sha256=code["code_sha256"],
+        reads=("frame.code", "frame.locals", "python.exception_state"),
+        writes=(mapping, "python.exception_state"),
+    )
+    bind = _namespace_operation(
+        frame,
+        node,
+        "source_exception_bind",
+        **common,
+        instruction=store,
+        value=active,
+        publication="source_store_of_original_exception_on_matched_edge_only",
+        release="preserve_replaced_binding_release_reentry_and_unraisable_finalizer_errors",
+        on_error="follow_source_unwind_from_store_without_entering_body",
+    )
+    clear = _namespace_operation(
+        frame,
+        node,
+        "source_exception_clear",
+        **common,
+        normal_exit=receipt["normal_exit"],
+        exceptional_cleanup=receipt["exceptional_cleanup"],
+        cleanup="follow_exit_specific_source_opcodes_including_None_store_then_delete_with_release_and_reentry",
+        on_error="follow_source_exception_table_at_failing_cleanup_instruction_preserving_completed_effects",
+    )
+    header["on_match"].append(dict(op="expr", value=bind))
+    header["cleanup"].append(dict(op="expr", value=clear))
+    return header

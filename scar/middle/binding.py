@@ -2,6 +2,7 @@
 
 from collections import defaultdict
 from .contracts import publish_program
+from .source_binding import bind_call_expression, bind_exception_arms, bind_import_store
 from scar.contract import (
     digest,
     json_bytes,
@@ -112,162 +113,6 @@ _SITE_OPERATIONS = {
 }
 
 
-def _source_position(location):
-    return [
-        location["line"],
-        location["end_line"],
-        location["column"] - 1,
-        location["end_column"] - 1,
-    ]
-
-
-def _bind_call_expression(node, scope):
-    """Bind positioned instruction evidence; M2 verifies semantic evaluation order."""
-    proof, code = node["source_expression"], scope.get("source_code") or {}
-    loc = node["location"]
-    position = _source_position(loc)
-    if not (
-        isinstance(proof, dict)
-        and type(proof.get("semantics_version")) is int
-        and proof["semantics_version"] == 1
-        and code.get("kind") == "module"
-        and isinstance(node.get("target"), dict)
-        and isinstance(node.get("args"), list)
-        and isinstance(node.get("keywords"), list)
-        and proof.get("code_sha256") == code.get("code_sha256")
-        and loc.get("file") == code.get("source_key")
-        and proof.get("position") == position
-        and isinstance(proof.get("instructions"), list)
-        and proof["instructions"]
-    ):
-        raise ValueError("source call region disagrees with its module and call port")
-    first = position[0], position[2]
-    last = position[1], position[3]
-    previous = -1
-    for instruction in proof["instructions"]:
-        if not isinstance(instruction, dict):
-            raise ValueError("invalid source instruction in call region")
-        offset, opcode = instruction.get("offset"), instruction.get("opcode")
-        span = instruction.get("position")
-        if not (
-            type(offset) is int
-            and offset > previous
-            and isinstance(opcode, str)
-            and opcode
-            and isinstance(span, list)
-            and len(span) == 4
-            and all(type(v) is int and v >= 0 for v in span)
-            and first <= (span[0], span[2]) <= (span[1], span[3]) <= last
-            and all(
-                type(instruction[k]) is int and instruction[k] >= 0
-                for k in ("oparg", "index")
-                if k in instruction
-            )
-        ):
-            raise ValueError("invalid source instruction position or operand")
-        previous = offset
-        if opcode in {"LOAD_NAME", "LOAD_ATTR", "LOAD_GLOBAL"}:
-            arg = instruction.get("oparg")
-            if not (
-                type(arg) is int
-                and isinstance(instruction.get("name"), str)
-                and instruction.get("index")
-                == (arg if opcode == "LOAD_NAME" else arg >> 1)
-            ):
-                raise ValueError("source call name operand disagrees with its index")
-        elif opcode in {"LOAD_CONST", "KW_NAMES", "LOAD_SMALL_INT"}:
-            immediate = opcode == "LOAD_SMALL_INT"
-            arg = instruction.get("oparg")
-            index_matches = (
-                "index" not in instruction
-                if immediate
-                else instruction.get("index") == arg
-            )
-            if type(arg) is not int or not index_matches:
-                raise ValueError("source call literal operand disagrees with its index")
-            if instruction.get("type") == "tuple":
-                names = instruction.get("names")
-                if (
-                    immediate
-                    or not isinstance(names, list)
-                    or not all(isinstance(n, str) for n in names)
-                ):
-                    raise ValueError("invalid source keyword tuple")
-            else:
-                fingerprint = instruction.get("value_sha256")
-                if (
-                    opcode == "KW_NAMES"
-                    or instruction.get("type")
-                    not in {"int", "float", "str", "bool", "NoneType"}
-                    or not isinstance(fingerprint, str)
-                    or len(fingerprint) != 64
-                    or any(c not in "0123456789abcdef" for c in fingerprint)
-                ):
-                    raise ValueError("missing literal identity in source call")
-    if proof["instructions"][-1]["opcode"] != "POP_TOP":
-        raise ValueError("source call region has no final result discard")
-
-
-def _bind_import_store(node, scope):
-    """Check an optional bytecode witness against the reconstructed graph ports."""
-    proof = node["source_import_store"]
-    request, target, loc = node["request"], node["binding"], node["location"]
-    module = node["module"]
-    slot = node.get("alias") or module.partition(".")[0]
-    ports = ("level", "fromlist", "import_name", "store")
-    if not isinstance(proof, dict) or not all(
-        isinstance(proof.get(key), dict) for key in ports
-    ):
-        raise ValueError("invalid source import operands")
-    level, fromlist, imported, stored = (proof[key] for key in ports)
-    code = scope.get("source_code") or {}
-    position = proof.get("position")
-    # CPython may load the import level from its constant table or encode
-    # zero in the instruction itself. Only the former owns a table index.
-    immediate = level.get("opcode") == "LOAD_SMALL_INT"
-    indexed = (
-        (fromlist, imported, stored)
-        if immediate
-        else (level, fromlist, imported, stored)
-    )
-    level_matches = (
-        type(level.get("oparg")) is int and level["oparg"] == 0 and "index" not in level
-        if immediate
-        else level.get("opcode") == "LOAD_CONST" and "oparg" not in level
-    )
-    if not (
-        type(proof.get("semantics_version")) is int
-        and proof["semantics_version"] == 1
-        and code.get("kind") == "module"
-        and proof.get("code_sha256") == code["code_sha256"]
-        and loc.get("file") == code["source_key"]
-        and position == _source_position(loc)
-        and request.get("form") == "import"
-        and request.get("module") == imported.get("name") == module
-        and request.get("level") == 0
-        and request.get("fromlist") == []
-        and level_matches
-        and fromlist.get("opcode") == "LOAD_CONST"
-        and type(level.get("value")) is int
-        and level["value"] == 0
-        and "value" in fromlist
-        and fromlist["value"] is None
-        and imported.get("opcode") == "IMPORT_NAME"
-        and stored.get("opcode") in {"STORE_NAME", "STORE_GLOBAL"}
-        and stored.get("name") == slot
-        and target.get("op") == "var"
-        and target.get("scope") == "global"
-        and target.get("name") == f"py:{scope['module']}:{slot}"
-        and all(type(p.get("index")) is int and p["index"] >= 0 for p in indexed)
-        and all(
-            type(p.get("offset")) is int and p["offset"] >= 0
-            for p in (level, fromlist, imported, stored)
-        )
-        and level["offset"] < fromlist["offset"] < imported["offset"] < stored["offset"]
-    ):
-        raise ValueError("source import operands disagree with their graph ports")
-
-
 def _definition(graph):
     nodes = graph["nodes"]
     active = set()
@@ -284,11 +129,11 @@ def _definition(graph):
             active.add(port)
             result = read(nodes[port])
             if result["op"] == "python_import" and "source_import_store" in result:
-                _bind_import_store(result, graph["signature"].get("python_scope", {}))
+                bind_import_store(result, graph["signature"].get("python_scope", {}))
             if "source_expression" in result:
-                _bind_call_expression(
-                    result, graph["signature"].get("python_scope", {})
-                )
+                bind_call_expression(result, graph["signature"].get("python_scope", {}))
+            if result["op"] == "try":
+                bind_exception_arms(result, graph["signature"].get("python_scope", {}))
             if result["op"] in _SITE_OPERATIONS or "source_name_load" in result:
                 result["site"] = f"{graph['id']}/{port}"
             active.remove(port)
