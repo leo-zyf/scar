@@ -120,6 +120,85 @@ print(retain() == "before", retain() == "after")
     assert rejected["issues"][0]["code"] == "python.recursive_progress"
 
 
+def test_selective_expressions_and_eager_comprehensions_preserve_effect_order(tmp_path):
+    entry = tmp_path / "entry.py"
+    entry.write_text("""def probe(value):
+    print(value)
+    return value
+
+def choose(flag):
+    return probe(11) if flag else probe(22)
+
+def build(count):
+    return [probe(index) if index else probe(-1)
+            for index in range(count) if index % 2 == 0]
+
+print(choose(True), choose(False))
+index = 91
+rows = build(6)
+print(len(rows), index == 91)
+for item in rows:
+    print(item)
+pairs = [i if j else -i for i in range(3) for j in range(2) if i]
+for item in pairs:
+    print(item)
+print(len([probe(i) for i in range(0)]))
+seen = -1
+observed = [(seen := i) for i in range(3)]
+print(len(observed), observed[0], observed[-1], seen)
+print(probe(31) if True else never_called())
+""")
+    expected = subprocess.run(
+        [sys.executable, "-B", entry], capture_output=True, timeout=30
+    )
+    assert expected.returncode == 0 and not expected.stderr
+    graph, plan, delivery = (tmp_path / name for name in ("graph", "plan", "delivery"))
+    _stage(tmp_path, "frontend", "build", "--entry", entry, "--out", graph)
+    entry.unlink()
+    planned = _stage(tmp_path, "middle", "plan", "--graph", graph, "--out", plan)
+    assert planned["status"] == "READY"
+    shutil.rmtree(graph)
+    compiled = _stage(tmp_path, "backend", "compile", "--ir", plan, "--out", delivery)
+    shutil.rmtree(plan)
+    actual = subprocess.run([compiled["executable"]], capture_output=True, timeout=30)
+    assert (actual.returncode, actual.stdout, actual.stderr) == (
+        expected.returncode,
+        expected.stdout,
+        expected.stderr,
+    )
+
+
+def test_source_coverage_survives_graph_index_diagnostic_removal(tmp_path):
+    source = tmp_path / "state.f90"
+    source.write_text(
+        "module persistent\ninteger::counter\nend module\n"
+        "program entry\nprint *,1\nend program\n"
+    )
+    manifest = tmp_path / "request.json"
+    manifest.write_text(
+        json.dumps(
+            dict(
+                source_root=str(tmp_path),
+                entry="main",
+                units=[dict(path=source.name, language="fortran", flags=[])],
+            )
+        )
+    )
+    graph, plan = (tmp_path / name for name in ("graph", "plan"))
+    _stage(tmp_path, "frontend", "build", "--manifest", manifest, "--out", graph)
+    source.unlink()
+    path = graph / "graph.json"
+    document = json.loads(path.read_bytes())
+    (unit,) = document["units"]
+    assert unit["source_coverage"]["complete"] is False
+    assert any(d["code"] == "fortran.module_state" for d in unit["diagnostics"])
+    unit["diagnostics"] = []
+    path.write_text(json.dumps(document))
+    _stage(tmp_path, "middle", "plan", "--graph", graph, "--out", plan, returncode=2)
+    rejected = json.loads((plan / "plan.json").read_bytes())
+    assert any(d["code"] == "fortran.module_state" for d in rejected["issues"])
+
+
 @pytest.mark.parametrize("controller", [False, True])
 def test_make_capture_preserves_mixed_profiles_and_independent_stages(
     tmp_path, controller

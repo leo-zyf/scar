@@ -142,6 +142,77 @@ def _join_facts(items):
     return facts
 
 
+def select(frame, node, steps, *, discard=False, truth_context=False):
+    """Evaluate the condition once and only the selected expression arm."""
+    if (
+        node.get("protocol") != "python_truth"
+        or node.get("evaluation") != "condition_then_one_arm"
+    ):
+        frame.fail(node, "selection_protocol", "missing selective evaluation contract")
+    condition = frame.evaluate(node["condition"], steps, truth_context=True)
+    if type(condition.exact) is bool:
+        selected = "then" if condition.exact else "else"
+        frame.skip_expression(
+            node["else" if condition.exact else "then"],
+            dict(
+                rule="constant_expression_condition",
+                guard_site=node.get("site"),
+                truth=condition.exact,
+            ),
+        )
+        return frame.evaluate(
+            node[selected], steps, discard=discard, truth_context=truth_context
+        )
+    start = frame.snapshot()
+    arms, results, states = [], [], []
+    frame.dynamic += 1
+    frame.enter_control("branch", node)
+    try:
+        for side in ("then", "else"):
+            frame.restore(start)
+            body = []
+            results.append(
+                frame.evaluate(
+                    node[side], body, discard=discard, truth_context=truth_context
+                )
+            )
+            arms.append(body)
+            states.append(frame.snapshot())
+    finally:
+        frame.leave_control()
+        frame.dynamic -= 1
+    frame.merge(states)
+    if discard:
+        result = literal(None)
+    else:
+        kinds = [item.kind for item in results]
+        if all(values.is_sequence(kind) for kind in kinds):
+            kind = kinds[0] if frame.project.sequences.compatible(*kinds) else None
+        elif all(values.is_array(kind) for kind in kinds):
+            try:
+                kind = values.join_arrays(kinds)
+            except ValueError:
+                kind = None
+        else:
+            kind = values.choice(kinds)
+        if kind is None or not values.runtime(kind):
+            frame.fail(
+                node,
+                "selection_type",
+                "selected arms require compatible closed source value types",
+            )
+        result = Value(kind, None, _join_facts(results)).at(frame.temporary())
+        steps.append(dict(op="decl", name=result.value["name"], type=values.wire(kind)))
+        for body, item in zip(arms, results):
+            body.append(
+                dict(op="assign", target=result.value, value=frame.scalar(item, node))
+            )
+    steps.append(
+        dict(op="if", condition=condition.value, then=arms[0], **{"else": arms[1]})
+    )
+    return result
+
+
 def _guarded(
     frame, node, steps, operands, evaluate_operand, stop_truth, discard, truth_context
 ):

@@ -43,19 +43,33 @@ def _annotation_items(node):
         yield "return", node.returns
 
 
-def _deferred_syntax(value):
-    """Preserve unevaluated syntax without introducing execution ports or effects."""
+def _deferred_syntax(value, *, positioned=False):
+    """Keep syntax fields as data. Only an enclosing source node can give them effects."""
     if isinstance(value, ast.AST):
-        return {
+        record = {
             "syntax": type(value).__name__,
             "fields": [
-                [k, _deferred_syntax(v)]
+                [k, _deferred_syntax(v, positioned=positioned)]
                 for k, v in ast.iter_fields(value)
-                if k != "ctx"
+                if positioned or k != "ctx"
             ],
         }
+        if positioned:
+            # Scalar fields and positionless ASDL helpers (e.g. Load) inherit
+            # their containing span. Columns are one-based UTF-8 byte offsets.
+            if getattr(value, "lineno", None) is None:
+                record["span"] = "enclosing"
+            else:
+                end_column = getattr(value, "end_col_offset", None)
+                record["span"] = [
+                    value.lineno,
+                    value.col_offset + 1,
+                    getattr(value, "end_lineno", None),
+                    end_column + 1 if end_column is not None else None,
+                ]
+        return record
     if isinstance(value, list):
-        return [_deferred_syntax(v) for v in value]
+        return [_deferred_syntax(v, positioned=positioned) for v in value]
     if isinstance(value, bytes):
         return {"bytes": value.hex()}
     if isinstance(value, float):
@@ -64,7 +78,7 @@ def _deferred_syntax(value):
         return {"complex": [value.real.hex(), value.imag.hex()]}
     if value is Ellipsis:
         return {"singleton": "Ellipsis"}
-    return value
+    return numeric_wire_value(value)
 
 
 def _type_parameters(node):
@@ -1350,8 +1364,10 @@ class _Scope:
                 effects=["MEM", "CTRL", "STATE"],
                 may_raise=True,
             ), {"class": "dict"}
-        if isinstance(node, ast.DictComp):
-            return self.mapping_comprehension(node)
+        if isinstance(node, (ast.DictComp, ast.ListComp)):
+            return self.comprehension(node)
+        if isinstance(node, ast.IfExp):
+            return self.select(node)
         if isinstance(node, ast.NamedExpr):
             value, fact = self.expr(node.value)
             owner = self.assignment_scope()
@@ -1418,29 +1434,33 @@ class _Scope:
         return {"op": "var", "scope": "global", "name": symbol}
 
     def unhandled(self, node):
-        children = []
-        for field, v in ast.iter_fields(node):
-            for child in (v if isinstance(v, list) else [v]):
-                if isinstance(child, ast.stmt):
-                    children.extend(self.statements([child]))
-                elif isinstance(child, ast.expr):
-                    children.append(self.expr(child)[0])
-                elif isinstance(child, ast.AST) and not isinstance(
-                    child,
-                    (
-                        ast.expr_context,
-                        ast.operator,
-                        ast.unaryop,
-                        ast.cmpop,
-                        ast.boolop,
-                    ),
-                ):
-                    children.append(self.unhandled(child))
+        # A missing protocol can select, defer or repeat any child. Treating
+        # child syntax as operations would invent execution ordering and facts.
+        self.widen([node])
+        if self.assignment_scope() is not self:
+            self.assignment_scope().widen([node])
         return self.record(
             node,
             "unsupported",
             construct=type(node).__name__,
-            children=children,
+            syntax=_deferred_syntax(node, positioned=True),
+            evaluation={"control": "unresolved", "field_order": "syntax_only"},
+            effects=["OPAQUE", "CTRL", "STATE"],
+            may_raise=True,
+            effect_summary=dict.fromkeys(
+                (
+                    "reads",
+                    "writes",
+                    "allocates",
+                    "frees",
+                    "aliases",
+                    "escapes",
+                    "rng_effect",
+                    "external_effect",
+                    "ordering_effect",
+                ),
+                "UNKNOWN",
+            ),
             missing=self.issue(
                 node, "protocol", "unbound " + type(node).__name__ + " protocol"
             ),
@@ -1465,7 +1485,39 @@ class _Scope:
     def assignment_scope(self):
         return self
 
-    def mapping_comprehension(self, node):
+    def select(self, node):
+        condition = self.expr(node.test)[0]
+        self.invalidate_shared()  # __bool__ or __len__ can call user code.
+        # A walrus in a comprehension arm targets its enclosing lexical frame.
+        scopes = [self]
+        while isinstance(scopes[-1], _ComprehensionScope):
+            scopes.append(scopes[-1].parent)
+        incoming = [s.env.copy() for s in scopes]
+        yes, yes_fact = self.expr(node.body)
+        yes_envs = [s.env for s in scopes]
+        for scope, env in zip(scopes, incoming):
+            scope.env = env
+        no, no_fact = self.expr(node.orelse)
+        for scope, env in zip(scopes, yes_envs):
+            scope.merge(env, scope.env)
+        fact = _join_facts(yes_fact, no_fact)
+        return (
+            self.record(
+                node,
+                "python_select",
+                condition=condition,
+                then=yes,
+                **{"else": no},
+                protocol="python_truth",
+                evaluation="condition_then_one_arm",
+                type=_py_type(fact.get("class")),
+                effects=["CTRL", "STATE"],
+                may_raise=True,
+            ),
+            fact,
+        )
+
+    def comprehension(self, node):
         first = self.expr(node.generators[0].iter)[0]
         owner = self.assignment_scope()
         before = owner.env.copy()
@@ -1490,23 +1542,29 @@ class _Scope:
                     asynchronous=bool(clause.is_async),
                 )
             )
-        key = inner.expr(node.key)[0]
-        value = inner.expr(node.value)[0]
+        if isinstance(node, ast.DictComp):
+            kind, op = "dict", "mapping_comprehension"
+            result = {
+                "key": inner.expr(node.key)[0],
+                "value": inner.expr(node.value)[0],
+            }
+        else:
+            kind, op = "list", "sequence_comprehension"
+            result = {"kind": kind, "element": inner.expr(node.elt)[0]}
         inner.invalidate_shared()
         owner.merge(before, owner.env)
         return self.record(
             node,
-            "mapping_comprehension",
+            op,
             scope=dict(
                 owner=self.symbol, id=inner.scope_id, bindings=sorted(inner.locals)
             ),
             generators=generators,
-            key=key,
-            value=value,
-            type=_py_type("dict"),
+            **result,
+            type=_py_type(kind),
             effects=["MEM", "CTRL", "STATE"],
             may_raise=True,
-        ), {"class": "dict"}
+        ), {"class": kind}
 
     def branch(self, body, env):
         previous = self.env

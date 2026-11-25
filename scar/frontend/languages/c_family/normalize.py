@@ -4,7 +4,15 @@ import hashlib
 from pathlib import PurePath
 
 from . import io as io_effects, objects, standard_library
-from .facts import ParsedUnit, cursor_kind as _kind
+from .facts import (
+    ParsedUnit,
+    cursor_kind as _kind,
+    type_kind,
+    is_attribute,
+    is_expression,
+    function_parameter_types,
+    element_type,
+)
 
 
 class _Unsupported(Exception):
@@ -72,7 +80,25 @@ _FUNCTIONS = {
     "CONVERSION_FUNCTION",
 }
 _RECORDS = {"STRUCT_DECL", "CLASS_DECL", "UNION_DECL"}
-_SCOPES = {"NAMESPACE", "LINKAGE_SPEC", "UNEXPOSED_DECL"}
+# These declarations affect compile-time lookup, access or validation. Clang's
+# resolved references and canonical types already contain their effect at each use.
+_LOOKUP_DECLARATIONS = {
+    "TYPEDEF_DECL",
+    "TYPE_ALIAS_DECL",
+    "TYPE_ALIAS_TEMPLATE_DECL",
+    "USING_DECLARATION",
+    "USING_DIRECTIVE",
+    "NAMESPACE_ALIAS",
+    "CXX_ACCESS_SPEC_DECL",
+    "STATIC_ASSERT",
+    "CONCEPT_DECL",
+}
+_TEMPLATES = {
+    "FUNCTION_TEMPLATE",
+    "CLASS_TEMPLATE",
+    "CLASS_TEMPLATE_PARTIAL_SPECIALIZATION",
+}
+_DIAGNOSTIC_ATTRIBUTES = {"WARN_UNUSED_ATTR", "WARN_UNUSED_RESULT_ATTR"}
 _LIBC_HEADERS = {
     "stdio.h",
     "stdlib.h",
@@ -151,7 +177,7 @@ def _public_header(cursor):
 
 
 def _va_list(t):
-    kind = t.kind.name
+    kind = type_kind(t)
     if kind not in {"CONSTANTARRAY", "POINTER"}:
         return False
     element = t.get_array_element_type() if kind == "CONSTANTARRAY" else t.get_pointee()
@@ -243,7 +269,7 @@ class _RecordIndex(dict):
 
 def _type(original, cursor, records):
     source = original.get_canonical()
-    kind = source.kind.name
+    kind = type_kind(source)
     if kind == "CONSTANTARRAY" and _va_list(source):
         return _va_interface()
     if source.is_volatile_qualified():
@@ -268,8 +294,8 @@ def _type(original, cursor, records):
         result = ("i" if kind in _SIGNED else "u") + str(8 * source.get_size())
     elif kind == "LONGDOUBLE":
         result = "f80"
-    elif kind == "COMPLEX" and source.element_type.kind.name in {"FLOAT", "DOUBLE"}:
-        result = "c64" if source.element_type.kind.name == "FLOAT" else "c128"
+    elif kind == "COMPLEX" and type_kind(element_type(source)) in {"FLOAT", "DOUBLE"}:
+        result = "c64" if type_kind(element_type(source)) == "FLOAT" else "c128"
     elif kind == "ENUM":
         result = _type(source.get_declaration().enum_type, cursor, records)
     elif kind in {"POINTER", "LVALUEREFERENCE"}:
@@ -281,7 +307,7 @@ def _type(original, cursor, records):
         shape = []
         element = source
         const_element = False
-        while element.kind.name == "CONSTANTARRAY":
+        while type_kind(element) == "CONSTANTARRAY":
             const_element |= element.is_const_qualified()
             shape.append(element.get_array_size())
             element = element.get_array_element_type().get_canonical()
@@ -298,7 +324,9 @@ def _type(original, cursor, records):
         return {
             "kind": "function",
             "result": _type(source.get_result(), cursor, records),
-            "params": [_type(a, cursor, records) for a in source.argument_types()],
+            "params": [
+                _type(a, cursor, records) for a in function_parameter_types(source)
+            ],
             "variadic": source.is_function_variadic(),
         }
     elif kind == "RECORD":
@@ -354,9 +382,23 @@ def _param_type(cursor, records):
     t = cursor.type.get_canonical()
     if _va_list(t):
         return _va_interface()
-    if t.kind.name in {"CONSTANTARRAY", "INCOMPLETEARRAY", "VARIABLEARRAY"}:
+    if type_kind(t) in {"CONSTANTARRAY", "INCOMPLETEARRAY", "VARIABLEARRAY"}:
         return {"kind": "ptr", "to": _type(t.get_array_element_type(), cursor, records)}
     return _type(t, cursor, records)
+
+
+def _variably_modified_alias(cursor):
+    ty = cursor.underlying_typedef_type.get_canonical()
+    while True:
+        kind = type_kind(ty)
+        if kind in {"VARIABLEARRAY", "DEPENDENTSIZEDARRAY"}:
+            return True
+        if kind in {"POINTER", "LVALUEREFERENCE", "RVALUEREFERENCE"}:
+            ty = ty.get_pointee()
+        elif kind in {"CONSTANTARRAY", "INCOMPLETEARRAY"}:
+            ty = ty.get_array_element_type()
+        else:
+            return False
 
 
 class _Unit:
@@ -375,6 +417,7 @@ class _Unit:
         self.expanded_records = set()
         self.methods = {}
         self.diagnostics = list(facts.diagnostics)
+        self.transparent = []
 
     def macro_at(self, cursor):
         declaration = self.facts.macro(cursor)
@@ -473,12 +516,12 @@ class _Unit:
             while self.pending_functions:
                 name, cursor = self.pending_functions.popitem()
                 if name not in self.functions:
-                    self.function(cursor)
+                    self.declaration(cursor)
             while self.records.specializations:
                 name, cursor = self.records.specializations.popitem()
                 if name not in self.expanded_records:
                     self.expanded_records.add(name)
-                    self.record(cursor)
+                    self.declaration(cursor)
         for name, methods in self.methods.items():
             record = self.records.get(name)
             if record and not record.get("opaque"):
@@ -501,6 +544,87 @@ class _Unit:
             }
         )
 
+    def mark_transparent(self, cursor, owner=None):
+        self.transparent.append(
+            {
+                "kind": _kind(cursor),
+                "role": "specification",
+                "owner": [owner.spelling] if owner and owner.spelling else [],
+                "location": self.location(cursor.location),
+                "status": "transparent",
+            }
+        )
+
+    def coverage(self):
+        records = [
+            {
+                "kind": issue["code"],
+                "role": "program_unit" if "symbol" in issue else "specification",
+                "owner": [issue["symbol"]] if "symbol" in issue else [],
+                "location": {
+                    "file": issue["file"],
+                    "line": issue["line"] or None,
+                    "column": issue["column"],
+                },
+                "status": "incomplete",
+                "diagnostic": issue,
+            }
+            for issue in self.diagnostics
+        ]
+        return {
+            "semantics_version": 1,
+            "language": self.facts.language,
+            "scope": "project_lookup_and_attribute_metadata_and_local_semantic_diagnostics",
+            "complete": not records,
+            "records": [*self.transparent, *records],
+        }
+
+    def attribute_errors(self, cursor):
+        if not self.facts.owns(cursor.location):
+            return
+        kind = _kind(cursor)
+        for child in cursor.get_children():
+            if not is_attribute(child):
+                continue
+            attr = _kind(child)
+            if attr in _DIAGNOSTIC_ATTRIBUTES or attr in {
+                "CXX_FINAL_ATTR",
+                "CXX_OVERRIDE_ATTR",
+            }:
+                self.mark_transparent(child, cursor)
+                continue
+            if (
+                kind in _RECORDS
+                and cursor.is_definition()
+                and attr in {"PACKED_ATTR", "ALIGNED_ATTR"}
+            ):
+                continue  # record() checks the actual layout.
+            tokens = [t.spelling for t in self.facts.tokens(child)]
+            head = tokens[: tokens.index("(")] if "(" in tokens else tokens
+            if head[:2] in (["gnu", "::"], ["clang", "::"], ["_Clang", "::"]):
+                head = head[2:]
+            name = head[0].strip("_") if len(head) == 1 else ""
+            if attr == "UNEXPOSED_ATTR" and name in {
+                "deprecated",
+                "unused",
+                "maybe_unused",
+                "nodiscard",
+            }:
+                self.mark_transparent(child, cursor)
+                continue
+            if kind in _FUNCTIONS and name in {"constructor", "destructor"}:
+                yield _Unsupported(
+                    child,
+                    "state.lifecycle_hook",
+                    f"process-start or exit hook for {self.symbol(cursor)}",
+                )
+            else:
+                yield _Unsupported(
+                    child,
+                    "attribute." + attr.lower(),
+                    f"{attr} {name or child.spelling} on {cursor.spelling or kind} requires an attribute rule",
+                )
+
     def signature(self, cursor, *, definition=False):
         name = _symbol(cursor, self.unit_tag)
         params = []
@@ -514,9 +638,9 @@ class _Unit:
             if definition:
                 qualified = arg.type.get_canonical()
                 if (
-                    qualified.kind.name == "POINTER"
+                    type_kind(qualified) == "POINTER"
                     and qualified.is_restrict_qualified()
-                    and qualified.get_pointee().kind.name
+                    and type_kind(qualified.get_pointee())
                     not in {"FUNCTIONPROTO", "FUNCTIONNOPROTO"}
                 ):
                     param["access_precondition"] = {
@@ -559,7 +683,7 @@ class _Unit:
         if method:
             sig["method"] = method
             self.methods.setdefault(method["owner"], {})[method["symbol"]] = method
-        if t.kind.name == "FUNCTIONPROTO" and t.is_function_variadic():
+        if type_kind(t) == "FUNCTIONPROTO" and t.is_function_variadic():
             sig["variadic"] = True
         return sig
 
@@ -634,18 +758,6 @@ class _Unit:
                 )
             )
         children = list(cursor.get_children())
-        for child in children:
-            if child.kind.is_attribute() and any(
-                t.spelling in {"constructor", "destructor"}
-                for t in self.facts.tokens(child)
-            ):
-                self.diagnostic(
-                    _Unsupported(
-                        child,
-                        "state.lifecycle_hook",
-                        f"process-start or exit hook for {name}",
-                    )
-                )
         blocks = [c for c in children if _kind(c) == "COMPOUND_STMT"]
         if len(blocks) == 1:
             for parameter in cursor.get_arguments():
@@ -721,9 +833,7 @@ class _Unit:
                 depth = 0
                 for token in following:
                     if depth == 0 and token in {"=", "{"}:
-                        operands = [
-                            c for c in field.get_children() if c.kind.is_expression()
-                        ]
+                        operands = [c for c in field.get_children() if is_expression(c)]
                         if not operands:
                             raise _Unsupported(
                                 field,
@@ -757,38 +867,56 @@ class _Unit:
         except _Unsupported as error:
             self.diagnostic(error, name)
         for child in children:
-            if _kind(child) in _FUNCTIONS | _RECORDS:
-                self.declaration(child)
-            elif (
-                _kind(child) == "VAR_DECL" and self.facts.initializer(child) is not None
+            kind = _kind(child)
+            if is_attribute(child) or kind in {
+                "TYPE_REF",
+                "TEMPLATE_REF",
+                "NAMESPACE_REF",
+            }:
+                continue
+            if kind in {"FIELD_DECL", "CXX_BASE_SPECIFIER"} or (
+                kind == "VAR_DECL" and self.facts.initializer(child) is None
             ):
-                # An in-class static/constexpr initializer is a definition for
-                # value use. Preserve its identity across translation units.
+                # Field/base layout was consumed above. A static data member
+                # without an in-class initializer does not define its storage here.
+                for error in self.attribute_errors(child):
+                    self.diagnostic(error, name)
+            else:
                 self.declaration(child)
 
     def declaration(self, cursor):
         kind = _kind(cursor)
-        loc = cursor.location
-        if loc.file and not self.facts.owns(loc):
+        if not self.facts.owns(cursor.location):
             return
-        if kind in _SCOPES:
+        # A project declaration attribute can affect linkage or registration
+        # even when the ordinary call graph does not reference this declaration.
+        for error in self.attribute_errors(cursor):
+            self.diagnostic(error)
+        if kind in {"NAMESPACE", "LINKAGE_SPEC"}:
             for child in cursor.get_children():
-                self.declaration(child)
+                if not is_attribute(child):
+                    self.declaration(child)
         elif kind in _FUNCTIONS:
+            for parameter in cursor.get_arguments():
+                for error in self.attribute_errors(parameter):
+                    self.diagnostic(error, self.symbol(cursor))
             self.function(cursor)
         elif kind in _RECORDS:
             self.record(cursor)
         elif kind == "ENUM_DECL":
-            self.enumeration(cursor)
-        elif kind in {
-            "FUNCTION_TEMPLATE",
-            "CLASS_TEMPLATE",
-            "CLASS_TEMPLATE_PARTIAL_SPECIALIZATION",
-        }:
+            for child in cursor.get_children():
+                if _kind(child) == "ENUM_CONSTANT_DECL":
+                    for error in self.attribute_errors(child):
+                        self.diagnostic(error, self.record_name(cursor))
+            try:
+                self.enumeration(cursor)
+            except _Unsupported as error:
+                self.diagnostic(error, self.record_name(cursor))
+        elif kind in _TEMPLATES:
             self.template(cursor)
-        elif kind == "VAR_DECL" and (
-            cursor.is_definition() or cursor.storage_class.name != "EXTERN"
-        ):
+        elif kind == "VAR_DECL":
+            if not cursor.is_definition() and cursor.storage_class.name == "EXTERN":
+                return  # The ABI of the referenced declaration is bound at its use.
             symbol = _symbol(cursor, self.unit_tag)
             try:
                 self.globals[symbol] = _Body(self).variable(cursor, symbol)
@@ -796,6 +924,26 @@ class _Unit:
                 # The translation unit can run static initialization/destruction
                 # before/after entry even when no function reads this variable.
                 self.diagnostic(error)
+        elif kind == "FRIEND_DECL":
+            for child in cursor.get_children():
+                # Type-only friendship changes access checking. A friend can
+                # also introduce a function with its own externally callable body.
+                if _kind(child) not in {
+                    "TYPE_REF",
+                    "TEMPLATE_REF",
+                    "NAMESPACE_REF",
+                } and not is_attribute(child):
+                    self.declaration(child)
+        elif kind in _LOOKUP_DECLARATIONS:
+            self.mark_transparent(cursor, cursor.semantic_parent)
+        else:
+            self.diagnostic(
+                _Unsupported(
+                    cursor,
+                    "declaration." + kind.lower(),
+                    f"declaration {kind} requires a semantic rule",
+                )
+            )
 
 
 class _Body:
@@ -829,11 +977,13 @@ class _Body:
                 self.calls.add(_symbol(node.referenced, self.unit.unit_tag))
 
     def variable(self, cursor, name=None):
-        if cursor.type.get_canonical().kind.name == "VARIABLEARRAY" and name is None:
+        if name is None:
+            self.errors.extend(self.unit.attribute_errors(cursor))
+        if type_kind(cursor.type.get_canonical()) == "VARIABLEARRAY" and name is None:
             element = cursor.type.get_canonical().get_array_element_type()
-            extents = [c for c in cursor.get_children() if c.kind.is_expression()]
+            extents = [c for c in cursor.get_children() if is_expression(c)]
             if (
-                element.get_canonical().kind.name
+                type_kind(element.get_canonical())
                 in _SIGNED | _UNSIGNED | _PRIMITIVES.keys()
                 and len(extents) == 1
             ):
@@ -859,9 +1009,9 @@ class _Body:
                 "thread-local allocation and initialization",
             )
         element = cursor.type.get_canonical()
-        while element.kind.name == "CONSTANTARRAY":
+        while type_kind(element) == "CONSTANTARRAY":
             element = element.get_array_element_type()
-        if element.kind.name == "RECORD" and not element.is_pod():
+        if type_kind(element) == "RECORD" and not element.is_pod():
             element_type = _type(element, cursor, self.unit.records)
             if element_type.get("kind") == "const":
                 element_type = element_type["of"]
@@ -903,7 +1053,7 @@ class _Body:
                 # scoped storage and declared type reproduce this C++ operation.
                 # The selected project constructor remains a reachability edge.
                 if (
-                    element.kind.name == "RECORD"
+                    type_kind(element) == "RECORD"
                     and not element.is_pod()
                     and row.get("object_lifetime")
                 ):
@@ -1010,9 +1160,7 @@ class _Body:
                 and 0 <= i - offset < len(parameters)
             ):
                 parameter = parameters[i - offset]
-                defaults = [
-                    n for n in parameter.get_children() if n.kind.is_expression()
-                ]
+                defaults = [n for n in parameter.get_children() if is_expression(n)]
                 if len(defaults) != 1:
                     raise _Unsupported(
                         cursor,
@@ -1021,9 +1169,9 @@ class _Body:
                     )
                 arg = defaults[0]
             value = self.expression(arg)
-            if 0 <= i - offset < len(parameters) and parameters[
-                i - offset
-            ].type.get_canonical().kind.name in {
+            if 0 <= i - offset < len(parameters) and type_kind(
+                parameters[i - offset].type.get_canonical()
+            ) in {
                 "POINTER",
                 "INCOMPLETEARRAY",
                 "CONSTANTARRAY",
@@ -1038,7 +1186,7 @@ class _Body:
                 )
             if (
                 0 <= i - offset < len(parameters)
-                and parameters[i - offset].type.get_canonical().kind.name
+                and type_kind(parameters[i - offset].type.get_canonical())
                 == "LVALUEREFERENCE"
             ):
                 value = {
@@ -1063,7 +1211,7 @@ class _Body:
             ):
                 value = next(value.get_children())
             if (
-                value.type.get_canonical().kind.name == "VARIABLEARRAY"
+                type_kind(value.type.get_canonical()) == "VARIABLEARRAY"
                 and _kind(value) == "DECL_REF_EXPR"
                 and value.referenced
                 and next((t.spelling for t in self.unit.facts.tokens(cursor)), None)
@@ -1107,7 +1255,7 @@ class _Body:
             pointee = cursor.type.get_pointee().get_canonical()
             tokens = [t.spelling for t in self.unit.facts.tokens(cursor)]
             if (
-                pointee.kind.name in {"RECORD", "CONSTANTARRAY"}
+                type_kind(pointee) in {"RECORD", "CONSTANTARRAY"}
                 or "new" not in tokens
                 or tokens[tokens.index("new") + 1 :][:1] == ["("]
             ):
@@ -1116,7 +1264,7 @@ class _Body:
                     "allocation.construction",
                     "allocation requires an object or placement construction protocol",
                 )
-            operands = [c for c in children if c.kind.is_expression()]
+            operands = [c for c in children if is_expression(c)]
             out = {"op": "allocate", "type": _type(pointee, cursor, self.unit.records)}
             end_type = min(
                 (i for i, t in enumerate(tokens) if t in {"(", "{"}),
@@ -1134,7 +1282,7 @@ class _Body:
                 if (
                     _kind(size) == "UNEXPOSED_EXPR"
                     and len(inner) == 1
-                    and inner[0].type.get_canonical().kind.name in _SIGNED
+                    and type_kind(inner[0].type.get_canonical()) in _SIGNED
                 ):
                     size = inner[0]
                 out["count"] = self.expression(size)
@@ -1158,8 +1306,8 @@ class _Body:
                 return destruction
             pointer = children[0].type.get_canonical()
             if (
-                pointer.kind.name != "POINTER"
-                or pointer.get_pointee().get_canonical().kind.name == "RECORD"
+                type_kind(pointer) != "POINTER"
+                or type_kind(pointer.get_pointee().get_canonical()) == "RECORD"
             ):
                 raise _Unsupported(
                     cursor,
@@ -1185,7 +1333,7 @@ class _Body:
             "CXX_CONST_CAST_EXPR",
             "CXX_FUNCTIONAL_CAST_EXPR",
         }:
-            operands = [c for c in children if c.kind.is_expression()]
+            operands = [c for c in children if is_expression(c)]
             if (
                 kind == "UNEXPOSED_EXPR"
                 and len(operands) == 1
@@ -1202,7 +1350,7 @@ class _Body:
             if (
                 not operands
                 and kind == "UNEXPOSED_EXPR"
-                and cursor.type.get_canonical().kind.name
+                and type_kind(cursor.type.get_canonical())
                 in _SIGNED | _UNSIGNED | {"FLOAT", "DOUBLE", "BOOL"}
             ):
                 return {
@@ -1225,7 +1373,7 @@ class _Body:
                 return value
             if (
                 kind == "UNEXPOSED_EXPR"
-                and source.kind.name == target.kind.name == "RECORD"
+                and type_kind(source) == type_kind(target) == "RECORD"
             ):
                 if source.get_declaration() == target.get_declaration():
                     source_type = self.unit.type_info(source, cursor)
@@ -1266,7 +1414,7 @@ class _Body:
                     "type": ty,
                     "value": value,
                 }
-            if target.kind.name == "POINTER" and source.kind.name in {
+            if type_kind(target) == "POINTER" and type_kind(source) in {
                 "CONSTANTARRAY",
                 "INCOMPLETEARRAY",
                 "VARIABLEARRAY",
@@ -1276,7 +1424,7 @@ class _Body:
                 if _va_list(source):
                     return value
                 target_type = self.unit.type_info(target, cursor)
-                if source.kind.name in {"INCOMPLETEARRAY", "VARIABLEARRAY"}:
+                if type_kind(source) in {"INCOMPLETEARRAY", "VARIABLEARRAY"}:
                     original_type = {
                         "kind": "array",
                         "of": self.unit.type_info(
@@ -1284,7 +1432,7 @@ class _Body:
                         ),
                         "shape": [None],
                     }
-                elif source.kind.name == "FUNCTIONNOPROTO":
+                elif type_kind(source) == "FUNCTIONNOPROTO":
                     original_type = target_type["to"]
                 else:
                     original_type = self.unit.type_info(source, cursor)
@@ -1299,7 +1447,7 @@ class _Body:
                     "mode": mode,
                     "conversion": (
                         "function_decay"
-                        if source.kind.name.startswith("FUNCTION")
+                        if type_kind(source).startswith("FUNCTION")
                         else "array_decay"
                     ),
                     "source_type": original_type,
@@ -1308,8 +1456,8 @@ class _Body:
                 }
             if (
                 kind == "UNEXPOSED_EXPR"
-                and target.kind.name == "INCOMPLETEARRAY"
-                and source.kind.name == "POINTER"
+                and type_kind(target) == "INCOMPLETEARRAY"
+                and type_kind(source) == "POINTER"
             ):
                 # Clang exposes the parameter's written array type on this
                 # implicit argument conversion. Its adjusted ABI is a pointer.
@@ -1332,8 +1480,8 @@ class _Body:
                     },
                     "value": value,
                 }
-            if target.kind.name == "POINTER" and (
-                source.kind.name == "NULLPTR"
+            if type_kind(target) == "POINTER" and (
+                type_kind(source) == "NULLPTR"
                 or (
                     isinstance(value, dict)
                     and value.get("op") == "literal"
@@ -1351,7 +1499,7 @@ class _Body:
             elif kind == "CXX_REINTERPRET_CAST_EXPR":
                 mode = "reinterpret"
             elif kind == "CSTYLE_CAST_EXPR" and (
-                source.kind.name == "POINTER" or target.kind.name == "POINTER"
+                type_kind(source) == "POINTER" or type_kind(target) == "POINTER"
             ):
                 mode = "explicit_pointer"
             target_type = self.unit.type_info(target, cursor)
@@ -1402,7 +1550,7 @@ class _Body:
                 if children
                 else {"op": "var", "name": "this"}
             )
-            if not children or children[0].type.get_canonical().kind.name == "POINTER":
+            if not children or type_kind(children[0].type.get_canonical()) == "POINTER":
                 base = {"op": "unary", "operator": "deref", "value": base}
             if standard_library.public_field(cursor.referenced):
                 return {
@@ -1546,9 +1694,7 @@ class _Body:
                         and children[0].referenced == declaration
                     ):
                         receiver = [
-                            c
-                            for c in children[0].get_children()
-                            if c.kind.is_expression()
+                            c for c in children[0].get_children() if is_expression(c)
                         ]
                     elif (
                         declaration.spelling.startswith("operator")
@@ -1565,7 +1711,7 @@ class _Body:
                     this = {"op": "var", "name": "this"}
                     if receiver:
                         this = self.expression(receiver[0])
-                        if receiver[0].type.get_canonical().kind.name != "POINTER":
+                        if type_kind(receiver[0].type.get_canonical()) != "POINTER":
                             this = {"op": "unary", "operator": "addr", "value": this}
                     args.insert(0, this)
                 call = self.unit.call(declaration, args)
@@ -1575,9 +1721,7 @@ class _Body:
                     and children
                     and _kind(children[0]) == "MEMBER_REF_EXPR"
                 ):
-                    bases = [
-                        c for c in children[0].get_children() if c.kind.is_expression()
-                    ]
+                    bases = [c for c in children[0].get_children() if is_expression(c)]
                     if bases:
                         return {
                             "op": "binary",
@@ -1586,14 +1730,16 @@ class _Body:
                             "right": call,
                         }
                 return call
-            if children and children[0].kind.is_expression():
+            if children and is_expression(children[0]):
                 pointer = children[0].type.get_canonical()
                 target_type = (
-                    pointer.get_pointee() if pointer.kind.name == "POINTER" else pointer
+                    pointer.get_pointee()
+                    if type_kind(pointer) == "POINTER"
+                    else pointer
                 )
                 # A call through a field, subscript or conditional expression may
                 # have a precise callable ABI even with no single declaration.
-                if target_type.kind.name == "FUNCTIONPROTO":
+                if type_kind(target_type) == "FUNCTIONPROTO":
                     return {
                         "op": "indirect_call",
                         "target": self.expression(children[0]),
@@ -1694,11 +1840,19 @@ class _Body:
                     self.unit.record(child)
                 elif _kind(child) == "ENUM_DECL":
                     self.unit.enumeration(child)
-                elif _kind(child) not in {
-                    "TYPEDEF_DECL",
-                    "TYPE_ALIAS_DECL",
-                    "USING_DECLARATION",
-                }:
+                elif _kind(child) in _LOOKUP_DECLARATIONS:
+                    if _kind(child) in {
+                        "TYPEDEF_DECL",
+                        "TYPE_ALIAS_DECL",
+                    } and _variably_modified_alias(child):
+                        raise _Unsupported(
+                            child,
+                            "declaration.dynamic_type_bound",
+                            "block-scope type alias requires evaluation of a dynamic bound",
+                        )
+                    self.errors.extend(self.unit.attribute_errors(child))
+                    self.unit.mark_transparent(child, self.owner)
+                else:
                     raise _Unsupported(
                         child,
                         "declaration." + _kind(child).lower(),
@@ -1737,7 +1891,7 @@ class _Body:
             and _kind(children[0]) == "VAR_DECL"
         ):
             variable, iterable, body = children
-            if iterable.type.get_canonical().kind.name != "CONSTANTARRAY":
+            if type_kind(iterable.type.get_canonical()) != "CONSTANTARRAY":
                 raise _Unsupported(
                     cursor,
                     "control.range_protocol",
@@ -1794,7 +1948,7 @@ class _Body:
                 {"op": "label", "name": cursor.spelling},
                 *self.statement(children[0]),
             ]
-        if cursor.kind.is_expression():
+        if is_expression(cursor):
             expr = self.expression(cursor)
             if expr["op"] == "update" and expr["operator"] == "set":
                 return [
@@ -1824,4 +1978,5 @@ def normalize_unit(facts: ParsedUnit) -> dict:
         "templates": list(unit.templates.values()),
         "enums": list(unit.enums.values()),
         "diagnostics": unit.diagnostics,
+        **({"source_coverage": unit.coverage()} if facts.language else {}),
     }

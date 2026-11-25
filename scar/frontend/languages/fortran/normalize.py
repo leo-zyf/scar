@@ -1,6 +1,7 @@
 """F2: turn captured procedure declarations, storage and statements into neutral operation bodies."""
 
 from dataclasses import replace
+from copy import deepcopy
 import math
 import struct
 from scar.contract import digest, json_bytes
@@ -254,9 +255,21 @@ def _bind_storage(builder, statements, common_blocks, globals_):
 
 def normalize_unit(parsed: ParsedUnit) -> dict:
     """Build structured operations with per-invocation dimension and storage bindings."""
-    out = {"functions": [], "externs": [], "diagnostics": list(parsed.diagnostics)}
+    out = {
+        "functions": [],
+        "externs": [],
+        "diagnostics": list(parsed.diagnostics),
+        "source_coverage": deepcopy(parsed.source_coverage),
+    }
     if parsed.diagnostics:
+        if not parsed.source_coverage:
+            out.pop("source_coverage")
         return out
+    out["diagnostics"].extend(
+        row["diagnostic"]
+        for row in out["source_coverage"].get("records", ())
+        if "diagnostic" in row
+    )
     out["source_numeric_contract"] = parsed.source_numeric_contract
     numeric = None
     if parsed.source_numeric_contract:
@@ -306,6 +319,7 @@ def normalize_unit(parsed: ParsedUnit) -> dict:
                     {
                         "code": "fortran." + gap.code,
                         "detail": str(gap),
+                        "symbol": key,
                         **parsed.location(gap.node or head),
                     }
                 )
@@ -529,4 +543,30 @@ def normalize_unit(parsed: ParsedUnit) -> dict:
     out.update(
         externs=list(externs.values()), records=list(records.values()), globals=globals_
     )
+    seen = set()
+    diagnostics = []
+    for issue in out["diagnostics"]:
+        key = (
+            issue["code"],
+            issue["detail"],
+            issue.get("file"),
+            issue.get("line"),
+            issue.get("symbol"),
+        )
+        if key not in seen:
+            seen.add(key)
+            diagnostics.append(issue)
+    out["diagnostics"] = diagnostics
+    coverage = out["source_coverage"]
+    for row in coverage.get("records", ()):
+        if row["role"] == "program_unit" and row.get("symbol"):
+            issue = next(
+                (d for d in diagnostics if d.get("symbol") == row["symbol"]), None
+            )
+            if issue:
+                row.update(status="incomplete", diagnostic=deepcopy(issue))
+    if coverage:
+        coverage["complete"] = not diagnostics and all(
+            row["status"] != "incomplete" for row in coverage["records"]
+        )
     return out

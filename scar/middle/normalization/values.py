@@ -285,7 +285,14 @@ def binding_targets(target):
 def written_targets(node):
     """Bound destinations of a source operation; receiver/index reads are separate."""
     op = node.get("op")
-    if op in {"assign", "update", "for", "python_define", "python_define_class"}:
+    if op in {
+        "assign",
+        "assignment_expression",
+        "update",
+        "for",
+        "python_define",
+        "python_define_class",
+    }:
         yield from binding_targets(node.get("target"))
     elif op in {"python_import", "exception_handler"}:
         yield from binding_targets(node.get("binding"))

@@ -289,6 +289,97 @@ def test_python_capture_then_offline_normalization(tmp_path, monkeypatch):
     }
 
 
+def test_python_select_comprehension_and_opaque_syntax_offline(tmp_path, monkeypatch):
+    from scar.contract import walk_operations
+    from scar.frontend.languages.python import normalize
+
+    entry = tmp_path / "entry.py"
+    entry.write_text(
+        "def left(x): return x\n"
+        "def right(x): return x\n"
+        "def choose(flag, rows):\n"
+        "    handler = rest = left\n"
+        "    match rows:\n"
+        "        case {'key': item, **rest} if flag:\n"
+        "            handler = right\n"
+        "            left(item + 1)\n"
+        "    handler(0)\n"
+        "    rest(0)\n"
+        "    pick = (callee := left) if flag else (callee := right)\n"
+        "    callee(0)\n"
+        "    return [left(row) if flag else right(extra)\n"
+        "            for row in rows if row for extra in (row,) if extra]\n"
+    )
+    (facts,) = python.capture_project(entry, tmp_path).units
+    match = next(n for n in ast.walk(facts.tree) if isinstance(n, ast.Match))
+    entry.unlink()
+    unit = _offline(
+        monkeypatch,
+        normalize,
+        facts,
+        (ast, "parse"),
+        (symtable, "symtable"),
+        (builtins, "compile"),
+    )
+    fn = next(f for f in unit["functions"] if f["name"] == "py:entry:choose")
+    ops = list(walk_operations(fn["partial_body"]))
+    opaque = next(n for n in ops if n["op"] == "unsupported")
+    assert list(walk_operations(opaque)) == [opaque]
+    assert opaque["evaluation"] == {
+        "control": "unresolved",
+        "field_order": "syntax_only",
+    }
+    assert opaque["may_raise"] and set(opaque["effect_summary"].values()) == {"UNKNOWN"}
+    assert opaque["missing"]["status"] == "unresolved"
+
+    def check_syntax(source, record):
+        if isinstance(source, ast.AST):
+            assert type(source).__name__ == record["syntax"]
+            assert [k for k, _ in record["fields"]] == list(source._fields)
+            if hasattr(source, "lineno"):
+                assert record["span"] == [
+                    source.lineno,
+                    source.col_offset + 1,
+                    source.end_lineno,
+                    source.end_col_offset + 1,
+                ]
+            else:
+                assert record["span"] == "enclosing"
+            for key, field in record["fields"]:
+                check_syntax(getattr(source, key), field)
+        elif isinstance(source, list):
+            assert len(source) == len(record)
+            for child, field in zip(source, record):
+                check_syntax(child, field)
+        else:
+            assert type(record) is type(source) and source == record
+
+    check_syntax(match, opaque["syntax"])
+    invokes = {n["target"]["name"]: n for n in ops if n["op"] == "python_invoke"}
+    assert all(
+        name in invokes and not invokes[name].get("candidate_callees")
+        for name in ("handler", "rest")
+    )
+    assert {c["symbol"] for c in invokes["callee"]["candidate_callees"]} == {
+        "py:entry:left",
+        "py:entry:right",
+    }
+    (comp,) = (n for n in ops if n["op"] == "sequence_comprehension")
+    first, second = comp["generators"]
+    assert comp["kind"] == "list" and comp["scope"]["bindings"] == ["extra", "row"]
+    assert first["iterable"]["name"] == "rows" and not first["asynchronous"]
+    assert first["target"]["cell"] == second["iterable"]["items"][0]["cell"]
+    assert first["filters"][0]["cell"] == first["target"]["cell"]
+    assert second["filters"][0]["cell"] == second["target"]["cell"]
+    decision = comp["element"]
+    assert decision["op"] == "python_select" and decision["condition"]["name"] == "flag"
+    assert decision["evaluation"] == "condition_then_one_arm"
+    assert decision["then"]["callee"] == "py:entry:left"
+    assert decision["else"]["callee"] == "py:entry:right"
+    assert decision["then"]["args"][0]["cell"]["owner"] == comp["scope"]["id"]
+    assert decision["else"]["args"][0]["cell"] == second["target"]["cell"]
+
+
 def test_python_mapping_displays_and_scoped_comprehensions_offline(
     tmp_path, monkeypatch
 ):
@@ -1449,6 +1540,70 @@ void nested(double * Q * p) {}
     )
 
 
+def test_clang_localizes_unmodeled_declarations_attributes_and_numeric_kinds(
+    tmp_path, monkeypatch
+):
+    from scar.frontend.graph import unit_graph
+    from scar.frontend.languages import c_family
+
+    source = tmp_path / "partial.cpp"
+    source.write_text(
+        "using I = int;\n"
+        "static_assert(sizeof(I) == sizeof(int));\n"
+        "struct R { [[maybe_unused]] int n; friend int owned(R r){return r.n;} };\n"
+        'extern "C" [[nodiscard]] int good(){return 7;}\n'
+        'asm("");\n'
+        "[[gnu::weak]] int optional_definition(){return 2;}\n"
+        "bool has_add(){return requires(int x){x+x;};}\n"
+        "_Float16 half_value(_Float16 x){return x;}\n"
+    )
+    facts = c_family.parse_unit(source, ["-std=c++20"], root=tmp_path, language="c++")
+    source.unlink()
+    normalized = _offline(monkeypatch, c_family, facts)
+    graph = unit_graph(normalized, "test-revision")
+    coverage = graph["source_coverage"]
+    assert coverage["language"] == "c++" and not coverage["complete"]
+    assert {r["kind"] for r in coverage["records"] if r["status"] == "transparent"} >= {
+        "TYPE_ALIAS_DECL",
+        "STATIC_ASSERT",
+        "WARN_UNUSED_RESULT_ATTR",
+    }
+    issues = [
+        row["diagnostic"]
+        for row in coverage["records"]
+        if row["status"] == "incomplete"
+    ]
+    assert issues == normalized["diagnostics"]
+    assert all(row["file"] == source.name and row["column"] > 0 for row in issues)
+    assert [(row["line"], row["code"]) for row in issues] == [
+        (5, "c_family.declaration.unexposed_decl"),
+        (6, "c_family.attribute.unexposed_attr"),
+        (7, "c_family.expression.cursor_154"),
+        (8, "c_family.type.type_32"),
+    ]
+    assert all("symbol" not in row for row in issues[:2])
+    names = {fn["signature"]["name"]: fn for fn in graph["functions"]}
+    assert names["good"]["defined"]
+    assert any(
+        fn["defined"] and fn["signature"]["location"]["line"] == 3
+        for fn in names.values()
+    )
+    for row in issues[2:]:
+        fn = names[row["symbol"]]
+        assert fn["source_defined"] and not fn["defined"]
+
+    # A block typedef can evaluate a bound, unlike a file-scope type alias.
+    c_source = tmp_path / "bound.c"
+    c_source.write_text("int bound(int n){typedef int Row[n++];return n;}\n")
+    captured = c_family.parse_unit(c_source, ["-std=c99"], root=tmp_path, language="c")
+    c_source.unlink()
+    c_unit = _offline(monkeypatch, c_family, captured)
+    assert c_unit["source_coverage"]["language"] == "c"
+    assert [row["code"] for row in c_unit["diagnostics"]] == [
+        "c_family.declaration.dynamic_type_bound"
+    ]
+
+
 def test_clang_capture_locks_included_buffers_then_normalizes_offline(
     tmp_path, monkeypatch
 ):
@@ -1734,3 +1889,94 @@ def test_contract_json_preserves_codepoints_and_mapping_keys(tmp_path):
     ):
         with pytest.raises(ValueError, match="SCAR wire"):
             json_loads(json.dumps(corrupt))
+
+
+def test_fortran_source_units_account_for_module_and_submodule_coverage(
+    tmp_path, monkeypatch
+):
+    from fparser.two import utils
+    from fparser.two.parser import ParserFactory
+    from scar.contract import validate_source_coverage
+
+    source = tmp_path / "units.f90"
+    text = (
+        "module constants\n"
+        "implicit none\nprivate\npublic :: increment\n"
+        "integer, parameter :: offset=2\ncontains\n"
+        "integer function increment(n)\ninteger,intent(in)::n\n"
+        "increment=n+offset\nend function\nend module\n"
+        "module persistent\ninteger::counter\nend module\n"
+        "module types\ntype::point\nreal::x\nend type\n"
+        "integer,parameter :: after=3\nend module\n"
+        "module parent\ninterface\nmodule subroutine step(x)\n"
+        "integer,intent(inout)::x\nend subroutine\nend interface\nend module\n"
+        "submodule(parent) child\nend submodule\n"
+        "subroutine remaining(n)\ninteger::n\nn=n+1\nend subroutine\n"
+    )
+    source.write_text(text)
+    facts = fortran.parse_unit(source, root=tmp_path)
+    assert not facts.diagnostics
+    assert facts.source_coverage["complete"] is False
+    validate_source_coverage(facts.source_coverage)
+    source.unlink()
+    output = _offline(
+        monkeypatch, fortran, facts, (ParserFactory, "create"), (utils, "walk")
+    )
+    coverage = output["source_coverage"]
+    validate_source_coverage(coverage)
+    assert coverage["scope"] == "program_units_and_specification_constructs"
+    units = {
+        tuple(row["owner"]): row
+        for row in coverage["records"]
+        if row["role"] == "program_unit"
+    }
+    assert units[("constants",)]["status"] == "transparent"
+    assert units[("constants", "increment")]["status"] == "modeled", units[
+        ("constants", "increment")
+    ].get("diagnostic")
+    assert units[("remaining",)]["status"] == "modeled"
+    assert units[("persistent",)]["status"] == "incomplete"
+    assert units[("child",)]["kind"] == "Submodule"
+    assert units[("child",)]["covers_subtree"] is True
+    assert units[("child",)]["diagnostic"]["code"] == "fortran.program_unit"
+    constants = next(
+        row["facts"]["symbols"]
+        for row in coverage["records"]
+        if row["kind"] == "Type_Declaration_Stmt" and row["owner"] == ["constants"]
+    )
+    assert constants[0]["name"] == "offset"
+    assert constants[0]["folded_value"] == "2"
+    declarations = {
+        (tuple(row["owner"]), row["kind"], row["location"]["line"]): row
+        for row in coverage["records"]
+        if row["role"] == "specification"
+    }
+    lines = text.splitlines()
+    for owner, spelling, code in (
+        ("persistent", "integer::counter", "fortran.module_state"),
+        ("types", "type::point", "fortran.declaration"),
+    ):
+        line = lines.index(spelling) + 1
+        row = next(
+            row
+            for (scope, _, at), row in declarations.items()
+            if scope == (owner,) and at == line
+        )
+        assert row["status"] == "incomplete"
+        assert row["diagnostic"]["code"] == code
+        assert row["diagnostic"]["owner"] == [owner]
+        assert row["diagnostic"]["file"].endswith("units.f90")
+    assert any(
+        row["status"] == "modeled"
+        and row.get("facts", {}).get("symbols", [{}])[0].get("name") == "after"
+        for row in declarations.values()
+        if row["owner"] == ["types"]
+    )
+    functions = {fn["name"]: fn for fn in output["functions"]}
+    assert set(functions) == {"__constants_MOD_increment", "remaining_"}
+    assert all("body" in fn for fn in functions.values())
+    assert coverage["complete"] is False
+    assert any(
+        issue["code"] == "fortran.program_unit" for issue in output["diagnostics"]
+    )
+    assert facts.source_coverage["records"] == coverage["records"]

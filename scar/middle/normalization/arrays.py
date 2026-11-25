@@ -163,7 +163,7 @@ class LiteralState:
         rebound = {
             target["name"]
             for node in operations
-            if node["op"] in {"assign", "for"}
+            if node["op"] in {"assign", "assignment_expression", "for"}
             for target in binding_targets(node.get("target", {}))
             if target.get("op") == "var"
         }
@@ -176,12 +176,12 @@ class LiteralState:
             } and not frame.array_readonly_call(node, rebound):
                 self.invalidate()
                 break
-            if op not in {"assign", "update"}:
+            if op not in {"assign", "assignment_expression", "update"}:
                 continue
             for target in binding_targets(node["target"]):
                 if target.get("op") == "index":
                     target = target["base"]
-                elif op == "assign":
+                elif op in {"assign", "assignment_expression"}:
                     continue
                 if target.get("op") != "var" or target["name"] in rebound:
                     self.invalidate()

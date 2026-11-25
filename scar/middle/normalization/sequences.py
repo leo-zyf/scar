@@ -619,6 +619,31 @@ def member(frame, node, base, name):
     return Value("sequence_method", (base, name))
 
 
+def comprehension(frame, node, steps, lower_generators):
+    """Build one shared list with ordered, scoped generator/filter regions."""
+    if node.get("kind") != "list":
+        frame.fail(
+            node, "sequence_comprehension", "only eager list construction is closed"
+        )
+
+    def make_result(body):
+        return capture(frame, node, [], body)
+
+    def put_entry(result, active, body):
+        value = active.evaluate(node["element"], body)
+        invoke(
+            active,
+            node,
+            Value("sequence_method", (result, "append")),
+            [value],
+            {},
+            body,
+            True,
+        )
+
+    return lower_generators(node, steps, make_result, put_entry)
+
+
 def persist_method(frame, target, method, steps):
     receiver, name = method.value
     if target.get("scope") == "global":

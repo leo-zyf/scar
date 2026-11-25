@@ -1531,6 +1531,60 @@ EXECUTION_ANNOTATIONS = frozenset(
 )
 
 
+def validate_source_coverage(record):
+    """Check a bounded source-coverage claim, independently of its parser."""
+    if (
+        not isinstance(record, dict)
+        or set(record)
+        != {"semantics_version", "language", "scope", "complete", "records"}
+        or type(record["semantics_version"]) is not int
+        or record["semantics_version"] != 1
+        or record["language"] not in {"python", "c", "c++", "fortran"}
+        or not isinstance(record["scope"], str)
+        or not record["scope"]
+        or type(record["complete"]) is not bool
+        or not isinstance(record["records"], list)
+    ):
+        raise ValueError("invalid source coverage contract")
+    incomplete = False
+    for item in record["records"]:
+        if (
+            not isinstance(item, dict)
+            or not {"kind", "role", "owner", "location", "status"} <= item.keys()
+            or not isinstance(item["kind"], str)
+            or not item["kind"]
+            or item["role"] not in {"program_unit", "specification"}
+            or not isinstance(item["owner"], list)
+            or any(not isinstance(name, str) or not name for name in item["owner"])
+            or not isinstance(item["location"], dict)
+            or not isinstance(item["location"].get("file"), str)
+            or not item["location"]["file"]
+            or (
+                item["location"].get("line") is not None
+                and (
+                    type(item["location"]["line"]) is not int
+                    or item["location"]["line"] < 1
+                )
+            )
+            or item["status"] not in {"modeled", "transparent", "incomplete"}
+        ):
+            raise ValueError("invalid source coverage record")
+        if item["status"] == "incomplete":
+            incomplete = True
+            issue = item.get("diagnostic")
+            if (
+                not isinstance(issue, dict)
+                or not isinstance(issue.get("code"), str)
+                or not issue["code"]
+                or not isinstance(issue.get("detail"), str)
+                or not issue["detail"]
+            ):
+                raise ValueError("unclosed source construct requires a diagnostic")
+    if record["complete"] == incomplete:
+        raise ValueError("source coverage completion contradicts its records")
+    return record
+
+
 def walk_records(value, *, exclude_fields=()):
     """Visit wire records, with explicit exclusions for non-executable evidence."""
     pending = [value]

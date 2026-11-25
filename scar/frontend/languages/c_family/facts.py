@@ -70,6 +70,32 @@ def cursor_kind(cursor):
         return f"CURSOR_{cursor._kind_id}"
 
 
+def type_kind(type_):
+    try:
+        return type_.kind.name
+    except ValueError:
+        return f"TYPE_{type_._kind_id}"
+
+
+def is_attribute(cursor):
+    return _clang().conf.lib.clang_isAttribute(ctypes.c_uint(cursor._kind_id))
+
+
+def is_expression(cursor):
+    return _clang().conf.lib.clang_isExpression(ctypes.c_uint(cursor._kind_id))
+
+
+def element_type(type_):
+    return _clang().conf.lib.clang_getElementType(type_)
+
+
+def function_parameter_types(type_):
+    lib = _clang().conf.lib
+    return (
+        lib.clang_getArgType(type_, i) for i in range(lib.clang_getNumArgTypes(type_))
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class SourceToken:
     spelling: str
@@ -81,6 +107,40 @@ def _project_name(root, filename):
     return real.relative_to(root).as_posix() if real.is_relative_to(root) else None
 
 
+def _language(filename, flags):
+    mode = None
+    for i, arg in enumerate(flags):
+        if arg == "-x" and i + 1 < len(flags):
+            mode = flags[i + 1]
+        elif arg.startswith("-x") and len(arg) > 2:
+            mode = arg[2:]
+    if mode and mode != "none":
+        if mode in {"c", "c-header", "cpp-output"}:
+            return "c"
+        if mode in {"c++", "c++-header", "c++-cpp-output"}:
+            return "c++"
+        return None
+    suffix = Path(filename).suffix
+    if suffix in {".c", ".i", ".h"}:
+        return "c"
+    if suffix in {
+        ".C",
+        ".cc",
+        ".cp",
+        ".cxx",
+        ".cpp",
+        ".CPP",
+        ".c++",
+        ".ii",
+        ".H",
+        ".hh",
+        ".hpp",
+        ".hxx",
+    }:
+        return "c++"
+    return None
+
+
 class ParsedUnit:
     """Read-only semantic input to F2; indexes and token cache are private to this unit."""
 
@@ -89,6 +149,7 @@ class ParsedUnit:
         self._api = api
         self.source_name = source_name
         self.flags = tuple(flags)
+        self.language = _language(source_name, flags)
         self.compiler_id = api.conf.lib.clang_getClangVersion()
         self._tokens = {}
         self._macros = {}
@@ -157,11 +218,20 @@ class ParsedUnit:
         self.diagnostics = tuple(
             {
                 **self.location(item.location),
-                "code": "c_family.parse",
+                "code": (
+                    "c_family.parse"
+                    if item.severity >= api.Diagnostic.Error
+                    else "c_family.parse.ignored_attribute"
+                ),
                 "detail": item.spelling,
             }
             for item in translation_unit.diagnostics
             if item.severity >= api.Diagnostic.Error
+            or (
+                item.severity == api.Diagnostic.Warning
+                and self.owns(item.location)
+                and item.option in {"-Wunknown-attributes", "-Wignored-attributes"}
+            )
         )
 
     def _project_file(self, filename):
@@ -236,7 +306,7 @@ class ParsedUnit:
                     if lib.clang_EvalResult_isUnsignedInt(evaluated):
                         return lib.clang_EvalResult_getAsUnsigned(evaluated)
                     return lib.clang_EvalResult_getAsLongLong(evaluated)
-                if kind == 2 and cursor.type.get_canonical().kind.name in {
+                if kind == 2 and type_kind(cursor.type.get_canonical()) in {
                     "FLOAT",
                     "DOUBLE",
                 }:

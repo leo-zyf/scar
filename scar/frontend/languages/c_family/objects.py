@@ -3,15 +3,13 @@
 from hashlib import sha256
 import json
 
+from .facts import cursor_kind as _kind, type_kind, is_expression
+
 
 class BindingError(ValueError):
     def __init__(self, cursor, detail):
         super().__init__(detail)
         self.cursor = cursor
-
-
-def _kind(cursor):
-    return cursor.kind.name
 
 
 def _record_type(ty, cursor, unit):
@@ -147,7 +145,7 @@ def invoke(cursor, reader):
     member = next((c for c in children if _kind(c) == "MEMBER_REF_EXPR"), None)
     if member is None:
         raise BindingError(cursor, "object call requires a resolved receiver")
-    operands = [c for c in member.get_children() if c.kind.is_expression()]
+    operands = [c for c in member.get_children() if is_expression(c)]
     if (
         not operands
         and reader.owner
@@ -158,7 +156,7 @@ def invoke(cursor, reader):
         raise BindingError(cursor, "object call receiver is ambiguous")
     else:
         receiver = reader.expression(operands[0])
-        if operands[0].type.get_canonical().kind.name != "POINTER":
+        if type_kind(operands[0].type.get_canonical()) != "POINTER":
             receiver = dict(op="unary", operator="addr", value=receiver)
     symbol = _require(declaration, reader)
     if info["kind"] == "destructor":
@@ -192,7 +190,7 @@ def allocation(cursor, reader):
         raise BindingError(
             cursor, "placement allocation requires an explicit storage binding"
         )
-    operands = [c for c in cursor.get_children() if c.kind.is_expression()]
+    operands = [c for c in cursor.get_children() if is_expression(c)]
     call = next(
         (
             c
@@ -226,11 +224,11 @@ def allocation(cursor, reader):
 
 
 def deletion(cursor, reader):
-    children = [c for c in cursor.get_children() if c.kind.is_expression()]
+    children = [c for c in cursor.get_children() if is_expression(c)]
     if len(children) != 1:
         return None
     pointer = children[0].type.get_canonical()
-    if pointer.kind.name != "POINTER":
+    if type_kind(pointer) != "POINTER":
         return None
     ty = pointer.get_pointee().get_canonical()
     spec = _record_type(ty, cursor, reader.unit)
@@ -287,7 +285,7 @@ def prepare(function, cursor, reader):
                     kind="delegate" if ty["name"] == info["owner"] else "base",
                     name=ty["name"],
                 )
-        elif child.kind.is_expression() and pending:
+        elif is_expression(child) and pending:
             if (
                 kind == "CALL_EXPR"
                 and child.referenced
@@ -300,7 +298,7 @@ def prepare(function, cursor, reader):
                 args = [
                     reader.expression(c)
                     for c in child.get_children()
-                    if c.kind.is_expression()
+                    if is_expression(c)
                 ]
             else:
                 args = [reader.expression(child)]

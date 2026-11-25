@@ -121,7 +121,13 @@ def _global_bindings(functions):
             if not isinstance(node, dict):
                 continue
             op = node.get("op")
-            multiple = multiple or op in {"for", "while", "exception_handler"}
+            multiple = multiple or op in {
+                "for",
+                "while",
+                "exception_handler",
+                "mapping_comprehension",
+                "sequence_comprehension",
+            }
             for target in values.written_targets(node):
                 if target.get("op") == "var" and target.get("scope") == "global":
                     name = target["name"]
@@ -1724,11 +1730,23 @@ class _Frame:
 
     def _evaluate(self, node, steps, discard=False, *, truth_context=False):
         op = node["op"]
+        if op == "python_select":
+            if node.get("site") is not None:
+                self.project.live_sites.add((self.name, node["site"]))
+            return expressions.select(
+                self, node, steps, discard=discard, truth_context=truth_context
+            )
+        if op == "assignment_expression":
+            value = self.evaluate(node["value"], steps)
+            if values.runtime(value.kind) and value.value.get("op") != "literal":
+                value = self.effect(value.value, value.kind, steps, facts=value.facts)
+            self.store(node["target"], value, steps)
+            return self.truth(value, node) if truth_context else value
         if op == "mapping":
             result = mappings.literal(self, node, steps)
             return self.truth(result, node) if truth_context else result
-        if op == "mapping_comprehension":
-            result = self.mapping_comprehension(node, steps)
+        if op in {"mapping_comprehension", "sequence_comprehension"}:
+            result = self.comprehension(node, steps)
             return self.truth(result, node) if truth_context else result
         if (
             op == "compare_chain"
@@ -2389,12 +2407,14 @@ class _Frame:
             self.merge(exits)
         return bool(exits)
 
-    def mapping_comprehension(self, node, steps):
+    def comprehension(self, node, steps):
         """Lower one lexical comprehension region, retaining structured loops."""
         identity = node.get("scope", {}).get("id")
         if not isinstance(identity, str):
             self.fail(
-                node, "mapping_scope", "comprehension requires a captured lexical scope"
+                node,
+                "comprehension_scope",
+                "comprehension requires a captured lexical scope",
             )
         prefix = "@comprehension/" + identity + "/"
 
@@ -2414,23 +2434,45 @@ class _Frame:
             return result
 
         try:
-            return mappings.comprehension(
-                self, rename(node), steps, self._mapping_generators
+            node = rename(node)
+            if node["op"] == "mapping_comprehension":
+                return mappings.comprehension(
+                    self, node, steps, self._comprehension_generators
+                )
+            return sequences.comprehension(
+                self, node, steps, self._comprehension_generators
             )
         finally:
             for name in tuple(self.env):
                 if name.startswith(prefix):
                     self.env.pop(name)
 
-    def _mapping_generators(self, node, steps, make_result, put_entry):
+    def _comprehension_generators(self, node, steps, make_result, put_entry):
         generators = node.get("generators", [])
         if not generators or any(g.get("asynchronous") for g in generators):
             self.fail(
                 node,
-                "mapping_iteration",
-                "mapping comprehension requires synchronous generators",
+                "comprehension_iteration",
+                "comprehension requires synchronous generators",
             )
         outer = self.evaluate(generators[0]["iterable"], steps)
+        outer_iteration = self.range_loop(
+            dict(
+                op="for",
+                protocol="iterator",
+                target=generators[0]["target"],
+                body=[],
+                **values.source_site(node),
+            ),
+            steps,
+            domain=outer,
+        )
+        if outer_iteration[-1]:
+            self.fail(
+                node,
+                "comprehension_iteration",
+                "comprehension iterator requires an explicit next-value contract",
+            )
         result = make_result(steps)
 
         def generate(level, out):
@@ -2443,16 +2485,35 @@ class _Frame:
                 body=[],
                 **values.source_site(node),
             )
+            # This is a may-write summary, never an execution schedule. It lets
+            # the ordinary loop analysis invalidate facts carried by callbacks,
+            # walrus assignments and nested generator clauses before lowering.
+            repeated = [
+                expression
+                for index, clause in enumerate(generators[level:], start=level)
+                for expression in (
+                    ([clause["iterable"]] if index != level else [])
+                    + list(clause.get("filters", ()))
+                )
+            ]
+            repeated.extend(
+                node[field] for field in ("key", "value", "element") if field in node
+            )
+            source_loop["body"] = [dict(op="expr", value=term) for term in repeated]
             start = self.snapshot()
-            loop, item, _, _, _, setup = self.range_loop(
-                source_loop, out, domain=domain
+            loop, item, count, _, _, setup = (
+                outer_iteration
+                if level == 0
+                else self.range_loop(source_loop, out, domain=domain)
             )
             if setup:
                 self.fail(
                     node,
-                    "mapping_iteration",
+                    "comprehension_iteration",
                     "comprehension iterator requires an explicit next-value contract",
                 )
+            allocation_mark = self.project.array_state.enter_loop(self, source_loop)
+            self.widen_loop(source_loop, item, count)
             self.dynamic += 1
             self.enter_control("loop", node)
             try:
@@ -2492,6 +2553,7 @@ class _Frame:
             finally:
                 self.leave_control()
                 self.dynamic -= 1
+                self.project.array_state.leave_loop(allocation_mark)
             out.append(loop)
             self.merge([start, after])
 

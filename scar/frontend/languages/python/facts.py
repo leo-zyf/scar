@@ -328,6 +328,8 @@ def assigned_names(node):
         isinstance(node, (ast.ExceptHandler, ast.MatchAs, ast.MatchStar)) and node.name
     ):
         yield node.name
+    elif isinstance(node, ast.MatchMapping) and node.rest:
+        yield node.rest
 
 
 def _catalog(tree, module):

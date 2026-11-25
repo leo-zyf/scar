@@ -464,7 +464,47 @@ def _shape(spec):
     return tuple(axis.items for axis in spec.items)
 
 
-def _declarations(spec, symbols, interfaces, associations):
+def _declarations(
+    spec, symbols, interfaces, associations, *, coverage=None, unit=None, owner=()
+):
+    for stmt in getattr(spec, "content", ()):
+        if kind(stmt) in {"Implicit_Part", "Declaration_Construct"}:
+            _declarations(
+                stmt,
+                symbols,
+                interfaces,
+                associations,
+                coverage=coverage,
+                unit=unit,
+                owner=owner,
+            )
+            continue
+        record = {
+            "kind": kind(stmt),
+            "role": "specification",
+            "owner": list(owner),
+            "location": unit.location(stmt) if unit else {},
+            "status": "modeled",
+        }
+        try:
+            _declaration(stmt, symbols, interfaces, associations)
+        except Gap as error:
+            if coverage is None:
+                raise
+            record.update(
+                status="incomplete",
+                diagnostic={
+                    "code": "fortran." + error.code,
+                    "detail": str(error),
+                    **unit.location(error.node or stmt),
+                    "owner": list(owner),
+                },
+            )
+        if coverage is not None:
+            coverage.append(record)
+
+
+def _declaration(stmt, symbols, interfaces, associations):
     permitted = {
         "Use_Stmt",
         "Implicit_Stmt",
@@ -477,7 +517,7 @@ def _declarations(spec, symbols, interfaces, associations):
         "Save_Stmt",
         "Comment",
     }
-    for stmt in getattr(spec, "content", ()):
+    if stmt is not None:
         tag = kind(stmt)
         entries = []
         if tag == "Type_Declaration_Stmt":
@@ -585,6 +625,228 @@ def _declarations(spec, symbols, interfaces, associations):
                 sym.location = stmt
                 if dims:
                     sym.dims = _shape(dims)
+
+
+def _source_coverage(tree, unit, tables, procedures):
+    """Account for source units and specifications without inventing executable bodies."""
+    records = []
+    captured = {id(p.header): p for p in procedures}
+    wrappers = {
+        "Program",
+        "External_Subprogram",
+        "Module_Subprogram_Part",
+        "Internal_Subprogram_Part",
+    }
+    units = _PROGRAMS | {"Module", "Submodule", "Block_Data"}
+
+    def record(node, owner, role, status="modeled"):
+        row = {
+            "kind": kind(node),
+            "role": role,
+            "owner": list(owner),
+            "location": unit.location(node),
+            "status": status,
+        }
+        records.append(row)
+        return row
+
+    def incomplete(row, code, detail, node):
+        row.update(
+            status="incomplete",
+            diagnostic={
+                "code": "fortran." + code,
+                "detail": detail,
+                **unit.location(node),
+                "owner": row["owner"],
+            },
+        )
+
+    def specifications(spec, owner, symbols, *, module=False, blocked=False):
+        for stmt in getattr(spec, "content", ()):
+            tag = kind(stmt)
+            if tag in {"Implicit_Part", "Declaration_Construct"}:
+                specifications(stmt, owner, symbols, module=module, blocked=blocked)
+                continue
+            row = record(stmt, owner, "specification")
+            if blocked:
+                incomplete(
+                    row,
+                    "program_unit_scope",
+                    "declaration belongs to an unclosed program unit",
+                    stmt,
+                )
+                row["covers_subtree"] = True
+                continue
+            if module and tag == "Access_Stmt":
+                row["facts"] = {
+                    "visibility": str(stmt.items[0]).lower(),
+                    "names": [
+                        str(n).lower() for n in getattr(stmt.items[1], "items", ())
+                    ],
+                }
+                continue
+            try:
+                _declaration(stmt, symbols, {}, [])
+            except Gap as error:
+                incomplete(row, error.code, str(error), error.node or stmt)
+                row["covers_subtree"] = True
+            if module:
+                names = (
+                    [str(entity.items[0]).lower() for entity in stmt.items[2].items]
+                    if tag == "Type_Declaration_Stmt"
+                    else []
+                )
+                meanings = [(name, symbols[name]) for name in names if name in symbols]
+                missing = [name for name in names if name not in symbols]
+                if missing:
+                    incomplete(
+                        row,
+                        "module_declaration_binding",
+                        "missing GNU module symbol facts: " + ", ".join(missing),
+                        stmt,
+                    )
+                elif tag in {"Common_Stmt", "Equivalence_Stmt", "Data_Stmt"}:
+                    incomplete(
+                        row,
+                        "module_storage",
+                        "module storage association is not modeled: " + tag,
+                        stmt,
+                    )
+                elif any(
+                    "VARIABLE" in sym.attrs and "PARAMETER" not in sym.attrs
+                    for _, sym in meanings
+                ):
+                    incomplete(
+                        row,
+                        "module_state",
+                        "persistent module storage is not modeled: "
+                        + ", ".join(
+                            name
+                            for name, sym in meanings
+                            if "VARIABLE" in sym.attrs and "PARAMETER" not in sym.attrs
+                        ),
+                        stmt,
+                    )
+                elif meanings and row["status"] == "modeled":
+                    row["facts"] = {
+                        "symbols": [
+                            {
+                                "name": name,
+                                "category": sym.category,
+                                "kind_bytes": sym.size,
+                                "attributes": sorted(sym.attrs),
+                                "folded_value": sym.value,
+                            }
+                            for name, sym in meanings
+                        ],
+                        "basis": "selected_gnu_resolved_symbols",
+                    }
+
+    def visit(node, parents=(), blocked=False):
+        tag = kind(node)
+        if tag in wrappers:
+            for child in getattr(node, "content", ()):
+                visit(child, parents, blocked)
+            return
+        if tag not in units:
+            if tag in {"Comment", "Contains_Stmt"}:
+                return
+            row = record(node, parents, "program_unit", "incomplete")
+            incomplete(row, "program_unit", "unhandled program unit " + tag, node)
+            row["covers_subtree"] = True
+            return
+        head = node.content[0]
+        name = (
+            str(head.items[0]).lower()
+            if tag == "Block_Data" and head.items[0] is not None
+            else "scar_unnamed_common_init" if tag == "Block_Data" else _unit_name(node)
+        )
+        owner = (*parents, name)
+        row = record(head, owner, "program_unit")
+        row["kind"] = tag
+        procedure = captured.get(id(head))
+        if procedure is not None:
+            row["symbol"] = procedure.symbol
+            records.extend(procedure.source_coverage)
+            if procedure.problem:
+                row.update(
+                    status="incomplete",
+                    diagnostic={**procedure.problem, "owner": list(owner)},
+                )
+                if not procedure.source_coverage:
+                    row["covers_subtree"] = True
+                    spec = next(
+                        (
+                            child
+                            for child in node.content
+                            if kind(child) == "Specification_Part"
+                        ),
+                        None,
+                    )
+                    specifications(spec, owner, {}, blocked=True)
+        elif tag == "Module" and not blocked:
+            row["status"] = "transparent"
+            symbols = {
+                name: replace(sym, bounds=[])
+                for name, sym in tables.get(owner, {}).items()
+            }
+            spec = next(
+                (
+                    child
+                    for child in node.content
+                    if kind(child) == "Specification_Part"
+                ),
+                None,
+            )
+            before = len(records)
+            specifications(spec, owner, symbols, module=True)
+            state = [
+                name
+                for name, sym in symbols.items()
+                if "VARIABLE" in sym.attrs and "PARAMETER" not in sym.attrs
+            ]
+            if state:
+                incomplete(
+                    row,
+                    "module_state",
+                    "persistent or associated module storage is not modeled: "
+                    + ", ".join(sorted(state)),
+                    head,
+                )
+            elif any(r["status"] == "incomplete" for r in records[before:]):
+                row.update(
+                    status="incomplete",
+                    diagnostic=next(
+                        r["diagnostic"]
+                        for r in records[before:]
+                        if r["status"] == "incomplete"
+                    ),
+                )
+        else:
+            incomplete(row, "program_unit", "unclosed program unit " + tag, head)
+            row["covers_subtree"] = True
+            blocked = True
+            spec = next(
+                (
+                    child
+                    for child in node.content
+                    if kind(child) == "Specification_Part"
+                ),
+                None,
+            )
+            specifications(spec, owner, {}, blocked=True)
+        for child in node.content:
+            if kind(child) in wrappers:
+                visit(child, owner, blocked)
+
+    visit(tree)
+    return {
+        "semantics_version": 1,
+        "language": "fortran",
+        "scope": "program_units_and_specification_constructs",
+        "complete": all(row["status"] != "incomplete" for row in records),
+        "records": records,
+    }
 
 
 def _enabled(flags, positive, negative, default=False):
@@ -1281,6 +1543,7 @@ class Procedure:
     block_data: bool
     problem: dict | None
     intrinsic_bindings: tuple = ()
+    source_coverage: tuple = ()
 
     def external_name(self, name):
         if name not in self.links:
@@ -1302,6 +1565,7 @@ class ParsedUnit:
     source_numeric_contract: dict = field(default_factory=dict)
     intrinsic_bindings: dict = field(default_factory=dict)
     external_headers: dict = field(default_factory=dict)
+    source_coverage: dict = field(default_factory=dict)
 
     def location(self, node):
         original = node
@@ -1422,7 +1686,12 @@ def _capture_unit(path, root, flags):
         _capture_procedure(unit, parents, node, tables, bindings)
         for parents, node in chain((((), block) for block in block_data), programs)
     )
-    return replace(unit, procedures=procedures, target=_capture_target(flags, tree))
+    return replace(
+        unit,
+        procedures=procedures,
+        target=_capture_target(flags, tree),
+        source_coverage=_source_coverage(tree, unit, tables, procedures),
+    )
 
 
 def _capture_procedure(unit, parents, node, tables, bindings):
@@ -1459,6 +1728,7 @@ def _capture_procedure(unit, parents, node, tables, bindings):
     )
     interfaces = {}
     associations = []
+    coverage = []
     problem = None
     try:
         if table is None:
@@ -1474,11 +1744,32 @@ def _capture_procedure(unit, parents, node, tables, bindings):
                 raise Gap(
                     "host_association", "internal procedure with host scope", head
                 )
+            # GNU may fold a host PARAMETER out of the procedure's own table.
+            # The source AST still refers to it; local symbols take precedence.
+            for inherited, meaning in host.items():
+                if "PARAMETER" in meaning.attrs:
+                    symbols.setdefault(inherited, replace(meaning, bounds=[]))
         spec = next(
             (child for child in node.content if kind(child) == "Specification_Part"),
             None,
         )
-        _declarations(spec, symbols, interfaces, associations)
+        _declarations(
+            spec,
+            symbols,
+            interfaces,
+            associations,
+            coverage=coverage,
+            unit=unit,
+            owner=(*parents, name),
+        )
+        problem = next(
+            (
+                record["diagnostic"]
+                for record in coverage
+                if record["status"] == "incomplete"
+            ),
+            None,
+        )
     except Gap as error:
         problem = {
             "code": "fortran." + error.code,
@@ -1487,6 +1778,11 @@ def _capture_procedure(unit, parents, node, tables, bindings):
         }
         if not block:
             problem["symbol"] = symbol
+
+    if not block:
+        for record in coverage:
+            if "diagnostic" in record:
+                record["diagnostic"]["symbol"] = symbol
 
     calls = set()
     formats = {}
@@ -1543,6 +1839,7 @@ def _capture_procedure(unit, parents, node, tables, bindings):
         block_data=block,
         problem=problem,
         intrinsic_bindings=unit.intrinsic_bindings.get((*parents, name), ()),
+        source_coverage=tuple(coverage),
     )
 
 

@@ -2,7 +2,7 @@
 
 from copy import deepcopy
 
-from scar.contract import digest, json_bytes
+from scar.contract import digest, json_bytes, validate_source_coverage
 
 _REGIONS = {"body", "then", "else", "init", "handlers", "cleanup", "finally"}
 _CONTROL = {
@@ -17,6 +17,7 @@ _CONTROL = {
     "try",
     "exception_handler",
     "with_context",
+    "python_select",
     "return",
     "break",
     "continue",
@@ -83,7 +84,7 @@ def function_graph(function, revision):
             op == "library_value" and value.get("mode") == "qualify"
         ):
             return storage(value["value"], scope)
-        if op == "select":
+        if op in {"select", "python_select"}:
             left, right = storage(value["then"], scope), storage(value["else"], scope)
             return left if left == right else "memory"
         if op == "binary" and value.get("operator") == "comma":
@@ -280,7 +281,10 @@ def function_graph(function, revision):
             field = value[key]
             if key == "args" and op in _CALLS:
                 row[key] = arguments(value, scope, number)
-            elif op == "mapping_comprehension" and key == "generators":
+            elif (
+                op in {"mapping_comprehension", "sequence_comprehension"}
+                and key == "generators"
+            ):
                 row[key] = [
                     {
                         port: encode(
@@ -339,7 +343,7 @@ def function_graph(function, revision):
                     and key == "items"
                     or op == "starred"
                     and key == "value"
-                    or op == "select"
+                    or op in {"select", "python_select"}
                     and key in {"then", "else"}
                     or op == "binary"
                     and value.get("operator") == "comma"
@@ -400,6 +404,10 @@ def unit_graph(unit, revision):
         key: deepcopy(unit.get(key, []))
         for key in ("externs", "records", "templates", "enums")
     }
+    if "source_coverage" in unit:
+        payload["source_coverage"] = deepcopy(
+            validate_source_coverage(unit["source_coverage"])
+        )
     for record in payload["records"]:
         fields = [field for field in record.get("fields", ()) if "init" in field]
         if fields:

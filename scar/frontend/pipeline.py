@@ -111,6 +111,11 @@ def _unit(job):
         compilation_profile_sha256=digest(json_bytes(profile)),
         revision=revision,
         source_facts=source_facts,
+        **(
+            {"source_coverage": unit["source_coverage"]}
+            if "source_coverage" in unit
+            else {}
+        ),
         graph=receipt,
         initializer_calls=initializers["calls"],
         initializer_objects=initializers["objects"],

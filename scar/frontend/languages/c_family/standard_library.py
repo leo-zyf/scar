@@ -1,5 +1,7 @@
 """Bind compiler-resolved standard library declarations to typed operator interfaces."""
 
+from .facts import cursor_kind, type_kind, is_expression
+
 
 class BindingError(ValueError):
     """A standard-library declaration needs a typed operation or target binding."""
@@ -174,7 +176,7 @@ def _namespace(cursor):
     parts = []
     parent = cursor.semantic_parent
     while parent:
-        if parent.kind.name == "NAMESPACE":
+        if cursor_kind(parent) == "NAMESPACE":
             parts.append(parent.spelling)
         parent = parent.semantic_parent
     return tuple(reversed(parts))
@@ -202,7 +204,7 @@ def wire_type(source, lower):
         pointer, owner = (
             source.get_template_argument_type(i).get_canonical() for i in range(2)
         )
-        if pointer.kind.name != "POINTER" or not is_standard(owner.get_declaration()):
+        if type_kind(pointer) != "POINTER" or not is_standard(owner.get_declaration()):
             raise BindingError(
                 "iterator requires a public container and element qualification"
             )
@@ -236,7 +238,7 @@ def wire_type(source, lower):
     arguments = []
     for i in range(max(0, source.get_num_template_arguments())):
         argument = source.get_template_argument_type(i)
-        if argument.kind.name == "INVALID":
+        if type_kind(argument) == "INVALID":
             raise BindingError(
                 f"non-type template argument of {family} needs a structural binding"
             )
@@ -258,7 +260,7 @@ def reference(declaration, lower_type):
         }
     if parent.spelling == "ios_base" and name in _FLAGS:
         name = "ios_" + name
-    elif not (name in _STREAMS | _MANIPULATORS and parent.kind.name == "NAMESPACE"):
+    elif not (name in _STREAMS | _MANIPULATORS and cursor_kind(parent) == "NAMESPACE"):
         return None
     return {"op": "library_ref", "provider": "cxx_standard", "name": name}
 
@@ -274,7 +276,7 @@ def public_field(declaration):
 def _stream_family(source, owns):
     """Identify the captured public char stream specialization, including its traits."""
     source = source.get_canonical()
-    if source.kind.name == "POINTER":
+    if type_kind(source) == "POINTER":
         source = source.get_pointee().get_canonical()
     owner = source.get_declaration()
     if (
@@ -289,7 +291,7 @@ def _stream_family(source, owns):
     )
     declaration = traits.get_declaration()
     if (
-        char.kind.name in {"CHAR_S", "CHAR_U"}
+        type_kind(char) in {"CHAR_S", "CHAR_U"}
         and not char.is_const_qualified()
         and not char.is_volatile_qualified()
         and declaration.spelling == "char_traits"
@@ -309,18 +311,18 @@ def _file_receiver(cursor, owns):
         family = _stream_family(cursor.type, owns)
         if family == "basic_ifstream":
             return True
-        if family != "basic_istream" or cursor.kind.name not in {
+        if family != "basic_istream" or cursor_kind(cursor) not in {
             "UNEXPOSED_EXPR",
             "PAREN_EXPR",
         }:
             break
-        children = [c for c in cursor.get_children() if c.kind.is_expression()]
+        children = [c for c in cursor.get_children() if is_expression(c)]
         cursor = children[0] if len(children) == 1 else None
     return False
 
 
 def _ifstream_effect(declaration, receiver, argc, lower_type, owns):
-    kind, name = declaration.kind.name, declaration.spelling
+    kind, name = cursor_kind(declaration), declaration.spelling
     constructor = kind == "CONSTRUCTOR"
     if not (
         constructor
@@ -360,11 +362,11 @@ def _ifstream_effect(declaration, receiver, argc, lower_type, owns):
         if (
             len(params) != 2
             or argc not in {1, 2}
-            or result.kind.name != "VOID"
-            or params[0].kind.name != "POINTER"
+            or type_kind(result) != "VOID"
+            or type_kind(params[0]) != "POINTER"
             or lower_type(params[0])
             != {"kind": "ptr", "to": {"kind": "const", "of": "char"}}
-            or params[1].kind.name != "ENUM"
+            or type_kind(params[1]) != "ENUM"
             or lower_type(params[1]) != _library_type("ios_openmode")
         ):
             return None
@@ -388,7 +390,7 @@ def _ifstream_effect(declaration, receiver, argc, lower_type, owns):
             ]
         )
     elif name == "close":
-        if params or argc or result.kind.name != "VOID":
+        if params or argc or type_kind(result) != "VOID":
             return None
         interface = "stream.close"
         contract.update(
@@ -399,12 +401,12 @@ def _ifstream_effect(declaration, receiver, argc, lower_type, owns):
         if (
             argc != len(params)
             or argc not in {2, 3}
-            or params[0].kind.name != "POINTER"
+            or type_kind(params[0]) != "POINTER"
             or lower_type(params[0]) != {"kind": "ptr", "to": "char"}
-            or params[1].kind.name not in {"SCHAR", "SHORT", "INT", "LONG", "LONGLONG"}
+            or type_kind(params[1]) not in {"SCHAR", "SHORT", "INT", "LONG", "LONGLONG"}
             or argc == 3
             and lower_type(params[2]) != "char"
-            or result.kind.name != "LVALUEREFERENCE"
+            or type_kind(result) != "LVALUEREFERENCE"
             or _stream_family(result.get_pointee(), owns) != "basic_istream"
         ):
             return None
@@ -441,7 +443,7 @@ def _ifstream_effect(declaration, receiver, argc, lower_type, owns):
 
 def bind_call(cursor, declaration, expression, lower_type, *, owns):
     """Use the resolved declaration for the interface and preserve explicit argument order."""
-    if declaration is None and cursor.type.get_canonical().kind.name == "RECORD":
+    if declaration is None and type_kind(cursor.type.get_canonical()) == "RECORD":
         args = list(cursor.get_arguments())
         ty = lower_type(cursor.type)
         bare = ty.get("of", ty) if isinstance(ty, dict) else {}
@@ -475,7 +477,7 @@ def bind_call(cursor, declaration, expression, lower_type, *, owns):
     )
     if ns[:1] != ("std",) and not iterator_member and not iterator_operator:
         return None
-    kind, name = declaration.kind.name, declaration.spelling
+    kind, name = cursor_kind(declaration), declaration.spelling
     owner = declaration.semantic_parent
     if kind == "CONSTRUCTOR":
         ty = lower_type(cursor.type)
@@ -507,10 +509,10 @@ def bind_call(cursor, declaration, expression, lower_type, *, owns):
         children = list(cursor.get_children())
         if (
             children
-            and children[0].kind.name == "MEMBER_REF_EXPR"
+            and cursor_kind(children[0]) == "MEMBER_REF_EXPR"
             and children[0].referenced == declaration
         ):
-            bases = [c for c in children[0].get_children() if c.kind.is_expression()]
+            bases = [c for c in children[0].get_children() if is_expression(c)]
             if len(bases) != 1:
                 raise BindingError(f"member {name} has no explicit receiver")
             receiver = bases[0]
@@ -520,7 +522,7 @@ def bind_call(cursor, declaration, expression, lower_type, *, owns):
         else:
             raise BindingError(f"member {name} has no resolved receiver")
         op["receiver"] = expression(receiver)
-        if receiver.type.get_canonical().kind.name == "POINTER":
+        if type_kind(receiver.type.get_canonical()) == "POINTER":
             op["receiver"] = {
                 "op": "unary",
                 "operator": "deref",
@@ -535,7 +537,7 @@ def bind_call(cursor, declaration, expression, lower_type, *, owns):
         "INCOMPLETEARRAY": "pointer",
     }
     op["parameter_modes"] = [
-        modes.get(parameter.type.get_canonical().kind.name, "value")
+        modes.get(type_kind(parameter.type.get_canonical()), "value")
         for parameter in list(declaration.get_arguments())[: len(arguments)]
     ]
     op["effects"] = "unknown"

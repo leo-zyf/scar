@@ -13,6 +13,7 @@ from scar.contract import (
     validate_text_profiles,
     validate_numeric_contract,
     validate_source_literal,
+    validate_source_coverage,
     validate_python_entry_environment,
 )
 
@@ -61,6 +62,9 @@ def _provider_sources(records):
 
 
 _SITE_OPERATIONS = {
+    "python_select",
+    "sequence_comprehension",
+    "assignment_expression",
     "mapping",
     "mapping_comprehension",
     "map",
@@ -642,6 +646,17 @@ def bind(graph, folder):
         all_issues += unit["diagnostics"]
         payload = read_member(folder, unit["graph"])
         _validate_numeric_evidence(unit, payload)
+        coverage = payload.get("source_coverage")
+        if coverage != unit.get("source_coverage"):
+            raise ValueError("source coverage disagrees with its sealed unit graph")
+        if coverage is not None:
+            validate_source_coverage(coverage)
+            for item in coverage["records"]:
+                if (
+                    item["status"] == "incomplete"
+                    and item["diagnostic"] not in unit["diagnostics"]
+                ):
+                    all_issues.append(item["diagnostic"])
         roots.update(
             n["name"]
             for n in payload["global_graph"]["nodes"]

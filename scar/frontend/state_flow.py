@@ -16,7 +16,7 @@ def state_flow(nodes, entry, accesses):
     for port, row in enumerate(nodes):
         op = row["op"]
         if (
-            op in {"with_context", "mapping_comprehension"}
+            op in {"with_context", "mapping_comprehension", "sequence_comprehension"}
             or op == "for"
             and (
                 "iterator" in row
@@ -25,7 +25,11 @@ def state_flow(nodes, entry, accesses):
         ):
             boundaries.append((port, "conservative_iterator_protocol"))
             protocol_regions.add(port)
-            if op in {"with_context", "mapping_comprehension"}:
+            if op in {
+                "with_context",
+                "mapping_comprehension",
+                "sequence_comprehension",
+            }:
                 opaque.add(port)
         elif op in {"map", "each"} and port not in bound_loops:
             # An older F3 shard can bind a same-named extent to the inner
@@ -151,7 +155,7 @@ def state_flow(nodes, entry, accesses):
         op = row["op"]
         if op == "binary" and row.get("operator") in {"land", "lor"}:
             conditional = [row["right"]]
-        elif op == "select":
+        elif op in {"select", "python_select"}:
             conditional = [row["then"], row["else"]]
         elif op in {"short_circuit", "compare_chain"}:
             conditional = row["operands"][1:]
@@ -469,7 +473,8 @@ def state_flow(nodes, entry, accesses):
                         first_iterable_evaluation="once_when_reached",
                         iteration_count="zero_or_more",
                     )
-                    if nodes[p]["op"] == "mapping_comprehension"
+                    if nodes[p]["op"]
+                    in {"mapping_comprehension", "sequence_comprehension"}
                     else {}
                 ),
             }
