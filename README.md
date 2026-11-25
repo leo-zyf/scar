@@ -68,9 +68,11 @@ Python 的受支持文件、目录、文本流、结构化循环及异常／清�
 
 5M 图含 880 个编译单元、2,026,039 条操作和 243 项资源。M2 已沿主入口分析至文件末尾。第 436、441、445 行各保留一个循环区域，求值和取得迭代器只发生一次，目标写入和循环体属于取到元素的分支，正常耗尽后进入退出分支。三个循环体分别含 2、1、1 条语句。静态分析没有给它们指定迭代次数。产物见 `evidence/handoff/source-loop-flow.json`。
 
-第 425 行导入绘图模块时，调用方接收实际 importer 的返回值。M2 沿 `plot_xiaoqu → plot_binary_data → scipy` 分别从未知初始帧重建三个模块体。每个条件域独立记录对命名空间的读写及导入，分别含 7、7、10 个导入站点。三个模块共含 11 处函数对象创建。还需要连接实际调用与对应的函数体，处理加载器选择的其他入口，并在 CPU 后端实现这些源操作。主入口的分析片段已到末尾，整程序 `INCOMPLETE`，驱动的执行 IR 包含零个可执行函数。见 `evidence/handoff/source-activation-flow.json`。
+第 425 行的加载器返回实际模块对象。M2 分别建立三个条件模块体，其中有 11 处函数创建。在保留的入口、模块及前缀中，27 个动态调用有 7 个能沿导入、属性读取和函数发布追溯到候选函数体。每条边以原调用选中的函数对象及活动代码为条件。7 个函数共还原 54 条连续语句，随后分别到达 3 个比较分支、3 个循环和 1 个数组索引赋值。第 429 行的函数体包含 `outdir → os.path.join → file0 → numpy.loadtxt → data` 的实际参数槽、属性读取和返回值写入。可逐条检查 `evidence/handoff/function-call-flow.json`。
 
-前端从实际编译结果恢复模块对 `__doc__` 的隐式赋值，包括编译器删除赋值的优化模式。在以前已封存 11,356 条指令证据的同一批 Python 模块图上，逐条核对后新增 397 条赋值证据。SciPy 的第一个 importer 可以读到这次写入的字符串。见 `evidence/handoff/source-operands.json` 和 `evidence/handoff/module-coverage.json`。
+独立对照取正式 5M 科学输出的 13 行数据，运行原 Python 入口第 430 行的调用切片一次。观察到的函数、代码、globals、builtins 和两个参数槽均与候选边匹配。生成 PDF 与正式上游产物仅创建日期不同，100 dpi 渲染像素相同。该对照覆盖一次原绘图调用，整驱动保持 `INCOMPLETE`。见 `evidence/handoff/plotting-frame-observation.json`。
+
+F1 对 2,554 个普通函数捕获到独立代码身份，生成 9,467 条带指令位置的语句记录和 19,478 条名称读取记录。与上一版对照，11,753 条模块级证据在原字段上全部保留。函数体由 F3 图 ID 与子代码摘要绑定，调用点共用其内容寻址文件。见 `evidence/handoff/module-coverage.json` 和 `evidence/handoff/function-call-flow.json`。
 
 M3 在 TwoPuncture 的 85 个外部数学调用点追溯操作数。热点中的 `Pion` 由入口参数 `n` 决定，`j` 随外循环变化，`k` 随内循环变化。大网格前三次 BiCGSTAB 迭代中两个调用点分别执行 9750 万和 5850 万次 `cos`。跨迭代复用还需证明浮点环境和库调用的可观察效果；本轮交付的两个二进制与之前实测版本的 SHA-256 均相同。对真实 C17 输入，仅共享已证明精确、私有的整数实参计算，保留原来的数学调用，7 组输入输出通过对照。证据见 `evidence/handoff/m3-math.json` 和 `evidence/solvers/public-run.json`。
 
@@ -86,7 +88,9 @@ B2 将 C++ 目标记录的必填字段规则预计算一次。在真实 ABE 的 
 
 另用交付的 TwoPuncture 可执行文件复测 16×16×8 网格，绑定逻辑 CPU 26，单线程，预热一对并交错计时四对。原版中位 5.398 秒（5.370–5.460），生成版 5.381 秒（5.307–5.401），比值 1.0032×。10 次运行的两个科学输出、stdout 和 stderr 对照一致，`Ansorg.psid` 归一化了首行日期。另一次测量的耗时分布在 5–11 秒，单独保留在 `solver-recheck.json`。见 `evidence/handoff/performance-payload/solver-clean.json`。
 
-提交 `b77896a5` 的固定版本安装包执行 220 项测试，193 项通过、27 项失败、0 项跳过。19 项首先需要原生加载初始化，5 项还涉及导入或其他效果后的状态续接，3 项首先需要证明目标保留原导入效果。详情见 `evidence/handoff/qualification-gates.json`。完整 5M 入口尚无 C++20 运行时间或加速比。
+在 50×50×26 网格的前三次 BiCGSTAB 迭代上，另测了保留每次写回、按需重载目标元素的实现。该实现减少 273,206,400 次加载，增加 494,426,400 次有效性检查。同核单线程预热一对、交错十对，现行生成版与实验版的中位数分别为 11.996 s 和 12.278 s，配对中位比 0.977×。该变换已拒绝。见 `evidence/handoff/slot-reload-performance.json`。
+
+提交 `5b4c7d8d` 的安装包执行 223 项测试，196 项通过、27 项失败、0 项跳过。失败用例与上一版相同。操作数最少的用例只有 14 个操作：F3 记录了导入和后续查找，M2 的特化路径直接调用项目函数，B1 因缺乏等价的导入、异常与缓存命中续体拒绝生成可执行文件。相同源码在普通启动、审计拒绝和预置模块时分别得到两种不同输出及一种错误退出。层间证据见 `evidence/handoff/smallest-entry-gap.json` 和 `evidence/handoff/qualification-gates.json`。完整 5M 入口仍无 C++20 运行时间或加速比。
 
 层间接口见 [架构](docs/ARCHITECTURE.md)，图和 IR 形式见 [模型](docs/MODEL.md)。`tests/stages` 通过禁止跨阶段导入及移走上游源码、图和报告，检查阶段独立性。GitHub Actions 从安装后的 wheel 执行同一检查。
 
