@@ -122,6 +122,8 @@ def _observed_operators(module):
                     operation if isinstance(operation, str) else op
                 )
                 integer_nodes.append(node)
+            if runtime.is_registry_operation(node):
+                observed.setdefault("module_registry", set()).add(op)
             if (
                 op in _ARRAY_OPERATIONS
                 or family == "ndarray"

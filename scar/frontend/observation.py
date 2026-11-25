@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+import re
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
@@ -99,3 +100,259 @@ def array_abi(entry, evidence):
         inputs=len(arrays),
         entry=entry,
     )
+
+
+_SPAN = ("line", "end_line", "column", "end_column")
+
+
+def _binding_sample(sample, line):
+    """Validate the collector payload before the graph supplies the port identity."""
+    if not isinstance(sample, dict) or set(sample) != {
+        "owner",
+        "location",
+        "binding_index",
+        "member",
+        "binding",
+        "result",
+    }:
+        raise ValueError("invalid import binding sample fields")
+    loc = sample["location"]
+    if (
+        not isinstance(loc, dict)
+        or set(loc) != set(_SPAN)
+        or any(type(loc[k]) is not int or loc[k] < 1 for k in _SPAN)
+        or loc["line"] != line
+        or (loc["end_line"], loc["end_column"]) <= (loc["line"], loc["column"])
+        or any(
+            type(sample[k]) is not str or not sample[k]
+            for k in ("owner", "member", "binding")
+        )
+        or type(sample["binding_index"]) is not int
+        or sample["binding_index"] < 0
+    ):
+        raise ValueError("invalid import binding sample position")
+    result = sample["result"]
+    if isinstance(result, dict):
+        kind = result.get("kind")
+        if kind in ("function", "type") and set(result) == {
+            "kind",
+            "module",
+            "qualname",
+        }:
+            if all(
+                type(result[k]) is str and 0 < len(result[k]) <= 4096
+                for k in ("module", "qualname")
+            ):
+                return sample
+        if kind in ("absent", "other", "none") and set(result) == {"kind"}:
+            return sample
+        if kind in ("int", "bool") and set(result) == {"kind", "value"}:
+            value = result["value"]
+            if (
+                type(value) is (int if kind == "int" else bool)
+                and value.bit_length() <= 64
+            ):
+                return sample
+        if kind == "module" and set(result) == {
+            "kind",
+            "name",
+            "same_registry_instance",
+        }:
+            if (
+                type(result["name"]) is str
+                and result["name"]
+                and type(result["same_registry_instance"]) in (bool, type(None))
+            ):
+                return sample
+    raise ValueError("invalid import binding sample value")
+
+
+def link_import_observation(observed, units, images, folder):
+    """F5 joins successful binding samples to exact source ports in one image."""
+    from scar.contract import digest, json_loads, read_member
+
+    image, entry_sha, raw = observed
+    record = json_loads(raw)
+    if (
+        not isinstance(record, dict)
+        or record.get("schema") != "scar.python-import-observation"
+        or record.get("schema_version") != 1
+        or record.get("scope") != "instrumented_script_successful_module_bindings"
+        or entry_sha != record.get("entry_sha256")
+        or not isinstance(record.get("source_sha256"), str)
+        or not re.fullmatch("[a-f0-9]{64}", record["source_sha256"])
+        or type(record.get("line")) is not int
+        or record["line"] < 1
+        or type(record.get("interpreter")) is not str
+        or not record["interpreter"]
+        or not isinstance(record.get("events"), list)
+        or len(record["events"]) > 4096
+        or type(record.get("dropped")) is not int
+        or record["dropped"] < 0
+    ):
+        raise ValueError("invalid import observation or mismatched script bytes")
+    if images is not None:
+        selected = next(v for v in images if v["id"] == image)
+        units = [units[i] for i in selected["units"]]
+    ports = {}
+    for unit in units:
+        facts = unit["source_facts"]
+        if (
+            unit["language"] != "python"
+            or facts.get("compiler") != record.get("interpreter")
+            or facts["files"].get(unit["path"]) != record["source_sha256"]
+        ):
+            continue
+        for fn in read_member(folder, unit["graph"])["functions"]:
+            scope = fn["signature"].get("python_scope", {})
+            if scope.get("kind") != "module":
+                continue
+            owner = "__main__" if scope.get("main") else scope["module"]
+            for port, node in enumerate(fn["nodes"]):
+                if node["op"] != "python_import" or node["request"]["form"] != "from":
+                    continue
+                loc = node["location"]
+                key = (
+                    owner,
+                    *(loc[k] for k in _SPAN),
+                    node["request"]["binding_index"],
+                    node["member"],
+                    node.get("alias") or node["member"],
+                )
+                ports.setdefault(key, []).append(f"{fn['id']}/{port}")
+    events = []
+    for raw_sample in record["events"]:
+        sample = _binding_sample(raw_sample, record["line"])
+        key = (
+            sample["owner"],
+            *(sample["location"][k] for k in _SPAN),
+            sample["binding_index"],
+            sample["member"],
+            sample["binding"],
+        )
+        sites = ports.get(key, [])
+        joined = (
+            {"site": sites[0]}
+            if len(sites) == 1
+            else {
+                "unresolved": (
+                    "no_matching_port" if not sites else "ambiguous_source_port"
+                )
+            }
+        )
+        events.append({**sample, **joined})
+    return dict(
+        image=image,
+        capture_sha256=digest(raw),
+        entry_sha256=entry_sha,
+        source_sha256=record["source_sha256"],
+        interpreter=record["interpreter"],
+        match_basis="entry_and_observed_module_source_revisions_and_port",
+        scope=record["scope"],
+        dropped=record["dropped"],
+        events=events,
+    )
+
+
+def attach_import_observation(index, raw_path, *, image=None):
+    """Attach one import sample using the sealed script image, without its sources."""
+    from scar.contract import (
+        GRAPH,
+        digest,
+        json_bytes,
+        member,
+        open_product,
+        publish,
+        read_blob,
+        read_member,
+        validate_images,
+    )
+
+    index, _, graph = open_product(Path(index).resolve(), "graph.json", GRAPH)
+    folder, units = index.parent, graph["units"]
+    images, entry = graph.get("images"), graph["entry"]
+    selected = units
+    if images is not None:
+        validate_images(images, graph["root_image"], unit_count=len(units))
+        if image is None and len(images) == 1:
+            image = images[0]["id"]
+        target = next((row for row in images if row["id"] == image), None)
+        if target is None:
+            raise ValueError("select a declared script image with --image")
+        entry, selected = target["entry"], [units[i] for i in target["units"]]
+    elif image is not None:
+        raise ValueError("single-program graph has no named image")
+
+    # The compact index identifies candidate units. Bind the entry to the
+    # actual module initializer in its checksummed graph member.
+    revisions = []
+    for unit in selected:
+        if unit["language"] != "python" or not any(
+            fn["name"] == entry for fn in unit["functions"]
+        ):
+            continue
+        for fn in read_member(folder, unit["graph"])["functions"]:
+            signature = fn["signature"]
+            scope = signature.get("python_scope", {})
+            if (
+                signature["name"] == entry == scope.get("initializer")
+                and scope.get("kind") == "module"
+                and scope.get("main") is True
+                and scope.get("source_key") == unit["path"]
+            ):
+                revisions.append(unit["source_facts"]["files"].get(unit["path"]))
+    if (
+        len(revisions) != 1
+        or not isinstance(revisions[0], str)
+        or not re.fullmatch("[a-f0-9]{64}", revisions[0])
+    ):
+        raise ValueError("selected image requires one sealed Python script entry")
+
+    sample = link_import_observation(
+        (image, revisions[0], Path(raw_path).read_bytes()), units, images, folder
+    )
+    facts = graph.setdefault("source_facts", {})
+    if "import_binding_sample" in facts:
+        previous = facts["import_binding_sample"]
+        if (
+            not isinstance(previous, dict)
+            or previous.get("image") != image
+            or read_blob(folder, previous["evidence"]) != json_bytes(sample)
+        ):
+            raise ValueError("graph already contains a different import observation")
+    else:
+        receipt = member(folder, "observations", sample)
+        read_blob(folder, receipt)
+        facts["import_binding_sample"] = dict(image=image, evidence=receipt)
+
+    data = json_bytes(graph)
+    derived = folder / f"graph-{digest(data)}.json"
+    if derived.exists():
+        if derived.read_bytes() != data:
+            raise ValueError("existing content-addressed graph has different bytes")
+    else:
+        publish(derived, data)
+    return derived
+
+
+def main(argv=None):
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Attach an import observation to a sealed graph."
+    )
+    parser.add_argument("--graph", type=Path, required=True)
+    parser.add_argument("--image")
+    parser.add_argument("--import-observation", type=Path, required=True)
+    args = parser.parse_args(argv)
+    try:
+        index = attach_import_observation(
+            args.graph, args.import_observation, image=args.image
+        )
+    except (OSError, ValueError) as error:
+        parser.exit(2, f"{parser.prog}: {error}\n")
+    print(index)
+
+
+if __name__ == "__main__":
+    main()

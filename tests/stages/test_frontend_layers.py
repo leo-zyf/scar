@@ -12,6 +12,48 @@ import tokenize
 from scar.frontend.languages import fortran, python
 
 
+def test_cpu_pool_affinity_does_not_remove_visible_hardware(tmp_path, monkeypatch):
+    import pytest
+
+    from scar import host
+    from scar.frontend import hardware
+
+    online = hardware._numbers(hardware._text(Path("/sys/devices/system/cpu/online")))
+    if len(online) < 2:
+        pytest.skip("requires multiple sysfs-visible CPUs")
+    monkeypatch.setattr(hardware, "array_sdk", lambda: None)
+    monkeypatch.setattr(host.os, "sched_getaffinity", lambda _: online)
+    wide, wide_edges, _ = hardware.snapshot(tmp_path)
+    selected = min(online)
+    monkeypatch.setattr(host.os, "sched_getaffinity", lambda _: {selected})
+    narrow, narrow_edges, platform = hardware.snapshot(tmp_path)
+    kinds = {"CPU", "CPU_CORE", "CPU_CACHE", "NUMA_MEMORY", "DRAM"}
+    assert [r for r in wide if r.kind in kinds] == [
+        r for r in narrow if r.kind in kinds
+    ]
+    assert len({r.id for r in narrow}) == len(narrow)
+    assert {f"cpu:{cpu}" for cpu in online} <= {r.id for r in narrow if r.kind == "CPU"}
+    topology = {"THREAD_ON_CORE", "SHARED_CPU_CACHE", "HOST_MEMORY_ACCESS"}
+    assert [e for e in wide_edges if e.value in topology] == [
+        e for e in narrow_edges if e.value in topology
+    ]
+    assert [e.target for e in narrow_edges if e.value == "CPU_POOL_MEMBER"] == [
+        f"cpu:{selected}"
+    ]
+    assert platform["affinity_cpu_ids"] == [selected]
+    assert platform["cpu_availability"]["worker_budget"] == 1
+
+    def unavailable(_):
+        raise OSError("affinity unavailable")
+
+    monkeypatch.setattr(host.os, "sched_getaffinity", unavailable)
+    _, unknown_edges, unknown = hardware.snapshot(tmp_path)
+    assert unknown["affinity_cpu_ids"] == []
+    assert unknown["cpu_availability"]["affinity_evidence"] == "unavailable"
+    assert unknown["cpu_availability"]["worker_budget"] == 1
+    assert not any(e.value == "CPU_POOL_MEMBER" for e in unknown_edges)
+
+
 def test_capture_mount_topology_distinguishes_backing_and_visibility(
     tmp_path, monkeypatch
 ):
@@ -1609,6 +1651,79 @@ def work(cmd, more, flag, other):
     )
 
 
+def test_fortran_nonpreprocessed_identity_tracks_opened_includes(tmp_path, monkeypatch):
+    import pytest
+
+    from scar.frontend.languages.fortran import facts
+
+    tracer = shutil.which("strace")
+    if (
+        not tracer
+        or subprocess.run(
+            [tracer, *facts._OPEN_TRACE, "-o", str(tmp_path / "probe"), "true"]
+        ).returncode
+    ):
+        pytest.skip("observing the selected GNU frontend requires local ptrace")
+    source = tmp_path / "value.f90"
+    outer = tmp_path / "external declarations"
+    inner = tmp_path / "constants"
+    source.write_text(
+        "integer function value()\ninclude 'external declarations'\nvalue=n\nend\n"
+    )
+    outer.write_text("include 'constants'\n")
+    inner.write_text("integer, parameter :: n=3\n")
+
+    def parse():
+        parsed = fortran.parse_unit(source, root=tmp_path)
+        contract = parsed.source_numeric_contract
+        assert "-cpp" not in contract["validated_command"]
+        return parsed.numeric_semantics_sha256, contract["semantic_capture"]
+
+    first, captured = parse()
+    assert first and first == parse()[0]
+    assert captured["coverage"]["source_includes"] == "same_frontend_read_inventory"
+    observed = {row["path"]: row for row in captured["inputs"]}
+    for path in (source, outer, inner):
+        assert observed[str(path)]["evidence"] == "gnu_frontend_read"
+    assert set(captured["open_witness"]["processes"]) == {"driver", "frontend"}
+    # Even an edit the compiler erases from its parse dump changes the selected input.
+    inner.write_text("integer, parameter :: n=3 ! revised comment\n")
+    revised, after = parse()
+    assert revised and revised != first
+    assert captured["stdout_sha256"] == after["stdout_sha256"]
+
+    module = tmp_path / "parameters.f90"
+    module.write_text("module parameters\ninteger, parameter :: n=5\nend module\n")
+    subprocess.run(["gfortran", "-fsyntax-only", str(module)], cwd=tmp_path, check=True)
+    source.write_text("integer function value()\nuse parameters\nvalue=n\nend\n")
+    key, imported = parse()
+    module_path = str(tmp_path / "parameters.mod")
+    assert module_path in {item["path"] for item in imported["inputs"]}
+    module_open = next(
+        row
+        for row in imported["open_witness"]["opened_files"]
+        if row["path"] == module_path
+    )
+    if module_open["device_inode"] is None:
+        assert key is None
+        assert {
+            "reason": "compiler_open_identity_unobserved",
+            "path": module_path,
+        } in imported["unresolved"]
+    real_which = shutil.which
+    monkeypatch.setattr(
+        facts.shutil,
+        "which",
+        lambda name: None if name == "strace" else real_which(name),
+    )
+    missing_observer, fallback = parse()
+    assert missing_observer is None
+    assert (
+        fallback["coverage"]["source_includes"]
+        == "unresolved_without_preprocessor_dependency_inventory"
+    )
+
+
 def test_fortran_capture_then_offline_normalization(tmp_path, monkeypatch):
     from fparser.two import utils
     from fparser.two.parser import ParserFactory
@@ -2217,3 +2332,119 @@ def test_fortran_source_units_account_for_module_and_submodule_coverage(
         issue["code"] == "fortran.program_unit" for issue in output["diagnostics"]
     )
     assert facts.source_coverage["records"] == coverage["records"]
+
+
+def test_attach_import_observation_to_relocated_script_image(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    from hashlib import sha256
+    import os
+    import sys
+
+    import scar
+    from scar.contract import read_member
+    from scar.frontend import build
+
+    source = tmp_path / "src"
+    source.mkdir()
+    first = source / "first.py"
+    first.write_text("from helper import value\nprint(value)\n")
+    (source / "second.py").write_text("print('another entry')\n")
+    (source / "helper.py").write_text("value = 11\n")
+    manifest = source / "request.json"
+    manifest.write_text(
+        json.dumps(
+            dict(
+                root_image="first",
+                images=[
+                    dict(id=name, entry="__main__", source=f"{name}.py", output=name)
+                    for name in ("first", "second")
+                ],
+            )
+        )
+    )
+    sample = tmp_path / "sample.json"
+    env = dict(os.environ, PYTHONPATH=str(Path(scar.__file__).resolve().parents[1]))
+
+    def invoke(module, *args):
+        return subprocess.run(
+            [sys.executable, "-B", "-m", module, *map(str, args)],
+            cwd=tmp_path,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+    captured = invoke(
+        "scar.frontend.languages.python.import_observation",
+        "--source",
+        first,
+        "--line",
+        1,
+        "--out",
+        sample,
+        first,
+    )
+    assert captured.returncode == 0 and captured.stdout == "11\n", captured.stderr
+    folder = tmp_path / "graph"
+    build(manifest, folder)
+    single = tmp_path / "single"
+    build(first, single)
+    shutil.rmtree(source)
+    folder = folder.rename(tmp_path / "relocated")
+    index = folder / "graph.json"
+    before = {p: p.read_bytes() for p in folder.rglob("*") if p.is_file()}
+
+    def attach(index, image, raw=sample):
+        return invoke(
+            "scar.frontend.observation",
+            "--graph",
+            index,
+            "--image",
+            image,
+            "--import-observation",
+            raw,
+        )
+
+    wrong = attach(index, "second")
+    assert wrong.returncode == 2 and "mismatched script bytes" in wrong.stderr
+    standalone = invoke(
+        "scar.frontend.observation", "--graph", single, "--import-observation", sample
+    )
+    assert standalone.returncode == 0, standalone.stderr
+    assert (
+        json.loads(Path(standalone.stdout.strip()).read_bytes())["source_facts"][
+            "import_binding_sample"
+        ]["image"]
+        is None
+    )
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _: attach(index, "first"), range(2)))
+    assert all(run.returncode == 0 for run in results), [run.stderr for run in results]
+    assert results[0].stdout == results[1].stdout
+    derived = Path(results[0].stdout.strip())
+    assert derived.parent == folder
+    assert derived.name == f"graph-{sha256(derived.read_bytes()).hexdigest()}.json"
+    assert attach(derived, "first").stdout == results[0].stdout
+    document = json.loads(derived.read_bytes())
+    ref = document["source_facts"].pop("import_binding_sample")
+    assert document == json.loads(before[index]) and ref["image"] == "first"
+    linked = read_member(folder, ref["evidence"])
+    [event] = linked["events"]
+    assert event["site"] and event["binding"] == "value"
+    assert event["result"] == {"kind": "int", "value": 11}
+    other = tmp_path / "different.json"
+    other.write_text(json.dumps(dict(json.loads(sample.read_bytes()), dropped=1)))
+    rejected = attach(derived, "first", other)
+    assert (
+        rejected.returncode == 2 and "different import observation" in rejected.stderr
+    )
+    after = {p for p in folder.rglob("*") if p.is_file()}
+    assert after - before.keys() == {derived, folder / ref["evidence"]["path"]}
+    assert all(p.read_bytes() == original for p, original in before.items())
+    planned = invoke("scar", "plan", "--graph", derived, "--out", tmp_path / "plan")
+    assert planned.returncode in (0, 2), planned.stderr
+    assert (
+        json.loads((tmp_path / "plan/plan.json").read_bytes())["graph_sha256"]
+        == sha256(derived.read_bytes()).hexdigest()
+    )

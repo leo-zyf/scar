@@ -89,33 +89,47 @@ class CPUAvailability:
     cpu_ids: tuple[int, ...]
     quotas: tuple[CPUQuota, ...]
     issues: tuple[str, ...] = ()
+    inventory_count: int | None = None
 
     @property
     def capacity_upper_bound(self):
         """Sustained core-time bound; quotas do not forbid wider short-lived teams."""
-        capacities = [Fraction(len(self.cpu_ids))]
+        count = len(self.cpu_ids) or self.inventory_count
+        capacities = [Fraction(count)] if count else []
         capacities.extend(
             Fraction(q.quota_us, q.period_us)
             for q in self.quotas
             if q.quota_us is not None
         )
-        return min(capacities)
+        return min(capacities, default=None)
 
     @property
     def worker_budget(self):
         # This is a conservative tool budget, not a hardware thread-count claim.
-        return 1 if self.issues else max(1, int(self.capacity_upper_bound))
+        bound = self.capacity_upper_bound
+        return 1 if self.issues or bound is None else max(1, int(bound))
 
     def as_record(self):
+        bound = self.capacity_upper_bound
         return dict(
             provider="host-affinity-cgroup",
             evidence="observed_constraints",
             cpu_ids=list(self.cpu_ids),
+            affinity_evidence="sched_getaffinity" if self.cpu_ids else "unavailable",
             quotas=[asdict(q) for q in self.quotas],
             constraint_scope="visible cgroup hierarchy and process affinity",
-            capacity_upper_bound_cores=float(self.capacity_upper_bound),
+            capacity_upper_bound_cores=float(bound) if bound is not None else None,
             capacity_scope="sustained core-time, not instantaneous concurrency or compute throughput",
-            capacity_evidence="inferred upper bound from affinity and visible quota/period",
+            capacity_evidence=(
+                "inferred upper bound from affinity and visible quota/period"
+                if self.cpu_ids
+                else "available CPU inventory count and visible quota/period"
+            ),
+            **(
+                {"inventory_cpu_count": self.inventory_count}
+                if self.inventory_count
+                else {}
+            ),
             worker_budget=self.worker_budget,
             budget_evidence="conservative policy, not measured optimal parallelism",
             budget_basis="floor of visible capacity, at least one worker; unresolved constraints use one",
@@ -184,8 +198,9 @@ def cpu_availability():
         cpus = tuple(sorted(affinity(0))) if affinity else ()
     except OSError:
         cpus = ()
+    inventory_count = None
     if not cpus:
-        cpus = tuple(range(os.cpu_count() or 1))
+        inventory_count = os.cpu_count()
         issues.append("process affinity unavailable; CPU inventory is an upper bound")
     quotas = []
     if sys.platform.startswith("linux"):
@@ -212,4 +227,4 @@ def cpu_availability():
                 quotas.append(CPUQuota(str(source), limit, period))
         except (OSError, ValueError) as error:
             issues.append(str(error))
-    return CPUAvailability(cpus, tuple(quotas), tuple(issues))
+    return CPUAvailability(cpus, tuple(quotas), tuple(issues), inventory_count)

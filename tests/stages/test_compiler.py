@@ -3891,10 +3891,16 @@ def test_fortran_numeric_facts_preserve_source_kinds_and_selected_policy(tmp_pat
                     condition["evidence"]["option_query_stdout_sha256"]
                     == contract["option_query"]["stdout_sha256"]
                 )
-        assert (
-            semantic["coverage"]["source_includes"]
-            == "unresolved_without_preprocessor_dependency_inventory"
-        )
+        if document["units"][0].get("numeric_semantics_sha256"):
+            assert (
+                semantic["coverage"]["source_includes"]
+                == "same_frontend_read_inventory"
+            )
+            assert not semantic["unresolved"]
+        else:
+            assert semantic["unresolved"] or semantic["coverage"][
+                "source_includes"
+            ] == ("unresolved_without_preprocessor_dependency_inventory")
         assert any(
             n.get("op") == "binary"
             and n.get("operator") == "gt"
@@ -4894,3 +4900,85 @@ indexed(-1e100, 4)
     shutil.rmtree(graph)
     delivered = _stage(tmp_path, "backend", "compile", "--ir", plan, "--out", delivery)
     assert _run([delivered["executable"]], tmp_path) == expected
+
+
+def test_sampled_import_bindings_attach_to_exact_ports_without_qualifying_callbacks(
+    tmp_path,
+):
+    if sys.implementation.name != "cpython" or not hasattr(sys, "monitoring"):
+        pytest.skip("local instruction observations require CPython 3.12+")
+    package = tmp_path / "pkg"
+    package.mkdir()
+    entry = tmp_path / "entry.py"
+    entry.write_text("import pkg\n")
+    source = package / "__init__.py"
+    source.write_text("seed = 11\nfrom . import seed as a, seed as b\nprint(a, b)\n")
+    sample = tmp_path / "sample.json"
+    assert (
+        _run(
+            [
+                sys.executable,
+                "-B",
+                "-m",
+                "scar.frontend.languages.python.import_observation",
+                "--source",
+                source,
+                "--line",
+                "2",
+                "--out",
+                sample,
+                entry,
+            ],
+            tmp_path,
+        )
+        == b"11 11\n"
+    )
+    request = tmp_path / "request.json"
+    request.write_text(
+        json.dumps(dict(source=entry.name, import_observation={"path": sample.name}))
+    )
+    graph, plan = tmp_path / "graph", tmp_path / "plan"
+    _stage(tmp_path, "frontend", "build", "--manifest", request, "--out", graph)
+    from scar.frontend.observation import link_import_observation
+
+    receipt = json.loads(sample.read_bytes())
+    entry_sha = receipt["entry_sha256"]
+    receipt["source_sha256"] = "0" * 64
+    stale = link_import_observation(
+        (None, entry_sha, json.dumps(receipt).encode()), [], None, graph
+    )
+    assert all(
+        e.get("unresolved") == "no_matching_port" and "site" not in e
+        for e in stale["events"]
+    )
+    receipt["events"][0]["site"] = "unverified/0"
+    with pytest.raises(ValueError, match="binding sample fields"):
+        link_import_observation(
+            (None, entry_sha, json.dumps(receipt).encode()), [], None, graph
+        )
+    entry.unlink()
+    shutil.rmtree(package)
+    sample.unlink()
+    _stage(tmp_path, "middle", "plan", "--graph", graph, "--out", plan, returncode=2)
+    product = json.loads((plan / "exec-ir.json").read_bytes())
+    ledger = json.loads(
+        (plan / product["module"]["source_imports"]["path"]).read_bytes()
+    )
+    observation = ledger["entry_environment"]["import_binding_sample"]
+    assert observation["dropped"] == 0
+    observed = observation["events"]
+    assert [(e["owner"], e["binding"], e["binding_index"]) for e in observed] == [
+        ("pkg", "a", 0),
+        ("pkg", "b", 1),
+    ]
+    assert len({e["site"] for e in observed}) == 2
+    bindings = next(
+        r["bindings"]
+        for r in ledger["occurrences"]
+        if r["request"]["fromlist"] == ["seed", "seed"]
+    )
+    assert [b["site"] for b in bindings] == [e["site"] for e in observed]
+    assert all(
+        b["observed_after_store"] == [{"kind": "int", "value": 11}] for b in bindings
+    )
+    assert product["status"] == "INCOMPLETE"

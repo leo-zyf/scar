@@ -503,6 +503,168 @@ runpy.run_path('entry.py', run_name='__main__')
     assert evidence["hook_binding"] == ("bound" if hook else "no_graph_binding")
 
 
+def test_package_fromlist_publication_and_deletion_retain_order_and_callbacks(tmp_path):
+    import shutil
+
+    from scar.contract import read_member
+    from scar.frontend import build
+    from scar.middle import plan
+
+    package = tmp_path / "pkg"
+    package.mkdir()
+    (package / "__init__.py").write_text(
+        "from . import child as first, child as second\ndel first, second\n"
+        "from other.library import action as first, action as second\nfirst(second)\n"
+    )
+    (package / "child.py").write_text("print('child')\n")
+    other = tmp_path / "other"
+    other.mkdir()
+    (other / "__init__.py").write_text("print('parent')\n")
+    (other / "library.py").write_text(
+        "print('library')\ndef action(arg):\n    print('source function')\n"
+    )
+    entry = tmp_path / "main.py"
+    entry.write_text("import pkg\n")
+    assert (
+        subprocess.check_output([sys.executable, "-B", entry])
+        == b"child\nparent\nlibrary\nsource function\n"
+    )
+    hooks = tmp_path / "hooks"
+    hooks.mkdir()
+    (hooks / "sitecustomize.py").write_text("""import builtins, os
+original = builtins.__import__
+def importer(name, globals=None, locals=None, fromlist=(), level=0):
+    if os.environ.get('FOREIGN_BINDINGS'):
+        if name == 'other.library' and fromlist == ('action','action'):
+            class Returned:
+                action = 43
+                def __del__(self):
+                    globals['first'] = lambda x: print('changed', x)
+            return Returned()
+    elif level == 1 and fromlist == ('child', 'child') and globals['__name__'] == 'pkg':
+        print('import once')
+        class Value:
+            def __del__(self):
+                if 'second' in globals:
+                    print('delete second during release')
+                    del globals['second']
+        class Result:
+            @property
+            def child(self):
+                print('lookup', 'first' in globals)
+                return Value()
+            def __del__(self):
+                print('release result')
+        return Result()
+    return original(name, globals, locals, fromlist, level)
+builtins.__import__ = importer
+""")
+    observed = subprocess.run(
+        [sys.executable, "-B", entry],
+        capture_output=True,
+        env=dict(os.environ, PYTHONPATH=str(hooks)),
+    )
+    assert (
+        observed.returncode == 1
+        and b"NameError: name 'second' is not defined" in observed.stderr
+    )
+    assert (
+        observed.stdout
+        == b"import once\nlookup False\nlookup True\nrelease result\ndelete second during release\n"
+    )
+    assert (
+        subprocess.check_output(
+            [sys.executable, "-B", entry],
+            env=dict(os.environ, PYTHONPATH=str(hooks), FOREIGN_BINDINGS="1"),
+        )
+        == b"child\nchanged 43\n"
+    )
+
+    graph, ir = tmp_path / "graph", tmp_path / "ir"
+    build(entry, graph)
+    shutil.rmtree(package)
+    shutil.rmtree(other)
+    entry.unlink()
+    assert plan(graph, ir)["status"] == "INCOMPLETE"
+    report = json.loads((ir / "plan.json").read_bytes())
+    [issue] = report["issues"]
+    assert (
+        issue["code"] == "python.global_binding_after_import"
+        and issue["location"]["line"] == 4
+    )
+    assert issue["source_evidence"]["slot"] == "py:pkg:first"
+    analysis = report["protocol_analysis"]
+    fragment = next(
+        f for f in analysis["prefix_fragments"] if f["symbol"] == "py:pkg:<init>"
+    )
+    prefix = read_member(ir, fragment["fragment"])
+    publish, delete, foreign = [s["value"] for s in prefix["body"]]
+    assert (
+        foreign["op"] == "module_fromlist_publish" and foreign["location"]["line"] == 3
+    )
+    assert (
+        foreign["resolved_module"] == "other.library"
+        and foreign["frame_globals"] == publish["frame_globals"]
+    )
+    assert foreign["initializers"] == ["py:other:<init>", "py:other.library:<init>"]
+    assert foreign["request"]["fromlist"] == ["action", "action"]
+    assert [
+        (b["binding_index"], b["name"], b["slot"]) for b in foreign["bindings"]
+    ] == [(0, "first", "py:pkg:first"), (1, "second", "py:pkg:second")]
+    previous = issue["source_evidence"]["prior_publication"]
+    assert (
+        previous["occurrence"] == foreign["occurrence"]
+        and previous["binding_index"] == 0
+    )
+    assert previous["source_evidence"] == foreign["bindings"][0]["source_evidence"]
+    candidate = previous["source_evidence"]["bound_value"]
+    assert (
+        candidate["class"] == "function"
+        and candidate["symbol"] == "py:other.library:action"
+    )
+    assert candidate["guards"]
+    assert [publish["op"], delete["op"]] == [
+        "module_fromlist_publish",
+        "module_global_delete",
+    ]
+    assert [p["location"]["line"] for p in (publish, delete)] == [1, 2]
+    assert all(
+        p["operator_family"] == "module_registry"
+        and p["may_raise"]
+        and p["external_effect"] == "UNKNOWN"
+        for p in (publish, delete)
+    )
+    assert (
+        publish["frame_globals"]
+        == delete["frame_globals"]
+        == dict(
+            owner="py:pkg:<init>", module="pkg", identity="current_activation_globals"
+        )
+    )
+    assert publish["request"]["fromlist"] == ["child", "child"]
+    assert (
+        [b["name"] for b in publish["bindings"]]
+        == delete["names"]
+        == ["first", "second"]
+    )
+    assert all(
+        c["child_candidate"]["initializer"] == "py:pkg.child:<init>"
+        and c["when"]["kind"] == "package_attribute_missing"
+        for c in publish["fromlist_checks"]
+    )
+    assert publish["initializers"] == ["py:pkg:<init>"]
+    imports = read_member(ir, report["source_imports"])["occurrences"]
+    occurrence = next(row for row in imports if row["id"] == publish["occurrence"])
+    [producer] = occurrence["producer_sites"]
+    assert producer["opcode"] == publish["op"] and producer["site"] == publish["site"]
+    assert occurrence["effect_coverage"] == "MODELED"
+    assert not any(
+        edge["target"] == "py:pkg.child:<init>"
+        for normalization in report["normalizations"]
+        for edge in normalization.get("removed_edges", ())
+    )
+
+
 def test_workflow_binds_entry_state_without_inventing_child_file_versions(tmp_path):
     process = dict(kind="handle", resource="process")
 

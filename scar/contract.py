@@ -18,6 +18,26 @@ RESOURCE_FLOW = "scar.resource-flow"
 WORKFLOW = "scar.workflow-graph"
 VERSION = 1
 
+# Execution-IR opcodes whose implementation owns a source-visible namespace
+# lookup, state check or continuation. Family tags are optional metadata.
+MODULE_REGISTRY_OPERATIONS = frozenset(
+    {
+        "capture_effect_state",
+        "module_attribute_resolve",
+        "module_callable_matches",
+        "module_export_continuation_required",
+        "module_export_matches",
+        "module_export_value",
+        "module_fromlist_publish",
+        "module_global_delete",
+        "module_import_continuation_required",
+        "module_import_preserves",
+        "module_namespace_initialize",
+        "module_state_preserves",
+        "state_effect_continuation_required",
+    }
+)
+
 
 def validate_python_entry_declaration(declaration):
     """Validate a requested launch mode, without granting its startup premises."""

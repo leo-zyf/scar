@@ -63,9 +63,9 @@ def _cache_size(text):
     return int(match[1]) * 1024 ** power[match[2]]
 
 
-def _caches(root, allowed):
+def _caches(root, visible):
     domains = {}
-    for cpu in sorted(allowed):
+    for cpu in sorted(visible):
         for location in sorted((root / f"cpu{cpu}" / "cache").glob("index*")):
             level, kind = _integer(location / "level"), _text(location / "type")
             shared = sorted(_numbers(_text(location / "shared_cpu_list")))
@@ -90,7 +90,7 @@ def _caches(root, allowed):
         Edge(f"cpu:{cpu}", identity, "RESOURCE", "SHARED_CPU_CACHE")
         for identity, cache in domains.items()
         for cpu in cache.attributes["shared_cpu_ids"]
-        if cpu in allowed
+        if cpu in visible
     ]
     return tuple(domains.values()), edges
 
@@ -347,9 +347,19 @@ def _block_kind(device, rotational):
 
 def snapshot(path):
     cpu_root = Path("/sys/devices/system/cpu")
-    online = _numbers(_text(cpu_root / "online"))
+    online_mask = _text(cpu_root / "online")
+    online = _numbers(online_mask)
+    present_mask = _text(cpu_root / "present")
+    present = _numbers(present_mask)
     availability = cpu_availability()
     allowed = set(availability.cpu_ids)
+    visible = present | online | allowed
+    if not present_mask:
+        visible.update(
+            int(cpu.name[3:])
+            for cpu in cpu_root.glob("cpu[0-9]*")
+            if cpu.name[3:].isdecimal()
+        )
     budget_evidence = availability.as_record()
     pool = Resource(
         "cpu-pool:process",
@@ -357,7 +367,11 @@ def snapshot(path):
         availability.worker_budget,
         {**budget_evidence, "capacity_unit": "conservative_worker_budget"},
     )
-    resources, edges = [pool], []
+    resources = [pool]
+    edges = [
+        Edge(pool.id, f"cpu:{cpu}", "RESOURCE", "CPU_POOL_MEMBER")
+        for cpu in sorted(allowed)
+    ]
     isa_by_cpu, isa_profiles = _cpu_isa()
     architecture = platform.machine()
     by_cpu = {}
@@ -388,7 +402,7 @@ def snapshot(path):
             )
         )
         by_cpu.update({cpu: number for cpu in cpus})
-    if not by_cpu:
+    if not nodes:
         resources.append(
             Resource(
                 "dram:host",
@@ -398,13 +412,12 @@ def snapshot(path):
             )
         )
     physical_cores = {}
-    for cpu in sorted(allowed):
-        edges.append(Edge(pool.id, f"cpu:{cpu}", "RESOURCE", "CPU_POOL_MEMBER"))
+    for cpu in sorted(visible):
         topology = cpu_root / f"cpu{cpu}" / "topology"
         number = by_cpu.get(cpu)
         package = _integer(topology / "physical_package_id")
         core = _integer(topology / "core_id")
-        if package is not None and core is not None:
+        if package is not None and package >= 0 and core is not None and core >= 0:
             identity = f"core:{package}:{core}"
             physical_cores.setdefault(identity, []).append(cpu)
             edges.append(Edge(f"cpu:{cpu}", identity, "RESOURCE", "THREAD_ON_CORE"))
@@ -415,6 +428,7 @@ def snapshot(path):
                 1,
                 {
                     "logical_cpu": cpu,
+                    "online": cpu in online if online_mask is not None else None,
                     "package_id": package,
                     "core_id": core,
                     "numa_node": number,
@@ -428,7 +442,7 @@ def snapshot(path):
             )
         )
         memory = f"dram:numa:{number}" if number is not None else "dram:host"
-        if number is not None or not by_cpu:
+        if number is not None or not nodes:
             edges.append(Edge(f"cpu:{cpu}", memory, "RESOURCE", "HOST_MEMORY_ACCESS"))
     for identity, cpus in physical_cores.items():
         resources.append(
@@ -439,7 +453,7 @@ def snapshot(path):
                 {"logical_cpus": cpus, "capacity_unit": "physical_core"},
             )
         )
-    caches, cache_edges = _caches(cpu_root, allowed)
+    caches, cache_edges = _caches(cpu_root, visible)
     resources.extend(caches)
     edges.extend(cache_edges)
 
@@ -516,7 +530,8 @@ def snapshot(path):
     evidence = {
         **mount_evidence,
         "provider": "linux-proc-sysfs",
-        "online_cpu_ids": sorted(online),
+        "present_cpu_ids": sorted(present) if present_mask is not None else None,
+        "online_cpu_ids": sorted(online) if online_mask is not None else None,
         "affinity_cpu_ids": sorted(allowed),
         "cpu_constraint": pool.id,
         "cpu_availability": budget_evidence,

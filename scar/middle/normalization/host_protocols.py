@@ -3,6 +3,7 @@
 import math
 
 from scar.contract import (
+    MODULE_REGISTRY_OPERATIONS,
     digest,
     json_bytes,
     python_provider_id,
@@ -462,6 +463,13 @@ class ImportOccurrences:
         if entry_environment is not None:
             validate_python_entry_environment(entry_environment)
         self.entry_environment = entry_environment
+        self.observed_bindings = {}
+        sample = (entry_environment or {}).get("import_binding_sample", {})
+        for event in sample.get("events", ()):
+            if "site" in event:
+                self.observed_bindings.setdefault(event["site"], []).append(
+                    event["result"]
+                )
         self.rows = {}
         self.nodes = {}
         self.last = {}
@@ -533,6 +541,8 @@ class ImportOccurrences:
             member=node.get("member"),
             site=site,
         )
+        if site in self.observed_bindings:
+            binding["observed_after_store"] = self.observed_bindings[site]
         if binding not in row["bindings"]:
             row["bindings"].append(binding)
         self.last[owner] = row
@@ -602,6 +612,8 @@ class ImportOccurrences:
 
 
 def require_registry_operator(project, operation):
+    if operation not in MODULE_REGISTRY_OPERATIONS:
+        raise ValueError(f"unregistered module-registry IR operation: {operation}")
     project.require_operator(
         "module_registry",
         operation,
@@ -614,6 +626,181 @@ def require_registry_operator(project, operation):
             "interference": "exclude_unmodelled_registry_replacement_across_each_folded_lookup",
             "bound_callable": "qualify_the_recorded_source_revision_and_unmodified_CPython_import_module_cache_path",
         },
+    )
+
+
+def global_delete_slots(frame, deletion):
+    """DELETE_NAME operands must name the current activation's lexical globals."""
+    if deletion.get("op") != "unbind" or not frame.initializing:
+        return []
+    slots = []
+    prefix = f"py:{frame.module}:"
+    for target in deletion.get("targets", ()):
+        slot = target.get("name", "")
+        if (
+            target.get("op") != "var"
+            or target.get("scope") != "global"
+            or target.get("cell")
+            or not isinstance(slot, str)
+            or not slot.startswith(prefix)
+            or not slot[len(prefix) :].isidentifier()
+        ):
+            return []
+        slots.append(slot)
+    return slots
+
+
+def global_fromlist(frame, body, index):
+    """Model source-ordered publication in an open module namespace."""
+    first = body[index]
+    request = first.get("request", {})
+    members = request.get("fromlist", ())
+    end = index + len(members)
+    module = first.get("module")
+    if (
+        not frame.initializing
+        or module not in frame.project.initializers
+        or request.get("form") != "from"
+        or request.get("binding_index") != 0
+        or not request.get("level")
+        and request.get("module") != module
+        or not members
+        or end > len(body)
+    ):
+        return None
+    if not frame.project.open_python_namespace and (
+        frame.dynamic
+        or frame.region is not frame.root_region
+        or module != frame.module
+        or not frame.scope.get("package")
+        or end == len(body)
+        or body[end].get("op") != "unbind"
+    ):
+        return None
+    level = request.get("level", 0)
+    requested = request.get("module")
+    if type(level) is not int or level < 0 or not isinstance(requested, str):
+        return None
+    if level:
+        package = (
+            frame.module
+            if frame.scope.get("package")
+            else frame.module.rpartition(".")[0]
+        )
+        parents = package.split(".")
+        if not package or level > len(parents):
+            return None
+        resolved = ".".join(
+            parents[: len(parents) - level + 1] + ([requested] if requested else [])
+        )
+        if resolved != module:
+            return None
+    parts = module.split(".")
+    expected = [
+        frame.project.initializers[parent]
+        for depth in range(1, len(parts) + 1)
+        if (parent := ".".join(parts[:depth])) in frame.project.initializers
+    ]
+    if first.get("initializers") != expected:
+        return None
+    if any(
+        frame.project.functions[symbol]["python_scope"].get("graph_backed") is not True
+        for symbol in expected
+    ):
+        return None
+    occurrence = frame.project.source_imports.get(frame.name, first)
+    bindings = []
+    for position, (node, member) in enumerate(zip(body[index:end], members)):
+        target = node.get("binding", {})
+        local = node.get("alias") or member
+        if (
+            node.get("op") != "python_import"
+            or node.get("graph_backed") is not True
+            or node.get("module") != module
+            or node.get("member") != member
+            or not isinstance(member, str)
+            or not member.isidentifier()
+            or not isinstance(local, str)
+            or not local.isidentifier()
+            or position
+            and (
+                node.get("initializers")
+                or node.get("conditional_initializers")
+                or node.get("fromlist_checks")
+            )
+            or node.get("request", {}).get("binding_index") != position
+            or frame.project.source_imports.get(frame.name, node) is not occurrence
+            or target.get("op") != "var"
+            or target.get("scope") != "global"
+            or target.get("cell")
+            or target.get("name") != f"py:{frame.module}:{local}"
+        ):
+            return None
+        bindings.append(
+            dict(
+                binding_index=position,
+                member=member,
+                name=local,
+                slot=target["name"],
+                source_evidence=dict(
+                    scope="source_candidates_only",
+                    requested_module=module,
+                    bound_value=node.get("bound_value", {}),
+                ),
+                **source_site(node),
+            )
+        )
+    if not frame.project.open_python_namespace and set(
+        global_delete_slots(frame, body[end])
+    ) != {b["slot"] for b in bindings}:
+        return None
+    return occurrence, bindings
+
+
+def namespace_effect(frame, node, steps, opcode, **operands):
+    action = dict(
+        op=opcode,
+        type="unit",
+        operator_family="module_registry",
+        semantics_version=1,
+        frame_globals=dict(
+            owner=frame.name, module=frame.module, identity="current_activation_globals"
+        ),
+        effects=["CTRL", "STATE", "IO", "MEM", "OPAQUE"],
+        may_raise=True,
+        reads=[
+            "frame.globals",
+            "frame.builtins",
+            "module.registry",
+            "module.namespace",
+            "python.object.state",
+        ],
+        writes=[
+            "module.registry",
+            "module.namespace",
+            "python.object.state",
+            "UNKNOWN",
+        ],
+        external_effect="UNKNOWN",
+        allocates="UNKNOWN",
+        frees="UNKNOWN",
+        aliases="UNKNOWN",
+        escapes="UNKNOWN",
+        rng_effect="UNKNOWN",
+        exceptional_exit="propagate_at_failing_source_operation_preserving_completed_effects",
+        **source_site(node),
+        **operands,
+    )
+    require_registry_operator(frame.project, opcode)
+    if opcode == "module_fromlist_publish":
+        row = frame.project.source_imports.get(frame.name, node)
+        frame.project.source_imports.producer(row, action, "source_import")
+    frame.effect(action, "unit", steps, discard=True)
+    # Import callbacks and releasing arbitrary objects can reenter Python and
+    # replace bindings, including names that never appeared in the source.
+    frame.project.names.clear()
+    frame.project.open_python_namespace = dict(
+        owner=frame.name, operation=opcode, **source_site(node)
     )
 
 

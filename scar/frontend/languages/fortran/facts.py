@@ -10,6 +10,7 @@ from pathlib import Path
 import re
 import shlex
 import shutil
+import stat
 import subprocess
 from tempfile import TemporaryDirectory
 from threading import Lock
@@ -1142,6 +1143,138 @@ def _math_interfaces(content, path, revision):
     return records, unresolved
 
 
+_OPEN_TRACE = (
+    "-ff",
+    "-y",
+    "-xx",
+    "-v",
+    "-s",
+    "0",
+    "-e",
+    "trace=%process,open,openat,openat2,close,dup2,dup3,fstat,newfstatat,getdents,getdents64,"
+    "io_uring_setup,open_by_handle_at,recvmsg,pidfd_getfd",
+)
+_HEX_PATH = r"(?:\\x[0-9a-f]{2})+"
+
+
+def _trace_path(encoded):
+    return os.fsdecode(bytes.fromhex(encoded.replace("\\x", "")))
+
+
+def _compiler_read_inventory(prefix, compiler, frontend):
+    """Accept a directly observed driver → f951 pair and resolved read descriptors."""
+    programs, inputs, issues = {}, {}, []
+    witness = {
+        "provider": "linux_strace_gnu_open_v1",
+        "scope": "regular_files_opened_for_reading",
+        "processes": {},
+    }
+    for trace in prefix.parent.glob(prefix.name + ".*"):
+        data = trace.read_bytes()
+        lines = data.decode("ascii").splitlines()
+        execs = [line for line in lines if line.startswith(("execve(", "execveat("))]
+        launch = (
+            re.match(rf'^execve\("({_HEX_PATH})",.*\)\s+= 0$', execs[0])
+            if execs
+            else None
+        )
+        if len(execs) != 1 or not launch or lines[-1:] != ["+++ exited with 0 +++"]:
+            raise ValueError("incomplete or indirect GNU process trace")
+        executable = Path(_trace_path(launch[1]))
+        if not executable.is_absolute():
+            raise ValueError("relative compiler executable in trace")
+        program = executable.resolve()
+        role = (
+            "frontend"
+            if program == frontend
+            else "driver" if program == compiler else None
+        )
+        if not role or role in programs:
+            raise ValueError("ambiguous GNU process chain")
+        pid = int(trace.suffix[1:])
+        programs[role] = (pid, lines)
+        witness["processes"][role] = {
+            "pid": pid,
+            "path": str(program),
+            "trace_sha256": digest(data),
+        }
+    if programs.keys() != {"driver", "frontend"}:
+        raise ValueError("GNU compiler trace is incomplete")
+    frontend_pid = programs["frontend"][0]
+    if not any(
+        re.match(rf"^(?:vfork|fork|clone3?)\(.*\)\s+= {frontend_pid}$", line)
+        for line in programs["driver"][1]
+    ):
+        raise ValueError("GNU frontend parent was not witnessed")
+    identities, directories = {}, set()
+    for role, (_, lines) in sorted(programs.items()):
+        pending = {}
+        for line in lines:
+            if " = -1 " in line:
+                continue
+            syscall = line.partition("(")[0]
+            if syscall in {"open", "openat", "openat2"}:
+                descriptor = re.search(rf"\)\s+= (\d+)<({_HEX_PATH})>$", line)
+                if not descriptor:
+                    raise ValueError("unresolved open file descriptor")
+                fd, path = descriptor[1], _trace_path(descriptor[2])
+                if fd in pending:
+                    issues.append(pending.pop(fd))
+                if re.search(r"\bO_WRONLY\b", line):
+                    continue
+                if not os.path.isabs(path) or not re.search(
+                    r"\bO_(?:RDONLY|RDWR)\b", line
+                ):
+                    raise ValueError("uncertain compiler input access mode or path")
+                inputs[path] = "gnu_" + role + "_read"
+                pending[fd] = path
+            elif syscall == "close":
+                closed = re.match(r"^close\((\d+)[<)]", line)
+                if closed and closed[1] in pending:
+                    issues.append(pending.pop(closed[1]))
+            elif syscall in {"dup2", "dup3"} and pending:
+                raise ValueError(
+                    "descriptor replacement before input identity was witnessed"
+                )
+            elif syscall in {"fstat", "newfstatat"}:
+                fd_stat = re.match(
+                    rf'^(?:fstat|newfstatat)\((\d+)<({_HEX_PATH})>, (?:"", )?'
+                    r"\{st_dev=makedev\((0x[0-9a-f]+|\d+), (0x[0-9a-f]+|\d+)\), "
+                    r"st_ino=(\d+), st_mode=(S_IFREG|S_IFDIR)\|",
+                    line,
+                )
+                if fd_stat and re.search(r"\)\s+= 0$", line):
+                    fd, path = fd_stat[1], _trace_path(fd_stat[2])
+                    if pending.get(fd) == path:
+                        identity = (
+                            os.makedev(int(fd_stat[3], 0), int(fd_stat[4], 0)),
+                            int(fd_stat[5]),
+                        )
+                        if identities.setdefault(path, identity) != identity:
+                            raise ValueError(
+                                "compiler opened multiple identities at one path"
+                            )
+                        if fd_stat[6] == "S_IFDIR":
+                            directories.add(path)
+                        pending.pop(fd)
+            elif syscall in {
+                "getdents",
+                "getdents64",
+                "io_uring_setup",
+                "open_by_handle_at",
+                "recvmsg",
+                "pidfd_getfd",
+            }:
+                raise ValueError("compiler input bypassed ordinary file opens")
+        issues.extend(pending.values())
+    for path in directories:
+        del inputs[path]
+    witness["opened_files"] = [
+        {"path": path, "device_inode": identities.get(path)} for path in sorted(inputs)
+    ]
+    return inputs, identities, witness, sorted(set(issues))
+
+
 def _semantic_inputs(capture, root, frontend):
     invocations = []
     for line in capture["semantic_stderr"].decode(errors="replace").splitlines():
@@ -1169,30 +1302,62 @@ def _semantic_inputs(capture, root, frontend):
                 continue
             if selected:
                 inputs[selected] = "gnu_semantic_preinclude"
-    dependency_inventory = False
+    source_coverage = "unresolved_without_preprocessor_dependency_inventory"
+    identities, open_witness = {}, None
     if capture.get("dependencies") is not None:
+        source_coverage = "unresolved_dependency_inventory"
         try:
             for selected in _dependency_inputs(capture["dependencies"]):
                 inputs.setdefault(selected, "gnu_semantic_dependency")
-            dependency_inventory = True
+            source_coverage = "same_semantic_command_dependency_inventory"
         except ValueError as error:
             unresolved.append(
                 {"reason": "dependency_inventory_unavailable", "detail": str(error)}
+            )
+    elif prefix := capture.get("open_trace"):
+        source_coverage = "incomplete_frontend_read_inventory"
+        try:
+            files, identities, open_witness, missing = _compiler_read_inventory(
+                prefix, Path(capture["compiler"]).resolve(), frontend
+            )
+            if not {capture["semantic_command"][-1], *inputs}.issubset(files):
+                raise ValueError(
+                    "expected semantic source or preinclude open is missing"
+                )
+            for path in sorted(files):
+                inputs.setdefault(path, files[path])
+            if not missing:
+                source_coverage = "same_frontend_read_inventory"
+            unresolved.extend(
+                {"reason": "compiler_open_identity_unobserved", "path": path}
+                for path in missing
+            )
+        except (OSError, ValueError) as error:
+            unresolved.append(
+                {"reason": "compiler_open_inventory_unavailable", "detail": str(error)}
             )
     headers, sources, interfaces = {}, {}, []
     for selected, evidence in inputs.items():
         path = (root / selected).resolve()
         try:
-            before = path.stat()
-            if (
-                max(before.st_mtime_ns, before.st_ctime_ns)
-                > capture["semantic_started_ns"]
-            ):
-                raise ValueError(
-                    "selected input modified during or after semantic capture"
-                )
-            content = path.read_bytes()
-            after = path.stat()
+            if not stat.S_ISREG(path.stat().st_mode):
+                raise ValueError("compiler input is not a regular file")
+            with path.open("rb") as stream:
+                before = os.fstat(stream.fileno())
+                if identities.get(selected, (before.st_dev, before.st_ino)) != (
+                    before.st_dev,
+                    before.st_ino,
+                ):
+                    raise ValueError("input differs from observed file identity")
+                if (
+                    max(before.st_mtime_ns, before.st_ctime_ns)
+                    > capture["semantic_started_ns"]
+                ):
+                    raise ValueError(
+                        "selected input modified during or after semantic capture"
+                    )
+                content = stream.read()
+                after = os.fstat(stream.fileno())
             stamp = lambda value: (
                 value.st_dev,
                 value.st_ino,
@@ -1200,7 +1365,7 @@ def _semantic_inputs(capture, root, frontend):
                 value.st_mtime_ns,
                 value.st_ctime_ns,
             )
-            if stamp(before) != stamp(after):
+            if not stamp(before) == stamp(after) == stamp(path.stat()):
                 raise ValueError("selected input changed while fingerprinting")
         except (OSError, ValueError) as error:
             unresolved.append(
@@ -1216,7 +1381,7 @@ def _semantic_inputs(capture, root, frontend):
         records.append({"path": str(path), **receipt})
         if path.is_relative_to(root):
             sources[path.relative_to(root).as_posix()] = revision
-        else:
+        elif evidence not in {"gnu_driver_read", "gnu_frontend_read"}:
             headers[str(path)] = receipt
         if evidence == "gnu_semantic_preinclude":
             declarations, missing = _math_interfaces(content, str(path), revision)
@@ -1228,18 +1393,11 @@ def _semantic_inputs(capture, root, frontend):
         "external_headers": headers,
         "source_digests": sources,
         "source_math_interfaces": interfaces,
+        "open_witness": open_witness,
         "unresolved": unresolved,
         "coverage": {
             "automatic_preincludes": "selected_frontend_arguments",
-            "source_includes": (
-                "same_semantic_command_dependency_inventory"
-                if dependency_inventory
-                else (
-                    "unresolved_dependency_inventory"
-                    if capture.get("dependencies") is not None
-                    else "unresolved_without_preprocessor_dependency_inventory"
-                )
-            ),
+            "source_includes": source_coverage,
             "snapshot": "stable_read_after_successful_semantic_capture",
         },
     }
@@ -1322,6 +1480,11 @@ def _numeric_contract(path, root, flags, capture, source_sha256):
             "inputs": inputs["files"],
             "coverage": inputs["coverage"],
             "unresolved": inputs["unresolved"],
+            **(
+                {"open_witness": inputs["open_witness"]}
+                if inputs["open_witness"]
+                else {}
+            ),
         },
         "source_math_interfaces": inputs["source_math_interfaces"],
         "target_mode": target_mode,
@@ -1379,7 +1542,10 @@ def _numeric_semantics_sha256(contract, temporary):
         capture["unresolved"]
         or not capture["frontend_argv"]
         or capture["coverage"]["source_includes"]
-        != "same_semantic_command_dependency_inventory"
+        not in {
+            "same_semantic_command_dependency_inventory",
+            "same_frontend_read_inventory",
+        }
     ):
         return None
 
@@ -1417,7 +1583,7 @@ def _numeric_semantics_sha256(contract, temporary):
     selected["semantic_capture"] = {
         key: value
         for key, value in capture.items()
-        if key not in {"started_ns", "finished_ns", "stderr_sha256"}
+        if key not in {"started_ns", "finished_ns", "stderr_sha256", "open_witness"}
     }
     selected["semantic_capture"]["frontend_argv"] = arguments(
         capture["frontend_argv"], frontend=True
@@ -1438,17 +1604,33 @@ def _compile_capture(path, root, flags, tmp):
         raise Gap("compiler", "gfortran is required")
     flags = _logical_flags(flags)
 
-    def capture(args, receipt=None):
+    def capture(args, receipt=None, *, observe_reads=False):
         command = [compiler, *flags, *args]
         started = time_ns()
-        p = subprocess.run(
-            command,
+        run_args = dict(
             cwd=root,
             env={**os.environ, "TMPDIR": str(tmp)},
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             timeout=180,
         )
+        observer = shutil.which("strace") if observe_reads else None
+        trace = tmp / "semantic-opens"
+        if observer:
+            try:
+                p = subprocess.run(
+                    [observer, *_OPEN_TRACE, "-o", str(trace), *command], **run_args
+                )
+            except (FileNotFoundError, PermissionError):
+                observer = None
+            else:
+                # A denied or unsupported tracer never starts the compiler.
+                if p.returncode and not any(
+                    f.stat().st_size for f in tmp.glob(trace.name + ".*")
+                ):
+                    observer = None
+        if not observer:
+            p = subprocess.run(command, **run_args)
         if p.returncode:
             raise Gap("compiler", p.stderr.decode(errors="replace").strip()[:3000])
         if receipt is not None:
@@ -1460,6 +1642,8 @@ def _compile_capture(path, root, flags, tmp):
                 semantic_started_ns=started,
                 semantic_finished_ns=time_ns(),
             )
+            if observer:
+                receipt["open_trace"] = trace
         return p.stdout.decode("utf-8", errors="replace")
 
     fixed = path.suffix.lower() in {".for", ".f", ".ftn", ".f77", ".fpp"}
@@ -1491,7 +1675,11 @@ def _compile_capture(path, root, flags, tmp):
         else []
     )
     receipt = {"compiler": compiler}
-    dump = capture([*semantic_flags, *dependency_flags, str(path)], receipt)
+    dump = capture(
+        [*semantic_flags, *dependency_flags, str(path)],
+        receipt,
+        observe_reads=not preprocess,
+    )
     dependency_bytes = dependencies.read_bytes() if dependencies.exists() else None
     receipt["dependencies"] = (
         dependency_bytes.decode("utf-8", errors="surrogateescape")

@@ -18,7 +18,7 @@ from scar.contract import (
 )
 
 
-def _entry_environment(graph):
+def _entry_environment(graph, folder):
     """Bind launch observations to an image without opening its interpreter."""
     facts = graph.get("source_facts", {})
     if not isinstance(facts, dict):
@@ -35,11 +35,23 @@ def _entry_environment(graph):
     entries = [entry for entry in record["entries"] if entry["image"] == selected]
     if not entries:
         return None
-    return dict(
+    environment = dict(
         record,
         entries=entries,
         capture_sha256=digest(json_bytes(record)),
     )
+    sample = facts.get("import_binding_sample")
+    if sample is not None and sample["image"] == selected:
+        evidence = read_member(folder, sample["evidence"])
+        if (
+            evidence["image"] != selected
+            or evidence["scope"] != "instrumented_script_successful_module_bindings"
+        ):
+            raise ValueError(
+                "import binding observation disagrees with the selected image"
+            )
+        environment["import_binding_sample"] = evidence
+    return environment
 
 
 def _provider_sources(records):
@@ -562,7 +574,7 @@ def _build_bindings(graph, build, captured):
 def bind(graph, folder):
     from scar.contract import validate_artifact_flow
 
-    entry_environment = _entry_environment(graph)
+    entry_environment = _entry_environment(graph, folder)
     environment_id = (
         digest(json_bytes(entry_environment)) if entry_environment is not None else None
     )

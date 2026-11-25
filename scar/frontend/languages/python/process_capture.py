@@ -2,12 +2,9 @@
 
 import argparse
 import atexit
-import builtins
 from hashlib import sha256
-from importlib.machinery import SourceFileLoader
 from itertools import islice
 import json
-import marshal
 import os
 from pathlib import Path, PurePath
 import platform
@@ -15,8 +12,10 @@ import sys
 from tempfile import NamedTemporaryFile
 import threading
 import time
-from types import CodeType, ModuleType
+from types import CodeType
 import warnings
+
+from .environment import code_digest, run_script
 
 _PATH_TYPES = (str, bytes, type(Path()), type(PurePath()))
 
@@ -47,10 +46,6 @@ def _position(frame, relative):
         column=column,
         end_column=end_column,
     )
-
-
-def _code_hash(code):
-    return sha256(marshal.dumps(code, 2)).hexdigest()
 
 
 def _compiled_codes(data, filename):
@@ -280,7 +275,7 @@ class _Capture:
         def fingerprint(code):
             key = id(code)
             if key not in code_hashes:
-                code_hashes[key] = _code_hash(code)
+                code_hashes[key] = code_digest(code)
             return code_hashes[key]
 
         for caller, code, path in self.callers:
@@ -377,28 +372,7 @@ def main(argv=None):
     atexit.register(capture.finish, output)
     capture.monitor_returns()
     sys.addaudithook(capture)
-    sys.argv = [options.script, *options.arguments]
-    if not getattr(sys.flags, "safe_path", False) and not sys.flags.isolated:
-        sys.path[0] = str(Path(options.script).resolve().parent)
-    filename = os.path.join(capture.initial_directory, options.script)
-    application = ModuleType("__main__")
-    application.__dict__.update(
-        __file__=filename,
-        __package__=None,
-        __spec__=None,
-        __cached__=None,
-        __loader__=SourceFileLoader("__main__", filename),
-        __builtins__=builtins,
-    )
-    sys.modules["__main__"] = application
-    code = compile(
-        Path(filename).read_bytes(),
-        filename,
-        "exec",
-        dont_inherit=True,
-        optimize=sys.flags.optimize,
-    )
-    exec(code, application.__dict__)
+    run_script(options.script, options.arguments, capture.initial_directory)
 
 
 if __name__ == "__main__":

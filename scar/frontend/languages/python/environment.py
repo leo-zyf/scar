@@ -1,9 +1,12 @@
-"""F1 observations of the interpreter running the analyzer, before source discovery."""
+"""CPython launch context and source identity for F1 observations."""
 
 import builtins
 from dataclasses import dataclass
 from functools import cache
 from hashlib import sha256
+from importlib.machinery import SourceFileLoader
+import marshal
+import os
 from pathlib import Path
 import sys
 from types import BuiltinFunctionType, MemberDescriptorType, ModuleType
@@ -117,3 +120,33 @@ def capture_import_environment(entries):
         application_initial_cache="unproven",
     )
     return ImportEnvironment(entries, analysis, cache_states)
+
+
+def code_digest(code):
+    return sha256(marshal.dumps(code, 2)).hexdigest()
+
+
+def run_script(script, arguments, initial_directory, *, data=None):
+    """Run a source script with its own main namespace and ordinary path entry."""
+    sys.argv = [script, *arguments]
+    if not getattr(sys.flags, "safe_path", False) and not sys.flags.isolated:
+        sys.path[0] = str(Path(script).resolve().parent)
+    filename = os.path.join(initial_directory, script)
+    application = ModuleType("__main__")
+    application.__dict__.update(
+        __file__=filename,
+        __package__=None,
+        __spec__=None,
+        __cached__=None,
+        __loader__=SourceFileLoader("__main__", filename),
+        __builtins__=builtins,
+    )
+    sys.modules["__main__"] = application
+    code = compile(
+        data if data is not None else Path(filename).read_bytes(),
+        filename,
+        "exec",
+        dont_inherit=True,
+        optimize=sys.flags.optimize,
+    )
+    exec(code, application.__dict__)

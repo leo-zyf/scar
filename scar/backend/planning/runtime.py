@@ -13,6 +13,7 @@ from tempfile import TemporaryDirectory
 
 from scar.contract import (
     EXECUTION_ANNOTATIONS,
+    MODULE_REGISTRY_OPERATIONS,
     control_regions,
     digest,
     json_bytes,
@@ -149,6 +150,13 @@ def _fields(record, fields):
     return {key: record[key] for key in fields if key in record}
 
 
+def is_registry_operation(operation):
+    return (
+        operation.get("operator_family") == "module_registry"
+        or operation.get("op") in MODULE_REGISTRY_OPERATIONS
+    )
+
+
 def _import_operations(module):
     # Read operands, never historical operations quoted by annotations.
     for fn in module.get("functions", ()):
@@ -229,10 +237,7 @@ def registry_checks(module):
     open_effect_count = 0
     guard_count = 0
     for owner, op in _import_operations(module):
-        if (
-            op.get("operator_family") == "module_registry"
-            or op["op"] in _STATE_COMPARISONS
-        ):
+        if is_registry_operation(op):
             operations[op["op"]] += 1
             if op.get("external_effect") == "UNKNOWN":
                 open_effect_count += 1

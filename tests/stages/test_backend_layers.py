@@ -3364,6 +3364,99 @@ def test_b1_qualification_distinguishes_contract_profile_platform_and_open_effec
             assert evidence["required_read_domains"] == {"source.continuation": 1}
 
 
+def test_registry_requirement_covers_untagged_consumers_and_continuations():
+    from scar.backend.planning import _observed_operators, runtime
+    from scar.contract import MODULE_REGISTRY_OPERATIONS
+
+    ops = [dict(op=name) for name in sorted(MODULE_REGISTRY_OPERATIONS)]
+    module = {"functions": [{"name": "entry", "body": ops, "source_evidence": ops}]}
+    assert (
+        _observed_operators(module)[0]["module_registry"] == MODULE_REGISTRY_OPERATIONS
+    )
+    assert runtime.registry_checks(module)["operator_counts"] == {
+        n: 1 for n in MODULE_REGISTRY_OPERATIONS
+    }
+
+
+@pytest.mark.parametrize("claimed_binding", [False, True])
+def test_b1_checks_fromlist_publication_and_deletion_without_family_tags(
+    tmp_path, claimed_binding
+):
+    from scar.backend import compile_ir
+    from scar.contract import read_member
+
+    frame = dict(
+        owner="py:pkg:<init>", module="pkg", identity="current_activation_globals"
+    )
+    effects = dict(
+        type="unit", frame_globals=frame, may_raise=True, external_effect="UNKNOWN"
+    )
+    publish = dict(
+        op="module_fromlist_publish",
+        occurrence="pkg/1",
+        site="pkg/1",
+        request=dict(form="from", module="", level=1, fromlist=["child"]),
+        bindings=[
+            dict(binding_index=0, member="child", name="child", slot="py:pkg:child")
+        ],
+        reads=["frame.globals", "frame.builtins", "module.registry"],
+        **effects,
+    )
+    delete = dict(
+        op="module_global_delete",
+        site="pkg/2",
+        names=["child"],
+        reads=["frame.globals"],
+        **effects,
+    )
+    function = dict(
+        name=frame["owner"],
+        params=[],
+        result="void",
+        body=[dict(op="expr", value=publish), dict(op="expr", value=delete)],
+        source_evidence=dict(prior=[publish, delete]),
+    )
+    module = {"entry": frame["owner"]}
+    if claimed_binding:
+        module["operator_requirements"] = {
+            "module_registry": {"binding": "native", "operations": []}
+        }
+    write_json(
+        tmp_path / "exec-ir.json",
+        document(
+            IR,
+            status="READY",
+            module=module,
+            functions=[member(tmp_path, "functions", function)],
+        ),
+    )
+    out = tmp_path / "delivery"
+    result = compile_ir(tmp_path, out, policy="serial")
+    scheduled = json.loads(Path(result["scheduled_ir"]).read_bytes())
+    physical = read_member(out, scheduled["physical"])
+    assert result["status"] == scheduled["status"] == physical["status"] == "INCOMPLETE"
+    assert result["issues"] == scheduled["issues"] == physical["issues"]
+    [issue] = result["issues"]
+    assert (issue["stage"], issue["code"], issue["requirement"]) == (
+        "B1",
+        "missing_operator_binding",
+        "module_registry",
+    )
+    qualification = issue["qualification"]
+    assert qualification["rule"] == "module_registry.observable_semantics"
+    assert qualification["evidence"]["observed_operations"] == [
+        publish["op"],
+        delete["op"],
+    ]
+    checks = issue["registry_checks"]
+    assert checks["operator_counts"] == {publish["op"]: 1, delete["op"]: 1}
+    assert {(s["operation"], s["site"]) for s in checks["operator_examples"]} == {
+        (publish["op"], publish["site"]),
+        (delete["op"], delete["site"]),
+    }
+    assert not (out / "target-ir.json").exists()
+
+
 def test_rounded_f64_iota_matches_numpy_allocation_and_index_errors(tmp_path):
     from scar.host import array_sdk
 

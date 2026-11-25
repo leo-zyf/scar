@@ -219,6 +219,13 @@ def build(manifest, out, *, jobs=1):
         resources=len(resource_records),
     )
     source_facts = {}
+    if request.import_observation is not None:
+        from .observation import link_import_observation
+
+        sample = link_import_observation(request.import_observation, units, images, out)
+        source_facts["import_binding_sample"] = dict(
+            image=sample["image"], evidence=member(out, "observations", sample)
+        )
     if captured.python_environment is not None:
         environment = captured.python_environment.for_providers(
             name

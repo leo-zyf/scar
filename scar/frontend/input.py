@@ -27,6 +27,7 @@ class SourceRequest:
     root_image: str | None = None
     build_trace: dict | None = None
     python_entries: tuple = ()
+    import_observation: tuple | None = None
 
 
 def _capture_bytes(manifest, receipt, label):
@@ -268,6 +269,23 @@ def read_request(path: Path) -> SourceRequest:
         if name in python_names:
             # A manifest may spell a unit through a local symlink.
             buffers[name] = buffers[relative]
+    observed = None
+    if "import_observation" in spec:
+        ref = spec["import_observation"]
+        raw = _capture_bytes(manifest, ref, "Python import observation")
+        image = ref.get("image")
+        if images is None:
+            if image is not None or project_entry is None:
+                raise ValueError("import observation requires a Python script entry")
+            relative = project_entry.resolve().relative_to(root).as_posix()
+        else:
+            script = next((v.get("source") for v in images if v["id"] == image), None)
+            if script is None:
+                raise ValueError(
+                    "import observation requires its declared script image"
+                )
+            relative = names[script]
+        observed = (image, hashes[relative], raw)
     observation = (
         {"entry": spec["entry"], "source": spec["source"], "observe": spec["observe"]}
         if "observe" in spec
@@ -287,4 +305,5 @@ def read_request(path: Path) -> SourceRequest:
         spec.get("root_image"),
         build_trace,
         _python_entries(spec, profiles, images),
+        observed,
     )

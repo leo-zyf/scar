@@ -273,6 +273,8 @@ class _Project:
         self.source_imports = host_protocols.ImportOccurrences(
             functions, entry_environment=entry_environment
         )
+        self.open_python_namespace = None
+        self.fromlist_publications = {}
         self.shadow, self.single_bind_globals, self.global_writers = _global_bindings(
             functions
         )
@@ -952,12 +954,31 @@ class _Frame:
 
     def ref(self, node):
         name = node["name"]
+        if node["op"] == "python_builtin" and self.project.open_python_namespace:
+            self.fail(
+                node,
+                "builtin_after_callback",
+                f"lookup of {name!r} needs the current globals and builtins after a Python callback",
+                source_evidence=self.project.open_python_namespace,
+            )
         if node.get("cell"):
             self.fail(node, "cell", "a lexical cell needs a closed activation lifetime")
         if node.get("scope") == "global":
             result = self.project.names.get(name)
             if result is not None:
                 result = self.global_value(name, result)
+            elif publication := self.project.fromlist_publications.get(name):
+                self.fail(
+                    node,
+                    "global_binding_after_import",
+                    f"using {name} needs the actual value in the current frame globals after import callbacks",
+                    source_evidence=dict(
+                        slot=name,
+                        prior_publication=publication,
+                        last_change=self.project.open_python_namespace,
+                        required="lookup_actual_current_binding_and_qualify_its_representation_or_propagate_failure",
+                    ),
+                )
         elif node["op"] == "python_builtin":
             slot = namespace_slot(self.module, name)
             result = self.env.get(name, self.project.names.get(slot))
@@ -1115,6 +1136,13 @@ class _Frame:
             )
         name = target["name"]
         global_ = target.get("scope") == "global"
+        if global_ and self.project.open_python_namespace:
+            self.fail(
+                target,
+                "global_store_after_callback",
+                f"replacing {name} must preserve the current binding and its release effects",
+                source_evidence=self.project.open_python_namespace,
+            )
         if global_ and not self.initializing:
             self.fail(target, "global_write", "a function writes a module namespace")
         if global_ and name in {
@@ -1562,7 +1590,7 @@ class _Frame:
         )
         return _Value("module", namespace)
 
-    def package_fromlist(self, node, occurrence):
+    def package_fromlist(self, node, occurrence, *, dynamic=False):
         """Keep the package and member candidates at this IMPORT_NAME occurrence."""
         module = node["module"]
         members = node["request"].get("fromlist", ())
@@ -1633,6 +1661,7 @@ class _Frame:
             check = dict(
                 binding_index=index,
                 member=member,
+                when=when,
                 child_candidate=candidate,
                 graph_binding=(
                     "bound" if slot in self.project.names else "no_graph_binding"
@@ -1691,6 +1720,8 @@ class _Frame:
             self.project.imports.registry_key(module)
         ):
             evidence["last_namespace_change"] = change
+        if dynamic:
+            return evidence
         self.fail(
             node,
             (
@@ -1740,6 +1771,15 @@ class _Frame:
                 f"absolute request for {req['module']} points to a different module {mod}",
             )
         origin = self.import_origin(node)
+        if self.project.open_python_namespace:
+            self.fail(
+                node,
+                "import_callable_after_callback",
+                f"import of {mod} needs the current __import__ callable, registry and returned bindings",
+                source_evidence=dict(
+                    request=req, last_change=self.project.open_python_namespace
+                ),
+            )
         if origin is not None:
             before = self.project.imports.snapshot()
             self.project.array_state.invalidate()
@@ -3224,10 +3264,14 @@ class _Frame:
             )
             return False
 
+        next_statement = 0
         for index, node in enumerate(body):
             region.boundary(node)
             if node.get("site") is not None:
                 self.project.live_sites.add((self.name, node["site"]))
+            if index < next_statement:
+                # This binding was emitted inside its one source IMPORT_NAME.
+                continue
             op = node["op"]
             first = len(steps)
             if (
@@ -3241,7 +3285,58 @@ class _Frame:
             elif op == "assign":
                 self.store(node["target"], self.evaluate(node["value"], steps), steps)
             elif op == "python_import":
-                self.imported(node, steps)
+                group = host_protocols.global_fromlist(self, body, index)
+                if group is None:
+                    self.imported(node, steps)
+                else:
+                    occurrence, bindings = group
+                    self.import_origin(node)
+                    occurrence["activation"] = "visited"
+                    evidence = self.package_fromlist(node, occurrence, dynamic=True)
+                    host_protocols.namespace_effect(
+                        self,
+                        node,
+                        steps,
+                        "module_fromlist_publish",
+                        source_protocol="python.import",
+                        occurrence=occurrence["id"],
+                        request=occurrence["request"],
+                        resolved_module=node["module"],
+                        bindings=bindings,
+                        fromlist_checks=evidence["ordered_checks"],
+                        initializers=node["initializers"],
+                        source_effects=occurrence["source_effects"],
+                        dispatch="call_current_frame_importer_once_with_original_arguments",
+                        initialization="only_as_invoked_by_actual_importer_including_ordered_fromlist_prechecks",
+                        lookup="successive_IMPORT_FROM_on_retained_actual_return_including_circular_registry_fallback",
+                        publication="STORE_NAME_after_each_successful_lookup_in_current_frame_globals",
+                        release="preserve_replaced_values_operand_stack_unwind_and_final_import_result_release",
+                        callbacks="preserve_source_opcode_tracing_reentry_and_unraisable_finalizer_errors",
+                    )
+                    for binding in bindings:
+                        self.project.fromlist_publications[binding["slot"]] = dict(
+                            occurrence=occurrence["id"], **binding
+                        )
+                    next_statement = index + len(bindings)
+            elif (
+                op == "unbind"
+                and self.project.open_python_namespace
+                and host_protocols.global_delete_slots(self, node)
+            ):
+                host_protocols.namespace_effect(
+                    self,
+                    node,
+                    steps,
+                    "module_global_delete",
+                    names=[t["name"].rsplit(":", 1)[1] for t in node["targets"]],
+                    targets=[
+                        dict(slot=t["name"], **values.source_site(t))
+                        for t in node["targets"]
+                    ],
+                    deletion="DELETE_NAME_in_current_frame_globals_in_source_order",
+                    missing="raise_NameError_at_first_missing_name",
+                    release="release_each_removed_binding_with_reentry_and_unraisable_finalizer_errors",
+                )
             elif op == "python_define_class":
                 self.store(
                     node["target"],
