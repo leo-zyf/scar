@@ -6975,3 +6975,142 @@ def test_m4_proves_only_function_local_scalar_indexed_scratch():
         )
         is None
     )
+
+
+def test_open_module_literal_store_uses_active_code_and_source_mapping(tmp_path):
+    from types import SimpleNamespace
+
+    from scar.backend import compile_ir
+    from scar.contract import IR, read_member
+    from scar.frontend import build
+    from scar.middle import plan
+
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    source = pkg / "__init__.py"
+    source.write_text(
+        "from . import child as disposable\ndel disposable\n"
+        "message = 'same string !'\nalternate = 'same string !'\n"
+        "last = 123\ndef declaration():\n    global alternate\n"
+    )
+    (pkg / "child.py").write_text("pass\n")
+    entry = tmp_path / "main.py"
+    entry.write_text("import pkg\n")
+
+    # STORE_NAME can publish through a separate locals mapping and release
+    # an old value that overwrites the newly published constant. STORE_GLOBAL
+    # must still obtain the original object from the current code's co_consts.
+    code = compile(source.read_bytes(), str(source), "exec")
+    constant = next(v for v in code.co_consts if v == "same string !")
+    globals_ = {"__builtins__": {"__import__": lambda *a: SimpleNamespace(child=7)}}
+    locals_, observations = {}, []
+
+    class Previous:
+        def __del__(self):
+            observations.append(locals_["message"] is constant)
+            locals_["message"] = "changed during release"
+
+    locals_["message"] = Previous()
+    exec(code, globals_, locals_)
+    assert observations == [True] and locals_["message"] == "changed during release"
+    assert globals_["alternate"] is constant and "alternate" not in locals_
+
+    class Reject(dict):
+        def __setitem__(self, name, value):
+            if name == "message":
+                raise LookupError(name)
+            super().__setitem__(name, value)
+
+    del globals_["alternate"]
+    with pytest.raises(LookupError, match="message"):
+        exec(code, globals_, Reject())
+    assert "alternate" not in globals_
+
+    graph = tmp_path / "graph"
+    build(entry, graph)
+    source.unlink()
+    index = json.loads((graph / "graph.json").read_bytes())
+    unit = next(row for row in index["units"] if row["path"] == "pkg/__init__.py")
+    payload = read_member(graph, unit["graph"])
+    initializer = next(
+        f for f in payload["functions"] if f["signature"]["name"] == "py:pkg:<init>"
+    )
+    nodes = initializer["nodes"]
+    [first, second, _] = [n for n in nodes if n["op"] == "assign"]
+    ports = [deepcopy(n["source_constant_store"]) for n in (first, second)]
+    assert ports[0]["load"]["index"] == ports[1]["load"]["index"]
+
+    def prefix(path, expected_line):
+        folder = tmp_path / ("plan-" + path.stem)
+        result = plan(path, folder)
+        assert result["status"] == "INCOMPLETE"
+        report = json.loads((folder / "plan.json").read_bytes())
+        [issue] = report["issues"]
+        assert (issue["code"], issue["location"]["line"]) == (
+            "python.global_store_after_callback",
+            expected_line,
+        )
+        row = next(
+            r
+            for r in report["protocol_analysis"]["prefix_fragments"]
+            if r["symbol"] == "py:pkg:<init>"
+        )
+        return [s["value"] for s in read_member(folder, row["fragment"])["body"]]
+
+    actual = prefix(graph / "graph.json", 5)
+    assert [n["op"] for n in actual] == [
+        "module_fromlist_publish",
+        "module_global_delete",
+        "module_global_store",
+        "module_global_store",
+    ]
+    stores = actual[-2:]
+    assert [s["store_opcode"] for s in stores] == ["STORE_NAME", "STORE_GLOBAL"]
+    assert [s["namespace"] for s in stores] == ["frame.locals", "frame.globals"]
+    assert [s["source_constant_store"] for s in stores] == ports
+    for store in stores:
+        assert store["frame_globals"]["owner"] == "py:pkg:<init>"
+        assert store["namespace"] in store["writes"] and "frame.code" in store["reads"]
+        assert store["external_effect"] == "UNKNOWN" and store["may_raise"]
+        assert "same_object" in store["constant"] and "reentry" in store["release"]
+        assert "source_equivalent" in store["on_code_mismatch"]
+
+    # Replay a prior schema and a mismatched code receipt at the same source site.
+    for label in ("old", "foreign"):
+        if label == "old":
+            del first["source_constant_store"]
+        else:
+            first["source_constant_store"] = deepcopy(ports[0])
+            first["source_constant_store"]["code"]["code_sha256"] = "0" * 64
+        unit["graph"] = member(graph, "units", payload)
+        path = graph / (label + ".json")
+        write_json(path, index)
+        assert [n["op"] for n in prefix(path, 3)] == [
+            "module_fromlist_publish",
+            "module_global_delete",
+        ]
+
+    # A READY replay through B1 still needs a provider if family metadata is absent.
+    untagged = dict(stores[0])
+    del untagged["operator_family"]
+    fn = dict(
+        name="main", result="void", params=[], body=[dict(op="expr", value=untagged)]
+    )
+    sealed = tmp_path / "sealed"
+    write_json(
+        sealed / "exec-ir.json",
+        document(
+            IR,
+            status="READY",
+            module={"entry": "main"},
+            functions=[member(sealed, "functions", fn)],
+        ),
+    )
+    result = compile_ir(sealed, tmp_path / "physical", policy="serial")
+    [failure] = result["issues"]
+    assert (result["status"], failure["code"], failure["requirement"]) == (
+        "INCOMPLETE",
+        "missing_operator_binding",
+        "module_registry",
+    )
+    assert failure["registry_checks"]["operator_counts"] == {"module_global_store": 1}

@@ -3283,7 +3283,10 @@ class _Frame:
             if op == "expr":
                 self.evaluate(node["value"], steps, discard=True)
             elif op == "assign":
-                self.store(node["target"], self.evaluate(node["value"], steps), steps)
+                if not host_protocols.store_open_module_constant(self, node, steps):
+                    self.store(
+                        node["target"], self.evaluate(node["value"], steps), steps
+                    )
             elif op == "python_import":
                 group = host_protocols.global_fromlist(self, body, index)
                 if group is None:

@@ -1,6 +1,7 @@
 """M2: bind verified source host APIs to language-independent effect contracts."""
 
 import math
+import re
 
 from scar.contract import (
     MODULE_REGISTRY_OPERATIONS,
@@ -757,7 +758,106 @@ def global_fromlist(frame, body, index):
     return occurrence, bindings
 
 
-def namespace_effect(frame, node, steps, opcode, **operands):
+def _matches_instruction(instruction, operand, source_key):
+    location = operand.get("location")
+    position = instruction.get("position")
+    fields = ("line", "end_line", "column", "end_column")
+    if (
+        not isinstance(location, dict)
+        or location.get("file") != source_key
+        or not all(type(location.get(k)) is int and location[k] >= 1 for k in fields)
+        or not isinstance(position, list)
+        or not all(type(part) is int for part in position)
+    ):
+        return False
+    line, end_line, column, end_column = (location[k] for k in fields)
+    return (
+        position == [line, end_line, column - 1, end_column - 1]
+        and type(instruction.get("index")) is int
+        and instruction["index"] >= 0
+        and type(instruction.get("offset")) is int
+        and instruction["offset"] >= 0
+    )
+
+
+def store_open_module_constant(frame, node, steps):
+    """Retain the source constant object and store opcode across callback effects."""
+    port = node.get("source_constant_store")
+    if (
+        not frame.project.open_python_namespace
+        or not frame.initializing
+        or frame.scope.get("graph_backed") is not True
+        or frame.name != frame.scope.get("initializer")
+        or not isinstance(port, dict)
+        or type(port.get("semantics_version")) is not int
+        or port["semantics_version"] != 1
+    ):
+        return False
+    code, load, store = (port.get(key) for key in ("code", "load", "store"))
+    value, target = node["value"], node["target"]
+    if (
+        not all(isinstance(item, dict) for item in (code, load, store))
+        or code != frame.scope.get("source_code")
+        or code.get("kind") != "module"
+        or not isinstance(code.get("source_key"), str)
+        or code.get("source_key") != frame.scope.get("source_key")
+        or not isinstance(code.get("compiler"), str)
+        or not code["compiler"].startswith("cpython ")
+        or type(code.get("optimize")) is not int
+        or code["optimize"] not in (0, 1, 2)
+        or not all(
+            isinstance(code.get(key), str) and re.fullmatch("[0-9a-f]{64}", code[key])
+            for key in ("source_sha256", "code_sha256")
+        )
+    ):
+        return False
+    if (
+        load.get("opcode") != "LOAD_CONST"
+        or load.get("type") != "str"
+        or value.get("op") != "literal"
+        or value.get("type") != {"kind": "python_object", "class": "str"}
+        or type(value.get("value")) is not str
+        or load.get("value_sha256") != digest(json_bytes(value["value"]))
+        or store.get("opcode") not in ("STORE_NAME", "STORE_GLOBAL")
+        or not isinstance(store.get("name"), str)
+        or not store["name"].isidentifier()
+        or target.get("op") != "var"
+        or target.get("scope") != "global"
+        or target.get("cell")
+        or target.get("name") != f"py:{frame.module}:{store['name']}"
+        or not _matches_instruction(load, value, code["source_key"])
+        or not _matches_instruction(store, target, code["source_key"])
+        or store["offset"] <= load["offset"]
+    ):
+        return False
+    mapping = "frame.locals" if store["opcode"] == "STORE_NAME" else "frame.globals"
+    namespace_effect(
+        frame,
+        node,
+        steps,
+        "module_global_store",
+        reads=(
+            ("frame.code", "frame.locals")
+            if mapping == "frame.locals"
+            else ("frame.code",)
+        ),
+        writes=[mapping],
+        source_constant_store=port,
+        name=store["name"],
+        slot=target["name"],
+        store_opcode=store["opcode"],
+        namespace=mapping,
+        code_match="require_current_activation_code_and_instruction_operands_at_sealed_offsets_match_before_LOAD_CONST",
+        on_code_mismatch="resume_source_equivalent_execution_before_LOAD_CONST",
+        constant="load_same_object_from_current_frame_code_co_consts_at_index",
+        publication="use_current_frame_code_co_names_key_and_source_store_opcode",
+        release="preserve_replaced_binding_release_reentry_and_stack_cleanup_on_failure",
+        callbacks="preserve_opcode_tracing_intervening_callbacks_and_unraisable_finalizer_errors",
+    )
+    return True
+
+
+def namespace_effect(frame, node, steps, opcode, *, reads=(), writes=(), **operands):
     action = dict(
         op=opcode,
         type="unit",
@@ -774,12 +874,14 @@ def namespace_effect(frame, node, steps, opcode, **operands):
             "module.registry",
             "module.namespace",
             "python.object.state",
+            *reads,
         ],
         writes=[
             "module.registry",
             "module.namespace",
             "python.object.state",
             "UNKNOWN",
+            *writes,
         ],
         external_effect="UNKNOWN",
         allocates="UNKNOWN",

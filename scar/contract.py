@@ -30,6 +30,7 @@ MODULE_REGISTRY_OPERATIONS = frozenset(
         "module_export_value",
         "module_fromlist_publish",
         "module_global_delete",
+        "module_global_store",
         "module_import_continuation_required",
         "module_import_preserves",
         "module_namespace_initialize",
