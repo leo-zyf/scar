@@ -365,6 +365,11 @@ def invoke(frame, node, target, args, keywords, steps, discard):
     return frame.effect(
         dict(
             **fields,
+            capture=digest(
+                json_bytes(
+                    [frame.name, fields["op"], source_site(node), frame.temporary()]
+                )
+            ),
             operator_family="process",
             **source_site(node),
             type=wire(kind),

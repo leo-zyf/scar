@@ -163,10 +163,22 @@ class ImportState:
                 state["binding_versions"][name] for state in states
             )
         for name, proof in result["registry"].items():
+            histories = [state["import_windows"].get(name, ()) for state in states]
+            first = histories[0]
+            # Unchanged paths can carry checks from different lifecycle points.
+            # Keep the original checks and their states at their own occurrences.
+            if first and all(
+                state["registry"].get(name) == proof
+                and state["namespace_writes"].get(name)
+                == states[0]["namespace_writes"].get(name)
+                and len(history) == len(first)
+                and all(a is b for a, b in zip(first, history))
+                for state, history in zip(states, histories)
+            ):
+                result["import_windows"][name] = list(first)
+                continue
             candidates = [
-                before
-                for state in states
-                for _, _, before, _ in state["import_windows"].get(name, ())
+                before for history in histories for _, _, before, _ in history
             ]
             expected = (
                 proof

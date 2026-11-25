@@ -6300,3 +6300,71 @@ def test_folded_extent_preserves_axis_order_for_coordinate_traversal():
     loop["extent_factors"] = [1, 11]
     with pytest.raises(ValueError, match="extent factorization"):
         annotate_iteration_layouts(fn)
+
+
+@pytest.mark.parametrize(
+    ("command", "operation"),
+    [("unbound-command", "process_request"), ("./child", "process_spawn")],
+)
+def test_process_return_checks_survive_unchanged_loop_paths_and_drop_on_throw(
+    command, operation
+):
+    from scar.middle.normalization import processes, values
+    from scar.middle.normalization.protocols import _Frame, _Project
+
+    function = dict(
+        name="owner",
+        params=[],
+        body=[],
+        result="void",
+        python_scope=dict(kind="module", module="owner", main=True),
+    )
+    project = _Project({"owner": function})
+    project.execution_images = [dict(id="child", output="child")]
+    project.active.append("owner")
+    frame = _Frame(project, function, ())
+    imports = project.imports
+    initializing = dict(state="initializing", initializer="owner", site="load")
+    imports.bind_registry("__main__", initializing)
+    steps = []
+    earlier = dict(
+        op="module_import_preserves",
+        checks={},
+        occurrence="entry/import",
+        direct_registry_keys=[],
+        conditional_registry_keys=[],
+    )
+    project.scoped_registry_effect("owner", {}, earlier, steps)
+    imports.bind_registry("__main__", dict(initializing, state="ready"))
+    before = imports.snapshot()
+    result = processes.invoke(
+        frame,
+        dict(site="entry/launch"),
+        values.Value("host_callable", "subprocess.Popen"),
+        [values.literal(command)],
+        {},
+        steps,
+        False,
+    )
+    assert processes.is_process(result.kind)
+    request = steps[1]["init"]
+    assert request["op"] == operation and request["external_effect"] == "UNKNOWN"
+    after = imports.snapshot()
+    exceptional = imports.exceptional_prefix(before, after, may_write=True)
+    assert not exceptional["import_windows"]
+    assert not imports.join_snapshots([after, exceptional])["import_windows"]
+    imports.restore(imports.join_snapshots([after, imports.copy_snapshot(after)]))
+    assert project.registry_entry("__main__", {})["state"] == "unresolved"
+    project.observe_import("owner", "namespace", {}, "provider")
+    for guard, expected in ((steps[0], "initializing"), (steps[2], "ready")):
+        check = guard["condition"]["checks"]["__main__"]
+        assert check["before"]["state"] == expected
+        assert check["namespace"]["binding_reads"][0]["member"] == "provider"
+        assert check["namespace"]["value_state_projection"] == "unproven"
+    fallback = steps[2]["else"][0]["value"]
+    assert fallback["op"] == "state_effect_continuation_required"
+    assert fallback["producer_capture"] == request["registry_state_capture"]["identity"]
+    assert (
+        fallback["resume"]
+        == "continue_after_original_action_with_captured_result_and_actual_post_state"
+    )
