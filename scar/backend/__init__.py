@@ -24,6 +24,8 @@ def _emit(schedule, folder):
 
 def _deliver_components(out, physical, receipt):
     package = read_member(out, receipt)
+    _, _, application = open_product(out, "scheduled-ir.json", "scar.scheduled-ir")
+    component_plan = read_member(out, package["physical"])
     ready = {image["id"] for image in physical["images"] if image["status"] == "READY"}
     selected = {image["id"] for image in package["images"]}
     if (
@@ -32,6 +34,10 @@ def _deliver_components(out, physical, receipt):
         or package.get("application_root") != physical["root_image"]
         or physical["root_image"] in selected
         or not selected <= ready
+        or package["images"]
+        != [row for row in application["images"] if row["id"] in selected]
+        or component_plan["images"]
+        != [row for row in physical["images"] if row["id"] in selected]
     ):
         raise ValueError("component schedule disagrees with the application plan")
     destination = out / "components"

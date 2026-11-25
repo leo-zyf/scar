@@ -320,7 +320,10 @@ raise SystemExit(main(['compile', '--ir', sys.argv[1], '--out', sys.argv[2], '--
     assert set(component["executables"]) == {"driver"}
     binary = component["executables"]["driver"]
     published = file_receipt(delivery, delivery / binary["path"])
-    assert (published["sha256"], published["size"]) == (binary["sha256"], binary["size"])
+    assert (published["sha256"], published["size"]) == (
+        binary["sha256"],
+        binary["size"],
+    )
     subprocess.run([delivery / binary["path"]], check=True)
     assert not (delivery / "project").exists()
 

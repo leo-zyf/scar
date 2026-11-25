@@ -1103,7 +1103,9 @@ def _closed_component_schedule(destination, root, revision, plans, schedules):
             excluded.add(name)
             continue
         physical = read_member(destination, plan["physical"])
-        targets = physical.get("operator_backends", {}).get("process", {}).get("images", {})
+        targets = (
+            physical.get("operator_backends", {}).get("process", {}).get("images", {})
+        )
         for target in targets:
             dependents.setdefault(target, []).append(name)
 
