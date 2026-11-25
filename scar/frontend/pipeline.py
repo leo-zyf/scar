@@ -11,7 +11,6 @@ from scar.contract import (
     document,
     json_bytes,
     member,
-    read_member,
     validate_python_entry_environment,
     validate_state_flow,
     write_json,
@@ -20,10 +19,11 @@ from scar.host import cpu_availability
 
 
 def _unit(job):
+    from .artifacts.graph import unit_operations
     from .graph import unit_graph
     from .state_flow import state_flow
 
-    root, profile, revision, out, source_hashes, parsed, source_bytes = job
+    index, root, profile, revision, out, source_hashes, parsed, source_bytes = job
     path = root / profile["path"]
     language = profile["language"].lower()
     flags = profile.get("flags", [])
@@ -104,7 +104,7 @@ def _unit(job):
                 )
         validate_state_flow(graph)
     receipt = member(out, "units", payload)
-    return dict(
+    unit_index = dict(
         path=profile["path"],
         language=language,
         flags=flags,
@@ -140,11 +140,12 @@ def _unit(job):
         ],
         diagnostics=unit.get("diagnostics", []),
     )
+    return unit_index, unit_operations(index, payload)
 
 
 def build(manifest, out, *, jobs=1):
     from .capture import capture_project
-    from .artifacts import artifact_graph
+    from .artifacts.graph import join_artifacts
     from .hardware import snapshot
     from .input import read_request, with_entry_abi
 
@@ -169,6 +170,7 @@ def build(manifest, out, *, jobs=1):
     out.mkdir(parents=True, exist_ok=True)
     work = [
         (
+            index,
             root,
             p,
             digest(json_bytes([snapshot_id, p])),
@@ -177,14 +179,15 @@ def build(manifest, out, *, jobs=1):
             parsed,
             request.python_buffers.get(p["path"]) if parsed is None else None,
         )
-        for p, parsed in zip(profiles, parsed_units)
+        for index, (p, parsed) in enumerate(zip(profiles, parsed_units, strict=True))
     ]
     workers = min(jobs, len(work), cpu_availability().worker_budget)
     if workers <= 1:
-        units = list(map(_unit, work))
+        results = list(map(_unit, work))
     else:
         with ProcessPoolExecutor(max_workers=workers) as pool:
-            units = list(pool.map(_unit, work, chunksize=1))
+            results = list(pool.map(_unit, work, chunksize=1))
+    units = [unit for unit, _ in results]
     for unit in units:
         for name, revision in unit["source_facts"]["files"].items():
             if sources.setdefault(name, revision) != revision:
@@ -236,9 +239,9 @@ def build(manifest, out, *, jobs=1):
         artifact_flow=member(
             out,
             "artifacts",
-            artifact_graph(
+            join_artifacts(
                 units,
-                [read_member(out, unit["graph"]) for unit in units],
+                (projection for _, projection in results),
                 build_graph,
                 images,
                 root,

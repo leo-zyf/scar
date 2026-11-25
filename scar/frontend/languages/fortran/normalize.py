@@ -434,12 +434,7 @@ def normalize_unit(parsed: ParsedUnit) -> dict:
                 builder, procedure.storage, procedure.common_blocks, globals_
             )
             for n, s in table.items():
-                if (
-                    n in names
-                    or n in builder.storage
-                    or "VARIABLE" not in s.attrs
-                    or "PARAMETER" in s.attrs
-                ):
+                if n in names or n in builder.storage or not s.source_variable:
                     continue
                 if (
                     s.attrs

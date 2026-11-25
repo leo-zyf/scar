@@ -11,7 +11,7 @@
 | F2 正规化 | `ParsedUnit` | `NeutralUnit`，含类型化操作、过程、记录、全局状态、外部接口、转换依据和定位缺口 | `builds/normalize.py`、`languages/*/normalize.py` 及同层操作模块 |
 | F3 构图 | `NeutralUnit` | 操作记录表、端口、控制区域、符号调用与状态域 | `graph.py` |
 | F4 状态分析 | F3 图、访问表 | may-def epoch、合流、循环携带关系；未闭合区域局部摘要及覆盖范围 | `state_flow.py` |
-| F5 封存 | 单元图、平台事实 | `graph.json` 与 `units/` 内容寻址成员，含 CPU 池/逻辑核/物理核/NUMA/DRAM/存储/可见设备拓扑 | `hardware.py`、`artifacts/graph.py`、`pipeline.py` |
+| F5 封存 | 各 worker 从 F4 单元图提取的操作端口、构建证据、平台事实 | `graph.json` 与 `units/` 内容寻址成员，含 CPU 池/逻辑核/物理核/NUMA/DRAM/存储/可见设备拓扑 | `hardware.py`、`artifacts/graph.py`、`pipeline.py` |
 
 前端 `__init__.py` 只导出入口；`pipeline.py` 依次编排 F0–F5。`capture.py` 只协调输入发现和编译配置去重，产品为 `CapturedProject`，不构建操作图。脚本镜像可与单一 `build_trace` 同时声明；生成的 `build.bindings` 以构建产物 ID、镜像 ID、单元索引及记录摘要连接两类子图。该连接只证明捕获的编译／链接来源，历史输入版本、构建输出流及配方效果仍保留未证明字段，不能据此删除运行时 Make。F3 的 `unit_graph` 独立接收中立单元，不修改 F2 输入，也不调用 F4。
 

@@ -41,6 +41,15 @@ class Symbol:
     location: object = None
     bounds: list = field(default_factory=list)
     char_length: object = None
+    compiler_type_metadata: bool = False
+
+    @property
+    def source_variable(self):
+        return (
+            "VARIABLE" in self.attrs
+            and "PARAMETER" not in self.attrs
+            and not self.compiler_type_metadata
+        )
 
     @property
     def dtype(self):
@@ -420,6 +429,29 @@ def _facts(dump):
                 binding[1] if binding else None,
                 result[1] if result else None,
             )
+        # GNU materializes a derived type's dispatch table and default object
+        # even when the only source operation is a USE declaration. Identify
+        # the linked descriptors; keep user variables and their bindings intact.
+        for name, symbol in table.items():
+            if not name.startswith("__vtab_") or not symbol.value:
+                continue
+            family = name.removeprefix("__vtab_")
+            type_name = "__vtype_" + family
+            init_name = "__def_init_" + family
+            descriptor = table.get(type_name)
+            initializer = table.get(init_name)
+            value = symbol.value.lower()
+            if (
+                descriptor is not None
+                and "DERIVED" in descriptor.attrs
+                and initializer is not None
+                and "ARTIFICIAL" in initializer.attrs
+                and value.startswith(type_name + "(")
+                and re.search(r"\b" + re.escape(init_name) + r"\b", value)
+            ):
+                symbol.compiler_type_metadata = initializer.compiler_type_metadata = (
+                    True
+                )
     for key, name, owner in imports:
         for ancestor in reversed(range(len(key))):
             target = (*key[:ancestor], owner)
@@ -712,18 +744,13 @@ def _source_coverage(tree, unit, tables, procedures):
                         "module storage association is not modeled: " + tag,
                         stmt,
                     )
-                elif any(
-                    "VARIABLE" in sym.attrs and "PARAMETER" not in sym.attrs
-                    for _, sym in meanings
-                ):
+                elif any(sym.source_variable for _, sym in meanings):
                     incomplete(
                         row,
                         "module_state",
                         "persistent module storage is not modeled: "
                         + ", ".join(
-                            name
-                            for name, sym in meanings
-                            if "VARIABLE" in sym.attrs and "PARAMETER" not in sym.attrs
+                            name for name, sym in meanings if sym.source_variable
                         ),
                         stmt,
                     )
@@ -800,11 +827,7 @@ def _source_coverage(tree, unit, tables, procedures):
             )
             before = len(records)
             specifications(spec, owner, symbols, module=True)
-            state = [
-                name
-                for name, sym in symbols.items()
-                if "VARIABLE" in sym.attrs and "PARAMETER" not in sym.attrs
-            ]
+            state = [name for name, sym in symbols.items() if sym.source_variable]
             if state:
                 incomplete(
                     row,
