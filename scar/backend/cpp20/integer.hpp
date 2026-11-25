@@ -89,4 +89,13 @@ inline std::int64_t sequence_index(const value &input, const char *message) {
     throw program_error("index_error", message);
   return input.get_si();
 }
+inline std::int64_t array_index_width(const value &input,
+                                      const char *index_message,
+                                      const char *overflow_message) {
+  if (input.fits_slong_p())
+    return input.get_si();
+  if (input.fits_ulong_p())
+    throw program_error("overflow_error", overflow_message);
+  throw program_error("index_error", index_message);
+}
 } // namespace scar::integers

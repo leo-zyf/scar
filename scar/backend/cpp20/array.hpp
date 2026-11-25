@@ -1,19 +1,25 @@
 #pragma once
 
+#include "exceptions.hpp"
 #include <algorithm>
+#include <bit>
 #include <cfenv>
+#include <cmath>
 #include <complex>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <initializer_list>
+#include <iomanip>
 #include <ios>
 #include <limits>
+#include <locale>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <set>
 #include <span>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -165,6 +171,45 @@ template <class T> class ndarray {
         {std::move(data), 0, size, std::move(shape), std::move(strides)});
   }
 
+  static ndarray iota_values(std::int64_t length) {
+    static_assert(std::is_same_v<T, double> &&
+                  std::numeric_limits<T>::is_iec559 &&
+                  std::numeric_limits<T>::digits == 53);
+    auto dims = shape({1, {length}});
+    auto size = count(dims);
+    auto result = allocate(std::move(dims), size);
+    if (size)
+      xt::noalias(*result.region_->storage) = xt::cast<T>(xt::arange(length));
+    return result;
+  }
+
+  static std::string iota_allocation_message(std::size_t length) {
+    // NumPy's f64 allocation diagnostic uses binary units and three significant
+    // figures, rounding up to the next unit at 1023.5.
+    constexpr const char *units[] = {"bytes", "KiB", "MiB", "GiB",
+                                     "TiB",   "PiB", "EiB"};
+    const auto bytes = length * sizeof(double);
+    auto unit = bytes ? (std::bit_width(bytes) - 1) / 10 : 0;
+    auto amount = static_cast<double>(bytes) /
+                  static_cast<double>(std::size_t{1} << (10 * unit));
+    if (amount >= 1023.5) {
+      ++unit;
+      amount /= 1024;
+    }
+    std::ostringstream message;
+    message.imbue(std::locale::classic());
+    message << "Unable to allocate ";
+    if (!unit)
+      message << bytes;
+    else if (amount < 999.5)
+      message << std::showpoint << std::setprecision(3) << amount;
+    else
+      message << std::showpoint << std::fixed << std::setprecision(0) << amount;
+    message << ' ' << units[unit] << " for an array with shape (" << length
+            << ",) and data type float64";
+    return message.str();
+  }
+
   void require_rank(std::optional<std::size_t> rank) const {
     if (!region_ || (rank && *rank != region_->shape.size()))
       throw std::invalid_argument("array handle rank mismatch");
@@ -186,11 +231,12 @@ template <class T> class ndarray {
     std::size_t axis = 0;
     for (auto index : indices) {
       const auto extent = static_cast<std::int64_t>(region_->shape[axis]);
-      if (index < 0)
-        index += extent;
-      if (index < 0 || index >= extent)
-        throw std::out_of_range("array index outside axis extent");
-      offset += static_cast<std::size_t>(index) * region_->strides[axis];
+      const auto position = index < 0 ? index + extent : index;
+      if (position < 0 || position >= extent)
+        throw std::out_of_range(
+            "index " + std::to_string(index) + " is out of bounds for axis " +
+            std::to_string(axis) + " with size " + std::to_string(extent));
+      offset += static_cast<std::size_t>(position) * region_->strides[axis];
       size /= static_cast<std::size_t>(extent);
       ++axis;
     }
@@ -294,18 +340,29 @@ public:
   }
 
   static ndarray iota(std::int64_t length) {
-    static_assert(std::is_same_v<T, double> &&
-                  std::numeric_limits<T>::is_iec559 &&
-                  std::numeric_limits<T>::digits == 53);
-    constexpr auto max_count = std::int64_t{1} << 53;
-    if (length > max_count)
+    if (length > (std::int64_t{1} << 53))
       throw std::length_error("array_iota exceeds the binary64 index limit");
-    auto dims = shape({1, {length}});
-    auto size = count(dims);
-    auto result = allocate(std::move(dims), size);
-    if (size)
-      xt::noalias(*result.region_->storage) = xt::cast<T>(xt::arange(length));
-    return result;
+    return iota_values(length);
+  }
+
+  static ndarray iota_rounded(double stop, bool endpoint_overflows_to_empty) {
+    static_assert(std::is_same_v<T, double> &&
+                  std::numeric_limits<std::ptrdiff_t>::digits == 63);
+    constexpr double endpoint = 0x1p63;
+    if (std::isnan(stop))
+      throw std::invalid_argument("arange: cannot compute length");
+    if (stop > endpoint || stop < -endpoint ||
+        (stop == endpoint && !endpoint_overflows_to_empty))
+      throw std::invalid_argument("Maximum allowed size exceeded");
+    // Check the rounded endpoint before narrowing it to a signed index.
+    const auto length = stop > 0 && stop < endpoint
+                            ? static_cast<std::int64_t>(std::ceil(stop))
+                            : std::int64_t{0};
+    try {
+      return iota_values(length);
+    } catch (const std::bad_alloc &) {
+      throw program_error("memory_error", iota_allocation_message(length));
+    }
   }
 
   static ndarray literal(array_shape layout, std::initializer_list<T> values) {
@@ -414,6 +471,11 @@ template <class T> ndarray<T> array_create(array_shape shape) {
 
 template <class T> ndarray<T> array_iota(std::int64_t count) {
   return ndarray<T>::iota(count);
+}
+
+template <class T>
+ndarray<T> array_iota_rounded(double stop, bool endpoint_overflows_to_empty) {
+  return ndarray<T>::iota_rounded(stop, endpoint_overflows_to_empty);
 }
 
 template <class T>

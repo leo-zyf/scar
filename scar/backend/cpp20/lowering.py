@@ -993,6 +993,7 @@ class Lowerer:
             "mod": ("zero_division_error",),
             "shape_extent": ("value_error",),
             "sequence_index": ("index_error",),
+            "array_index_width": ("index_error", "overflow_error"),
         }
         supported = {
             "from_i64",
@@ -1293,6 +1294,23 @@ class Lowerer:
             return call(target, self.expression(source))
         if op == "array_iota":
             count = node.get("count")
+            if "extent_conversion" in node:
+                bound = node.get("at_signed_limit")
+                if (
+                    rank != 1
+                    or ty["element"] != "f64"
+                    or not isinstance(count, dict)
+                    or count.get("type") != "f64"
+                    or "max_count" in node
+                    or node["extent_conversion"] != "rounded_binary64_nonnegative_i64"
+                    or bound not in ("empty", "reject")
+                ):
+                    raise ValueError("invalid rounded binary64 extent contract")
+                return call(
+                    template("scar::array_iota_rounded", elem),
+                    self.expression(count),
+                    Expr("literal", value=bound == "empty"),
+                )
             limit = node.get("max_count")
             if (
                 rank != 1

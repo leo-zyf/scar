@@ -30,6 +30,7 @@ _SIGNATURES = {
     "decimal": (("integer",), "text"),
     "shape_extent": (("integer",), "i64"),
     "sequence_index": (("integer",), "i64"),
+    "array_index_width": (("integer",), "i64"),
 }
 _LICENSES = {"COPYRIGHT", "COPYING.LGPLv3", "COPYING.GPLv2", "COPYING.GPLv3"}
 
@@ -69,6 +70,7 @@ def _use(node):
         "mod": {"zero_division_error"},
         "shape_extent": {"value_error"},
         "sequence_index": {"index_error"},
+        "array_index_width": {"index_error", "overflow_error"},
     }
     messages = node.get("exception_messages", {})
     if (

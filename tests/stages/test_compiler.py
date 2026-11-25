@@ -4542,3 +4542,91 @@ def test_private_pointwise_snapshot_forwarding_survives_all_stages(tmp_path):
     )
     shutil.rmtree(plan)
     assert _run([result["executable"]], tmp_path) == expected
+
+
+def test_rounded_sequence_lengths_keep_count_and_extent_separate(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    entry = source / "entry.py"
+    entry.write_text("""import numpy as np
+def grid(x):
+    count = int(x)
+    try:
+        a = np.linspace(1.0, 3.0, count)
+        print(a[-1])
+    except Exception as error:
+        print(str(error))
+grid(3.5)
+grid(0.0)
+grid(-3.5)
+grid(1e100)
+grid(1152921504606846976.0)
+grid(9007199254740992.0)
+grid(9223372036854775808.0)
+
+def indexed(value, row):
+    a = np.zeros((2, 3))
+    column = int(value)
+    try:
+        a[row, column] = 4.0
+        print(a[row, column])
+    except OverflowError as err:
+        print("overflow", str(err))
+    except IndexError as err:
+        print("index", str(err))
+    try:
+        print(a[row, column])
+    except OverflowError as err:
+        print("overflow", str(err))
+    except IndexError as err:
+        print("index", str(err))
+indexed(-1.0, 1)
+indexed(7.0, 0)
+indexed(9223372036854775808.0, 4)
+indexed(18446744073709551616.0, 4)
+indexed(-1e100, 4)
+""")
+    expected = _run([sys.executable, "-B", entry], source)
+    graph, plan, delivery = (tmp_path / d for d in ("graph", "plan", "delivery"))
+    _stage(tmp_path, "frontend", "build", "--entry", entry, "--out", graph)
+    shutil.rmtree(source)
+    product = json.loads((graph / "graph.json").read_bytes())
+    from scar.contract import walk_operations
+
+    # The rounded signed-limit behavior is qualified for a specific native
+    # provider. Other installed binaries still support proven below-limit sizes.
+    known = any(
+        artifact.get("source_provider", {})
+        .get("exports", {})
+        .get("linspace", {})
+        .get("implementation_dependencies", {})
+        .get("numpy._core._multiarray_umath", {})
+        .get("sha256")
+        == "1650f5b6a42b0022f9821b475725469237dbc77595f1d5c7ae7bbc0288002095"
+        for unit in _payloads(graph, product)
+        for artifact in walk_operations(unit)
+    )
+    result = _stage(
+        tmp_path,
+        "middle",
+        "plan",
+        "--graph",
+        graph,
+        "--out",
+        plan,
+        returncode=0 if known else 2,
+    )
+    if not known:
+        report = json.loads((plan / "plan.json").read_bytes())
+        assert [i["code"] for i in report["issues"]] == ["python.array_range_profile"]
+        return
+    assert result["status"] == "READY"
+    ir = json.loads((plan / "exec-ir.json").read_bytes())
+    assert any(
+        op.get("extent_conversion") == "rounded_binary64_nonnegative_i64"
+        for ref in ir["functions"]
+        for op in walk_operations(json.loads((plan / ref["path"]).read_bytes()))
+    )
+    shutil.rmtree(graph)
+    delivered = _stage(tmp_path, "backend", "compile", "--ir", plan, "--out", delivery)
+    assert _run([delivered["executable"]], tmp_path) == expected

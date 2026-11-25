@@ -1050,6 +1050,80 @@ def test_external_import_facts_preserve_ownership_without_execution(
     ]
 
 
+def test_numpy_linspace_captures_selected_native_dependency_without_importing(
+    tmp_path, monkeypatch
+):
+    from hashlib import sha256
+    from importlib.metadata import distribution
+
+    from scar.contract import read_member, walk_operations
+    from scar.frontend import build
+
+    entry = tmp_path / "entry.py"
+    entry.write_text("from numpy import linspace as grid, array\ngrid(0., 1.)\n")
+    original_import = builtins.__import__
+
+    def block_numpy(name, *args, **kwargs):
+        assert name.split(".")[0] != "numpy", "capture executed the subject provider"
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", block_numpy)
+    facts = python.parse_unit(entry, root=tmp_path)
+    exports = facts.providers["numpy"]["exports"]
+    dependencies = exports["linspace"]["implementation_dependencies"]
+    assert "implementation_dependencies" not in exports["array"]
+    loaders = {
+        "numpy._core.numeric": "source",
+        "numpy._core.multiarray": "source",
+        "numpy._core._multiarray_umath": "extension",
+    }
+    assert dependencies.keys() == loaders.keys()
+    installed = distribution("numpy")
+    for name, loader in loaders.items():
+        item = dependencies[name]
+        content = installed.locate_file(item["member"]).read_bytes()
+        assert item == dict(
+            module=name,
+            member=item["member"],
+            distribution="numpy",
+            version="2.5.5",
+            status="verified_distribution",
+            loader=loader,
+            proof_scope="installed_file_with_digest",
+            sha256=sha256(content).hexdigest(),
+        )
+    unit = _offline(monkeypatch, python, facts)
+    operation = next(
+        node
+        for node in walk_operations(unit["functions"][0]["partial_body"])
+        if node["op"] == "python_import"
+    )
+    assert operation["source_provider"]["exports"]["linspace"] == exports["linspace"]
+
+    extension = dependencies["numpy._core._multiarray_umath"]
+    assert operation["source_provider"]["array_runtime"] == extension
+    entry.write_text("import numpy as np\nnp.zeros((2, 3))\n")
+    graph = tmp_path / "graph"
+    build(entry, graph)
+    (unit,) = json.loads((graph / "graph.json").read_bytes())["units"]
+    zeros = unit["source_facts"]["providers"]["numpy"]
+    assert "linspace" not in zeros["exports"]
+    assert zeros["array_runtime"] == extension
+    payload = read_member(graph, unit["graph"])
+    assert (
+        next(
+            n["source_provider"]["array_runtime"]
+            for n in walk_operations(payload)
+            if n["op"] == "python_import"
+        )
+        == extension
+    )
+
+    (tmp_path / "numpy.py").write_text("raise AssertionError('executed shadow')\n")
+    shadow = python.parse_unit(entry, root=tmp_path).providers["numpy"]
+    assert shadow["status"] == "project" and "array_runtime" not in shadow
+
+
 def test_distribution_source_units_share_capture_and_follow_requested_bodies(
     tmp_path, monkeypatch
 ):

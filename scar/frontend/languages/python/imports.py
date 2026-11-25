@@ -29,6 +29,16 @@ _FILE_LOADERS = {
     ExtensionFileLoader: "extension",
 }
 
+# The public implementation delegates arange to native code through these
+# modules. Capture the selected bytes even when the extension has no Python AST.
+_EXPORT_DEPENDENCIES = {
+    ("numpy-public-v1", "2.5.5", "linspace"): (
+        "numpy._core.numeric",
+        "numpy._core.multiarray",
+        "numpy._core._multiarray_umath",
+    ),
+}
+
 
 def source_member(record):
     """Logical member whose selected source loader and actual bytes were verified."""
@@ -113,6 +123,7 @@ class Imports:
         )
         self.members = cache(self._members)
         self.providers = {}
+        self.dependency_identity = cache(self._dependency_identity)
         self.exports = ExportSources(self)
         self.module_imports = cache(self._module_imports)
         locale_encoding = (
@@ -388,6 +399,15 @@ class Imports:
                     record["provider_id"] = python_provider_id(record)
                     if interface := python_source_boundary(record):
                         record["source_interface"] = interface
+                        if interface == "numpy-public-v1":
+                            core = (
+                                "core"
+                                if record["version"].startswith("1.")
+                                else "_core"
+                            )
+                            record["array_runtime"] = self.dependency_identity(
+                                f"numpy.{core}._multiarray_umath"
+                            )
                 self.providers[name] = record
             except (OSError, ValueError, TypeError) as error:
                 self.providers[name] = dict(
@@ -397,6 +417,24 @@ class Imports:
                     reason=str(error),
                 )
         return self.providers[name]
+
+    def _dependency_identity(self, name):
+        """Capture the selected member and its RECORD verification without loading it."""
+        record = self.record(name)
+        return {
+            key: record[key]
+            for key in (
+                "module",
+                "status",
+                "distribution",
+                "version",
+                "member",
+                "loader",
+                "proof_scope",
+                "sha256",
+            )
+            if key in record
+        }
 
     def _module_imports(self, name):
         """Static finder evidence for direct, absolute imports in this module suite."""
@@ -511,6 +549,17 @@ class Imports:
                 continue
             for member in sorted(members):
                 evidence = self.exports.get(module, member)
+                dependencies = _EXPORT_DEPENDENCIES.get(
+                    (record.get("source_interface"), record.get("version"), member)
+                )
+                if dependencies:
+                    evidence = dict(
+                        evidence,
+                        implementation_dependencies={
+                            name: self.dependency_identity(name)
+                            for name in dependencies
+                        },
+                    )
                 if (
                     "." not in member
                     and member != "__getattr__"

@@ -3362,3 +3362,186 @@ def test_b1_qualification_distinguishes_contract_profile_platform_and_open_effec
                 == "resume_after_failed_match"
             )
             assert evidence["required_read_domains"] == {"source.continuation": 1}
+
+
+def test_rounded_f64_iota_matches_numpy_allocation_and_index_errors(tmp_path):
+    from scar.host import array_sdk
+
+    # Keep even the near-address-space inputs deterministic on overcommitting hosts.
+    stops = [
+        0,
+        1,
+        5,
+        1.25,
+        131006464,
+        134152192,
+        2**53 + 2,
+        2**60 - 128,
+        2**60,
+        2**63 - 1024,
+        2**63,
+        2**63 + 2048,
+        float("inf"),
+    ]
+    args = [str(x) for x in stops]
+    source = tmp_path / "iota.cpp"
+    source.write_text(r"""
+#include "array.hpp"
+#include <cstdlib>
+#include <iostream>
+#include <sys/resource.h>
+
+int main(int argc, char **argv) {
+  const rlimit limit{256 << 20, 256 << 20};
+  if (setrlimit(RLIMIT_AS, &limit)) return 1;
+  for (int i = 2; i < argc; ++i) {
+    try {
+      auto a = scar::array_iota_rounded<double>(std::strtod(argv[i], nullptr),
+                                                 argv[1][0] == '1');
+      for (std::int64_t j = 0; j < a.size(1); ++j)
+        std::cout << a.load(1, {j}) << ' ';
+      std::cout << a.load(1, {-1}) << '\n';
+    } catch (...) {
+      auto error = scar::capture_error();
+      std::cout << error->category << ' ' << error->message << '\n';
+    }
+  }
+}
+""")
+    binary = tmp_path / "iota"
+    subprocess.run(
+        [
+            "c++",
+            "-std=c++20",
+            "-Werror",
+            "-O2",
+            "-I",
+            Path(scar.__file__).parent / "backend/cpp20",
+            "-I",
+            Path(array_sdk(required=True)["prefix"]) / "include",
+            source,
+            "-o",
+            binary,
+        ],
+        check=True,
+    )
+    reference = subprocess.check_output(
+        [
+            sys.executable,
+            "-c",
+            """
+import numpy as np, resource, sys
+resource.setrlimit(resource.RLIMIT_AS, (256 << 20, 256 << 20))
+for stop in sys.argv[1:]:
+    try:
+        a = np.arange(float(stop), dtype=np.float64)
+        print(*(int(x) for x in a), int(a[-1]))
+    except (IndexError, MemoryError, ValueError) as e:
+        category = {IndexError: "index_error", MemoryError: "memory_error",
+                    ValueError: "value_error"}
+        print(next(v for k, v in category.items() if isinstance(e, k)), e)
+""",
+            *args,
+        ],
+        text=True,
+        env=dict(os.environ, OPENBLAS_NUM_THREADS="1"),
+    ).splitlines()
+    at_limit = reference[stops.index(2**63)]
+    empty = "index_error index -1 is out of bounds for axis 0 with size 0"
+    rejected = "value_error Maximum allowed size exceeded"
+    assert at_limit in (empty, rejected)
+    endpoint_empty = str(int(at_limit == empty))
+    assert (
+        subprocess.check_output([binary, endpoint_empty, *args], text=True).splitlines()
+        == reference
+    )
+    assert (
+        subprocess.check_output([binary, "0", str(2**63)], text=True).strip()
+        == rejected
+    )
+    assert (
+        subprocess.check_output([binary, "1", str(2**63)], text=True).strip() == empty
+    )
+
+
+def test_integer_array_index_width_preserves_lp64_exception_categories(tmp_path):
+    from scar.backend.cpp20.lowering import Lowerer
+    from scar.backend.cpp20.printer import _expression
+    from scar.backend.planning import integer
+    from scar.contract import digest, json_bytes
+
+    argument = dict(op="var", name="index", type="integer")
+    messages = dict(index_error="outside index domain", overflow_error="unsigned index")
+    node = dict(
+        op="integer_op",
+        operation="array_index_width",
+        operator_family="integer",
+        semantics_version=1,
+        type="i64",
+        args=[argument],
+        effects=["VAL"],
+        may_raise=True,
+        reads=[],
+        writes=[],
+        exception_messages=messages,
+    )
+    requirement = dict(semantics_version=1, operations=["array_index_width"])
+    for field in messages:
+        incomplete = {k: v for k, v in messages.items() if k != field}
+        with pytest.raises(
+            ValueError, match="messages for each possible source exception"
+        ):
+            integer.qualify(requirement, [dict(node, exception_messages=incomplete)])
+    binding = integer.qualify(requirement, [node])
+    module = dict(functions=[], integer_binding_sha256=digest(json_bytes(binding)))
+    lower = Lowerer(module, dict(operator_backends=dict(integer=binding)))
+    call = _expression(lower.expression(node))
+    index = _expression(lower.expression(argument))
+    source, binary = tmp_path / "width.cpp", tmp_path / "width"
+    source.write_text(f"""
+#include "integer.hpp"
+#include <iostream>
+int main(int argc, char **argv) {{
+  for (int i = 1; i < argc; ++i) {{
+    try {{
+      scar::integers::value {index}(argv[i], 10);
+      std::cout << {call} << '\\n';
+    }} catch (const scar::program_error &e) {{
+      std::cout << e.category() << " " << e.message() << '\\n';
+    }}
+  }}
+}}
+""")
+    files = binding["files"]
+    subprocess.run(
+        [
+            "c++",
+            "-std=c++20",
+            "-Werror",
+            "-I",
+            Path(scar.__file__).parent / "backend/cpp20",
+            "-I",
+            Path(files["include/gmp.h"]["path"]).parent,
+            source,
+            files["lib/libgmp.a"]["path"],
+            "-o",
+            binary,
+        ],
+        check=True,
+    )
+    index_error = "index_error " + messages["index_error"]
+    overflow_error = "overflow_error " + messages["overflow_error"]
+    cases = {
+        -(2**100): index_error,
+        -(2**63) - 1: index_error,
+        -(2**63): str(-(2**63)),
+        -1: "-1",
+        0: "0",
+        2**63 - 1: str(2**63 - 1),
+        2**63: overflow_error,
+        2**64 - 1: overflow_error,
+        2**64: index_error,
+        2**100: index_error,
+    }
+    received = subprocess.check_output([binary, *map(str, cases)], text=True)
+    assert received.splitlines() == list(cases.values())

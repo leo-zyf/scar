@@ -546,6 +546,7 @@ def import_provider(frame, node, steps):
         "distribution": source["distribution"],
         "version": source["version"],
         "sha256": source["sha256"],
+        "array_runtime": source.get("array_runtime"),
         "import_effects": node["effects"],
         "contract": "closed public numerical operations with unobserved module registry and initialization hooks",
         "exports": {**(prior or {}).get("exports", {}), **source.get("exports", {})},
@@ -1175,6 +1176,68 @@ def _implementation(frame, node, name, sources):
     return profile
 
 
+# The signed-index ceiling rounds to 2**63 in binary64. The native
+# provider's conversion at that one representable value varies with its ABI.
+_NDARRAY_RUNTIME_SHA256 = (
+    "1650f5b6a42b0022f9821b475725469237dbc77595f1d5c7ae7bbc0288002095"
+)
+_LINSPACE_ARANGE = {
+    "numpy._core.numeric": "feb150554b4879d4df7bd0a4ab7b1a6b818de7ba994ed0c73583fee177533417",
+    "numpy._core.multiarray": "afd14181b927aa10800a0c5dab5f456f52e219726847dbef379e313419029d49",
+    "numpy._core._multiarray_umath": _NDARRAY_RUNTIME_SHA256,
+}
+
+
+def _rounded_ramp(frame, node, count, steps):
+    lower, upper = count.bounds or (None, None)
+    overlaps_ceiling = (upper is None or upper >= (1 << 63) - 512) and (
+        lower is None or lower <= (1 << 63) + 1024
+    )
+    if overlaps_ceiling:
+        export = frame.project.providers["numpy"]["exports"]["linspace"]
+        files = export.get("implementation_dependencies", {})
+        for name, sha in _LINSPACE_ARANGE.items():
+            record = files.get(name, {})
+            if (
+                record.get("sha256") != sha
+                or record.get("status") != "verified_distribution"
+                or record.get("proof_scope") != "installed_file_with_digest"
+                or record.get("distribution") != "numpy"
+                or record.get("version") != "2.5.5"
+            ):
+                frame.fail(
+                    node,
+                    "array_range_profile",
+                    "rounded extent at the signed-index ceiling needs a qualified array-provider binary",
+                )
+
+    # Saturate only the over-limit operand of the allocator. This keeps the
+    # arange size failure after subtraction and prevents integer-to-float
+    # overflow from replacing that source exception.
+    stop = integers.to_binary64(frame, node, count).value
+    if upper is None or upper > 1 << 64:
+        ceiling = integers.literal(frame, node, 1 << 64, steps=steps)
+        excess = integers.binary(frame, node, "gt", count, ceiling, steps)
+        stop = dict(
+            op="select",
+            type="f64",
+            condition=excess.value,
+            then=literal(float(1 << 64)).value,
+            **{"else": stop},
+        )
+    return _output(
+        frame,
+        "array_iota",
+        array_kind(1),
+        steps,
+        count=stop,
+        extent_conversion="rounded_binary64_nonnegative_i64",
+        at_signed_limit="empty" if overlaps_ceiling else "reject",
+        facts={"shape": (None,)},
+        effects=["MEM", "VAL"],
+    )
+
+
 def _linspace(frame, node, args, keywords, steps, discard):
     """Expand a versioned public sequence contract into neutral scalar/array ops."""
     first_operation = len(steps)
@@ -1207,17 +1270,22 @@ def _linspace(frame, node, args, keywords, steps, discard):
     start, stop, count, endpoint, retstep, dtype, axis = bound
     if count.kind == "bool":
         count = scalars.construct(frame, node, "int", [count], {})
-    if count.kind != "i64" or count.bounds[1] > 1 << 53:
-        frame.fail(
+    if count.kind not in {"i64", "integer"}:
+        frame.fail(node, "array_count", "sample count needs an integer index")
+    bounds = count.bounds
+    wide = bounds is None or bounds[1] > 1 << 53 or bounds[0] < -(1 << 63)
+    if wide:
+        count = integers.promote(frame, node, count, steps=steps)
+    elif count.kind == "integer":
+        count = integers.apply(
+            frame,
             node,
-            "array_count",
-            "the exact coordinate sequence requires a proven index-width count no larger than 2**53",
-        )
-    if count.bounds[1] < 0:
-        frame.fail(
-            node,
-            "array_count",
-            "this source invocation raises ValueError for a negative sample count",
+            "shape_extent",
+            [count],
+            "i64",
+            steps=steps,
+            facts=count.facts,
+            exception_messages={"value_error": "Maximum allowed dimension exceeded"},
         )
     if not (
         dtype.kind == "unit"
@@ -1246,14 +1314,18 @@ def _linspace(frame, node, args, keywords, steps, discard):
         frame.fail(
             node, "array_return", "retstep must determine one source return layout"
         )
-    start, stop = [
-        scalars.construct(frame, node, "float", [v], {}) for v in (start, stop)
-    ]
 
     def scalar(op, a, b, kind="i64"):
         return dict(op="binary", type=kind, operator=op, left=a, right=b)
 
-    if count.bounds[0] < 0:
+    def integer_op(op, lhs, rhs, output, kind="bool"):
+        if wide:
+            return integers.binary(frame, node, op, lhs, rhs, output).value
+        return scalar(op, lhs.value, rhs.value, kind)
+
+    low, upper = bounds if bounds is not None else (None, None)
+    if low is None or low < 0:
+        negative = integer_op("lt", count, literal(0), steps)
         bad = []
         rendered = text.render(frame, node, count, "str", literal(""), bad)
         message = text._concat(
@@ -1269,39 +1341,38 @@ def _linspace(frame, node, args, keywords, steps, discard):
             frame, node, exceptions.builtin("ValueError"), [message], {}, bad
         )
         bad.append(dict(op="throw", value=error.value))
-        steps.append(
-            dict(
-                op="if",
-                condition=scalar("lt", count.value, literal(0).value, "bool"),
-                then=bad,
-                **{"else": []},
-            )
-        )
-        count = Value("i64", count.value, dict(range=(0, count.bounds[1])))
-    lower, upper = count.bounds
-    div = (
-        count
-        if endpoint.exact is False
-        else Value(
-            "i64",
-            scalar("sub", count.value, literal(1).value),
-            dict(range=(lower - 1, upper - 1)),
-        )
-    )
-    if endpoint.exact is _UNKNOWN:
-        div = Value(
-            "i64",
-            dict(
+        steps.append(dict(op="if", condition=negative, then=bad, **{"else": []}))
+
+    lower = max(0, low or 0)
+    start, stop = [
+        scalars.construct(frame, node, "float", [v], {}, steps=steps)
+        for v in (start, stop)
+    ]
+    offset = 0 if endpoint.exact is False else 1
+    div_lower = lower - offset
+    div_upper = None if upper is None else max(0, upper) - int(endpoint.exact is True)
+    div = count.value
+    if offset:
+        div = integer_op("sub", count, literal(1), steps, "i64")
+        if endpoint.exact is _UNKNOWN:
+            div = dict(
                 op="select",
-                type="i64",
+                type=wire(count.kind),
                 condition=endpoint.value,
-                then=div.value,
+                then=div,
                 **{"else": count.value},
-            ),
-            dict(range=(lower - 1, upper)),
-        )
-    div = frame.effect(div.value, div.kind, steps, facts=div.facts)
-    positive = True if div.bounds[0] > 0 else False if div.bounds[1] <= 0 else None
+            )
+    div = frame.effect(
+        div,
+        count.kind,
+        steps,
+        facts={"range": (div_lower, div_upper)} if div_upper is not None else {},
+    )
+    positive = (
+        True
+        if div_lower > 0
+        else False if div_upper is not None and div_upper <= 0 else None
+    )
     if retstep.exact and positive is None:
         frame.fail(
             node,
@@ -1339,20 +1410,28 @@ def _linspace(frame, node, args, keywords, steps, discard):
         )
 
     delta = arithmetic(141, "sub", stop, start, steps)
-    extent = count.exact if count.exact is not _UNKNOWN else None
-    ramp = _output(
-        frame,
-        "array_iota",
-        array_kind(1),
-        steps,
-        count=count.value,
-        max_count=1 << 53,
-        facts={"shape": (extent,)},
-        effects=["MEM", "VAL"],
+    extent = count.exact if not wide and count.exact is not _UNKNOWN else None
+    ramp = (
+        _rounded_ramp(frame, node, count, steps)
+        if wide
+        else _output(
+            frame,
+            "array_iota",
+            array_kind(1),
+            steps,
+            count=count.value,
+            max_count=1 << 53,
+            facts={"shape": (extent,)},
+            effects=["MEM", "VAL"],
+        )
     )
-    denominator = Value("f64", _as_float(frame, node, div))
 
     def regular(out):
+        denominator = (
+            integers.to_binary64(frame, node, div, steps=out)
+            if wide
+            else Value("f64", _as_float(frame, node, div))
+        )
         step = arithmetic(
             152, "div", delta, denominator, out, operation="scalar divide"
         )
@@ -1392,14 +1471,14 @@ def _linspace(frame, node, args, keywords, steps, discard):
         steps.append(
             dict(
                 op="if",
-                condition=scalar("gt", div.value, literal(0).value, "bool"),
+                condition=integer_op("gt", div, literal(0), steps),
                 then=yes,
                 **{"else": no},
             )
         )
         step = None
     arithmetic(173, "add", result, start, steps, inplace=True)
-    if endpoint.exact is not False and upper > 1:
+    if endpoint.exact is not False and (upper is None or upper > 1):
         store = dict(
             op="array_store",
             base=result.value,
@@ -1415,7 +1494,7 @@ def _linspace(frame, node, args, keywords, steps, discard):
             guard = scalar(
                 "land",
                 endpoint.value,
-                scalar("gt", count.value, literal(1).value, "bool"),
+                integer_op("gt", count, literal(1), steps),
                 "bool",
             )
             steps.append(dict(op="if", condition=guard, then=[store], **{"else": []}))
@@ -1740,6 +1819,44 @@ def construct(frame, node, target, args, keywords, steps, discard):
     )
 
 
+def _array_index_width(frame, node, value, steps):
+    if value.kind == "i64":
+        return value
+    bounds = value.bounds
+    fits = bounds is not None and -(1 << 63) <= bounds[0] <= bounds[1] < 1 << 63
+    if not fits:
+        provider = frame.project.providers.get("numpy", {})
+        runtime = provider.get("array_runtime") or {}
+        if (
+            provider.get("version") != "2.5.5"
+            or runtime.get("sha256") != _NDARRAY_RUNTIME_SHA256
+            or runtime.get("status") != "verified_distribution"
+            or runtime.get("loader") != "extension"
+            or runtime.get("proof_scope") != "installed_file_with_digest"
+            or runtime.get("module") != "numpy._core._multiarray_umath"
+            or runtime.get("distribution") != "numpy"
+            or runtime.get("version") != provider["version"]
+        ):
+            frame.fail(
+                node,
+                "array_index_profile",
+                "wide array indices require a qualified array-provider index ABI",
+            )
+    return integers.apply(
+        frame,
+        node,
+        "array_index_width",
+        [value],
+        "i64",
+        steps=steps,
+        facts=value.facts if fits else {},
+        exception_messages={
+            "overflow_error": "Python int too large to convert to C long",
+            "index_error": "only integers, slices (`:`), ellipsis (`...`), numpy.newaxis (`None`) and integer or boolean arrays are valid indices",
+        },
+    )
+
+
 def index(frame, node, steps, rhs=None, discard=False, *, evaluated_base=None):
     base = (
         frame.evaluate(node["base"], steps)
@@ -1807,18 +1924,20 @@ def index(frame, node, steps, rhs=None, discard=False, *, evaluated_base=None):
             "a captured sequence requires one proven in-bounds integer index",
         )
     n = rank(base.kind)
-    if n is None or len(axes) > n or any(v.kind != "i64" for v in axes):
+    if (
+        n is None
+        or len(axes) > n
+        or any(v.kind not in {"integer", "i64"} for v in axes)
+    ):
         frame.fail(
             node,
             "array_index",
             "only integer prefix indexing within the declared array rank is supported",
         )
+    # The source converts all index operands in order before checking bounds
+    # on the first axis. Keep those two possible failures in distinct steps.
+    axes = [_array_index_width(frame, node, value, steps) for value in axes]
     shape = base.facts.get("shape", (None,) * n)
-    if any(
-        d is not None and v.exact is not _UNKNOWN and not -d <= v.exact < d
-        for v, d in zip(axes, shape)
-    ):
-        frame.fail(node, "array_bounds", "a constant index is outside the current axis")
     indices = [v.value for v in axes]
     result = shape[len(axes) :]
     element = array_element(base.kind)

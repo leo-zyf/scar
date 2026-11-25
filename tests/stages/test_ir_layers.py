@@ -670,7 +670,7 @@ before=project.imports.snapshot()
 comparison=dict(op='module_import_preserves',type='bool',operator_family='module_registry',occurrence='foreign/import',direct_registry_keys=['foreign'],conditional_registry_keys=[],checks={})
 project.unknown_registry('entry',{'site':'foreign/import'})
 guarded=[]
-project.scoped_import('entry',{'site':'foreign/import'},comparison,guarded,before=before)
+project.scoped_registry_effect('entry',{'site':'foreign/import'},comparison,guarded,before=before)
 assert project.imports.registry_entry('package')['state']=='unresolved'
 assert project.registry_entry('package',{'site':'consumer'})['state']=='ready'
 assert guarded[0]['op']=='if'
