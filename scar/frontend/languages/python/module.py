@@ -2058,7 +2058,12 @@ class _Scope:
                 and isinstance(node.value, ast.Constant)
                 and type(node.value.value) is str
             ):
-                return [R(node, "expr", value=self.expr(node.value)[0])]
+                value = self.expr(node.value)[0]
+                if self.code.get("kind") == "function" and isinstance(
+                    node.value, ast.Constant
+                ):
+                    value.update(self.source_expression(node.value))
+                return [R(node, "expr", value=value)]
             document = self.unit.module_docstring
             if document.get("omitted"):
                 return []
@@ -2095,11 +2100,12 @@ class _Scope:
                     receipt = (
                         dict(receipt, rhs_sha256=fingerprint) if fingerprint else None
                     )
+                target = self.destination(targets[0], f)
                 return [
                     R(
                         node,
                         "assign",
-                        target=self.destination(targets[0], f),
+                        target=target,
                         value=value,
                         **(
                             {
@@ -2109,7 +2115,7 @@ class _Scope:
                                 }
                             }
                             if receipt
-                            else self.source_expression(node, value)
+                            else self.source_expression(node, (value, target))
                         ),
                     )
                 ]
@@ -2145,7 +2151,7 @@ class _Scope:
                     condition=condition,
                     then=yes,
                     **{"else": no},
-                    **self.source_expression(node),
+                    **self.source_expression(node, condition),
                 )
             ]
         if isinstance(node, (ast.For, ast.AsyncFor, ast.While)):
@@ -2182,7 +2188,7 @@ class _Scope:
                     body=steps,
                     **fields,
                     **{"else": otherwise},
-                    **self.source_expression(node),
+                    **self.source_expression(node, fields),
                 )
             ]
         if isinstance(node, (ast.With, ast.AsyncWith)):
@@ -2326,6 +2332,8 @@ class _Scope:
             ]
         if isinstance(node, ast.Return):
             value = self.expr(node.value)[0]
+            if node.value is None and tuple_position(node) in self.expression_sites:
+                value["location"] = self.unit.location(node)
             return [
                 R(node, "return", value=value, **self.source_expression(node, value))
             ]

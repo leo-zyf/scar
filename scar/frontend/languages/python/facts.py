@@ -370,10 +370,11 @@ def _import_store_sites(program, instructions, imports, handlers):
 
 
 _STATEMENT_END = {
+    ast.Constant: {"NOP"},
     ast.Call: {"POP_TOP"},
     ast.Raise: {"RAISE_VARARGS"},
     ast.Return: {"RETURN_VALUE", "RETURN_CONST"},
-    ast.Assign: {"STORE_NAME", "STORE_GLOBAL", "STORE_FAST"},
+    ast.Assign: {"STORE_NAME", "STORE_GLOBAL", "STORE_FAST", "STORE_SUBSCR"},
     ast.Delete: {"DELETE_NAME", "DELETE_GLOBAL"},
     ast.If: {"POP_JUMP_IF_TRUE", "POP_JUMP_IF_FALSE"},
     ast.For: {"GET_ITER"},
@@ -401,6 +402,42 @@ def _pool_display_items(value, parts):
             type="tuple", item_count=len(value), items_sha256=digest(json_bytes(tokens))
         )
     return None
+
+
+def _slice_key(value, node):
+    """Describe an actual pool constant only when every slice component matches the syntax."""
+    if type(value) is slice and isinstance(node, ast.Slice):
+        kind, actual, syntax = (
+            "slice",
+            (value.start, value.stop, value.step),
+            (node.lower, node.upper, node.step),
+        )
+    elif (
+        type(value) is tuple
+        and isinstance(node, ast.Tuple)
+        and len(value) == len(node.elts)
+    ):
+        kind, actual, syntax = "tuple", value, node.elts
+    elif (
+        node is None
+        and value is None
+        or isinstance(node, ast.Constant)
+        and type(node.value) is type(value)
+        and node.value == value
+    ):
+        return dict(kind=type(value).__name__, value=numeric_wire_value(value))
+    else:
+        return None
+    items = [_slice_key(item, part) for item, part in zip(actual, syntax)]
+    if all(items):
+        return dict(
+            kind=kind,
+            **(
+                dict(zip(("lower", "upper", "step"), items))
+                if kind == "slice"
+                else {"items": items}
+            ),
+        )
 
 
 def _expression_instruction(program, ins, parts, keywords):
@@ -446,7 +483,16 @@ def _expression_instruction(program, ins, parts, keywords):
         value = arg if opcode == "LOAD_SMALL_INT" else program.co_consts[arg]
         if opcode != "LOAD_SMALL_INT":
             row["index"] = arg
-        if type(value) is tuple:
+        if opcode == "LOAD_CONST" and (
+            type(value) is slice
+            or type(value) is tuple
+            and any(type(item) is slice for item in value)
+        ):
+            key = next((key for n in parts if (key := _slice_key(value, n))), None)
+            if key is None:
+                return None
+            row.update(type=type(value).__name__, constant_key=key)
+        elif type(value) is tuple:
             if value in keywords:
                 row.update(type="tuple", names=list(value))
             elif opcode == "LOAD_CONST" and (
@@ -459,6 +505,12 @@ def _expression_instruction(program, ins, parts, keywords):
             isinstance(n, ast.Constant)
             and type(n.value) is type(value)
             and n.value == value
+            or value is None
+            and isinstance(n, ast.Slice)
+            and (n.lower is None or n.upper is None)
+            or value is None
+            and isinstance(n, ast.Return)
+            and n.value is None
             for n in parts
         ):
             row.update(
@@ -467,6 +519,44 @@ def _expression_instruction(program, ins, parts, keywords):
             )
         else:
             return None
+    elif (
+        opcode in {"BINARY_SUBSCR", "STORE_SUBSCR"}
+        or opcode == "BINARY_OP"
+        and ins.argrepr == "[]"
+    ):
+        ctx = ast.Store if opcode == "STORE_SUBSCR" else ast.Load
+        if not any(
+            isinstance(n, ast.Subscript) and isinstance(n.ctx, ctx) for n in parts
+        ):
+            return None
+        if opcode == "BINARY_OP":
+            row["operator"] = "subscript"
+    elif opcode == "BUILD_SLICE":
+        if not any(
+            isinstance(n, ast.Slice) and arg == (3 if n.step is not None else 2)
+            for n in parts
+        ):
+            return None
+    elif opcode == "COMPARE_OP":
+        names = {
+            "<": "lt",
+            "<=": "lte",
+            "==": "eq",
+            "!=": "noteq",
+            ">": "gt",
+            ">=": "gte",
+        }
+        op = names.get(ins.argval)
+        if not any(
+            isinstance(n, ast.Compare)
+            and len(n.ops) == 1
+            and type(n.ops[0]).__name__.lower() == op
+            for n in parts
+        ):
+            return None
+        row.update(
+            operator=op, force_bool=sys.version_info >= (3, 13) and bool(arg & 16)
+        )
     elif opcode == "BINARY_OP":
         binary = python_binary_operator(arg)
         if (
@@ -524,10 +614,13 @@ def _expression_instruction(program, ins, parts, keywords):
                 return None
             row["intrinsic"] = ins.argrepr
     elif opcode in {"POP_JUMP_IF_TRUE", "POP_JUMP_IF_FALSE", "TO_BOOL"}:
-        if not any(isinstance(n, ast.Call) for n in parts):
+        if not any(isinstance(n, (ast.Call, ast.Compare)) for n in parts):
             return None
         if opcode != "TO_BOOL":
             row["target"] = ins.argval
+    elif opcode == "NOP":
+        if not any(isinstance(n, ast.Constant) for n in parts):
+            return None
     elif opcode == "RETURN_VALUE":
         pass
     elif opcode == "GET_ITER":
@@ -545,10 +638,16 @@ def _expression_instruction(program, ins, parts, keywords):
     return row
 
 
-def _condition_operand(test):
+def _condition_operand(test, *, comparison=False):
     if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
         test = test.operand
-    return test if isinstance(test, ast.Call) else None
+    if (
+        isinstance(test, ast.Call)
+        or comparison
+        and isinstance(test, ast.Compare)
+        and len(test.ops) == 1
+    ):
+        return test
 
 
 def _suite_entry(ins, statement, kind, preceding=()):
@@ -602,9 +701,9 @@ def _implicit_return(instructions, index, span):
     )
 
 
-def _branch_receipt(node, after, instructions, end, offsets, rows):
+def _branch_receipt(node, after, instructions, end, offsets, rows, *, function_frame):
     """Match the actual successors of a call's truth jump to the source suites."""
-    operand = _condition_operand(node.test)
+    operand = _condition_operand(node.test, comparison=True)
     negated = operand is not node.test
     pos = tuple_position(operand)
     branch = instructions[end]
@@ -612,10 +711,13 @@ def _branch_receipt(node, after, instructions, end, offsets, rows):
         return None
     # 3.12 truth-tests the object in the jump. Later bytecode must produce an
     # exact bool first. A separate UNARY_NOT is not interchangeable with this lowering.
-    truth = 1 if sys.version_info >= (3, 13) else 0
+    truth = int(sys.version_info >= (3, 13) and isinstance(operand, ast.Call))
+    opcode = {"COMPARE_OP"} if isinstance(operand, ast.Compare) else {"CALL", "CALL_KW"}
     if (
         len(rows) < 2 + truth
-        or rows[-2 - truth]["opcode"] not in {"CALL", "CALL_KW"}
+        or rows[-2 - truth]["opcode"] not in opcode
+        or isinstance(operand, ast.Compare)
+        and rows[-2]["force_bool"] != (sys.version_info >= (3, 13))
         or truth
         and rows[-2]["opcode"] != "TO_BOOL"
         or any(row["position"] != list(pos) for row in rows[-2 - truth :])
@@ -648,7 +750,46 @@ def _branch_receipt(node, after, instructions, end, offsets, rows):
     else:
         no = _implicit_return(instructions, other, pos)
     if yes and no:
+        exits = {}
+        if function_frame and node.orelse and after is not None:
+            # A jump over a straight else suite and its normal fallthrough
+            # converge at the first instruction of the next source statement.
+            jump = instructions[other - 1]
+            if jump.opname == "JUMP_FORWARD" and jump.argval in offsets:
+                join = offsets[jump.argval]
+                if other < join and (
+                    destination_row := destination(join, after, "continuation")
+                ):
+                    last = instructions[join - 1]
+                    terminal = {
+                        "RETURN_VALUE",
+                        "RETURN_CONST",
+                        "RAISE_VARARGS",
+                        "RERAISE",
+                        "YIELD_VALUE",
+                    }
+                    if (
+                        not any(
+                            i.opcode in _JUMP_OPCODES or i.opname in terminal
+                            for i in (
+                                *instructions[then : other - 1],
+                                *instructions[other:join],
+                            )
+                        )
+                        and _suite_entry(jump, node.body[-1], "suite")
+                        and _suite_entry(last, node.orelse[-1], "suite")
+                    ):
+                        exits = dict(
+                            join=destination_row,
+                            then_exit=dict(
+                                _positioned_instruction(jump), target=jump.argval
+                            ),
+                            else_exit=dict(
+                                _positioned_instruction(last), fallthrough=jump.argval
+                            ),
+                        )
         return dict(
+            **exits,
             condition_position=list(tuple_position(node.test)),
             operand_position=list(pos),
             negated=negated,
@@ -658,37 +799,61 @@ def _branch_receipt(node, after, instructions, end, offsets, rows):
         )
 
 
-def _iteration_receipt(node, after, instructions, end, offsets, jumps, handlers):
+def _iteration_receipt(
+    node, after, instructions, end, offsets, jumps, handlers, *, function_frame
+):
     if not isinstance(node.target, ast.Name) or any(
         isinstance(part, (ast.Break, ast.Continue))
         for statement in (*node.body, *node.orelse)
         for part in ast.walk(statement)
     ):
         return None
+    if function_frame and any(
+        isinstance(part, (ast.Return, ast.Yield, ast.YieldFrom))
+        for part in scope_nodes(node.body)
+    ):
+        return None
     acquire = instructions[end]
     if end + 3 >= len(instructions):
         return None
-    step, store = instructions[end + 1 : end + 3]
+    header = end + 1
+    advance = header
+    while (
+        advance < len(instructions) and instructions[advance].opname == "EXTENDED_ARG"
+    ):
+        advance += 1
+    if advance + 2 >= len(instructions):
+        return None
+    prefix = instructions[header:advance]
+    if prefix and not function_frame:
+        return None
+    step, store = instructions[advance : advance + 2]
     if (
         acquire.positions not in {tuple_position(node), tuple_position(node.iter)}
         or step.opname != "FOR_ITER"
         or step.positions != acquire.positions
-        or store.opname not in {"STORE_NAME", "STORE_GLOBAL"}
+        or store.opname
+        not in ({"STORE_FAST"} if function_frame else {"STORE_NAME", "STORE_GLOBAL"})
         or store.positions != tuple_position(node.target)
         or store.argval != node.target.id
     ):
         return None
     exit_index = offsets.get(step.argval)
-    if exit_index is None or exit_index < end + 4:
+    if exit_index is None or exit_index < advance + 3:
         return None
+    head = instructions[header].offset
+    body_code = instructions[advance + 2 : exit_index]
+    backs = [
+        ins for ins in body_code if ins.opname == "JUMP_BACKWARD" and ins.argval == head
+    ]
     back = instructions[exit_index - 1]
     cleanup = instructions[exit_index]
     if (
         back.opname != "JUMP_BACKWARD"
-        or back.argval != step.offset
+        or back.argval != head
         or cleanup.opname != "END_FOR"
         or cleanup.positions != acquire.positions
-        or jumps[step.offset] != [back.offset]
+        or jumps[head] != [ins.offset for ins in backs]
         or jumps[cleanup.offset] != [step.offset]
         or not _suite_entry(back, node.body[-1], "suite")
     ):
@@ -700,18 +865,38 @@ def _iteration_receipt(node, after, instructions, end, offsets, jumps, handlers)
         return None
     clean = instructions[exit_index:stop]
     if (
-        any(i.positions != acquire.positions for i in clean)
+        any(i.positions != acquire.positions for i in (*prefix, *clean))
         or any(
             i.offset in handlers
-            or (i.is_jump_target and i.offset not in {step.offset, cleanup.offset})
-            for i in instructions[end + 1 : stop]
+            or i.is_jump_target
+            and i.offset not in {head, cleanup.offset}
+            and not (
+                function_frame
+                and body_code[0].offset <= i.offset < cleanup.offset
+                and all(
+                    body_code[0].offset <= pred < cleanup.offset
+                    for pred in jumps[i.offset]
+                )
+            )
+            for i in instructions[header:stop]
         )
         or any(
-            i.opcode in _JUMP_OPCODES for i in instructions[end + 3 : exit_index - 1]
+            i.opcode in _JUMP_OPCODES
+            and not (
+                function_frame
+                and (
+                    i.opname == "JUMP_BACKWARD"
+                    and i.argval == head
+                    or i.opname
+                    in {"POP_JUMP_IF_TRUE", "POP_JUMP_IF_FALSE", "JUMP_FORWARD"}
+                    and i.offset < i.argval < cleanup.offset
+                )
+            )
+            for i in body_code[:-1]
         )
     ):
         return None
-    body = _suite_entry(instructions[end + 3], node.body[0], "suite")
+    body = _suite_entry(body_code[0], node.body[0], "suite")
     if node.orelse:
         exhausted = _suite_entry(instructions[stop], node.orelse[0], "suite")
     elif after is not None:
@@ -724,7 +909,20 @@ def _iteration_receipt(node, after, instructions, end, offsets, jumps, handlers)
         next=dict(_positioned_instruction(step), target=step.argval),
         store=_positioned_instruction(store),
         body=body,
-        backedge=dict(_positioned_instruction(back), target=back.argval),
+        **(
+            {"next_prefix": [_positioned_instruction(i) for i in prefix]}
+            if prefix
+            else {}
+        ),
+        **(
+            {"backedge": dict(_positioned_instruction(back), target=head)}
+            if len(backs) == 1
+            else {
+                "backedges": [
+                    dict(_positioned_instruction(i), target=head) for i in backs
+                ]
+            }
+        ),
         cleanup=[_positioned_instruction(i) for i in clean],
         exhausted=exhausted,
     )
@@ -741,7 +939,7 @@ def _statement_expression(
     """Capture source operands and the terminal operation consuming them."""
     expr = root
     if isinstance(root, ast.If):
-        expr = _condition_operand(root.test)
+        expr = _condition_operand(root.test, comparison=function_frame)
     elif isinstance(root, ast.For):
         expr = root.iter
     span = tuple_position(expr)
@@ -749,13 +947,22 @@ def _statement_expression(
     discarded_call = isinstance(root, ast.Call)
     needs_object_ports = function_frame or not discarded_call
     for node in ast.walk(expr):
-        if isinstance(node, (ast.Load, ast.Store, ast.Del, ast.keyword, ast.operator)):
+        if not function_frame and isinstance(
+            node, (ast.Subscript, ast.Slice, ast.Compare)
+        ):
+            return None
+        if isinstance(
+            node, (ast.Load, ast.Store, ast.Del, ast.keyword, ast.operator, ast.cmpop)
+        ):
             continue
         if not isinstance(
             node,
             (
                 ast.Call,
                 ast.BinOp,
+                ast.Compare,
+                ast.Subscript,
+                ast.Slice,
                 ast.Raise,
                 ast.Return,
                 ast.List,
@@ -836,6 +1043,8 @@ def _statement_expression(
         if depth < 0:
             return None
         rows.append(row)
+    if isinstance(root, ast.Constant) and [row["opcode"] for row in rows] != ["NOP"]:
+        return None
     if isinstance(root, ast.Delete) and [row["position"] for row in rows] != [
         list(tuple_position(target)) for target in root.targets
     ]:
@@ -896,6 +1105,7 @@ def _statement_expression_sites(
                         matches[0],
                         offsets,
                         receipt["instructions"],
+                        function_frame=function_frame,
                     )
                     if edges is None:
                         continue
@@ -909,6 +1119,7 @@ def _statement_expression_sites(
                         offsets,
                         jumps,
                         handlers,
+                        function_frame=function_frame,
                     )
                     if not iteration:
                         continue
@@ -931,6 +1142,7 @@ def _positioned_instruction(ins):
         "LOAD_GLOBAL",
         "STORE_NAME",
         "STORE_GLOBAL",
+        "STORE_FAST",
         "DELETE_NAME",
         "DELETE_GLOBAL",
     }:
@@ -1174,33 +1386,53 @@ def _code_parameters(code):
     return params
 
 
-def _function_expression_sites(program, node):
-    """Capture single local stores and discarded calls within this code object."""
+def _function_expression_sites(program, node, following):
+    """Collect located expression, assignment and control regions in one child frame."""
     expressions = {}
     for stmt in scope_nodes(node.body):
-        if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call):
+        if isinstance(stmt, ast.Expr) and isinstance(
+            stmt.value, (ast.Call, ast.Constant)
+        ):
             expressions[tuple_position(stmt.value)] = stmt.value
-        elif isinstance(stmt, ast.Return) and stmt.value is not None:
+        elif isinstance(stmt, ast.Return):
             expressions[tuple_position(stmt)] = stmt
-            expressions[tuple_position(stmt.value)] = stmt
+            if stmt.value is not None:
+                expressions[tuple_position(stmt.value)] = stmt
         elif (
             isinstance(stmt, ast.Assign)
             and len(stmt.targets) == 1
-            and isinstance(stmt.targets[0], ast.Name)
+            and isinstance(stmt.targets[0], (ast.Name, ast.Subscript))
         ):
             expressions[tuple_position(stmt.targets[0])] = stmt
+        elif isinstance(stmt, ast.If) and (
+            operand := _condition_operand(stmt.test, comparison=True)
+        ):
+            expressions[tuple_position(operand)] = stmt
+        elif isinstance(stmt, ast.For) and isinstance(stmt.target, ast.Name):
+            expressions[tuple_position(stmt)] = stmt
+            expressions[tuple_position(stmt.iter)] = stmt
     if not expressions:
         return {}, {}
     instructions = list(dis.get_instructions(program))
     handlers = {entry.target for entry in dis.Bytecode(program).exception_entries}
     regions = _statement_expression_sites(
-        program, instructions, expressions, handlers, {}, {}, function_frame=True
+        program, instructions, expressions, handlers, {}, following, function_frame=True
     )
     regions = {
         span: proof
         for span, proof in regions.items()
         if proof["instructions"][-1]["opcode"]
-        in {"STORE_FAST", "POP_TOP", "RETURN_VALUE", "RETURN_CONST"}
+        in {
+            "NOP",
+            "STORE_FAST",
+            "STORE_SUBSCR",
+            "POP_TOP",
+            "RETURN_VALUE",
+            "RETURN_CONST",
+            "POP_JUMP_IF_TRUE",
+            "POP_JUMP_IF_FALSE",
+            "GET_ITER",
+        }
     }
     names = {
         tuple(row["position"]): row["name"]
@@ -1299,7 +1531,7 @@ def _compiler_sites(tree, path, relative, source_hash):
                 following.update(
                     (a, b)
                     for a, b in pairwise(suite)
-                    if isinstance(a, (ast.If, ast.For)) and not a.orelse
+                    if isinstance(a, (ast.If, ast.For))
                 )
         if isinstance(node, ast.Dict):
             mappings[tuple_position(node)] = []
@@ -1513,7 +1745,9 @@ def _compiler_sites(tree, path, relative, source_hash):
         definition_sites=definition_sites,
         function_expression_sites={
             span: _function_expression_sites(
-                program.co_consts[proof["instructions"][0]["index"]], definitions[span]
+                program.co_consts[proof["instructions"][0]["index"]],
+                definitions[span],
+                following,
             )
             for span, proof in definition_sites.items()
         },

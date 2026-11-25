@@ -3947,3 +3947,135 @@ def test_plain_import_observation_precedes_frame_callback_and_joins_exact_instru
             (None, entry_sha, json.dumps(altered).encode()), units, None, out
         )
         assert linked["events"][0]["unresolved"] == "no_matching_port"
+
+
+def test_function_comparison_iteration_and_subscription_match_child_bytecode(tmp_path):
+    import dis
+    import sys
+    from types import CodeType
+
+    from scar.contract import read_member
+    from scar.frontend import build
+
+    path = tmp_path / "consumer.py"
+    path.write_text(
+        "def f(items, sink, index):\n"
+        "    if index == 0:\n"
+        "        sink(1)\n"
+        "    else:\n"
+        "        sink(2)\n"
+        "    for value in sorted(items):\n"
+        "        if value < 0:\n"
+        "            sink(value)\n"
+        "        else:\n"
+        "            sink(42)\n"
+        "    row = items[:, 0]\n"
+        "    global_items[sink(index)] = sink(row)\n"
+        "    for value in items:\n"
+        "        if value: break\n"
+        "    if 0 < index < 8:\n"
+        "        sink(items)\n"
+        "    sink(99)\n"
+        "    'an unused string with a source line event'\n"
+        "    return\n"
+    )
+    module = compile(path.read_bytes(), str(path), "exec", dont_inherit=True)
+    child = next(c for c in module.co_consts if type(c) is CodeType)
+    ops = {i.offset: i for i in dis.get_instructions(child)}
+    out = tmp_path / "graph"
+    build(path, out)
+    [unit] = json.loads((out / "graph.json").read_bytes())["units"]
+    fn = next(
+        f
+        for f in read_member(out, unit["graph"])["functions"]
+        if f["signature"]["name"].endswith(":f")
+    )
+    statements = {
+        n["location"]["line"]: n
+        for n in fn["nodes"]
+        if n["op"] in {"for", "if", "assign", "return"}
+    }
+
+    def receipt(line):
+        result = statements[line]["source_expression"]
+        assert (
+            result["code_sha256"]
+            == fn["signature"]["python_scope"]["definition_code"]["code_sha256"]
+        )
+        for row in result["instructions"]:
+            instruction = ops[row["offset"]]
+            assert (row["opcode"], row["position"]) == (
+                instruction.opname,
+                list(instruction.positions),
+            )
+            if "oparg" in row:
+                assert row["oparg"] == instruction.arg
+        return result
+
+    branch = receipt(2)
+    rich, jump = branch["instructions"][-2:]
+    assert rich["operator"] == "eq" and rich["force_bool"] == bool(
+        rich["oparg"] & 16 and sys.version_info >= (3, 13)
+    )
+    edges = branch["branch"]
+    assert edges["then"]["statement_position"][0] == 3
+    assert edges["else"]["offset"] == ops[jump["offset"]].argval
+    assert (
+        edges["join"]["offset"]
+        == edges["then_exit"]["target"]
+        == edges["else_exit"]["fallthrough"]
+    )
+    assert ops[edges["then_exit"]["offset"]].argval == edges["join"]["offset"]
+    loop = receipt(6)["iteration"]
+    assert loop["store"]["opcode"] == "STORE_FAST"
+    assert child.co_varnames[loop["store"]["index"]] == loop["store"]["name"] == "value"
+    assert loop["next"]["target"] == loop["cleanup"][0]["offset"]
+    assert loop["exhausted"]["statement_position"][0] == 11
+    backedges = loop.get("backedges") or [loop["backedge"]]
+    expected = [
+        i.offset
+        for i in ops.values()
+        if i.opname == "JUMP_BACKWARD" and i.argval == loop["next"]["offset"]
+    ]
+    assert [r["offset"] for r in backedges] == expected
+    subscript = receipt(11)["instructions"]
+    assert subscript[-1]["opcode"] == "STORE_FAST" and subscript[-1]["name"] == "row"
+    if sys.version_info < (3, 14):
+        assert (
+            "BUILD_SLICE" in [r["opcode"] for r in subscript]
+            and subscript[-2]["opcode"] == "BINARY_SUBSCR"
+        )
+    else:
+        assert subscript[-2]["operator"] == "subscript"
+        pool = next(r for r in subscript if "constant_key" in r)
+        assert child.co_consts[pool["index"]] == (slice(None), 0)
+        assert pool["constant_key"]["items"][0] == dict(
+            kind="slice",
+            **dict.fromkeys(
+                ("lower", "upper", "step"), {"kind": "NoneType", "value": None}
+            ),
+        )
+    nop = next(
+        n["source_expression"]
+        for n in fn["nodes"]
+        if n["op"] == "literal"
+        and n.get("value") == "an unused string with a source line event"
+    )
+    assert (
+        len(nop["instructions"]) == 1
+        and ops[nop["instructions"][0]["offset"]].opname == "NOP"
+    )
+    returned = receipt(19)["instructions"]
+    assert child.co_consts[returned[0]["index"]] is None
+    assert [row["opcode"] for row in returned] == (
+        ["RETURN_CONST"]
+        if sys.version_info < (3, 14)
+        else ["LOAD_CONST", "RETURN_VALUE"]
+    )
+    store = receipt(12)["instructions"]
+    assert store[-1]["opcode"] == "STORE_SUBSCR"
+    assert [row["position"][2] for row in store if row["opcode"] == "CALL"] == [32, 17]
+    assert (
+        "source_expression" not in statements[13]
+        and "source_expression" not in statements[15]
+    )
