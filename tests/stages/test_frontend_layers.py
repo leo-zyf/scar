@@ -1099,6 +1099,92 @@ def test_module_if_call_receipt_binds_truth_and_both_successors(tmp_path):
             assert code.co_consts[edges["else"]["constant_index"]] is None
 
 
+def test_module_iteration_joins_iterable_store_backedge_and_exhaustion(tmp_path):
+    from copy import deepcopy
+    import dis
+    import pytest
+
+    from scar.contract import read_member
+    from scar.frontend import build
+    from scar.middle.binding import _definition
+
+    p = tmp_path / "loops.py"
+    p.write_text(
+        "global item\n"
+        "for item in make(settings.limit):\n    report(item)\nelse:\n    empty()\n"
+        "for a, b in pairs:\n    consume(a)\n"
+        "for item in values:\n    if flag: break\n"
+        "for item in values:\n    continue\n"
+        "for item in values:\n    report(item)\nafter()\n"
+        "for item in other:\n    report(item)\n"
+    )
+    compiled = compile(p.read_bytes(), str(p), "exec", dont_inherit=True)
+    ops = {ins.offset: ins for ins in dis.get_instructions(compiled)}
+    out = tmp_path / "graph"
+    build(p, out)
+    [unit] = json.loads((out / "graph.json").read_bytes())["units"]
+    [scope] = read_member(out, unit["graph"])["functions"]
+    body = _definition(scope)["body"]
+    loops = [n for n in body if n["op"] == "for"]
+    assert ["source_expression" in n for n in loops] == [
+        True,
+        False,
+        False,
+        False,
+        True,
+        True,
+    ]
+    accepted = [n for n in loops if "source_expression" in n]
+    assert [
+        n["source_expression"]["iteration"]["exhausted"]["kind"] for n in accepted
+    ] == ["suite", "continuation", "implicit_return"]
+    for node in accepted:
+        proof = node["source_expression"]
+        edges = proof["iteration"]
+        sequence = [
+            *proof["instructions"],
+            edges["next"],
+            edges["store"],
+            edges["body"],
+            edges["backedge"],
+            *edges["cleanup"],
+            edges["exhausted"],
+        ]
+        for row in sequence:
+            actual = ops[row["offset"]]
+            assert (row["opcode"], row["position"]) == (
+                actual.opname,
+                list(actual.positions),
+            )
+            if "oparg" in row:
+                assert row["oparg"] == actual.arg
+            if "target" in row:
+                assert row["target"] == actual.argval
+        assert (
+            proof["instructions"][-1]["opcode"] == "GET_ITER"
+            and edges["store"]["opcode"] == "STORE_GLOBAL"
+        )
+        assert (
+            edges["next"]["target"] == edges["cleanup"][0]["offset"]
+            and edges["backedge"]["target"] == edges["next"]["offset"]
+        )
+    for field, key, new in (
+        ("next", "target", 0),
+        ("store", "name", "other"),
+        ("backedge", "target", 0),
+        ("exhausted", "statement_position", [1, 1, 1, 1]),
+    ):
+        altered = deepcopy(scope)
+        loop = next(
+            n["source_expression"]["iteration"]
+            for n in altered["nodes"]
+            if n["op"] == "for" and "source_expression" in n
+        )
+        loop[field][key] = new
+        with pytest.raises(ValueError, match="source iteration"):
+            _definition(altered)
+
+
 def test_module_name_loads_follow_actual_callee_and_argument_ports(tmp_path):
     import dis
     import sys

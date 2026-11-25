@@ -113,43 +113,65 @@ def bind_constant_store(node, scope):
         raise ValueError("source constant load disagrees with its literal")
 
 
+def _graph_position(operation, code):
+    loc = operation.get("location") if isinstance(operation, dict) else None
+    return (
+        _source_position(loc) if loc and loc.get("file") == code["source_key"] else None
+    )
+
+
+def _inside_source(span, spot):
+    return (
+        span is not None
+        and isinstance(spot, list)
+        and len(spot) == 4
+        and all(type(x) is int for x in spot)
+        and (span[0], span[2])
+        <= (spot[0], spot[2])
+        <= (spot[1], spot[3])
+        <= (span[1], span[3])
+    )
+
+
+def _edge_enters(edge, statement, kind, code):
+    span = _graph_position(statement, code)
+    return (
+        edge.get("kind") == kind
+        and edge.get("statement_position") == span
+        and _inside_source(span, edge.get("position"))
+    )
+
+
+def _source_return(other, operand_pos):
+    return (
+        other.get("kind") == "implicit_return"
+        and other.get("statement_position") is None
+        and other.get("position") == operand_pos
+        and type(other.get("constant_index")) is int
+        and other["constant_index"] >= 0
+        and type(other.get("return_offset")) is int
+        and (
+            other["opcode"] == "RETURN_CONST"
+            and other["return_offset"] == other["offset"]
+            or other["opcode"] == "LOAD_CONST"
+            and other["return_offset"] > other["offset"]
+        )
+    )
+
+
 def _bind_condition_edges(node, proof, code, successor):
     branch = proof.get("branch")
     condition = node.get("condition", {})
     negated = condition.get("op") == "unary" and condition.get("operator") == "not"
     operand = condition.get("value", {}) if negated else condition
 
-    def position(operation):
-        loc = operation.get("location") if isinstance(operation, dict) else None
-        return (
-            _source_position(loc)
-            if loc and loc.get("file") == code["source_key"]
-            else None
-        )
-
-    def enters(edge, statement, kind):
-        span = position(statement)
-        spot = edge.get("position")
-        return (
-            span is not None
-            and edge.get("kind") == kind
-            and edge.get("statement_position") == span
-            and isinstance(spot, list)
-            and len(spot) == 4
-            and all(type(x) is int for x in spot)
-            and (span[0], span[2])
-            <= (spot[0], spot[2])
-            <= (spot[1], spot[3])
-            <= (span[1], span[3])
-        )
-
     rows = proof["instructions"]
     jump = rows[-1]
-    operand_pos = position(operand)
+    operand_pos = _graph_position(operand, code)
     if not (
         isinstance(branch, dict)
         and operand_pos
-        and branch.get("condition_position") == position(condition)
+        and branch.get("condition_position") == _graph_position(condition, code)
         and branch.get("operand_position") == operand_pos
         and branch.get("negated") is negated
         and jump["opcode"] == ("POP_JUMP_IF_TRUE" if negated else "POP_JUMP_IF_FALSE")
@@ -180,36 +202,124 @@ def _bind_condition_edges(node, proof, code, successor):
             )
         )
         and node.get("then")
-        and enters(then, node["then"][0], "suite")
+        and _edge_enters(then, node["then"][0], "suite", code)
     ):
         raise ValueError(
             "source condition disagrees with its fallthrough or jump target"
         )
     if node.get("else") or successor is not None:
         suite = node.get("else")
-        if not enters(
+        if not _edge_enters(
             other,
             suite[0] if suite else successor,
             "suite" if suite else "continuation",
+            code,
         ):
             raise ValueError(
                 "source condition disagrees with its alternative or continuation"
             )
-    elif not (
-        other.get("kind") == "implicit_return"
-        and other.get("statement_position") is None
-        and other.get("position") == operand_pos
-        and type(other.get("constant_index")) is int
-        and other["constant_index"] >= 0
-        and type(other.get("return_offset")) is int
-        and (
-            other["opcode"] == "RETURN_CONST"
-            and other["return_offset"] == other["offset"]
-            or other["opcode"] == "LOAD_CONST"
-            and other["return_offset"] > other["offset"]
+    elif not _source_return(other, operand_pos):
+        raise ValueError("source condition lacks the module's implicit return")
+
+
+def _bind_iteration_edges(node, proof, scope, successor):
+    code = scope["source_code"]
+    loop = proof.get("iteration")
+    body = node.get("body")
+    if not (
+        isinstance(loop, dict)
+        and all(
+            isinstance(loop.get(k), dict)
+            for k in ("next", "store", "body", "backedge", "exhausted")
+        )
+        and isinstance(loop.get("cleanup"), list)
+        and node.get("protocol") == "iterator"
+        and node.get("init") == []
+        and isinstance(body, list)
+        and body
+        and isinstance(node.get("else"), list)
+        and not any(
+            op["op"] in {"break", "continue"}
+            for op in walk_operations([body, node["else"]])
         )
     ):
-        raise ValueError("source condition lacks the module's implicit return")
+        raise ValueError("source iteration lacks its ordinary target or control ports")
+    step, store, entry, back, exit_edge = (
+        loop[k] for k in ("next", "store", "body", "backedge", "exhausted")
+    )
+    acquire = proof["instructions"][-1]
+    iterable_pos = _graph_position(node.get("range"), code)
+    pos = acquire["position"]
+    cleanup = loop["cleanup"]
+    if not (
+        acquire["opcode"] == "GET_ITER"
+        and pos in (proof["position"], iterable_pos)
+        and len(proof["instructions"]) >= 2
+        and all(
+            _inside_source(iterable_pos, row["position"])
+            for row in proof["instructions"][:-1]
+        )
+        and [r.get("opcode") for r in cleanup if isinstance(r, dict)]
+        in (["END_FOR"], ["END_FOR", "POP_ITER"])
+        and all(isinstance(r, dict) and r.get("position") == pos for r in cleanup)
+        and all(
+            type(r.get("offset")) is int
+            and r["offset"] >= 0
+            and isinstance(r.get("opcode"), str)
+            for r in (step, store, entry, back, *cleanup, exit_edge)
+        )
+        and all(
+            type(r.get("target")) is int
+            and type(r.get("oparg")) is int
+            and r["oparg"] >= 0
+            for r in (step, back)
+        )
+    ):
+        raise ValueError(
+            "source iteration disagrees with its iterable or cleanup instructions"
+        )
+    if not (
+        step["opcode"] == "FOR_ITER"
+        and step.get("position") == pos
+        and store["opcode"] in {"STORE_NAME", "STORE_GLOBAL"}
+        and type(store.get("oparg")) is int
+        and type(store.get("index")) is int
+        and store["oparg"] == store["index"] >= 0
+        and _namespace_target(store, node.get("target"), scope)
+        and back["opcode"] == "JUMP_BACKWARD"
+        and back["target"] == step["offset"]
+        and step["target"] == cleanup[0]["offset"]
+        and step["target"] == store["offset"] + 2 * step["oparg"]
+        and back["target"] == cleanup[0]["offset"] - 2 * back["oparg"]
+        and acquire["offset"] + 2
+        == step["offset"]
+        < store["offset"]
+        < entry["offset"]
+        <= back["offset"]
+        < cleanup[0]["offset"]
+        and all(
+            b["offset"] == a["offset"] + 2
+            for a, b in zip(cleanup, [*cleanup[1:], exit_edge])
+        )
+        and _edge_enters(entry, body[0], "suite", code)
+        and _inside_source(_graph_position(body[-1], code), back.get("position"))
+    ):
+        raise ValueError(
+            "source iteration disagrees with its target, loop body or backedge"
+        )
+    alternative = node.get("else") or []
+    if alternative or successor is not None:
+        if not _edge_enters(
+            exit_edge,
+            alternative[0] if alternative else successor,
+            "suite" if alternative else "continuation",
+            code,
+        ):
+            raise ValueError(
+                "source iteration disagrees with its exhaustion continuation"
+            )
+    elif not _source_return(exit_edge, pos):
+        raise ValueError("source iteration lacks the implicit module return")
 
 
 def bind_source_expression(node, scope, successor=None):
@@ -247,7 +357,7 @@ def bind_source_expression(node, scope, successor=None):
                 "value": None,
             }:
                 raise ValueError("source raise omits an evaluated operand")
-    elif operation not in {"assign", "unbind", "if"} and not (
+    elif operation not in {"assign", "unbind", "if", "for"} and not (
         isinstance(node.get("target"), dict)
         and isinstance(node.get("args"), list)
         and isinstance(node.get("keywords"), list)
@@ -434,6 +544,8 @@ def bind_source_expression(node, scope, successor=None):
             )
         ):
             raise ValueError("source deletion disagrees with its ordered targets")
+    elif operation == "for":
+        _bind_iteration_edges(node, proof, scope, successor)
     elif operation == "if":
         _bind_condition_edges(node, proof, code, successor)
     elif last["opcode"] != "POP_TOP":

@@ -2123,7 +2123,16 @@ class _Scope:
             self.merge(before, header, after)
             otherwise, after_else = self.branch(node.orelse, self.env)
             self.merge(self.env, after_else)
-            return [R(node, op, body=steps, **fields, **{"else": otherwise})]
+            return [
+                R(
+                    node,
+                    op,
+                    body=steps,
+                    **fields,
+                    **{"else": otherwise},
+                    **self.source_expression(node),
+                )
+            ]
         if isinstance(node, (ast.With, ast.AsyncWith)):
             resources = []
             suppressed = []

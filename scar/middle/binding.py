@@ -181,7 +181,7 @@ def _definition(graph, declarations=None):
                 bind_constant_store(result, graph["signature"].get("python_scope", {}))
             if "source_expression" in result:
                 following = None
-                if result["op"] == "if" and successor is not None:
+                if result["op"] in {"if", "for"} and successor is not None:
                     next_port = (
                         successor.get("port") if isinstance(successor, dict) else None
                     )

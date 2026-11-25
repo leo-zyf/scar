@@ -339,6 +339,7 @@ _STATEMENT_END = {
     ast.Assign: {"STORE_NAME", "STORE_GLOBAL"},
     ast.Delete: {"DELETE_NAME", "DELETE_GLOBAL"},
     ast.If: {"POP_JUMP_IF_TRUE", "POP_JUMP_IF_FALSE"},
+    ast.For: {"GET_ITER"},
 }
 
 
@@ -487,6 +488,9 @@ def _expression_instruction(program, ins, parts, keywords):
             return None
         if opcode != "TO_BOOL":
             row["target"] = ins.argval
+    elif opcode == "GET_ITER":
+        if not any(isinstance(n, ast.For) for n in parts):
+            return None
     elif opcode == "RAISE_VARARGS":
         if not any(
             isinstance(n, ast.Raise)
@@ -503,6 +507,57 @@ def _condition_operand(test):
     if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
         test = test.operand
     return test if isinstance(test, ast.Call) else None
+
+
+def _suite_entry(ins, statement, kind, preceding=()):
+    span = tuple_position(statement)
+
+    def inside(spot):
+        return (
+            None not in spot
+            and (span[0], span[2]) <= (spot.lineno, spot.col_offset)
+            and (spot.end_lineno, spot.end_col_offset) <= (span[1], span[3])
+        )
+
+    if (
+        ins.opname == "EXTENDED_ARG"
+        or not inside(ins.positions)
+        or any(inside(other.positions) for other in preceding)
+    ):
+        return None
+    return dict(
+        kind=kind,
+        offset=ins.offset,
+        opcode=ins.opname,
+        position=list(ins.positions),
+        statement_position=list(span),
+    )
+
+
+def _implicit_return(instructions, index, span):
+    target = instructions[index]
+    if (
+        target.opname not in {"RETURN_CONST", "LOAD_CONST"}
+        or target.argval is not None
+        or target.positions != span
+    ):
+        return None
+    ret = target
+    if target.opname == "LOAD_CONST":
+        if index + 1 >= len(instructions):
+            return None
+        ret = instructions[index + 1]
+        if ret.opname != "RETURN_VALUE" or ret.is_jump_target:
+            return None
+    return dict(
+        kind="implicit_return",
+        opcode=target.opname,
+        offset=target.offset,
+        position=list(span),
+        statement_position=None,
+        constant_index=target.arg,
+        return_offset=ret.offset,
+    )
 
 
 def _branch_receipt(node, after, instructions, end, offsets, rows):
@@ -539,60 +594,17 @@ def _branch_receipt(node, after, instructions, end, offsets, rows):
         return None
 
     def destination(index, statement, kind):
-        ins = instructions[index]
-
-        def inside(spot):
-            return (
-                None not in spot
-                and (statement.lineno, statement.col_offset)
-                <= (spot.lineno, spot.col_offset)
-                and (spot.end_lineno, spot.end_col_offset)
-                <= (statement.end_lineno, statement.end_col_offset)
-            )
-
-        if (
-            ins.opname == "EXTENDED_ARG"
-            or not inside(ins.positions)
-            or any(inside(other.positions) for other in instructions[then:index])
-        ):
-            return None
-        return dict(
-            kind=kind,
-            offset=ins.offset,
-            opcode=ins.opname,
-            position=list(ins.positions),
-            statement_position=list(tuple_position(statement)),
+        return _suite_entry(
+            instructions[index], statement, kind, instructions[then:index]
         )
 
     yes = destination(then, node.body[0], "suite")
-    target = instructions[other]
     if node.orelse:
         no = destination(other, node.orelse[0], "suite")
     elif after is not None:
         no = destination(other, after, "continuation")
-    elif (
-        target.opname in {"RETURN_CONST", "LOAD_CONST"}
-        and target.argval is None
-        and target.positions == pos
-    ):
-        ret = target
-        if target.opname == "LOAD_CONST":
-            if other + 1 >= len(instructions):
-                return None
-            ret = instructions[other + 1]
-            if ret.opname != "RETURN_VALUE" or ret.is_jump_target:
-                return None
-        no = dict(
-            kind="implicit_return",
-            opcode=target.opname,
-            offset=target.offset,
-            position=list(pos),
-            statement_position=None,
-            constant_index=target.arg,
-            return_offset=ret.offset,
-        )
     else:
-        return None
+        no = _implicit_return(instructions, other, pos)
     if yes and no:
         return dict(
             condition_position=list(tuple_position(node.test)),
@@ -604,9 +616,90 @@ def _branch_receipt(node, after, instructions, end, offsets, rows):
         )
 
 
+def _iteration_receipt(node, after, instructions, end, offsets, jumps, handlers):
+    if not isinstance(node.target, ast.Name) or any(
+        isinstance(part, (ast.Break, ast.Continue))
+        for statement in (*node.body, *node.orelse)
+        for part in ast.walk(statement)
+    ):
+        return None
+    acquire = instructions[end]
+    if end + 3 >= len(instructions):
+        return None
+    step, store = instructions[end + 1 : end + 3]
+    if (
+        acquire.positions not in {tuple_position(node), tuple_position(node.iter)}
+        or step.opname != "FOR_ITER"
+        or step.positions != acquire.positions
+        or store.opname not in {"STORE_NAME", "STORE_GLOBAL"}
+        or store.positions != tuple_position(node.target)
+        or store.argval != node.target.id
+    ):
+        return None
+    exit_index = offsets.get(step.argval)
+    if exit_index is None or exit_index < end + 4:
+        return None
+    back = instructions[exit_index - 1]
+    cleanup = instructions[exit_index]
+    if (
+        back.opname != "JUMP_BACKWARD"
+        or back.argval != step.offset
+        or cleanup.opname != "END_FOR"
+        or cleanup.positions != acquire.positions
+        or jumps[step.offset] != [back.offset]
+        or jumps[cleanup.offset] != [step.offset]
+        or not _suite_entry(back, node.body[-1], "suite")
+    ):
+        return None
+    stop = exit_index + 1
+    if stop < len(instructions) and instructions[stop].opname == "POP_ITER":
+        stop += 1
+    if stop >= len(instructions):
+        return None
+    clean = instructions[exit_index:stop]
+    if (
+        any(i.positions != acquire.positions for i in clean)
+        or any(
+            i.offset in handlers
+            or (i.is_jump_target and i.offset not in {step.offset, cleanup.offset})
+            for i in instructions[end + 1 : stop]
+        )
+        or any(
+            i.opcode in _JUMP_OPCODES for i in instructions[end + 3 : exit_index - 1]
+        )
+    ):
+        return None
+    body = _suite_entry(instructions[end + 3], node.body[0], "suite")
+    if node.orelse:
+        exhausted = _suite_entry(instructions[stop], node.orelse[0], "suite")
+    elif after is not None:
+        exhausted = _suite_entry(instructions[stop], after, "continuation")
+    else:
+        exhausted = _implicit_return(instructions, stop, acquire.positions)
+    if not body or not exhausted:
+        return None
+    return dict(
+        next=dict(_positioned_instruction(step), target=step.argval),
+        store=_positioned_instruction(store),
+        body=body,
+        backedge=dict(_positioned_instruction(back), target=back.argval),
+        cleanup=[_positioned_instruction(i) for i in clean],
+        exhausted=exhausted,
+    )
+
+
+_JUMP_OPCODES = frozenset(
+    dis.hasjump if hasattr(dis, "hasjump") else dis.hasjabs + dis.hasjrel
+)
+
+
 def _statement_expression(program, instructions, root, end, handlers):
     """Capture source operands and the terminal operation consuming them."""
-    expr = _condition_operand(root.test) if isinstance(root, ast.If) else root
+    expr = root
+    if isinstance(root, ast.If):
+        expr = _condition_operand(root.test)
+    elif isinstance(root, ast.For):
+        expr = root.iter
     span = tuple_position(expr)
     parts, keywords = defaultdict(list), defaultdict(list)
     discarded_call = isinstance(root, ast.Call)
@@ -658,6 +751,8 @@ def _statement_expression(program, instructions, root, end, handlers):
     if not (needs_object_ports or keywords):
         return None
 
+    if isinstance(root, ast.For):
+        parts[instructions[end].positions].append(root)
     start = end
     while start > 0:
         previous = instructions[start - 1].positions
@@ -689,7 +784,7 @@ def _statement_expression(program, instructions, root, end, handlers):
         list(tuple_position(target)) for target in root.targets
     ]:
         return None
-    if depth or (
+    if depth != int(isinstance(root, ast.For)) or (
         discarded_call
         and (
             len(rows) < 2
@@ -708,16 +803,17 @@ def _statement_expression_sites(
 ):
     # Multiple compiled copies of a finally suite have the same source span.
     ends = defaultdict(list)
-    offsets = {}
+    offsets, jumps = {}, defaultdict(list)
     for index, ins in enumerate(instructions):
         offsets[ins.offset] = index
+        if ins.opcode in _JUMP_OPCODES:
+            jumps[ins.argval].append(ins.offset)
 
         root = expressions.get(ins.positions)
         if root is not None and ins.opname in _STATEMENT_END[type(root)]:
-            ends[ins.positions].append(index)
+            ends[root].append(index)
     sites = {}
-    for end_span, matches in ends.items():
-        root = expressions[end_span]
+    for root, matches in ends.items():
         span = tuple_position(root)
         if len(matches) == 1 and span not in stores:
             receipt = _statement_expression(
@@ -736,11 +832,24 @@ def _statement_expression_sites(
                     if edges is None:
                         continue
                     receipt["branch"] = edges
+                if isinstance(root, ast.For):
+                    iteration = _iteration_receipt(
+                        root,
+                        following.get(root),
+                        instructions,
+                        matches[0],
+                        offsets,
+                        jumps,
+                        handlers,
+                    )
+                    if not iteration:
+                        continue
+                    receipt["iteration"] = iteration
                 sites[span] = receipt
     return sites
 
 
-def _handler_instruction(ins):
+def _positioned_instruction(ins):
     op = ins.opname
     row = dict(
         opcode=op,
@@ -771,9 +880,6 @@ def _exception_handler_sites(instructions, entries, tries, loads):
     """Join a module try's source clauses to its actual match, cleanup and unwind edges."""
     by_offset = {ins.offset: i for i, ins in enumerate(instructions)}
     starts = [e.start for e in entries]
-    jumps = (
-        set(dis.hasjump) if hasattr(dis, "hasjump") else set(dis.hasjabs + dis.hasjrel)
-    )
 
     def covering(offset):
         i = bisect_right(starts, offset) - 1
@@ -877,7 +983,7 @@ def _exception_handler_sites(instructions, entries, tries, loads):
         # Several compiled control paths can share the same source span. Only
         # follow a straight-line suite with an unambiguous exit and cleanup.
         if any(
-            row.opcode in jumps
+            row.opcode in _JUMP_OPCODES
             or row.is_jump_target
             or row.opname in {"RETURN_VALUE", "RETURN_CONST", "RERAISE", "EXTENDED_ARG"}
             or not any(within(row.positions, stmt) for stmt in handler.body)
@@ -909,17 +1015,17 @@ def _exception_handler_sites(instructions, entries, tries, loads):
             semantics_version=1,
             position=list(span),
             arm_index=index,
-            entry=_handler_instruction(entry_op),
+            entry=_positioned_instruction(entry_op),
             load=loads[tuple_position(handler.type)],
-            check=_handler_instruction(check),
-            branch=_handler_instruction(branch),
-            matched=list(map(_handler_instruction, matched)),
+            check=_positioned_instruction(check),
+            branch=_positioned_instruction(branch),
+            matched=list(map(_positioned_instruction, matched)),
             body_offset=remaining[0].offset,
-            body_raise=_handler_instruction(finish) if raises else None,
-            mismatch=_handler_instruction(instructions[mismatch]),
-            normal_exit=list(map(_handler_instruction, normal)),
-            exceptional_cleanup=list(map(_handler_instruction, exceptional)),
-            unwind=list(map(_handler_instruction, unwind)),
+            body_raise=_positioned_instruction(finish) if raises else None,
+            mismatch=_positioned_instruction(instructions[mismatch]),
+            normal_exit=list(map(_positioned_instruction, normal)),
+            exceptional_cleanup=list(map(_positioned_instruction, exceptional)),
+            unwind=list(map(_positioned_instruction, unwind)),
             exception_table=[dict(e._asdict()) for e in sorted(table)],
         )
 
@@ -1060,7 +1166,7 @@ def _compiler_sites(tree, path, relative, source_hash):
                 following.update(
                     (a, b)
                     for a, b in pairwise(suite)
-                    if isinstance(a, ast.If) and not a.orelse
+                    if isinstance(a, (ast.If, ast.For)) and not a.orelse
                 )
         if isinstance(node, ast.Dict):
             mappings[tuple_position(node)] = []
@@ -1114,6 +1220,9 @@ def _compiler_sites(tree, path, relative, source_hash):
             tries.append(node)
         elif isinstance(node, ast.Raise):
             expressions[tuple_position(node)] = node
+        elif isinstance(node, ast.For) and isinstance(node.target, ast.Name):
+            expressions[tuple_position(node)] = node
+            expressions[tuple_position(node.iter)] = node
         elif isinstance(node, ast.If) and (operand := _condition_operand(node.test)):
             expressions[tuple_position(operand)] = node
         elif isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
