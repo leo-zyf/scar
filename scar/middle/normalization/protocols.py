@@ -245,6 +245,7 @@ class _Project:
         self.namespace_writes = {}
         self.import_windows = {}
         self.import_markers = []
+        self.source_imports = host_protocols.ImportOccurrences(functions)
         self.shadow, self.single_bind_globals = _global_bindings(functions)
         self.sequences = sequences.Domains(functions, self.single_bind_globals)
 
@@ -284,7 +285,10 @@ class _Project:
         for name, proof in self.registry.items():
             if proof["state"] != "ready":
                 continue
-            if name in operation["direct_registry_keys"]:
+            if (
+                name in operation["direct_registry_keys"]
+                or name in operation["conditional_registry_keys"]
+            ):
                 self.registry[name] = dict(
                     state="unresolved", owner=owner, **values.source_site(node)
                 )
@@ -589,14 +593,18 @@ class _Frame:
             self.region.current if self.region is not None else None
         )
         node = {**values.source_site(source or {}), **node}
-        if any(
-            domain in node.get("writes", ())
-            for domain in (
-                "module.registry",
-                "process.import_hooks",
-                "import.external_effects",
-                "audit_hook.external_effects",
+        writes = node.get("writes", ())
+        if (
+            any(
+                port in writes
+                for port in (
+                    "import.external_effects",
+                    "audit_hook.external_effects",
+                    "process.import_hooks",
+                )
             )
+            or "module.registry" in writes
+            and node.get("source_protocol") != "python.import"
         ):
             self.project.unknown_registry(self.name, node)
         if discard:
@@ -1164,6 +1172,15 @@ class _Frame:
 
     def imported(self, node, steps):
         req = node.get("request", {})
+        occurrence = self.project.source_imports.get(self.name, node)
+        primary = req.get("form") != "from" or req.get("binding_index", 0) == 0
+        if not primary and occurrence["activation"] != "visited":
+            self.fail(
+                node,
+                "import_binding_sequence",
+                "IMPORT_FROM requires its preceding source module request",
+            )
+        occurrence["activation"] = "visited"
         mod = node["module"]
         if self.dynamic:
             self.fail(
@@ -1219,16 +1236,21 @@ class _Frame:
                     f"{mod} resolves to {identity} at {origin.get('origin')}. Its initialization, effects and exported bindings have no execution contract.",
                     source_evidence=self._import_evidence(mod),
                 )
-            if not value.facts.get("namespace_instance"):
-                scoped = host_protocols.registry_import(self, node, origin)
-                writes = {
-                    w
-                    for op in walk_operations(steps[start:])
-                    for w in op.get("writes", ())
-                }
-                if scoped and not writes.intersection(
-                    {"module.registry", "import.external_effects"}
-                ):
+            produced = list(walk_operations(steps[start:]))
+            for op in produced:
+                if op.get("source_protocol") == "python.import":
+                    self.project.source_imports.producer(
+                        occurrence, op, "source_import"
+                    )
+            if primary and not value.facts.get("namespace_instance"):
+                scoped = host_protocols.registry_import(self, node, origin, occurrence)
+                opaque = any(
+                    "import.external_effects" in op.get("writes", ())
+                    or "module.registry" in op.get("writes", ())
+                    and op.get("source_import_occurrence") != occurrence["id"]
+                    for op in produced
+                )
+                if scoped and not opaque:
                     self.project.scoped_import(self.name, node, scoped, steps)
                 else:
                     self.project.unknown_registry(self.name, node)
@@ -1273,17 +1295,11 @@ class _Frame:
                         "import_initializer_completion",
                         f"the initializer for {name} has no proven normal continuation",
                     )
-                steps.append(
-                    dict(
-                        op="expr",
-                        value=dict(
-                            op="call",
-                            callee=symbol,
-                            args=[],
-                            **values.source_site(node),
-                        ),
-                    )
+                call = dict(
+                    op="call", callee=symbol, args=[], **values.source_site(node)
                 )
+                self.project.source_imports.producer(occurrence, call, "module_body")
+                steps.append(dict(op="expr", value=call))
                 # Only the continuation of this emitted call has an initialized
                 # module. Merely compiling or finding a cached body proves less.
                 self.project.registry[name] = dict(
@@ -2395,6 +2411,7 @@ def normalize_protocols(module):
     project.execution_images = module.get("execution_images", [])
     project.text_profiles = module.get("text_profiles", {})
     issue = None
+    omitted = set()
     try:
         entry = module["entry"]
         if (
@@ -2453,6 +2470,9 @@ def normalize_protocols(module):
         issue = error.issue
         project.sequences.freeze(project, partial=True)
     project.finish_imports()
+    module["source_imports"] = project.source_imports.product(
+        project.skipped_sites, omitted
+    )
     contracts = [
         dict(
             symbol=name,

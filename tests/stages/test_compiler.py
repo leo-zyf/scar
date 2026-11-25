@@ -3010,6 +3010,8 @@ def test_conditional_copy_materialization_is_removed_through_all_stages(
 
 
 def test_fortran_numeric_facts_preserve_source_kinds_and_selected_policy(tmp_path):
+    from scar.frontend.languages.fortran.facts import _target_condition
+
     data = (
         "subroutine typed(x,y,n,z,a,q,flag)\n"
         "real(8), intent(in) :: x,a(3)\n"
@@ -3077,7 +3079,25 @@ def test_fortran_numeric_facts_preserve_source_kinds_and_selected_policy(tmp_pat
         assert "-Q" not in contract["validated_command"]
         assert "-v" in contract["validated_command"]
         assert contract["option_query"]["command"][-1] == str(source)
+        assert "--help=target" in contract["option_query"]["command"]
         assert contract["option_query"]["returncode"] == 0
+        mode = contract["target_mode"]
+        assert mode["multilib_abi"] == "x86_64"
+        assert mode["instruction_bits"] == mode["pointer_bits"] == 64
+        assert mode["options"] == {
+            "-m16": False,
+            "-m32": False,
+            "-m64": True,
+            "-mx32": False,
+        }
+        assert (
+            mode["evidence"]["option_query_stdout_sha256"]
+            == contract["option_query"]["stdout_sha256"]
+        )
+        assert (
+            mode["evidence"]["compiler_frontend_sha256"]
+            == contract["compiler"]["frontend"]["sha256"]
+        )
         for tool in ("driver", "frontend"):
             identity = contract["compiler"][tool]
             assert (
@@ -3096,7 +3116,13 @@ def test_fortran_numeric_facts_preserve_source_kinds_and_selected_policy(tmp_pat
         ]
         assert {
             n["name"]: [nodes[arg["port"]]["type"] for arg in n["args"]] for n in powers
-        } == {"pow": ["f32", "f64"], "powi": ["f64", "i32"]}
+        } == {"pow": ["f64", "f64"], "powi": ["f64", "i32"]}
+        promoted = next(n for n in powers if n["name"] == "pow")
+        assert promoted["source_intrinsic_contract"]["argument_types"] == ["f32", "f64"]
+        assert promoted["source_intrinsic_contract"]["normalized_argument_types"] == [
+            "f64",
+            "f64",
+        ]
         for node in powers:
             assert node["type"] == "f64"
             assert node["location"]["line"] == 8
@@ -3139,6 +3165,13 @@ def test_fortran_numeric_facts_preserve_source_kinds_and_selected_policy(tmp_pat
                 k: file[k] for k in ("sha256", "size", "evidence")
             }
         interfaces = contract["source_math_interfaces"]
+        from scar.backend.planning.toolchain import _source_math_declarations
+
+        declarations = _source_math_declarations(contract, facts["external_headers"])
+        assert [row["target_applicability"] for row in declarations["pow"]] == [
+            True,
+            False,
+        ]
         assert any(
             i["interface"] == "pow"
             and i["attributes"]["simd"]["branch"] == "notinbranch"
@@ -3153,7 +3186,13 @@ def test_fortran_numeric_facts_preserve_source_kinds_and_selected_policy(tmp_pat
             )
             assert evidence["line"] > 0
             if interface["target_condition"] is not None:
-                assert interface["target_condition"]["evaluation"] == "unresolved"
+                condition = interface["target_condition"]
+                assert condition["evaluation"] == "derived"
+                assert condition["value"] == (condition["selector"] == "x86_64")
+                assert (
+                    condition["evidence"]["option_query_stdout_sha256"]
+                    == contract["option_query"]["stdout_sha256"]
+                )
         assert (
             semantic["coverage"]["source_includes"]
             == "unresolved_without_preprocessor_dependency_inventory"
@@ -3242,6 +3281,66 @@ def test_fortran_numeric_facts_preserve_source_kinds_and_selected_policy(tmp_pat
         )
         assert "-nocpp" in compatibility["command"]
         assert not {"-MD", "-MF", "-MT"}.intersection(compatibility["command"])
+
+    source = tmp_path / "target.f90"
+    source.write_text("subroutine target(x)\nreal(8) :: x\nx=x*x\nend\n")
+    for flags, abi, instruction_bits in (
+        (["-m64", "-mx32"], "x32", 64),
+        (["-mx32", "-m32"], "i386", 32),
+    ):
+        request.write_text(
+            json.dumps(
+                dict(
+                    language="fortran",
+                    source_root=str(tmp_path),
+                    entry="target_",
+                    units=[dict(path=source.name, flags=flags)],
+                )
+            )
+        )
+        graph = tmp_path / ("graph-target-" + abi)
+        _stage(tmp_path, "frontend", "build", "--manifest", request, "--out", graph)
+        document = json.loads((graph / "graph.json").read_bytes())
+        assert not document["units"][0]["diagnostics"]
+        contract = _payloads(graph, document)[0]["functions"][0]["signature"][
+            "source_numeric_contract"
+        ]
+        assert contract["source_flags"] == flags
+        assert contract["semantic_capture"]["returncode"] == 0
+        mode = contract["target_mode"]
+        assert mode["multilib_abi"] == abi
+        assert (
+            mode["instruction_bits"] == instruction_bits and mode["pointer_bits"] == 32
+        )
+        assert mode["options"][flags[-1]] is True and mode["options"][flags[0]] is False
+        assert _target_condition("x86_64", mode)["value"] is False
+        assert _target_condition("x32", mode)["value"] == (abi == "x32")
+        unresolved = _target_condition("unrecognized_multilib", mode)
+        assert unresolved["evaluation"] == "unresolved" and "value" not in unresolved
+        for interface in contract["source_math_interfaces"]:
+            condition = interface["target_condition"]
+            if condition is not None:
+                assert condition["evaluation"] == "derived"
+                assert condition["value"] == (condition["selector"] == abi)
+        from scar.backend.planning.toolchain import _source_math_target
+
+        assert (
+            _source_math_target(
+                contract, dict(target_condition=_target_condition("x86_64", mode))
+            )
+            is False
+        )
+        assert _source_math_target(
+            contract, dict(target_condition=_target_condition("x32", mode))
+        ) == (abi == "x32")
+        # Multilib support need not install the corresponding vector headers.
+        # A known ABI predicate must not manufacture a missing declaration.
+        declarations = _source_math_declarations(
+            contract, document["units"][0]["source_facts"].get("external_headers", {})
+        )
+        assert set(declarations) == {
+            interface["interface"] for interface in contract["source_math_interfaces"]
+        }
 
 
 def test_fixed_form_program_emits_cpp20(tmp_path):

@@ -121,11 +121,23 @@ raise SystemExit(main(args))
     plan, delivery = tmp_path / "plan", tmp_path / "delivery"
     assert run("middle", "plan", "--graph", graph, "--out", plan)["status"] == "READY"
     ir = json.loads((plan / "exec-ir.json").read_bytes())
+    imports = read_member(plan, ir["module"]["source_imports"])
+    assert imports["scope"] == "source_import_occurrences"
+    assert any(row["activation"] == "visited" for row in imports["occurrences"])
+    assert (
+        json.loads((plan / "plan.json").read_bytes())["source_imports"]
+        == ir["module"]["source_imports"]
+    )
     functions = [read_member(plan, ref) for ref in ir["functions"]]
     assert any("__getattr__" in f["name"] for f in functions)
     assert not any("graph_source_fixture.known:<init>" in f["name"] for f in functions)
     shutil.rmtree(graph)
     result = run("backend", "compile", "--ir", plan, "--out", delivery)
+    physical = json.loads((delivery / "physical-plan.json").read_bytes())
+    audit = physical["source_import_effects"]
+    assert audit["coverage"] == "INCOMPLETE"
+    assert audit["activation_counts"]["visited"] > 0
+    assert read_member(delivery, audit["ledger"]) == imports
     shutil.rmtree(plan)
     actual = subprocess.run([result["executable"]], capture_output=True, check=True)
     assert actual.stdout == expected and not actual.stderr
@@ -138,6 +150,10 @@ raise SystemExit(main(args))
     )
     report = json.loads((rejected / "plan.json").read_bytes())
     assert any(i["code"] == "python.import_from_hook" for i in report["issues"])
+    partial = json.loads((rejected / "exec-ir.json").read_bytes())
+    assert not partial["functions"]
+    assert read_member(rejected, partial["module"]["source_imports"])["occurrences"]
+    assert report["source_imports"] == partial["module"]["source_imports"]
 
 
 def test_workflow_binds_entry_state_without_inventing_child_file_versions(tmp_path):
@@ -320,7 +336,7 @@ def test_binding_preserves_unit_scoped_provider_and_export_evidence(
     build(entry, graph)
     cached = source / "cached.py"
     cached.write_text(
-        "import importlib as lib\nfrom importlib import import_module as lookup\n"
+        "import time\nimport importlib as lib\nfrom importlib import import_module as lookup, import_module as second\n"
         "import provider_sample.kernel\n"
         "def read(): return lookup('provider_sample.kernel').marker\n"
         "import math\n"
@@ -410,6 +426,29 @@ print(json.dumps(issue))
         if n["op"] == "if" and n["condition"]["op"] == "module_import_preserves"
     )
     transition = guarded["condition"]
+    rows = result["source_imports"]["occurrences"]
+    fromlist = next(r for r in rows if len(r["bindings"]) == 2)
+    assert [b["name"].rsplit(":", 1)[-1] for b in fromlist["bindings"]] == [
+        "lookup",
+        "second",
+    ]
+    assert (
+        fromlist["effect_coverage"] == "MODELED"
+        and len(fromlist["producer_sites"]) == 1
+    )
+    assert sum(op.get("source_import_occurrence") == fromlist["id"] for op in ops) == 1
+    unused = next(r for r in rows if r["request"]["module"] == "time")
+    assert (
+        unused["effect_coverage"] == "UNPROVEN"
+        and unused["obligations"]
+        and not unused["producer_sites"]
+    )
+    occurrence = next(r for r in rows if r["id"] == transition["occurrence"])
+    assert transition["writes"] == [] and transition["reads"] == [
+        "occurrence.before",
+        "occurrence.after",
+    ]
+    assert transition["producer_sites"] == occurrence["producer_sites"]
     assert transition["type"] == "bool" and transition["direct_registry_keys"] == [
         "math"
     ]
@@ -1842,16 +1881,25 @@ def test_projection_import_keeps_verified_class_and_shared_registry_effects():
     results = _layer(
         "normalization",
         """from scar.middle.normalization.protocols import _Project,_Frame,_Unclosed
-from scar.contract import walk_operations
+from scar.contract import python_provider_id,walk_operations
 results=[]
 for imports in data:
-    project=_Project({})
-    frame=_Frame(project,dict(name='entry',params=[],body=[],python_scope=dict(kind='module',module='test')),())
+    sources={}
+    for node in imports:
+        for source in (node['source_provider'],node['import_resolution']):
+            if identity:=python_provider_id(source):
+                sources[source['module']]={**source,'provider_id':identity}
+    entry=dict(name='entry',params=[],body=imports,python_scope=dict(kind='module',module='test',initializer='entry',provider_sources=sources))
+    project=_Project({'entry':entry})
+    project.active.append('entry')
+    project.registry['held']=dict(state='ready',initializer='held:init',owner='entry')
+    frame=_Frame(project,entry,())
     steps=[]
     issue=None
     try:
         for node in imports:
             frame.imported(node,steps)
+        project.observe_import('held','registry',{'site':'read-after-initializer'})
     except _Unclosed as error:
         issue=error.issue['code']
     results.append(dict(issue=issue,operations=list(walk_operations(steps)),
@@ -1869,6 +1917,20 @@ print(json.dumps(results))
     )
     positive = results[0]
     assert positive["issue"] is None
+    producers = {
+        n["source_import_occurrence"]: n
+        for n in positive["operations"]
+        if "source_import_occurrence" in n
+    }
+    checks = [n for n in positive["operations"] if n["op"] == "module_import_preserves"]
+    assert len(checks) == 3 and len(producers) == 3
+    for check in checks:
+        producer = producers[check["occurrence"]]
+        assert (
+            check["writes"] == []
+            and check["producer_sites"][0]["opcode"] == producer["op"]
+        )
+        assert check["checks"]["held"]["registry"]["site"] == "read-after-initializer"
     imports = [
         node
         for node in positive["operations"]

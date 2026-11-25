@@ -417,6 +417,123 @@ def _compilation_options(module, physical):
     return options
 
 
+def _math_operation(function, path):
+    if (
+        not isinstance(path, list)
+        or not path
+        or path[0] not in ("body", "initializers")
+    ):
+        raise ValueError("invalid scheduled math operation path")
+    node = function
+    for key in path:
+        if type(key) is int and isinstance(node, list) and 0 <= key < len(node):
+            node = node[key]
+        elif isinstance(key, str) and isinstance(node, dict) and key in node:
+            node = node[key]
+        else:
+            raise ValueError("invalid scheduled math operation path")
+    if not isinstance(node, dict):
+        raise ValueError("expected an operation at the scheduled math path")
+    return node
+
+
+def _math_decisions(module, receipts, physical):
+    seal = "math_interface_binding_sha256"
+    if seal not in module and "math_interfaces" not in physical:
+        return None, set()
+    decision = physical.get("math_interfaces")
+    if not isinstance(decision, dict) or module.get(seal) != digest(
+        json_bytes(decision)
+    ):
+        raise ValueError("missing or mismatched physical math interface binding")
+    owners = decision.get("functions")
+    target = decision.get("target")
+    if (
+        type(decision.get("semantics_version")) is not int
+        or decision["semantics_version"] != 1
+        or decision.get("scope") != "scheduled_operations"
+        or not isinstance(owners, dict)
+        or not owners
+        or not isinstance(target, dict)
+        or target.get("compilation_sha256")
+        != digest(json_bytes(physical.get("compilation")))
+    ):
+        raise ValueError(
+            "invalid scheduled math interface scope or compilation identity"
+        )
+    functions = {
+        fn["name"]: (fn, receipt["sha256"])
+        for fn, receipt in zip(module["functions"], receipts, strict=True)
+    }
+    if len(functions) != len(receipts):
+        raise ValueError("ambiguous scheduled math function name")
+    externs = {
+        d["name"]: d for d in module.get("externs", ()) if d["name"] not in functions
+    }
+    interfaces, pending = {}, set()
+    for name, row in owners.items():
+        if name not in functions or not isinstance(row, dict):
+            raise ValueError("unknown scheduled math function")
+        fn, member_sha = functions[name]
+        contract = fn.get("source_numeric_contract")
+        source_sha = digest(json_bytes(contract)) if contract is not None else None
+        if (
+            row.get("scheduled_function_sha256") != member_sha
+            or row.get("source_contract_sha256") != source_sha
+        ):
+            raise ValueError("scheduled math function member or contract mismatch")
+        sites = row.get("sites")
+        if not isinstance(sites, list) or not sites:
+            raise ValueError("scheduled math function needs a nonempty list of sites")
+        for site in sites:
+            if not isinstance(site, dict) or (
+                site.get("selected"),
+                site.get("vector_eligibility"),
+            ) != ("preserve_operation", "not_qualified"):
+                raise ValueError("unsupported scheduled math interface decision")
+            node = _math_operation(fn, site.get("operation_path"))
+            op = node.get("op")
+            symbol = node.get("callee") if op == "call" else node.get("name")
+            external = externs.get(symbol, {}) if isinstance(symbol, str) else {}
+            args = node.get("args")
+            if (
+                not isinstance(symbol, str)
+                or not symbol
+                or op not in {"intrinsic", "call", "library_call"}
+                or op == "library_call"
+                and (node.get("provider") != "cxx_standard" or "receiver" in node)
+                or op == "call"
+                and (external.get("provider"), external.get("header"))
+                != ("libc", "math.h")
+                or not isinstance(args, list)
+                or not all(isinstance(a, dict) for a in args)
+                or (op, symbol) != (site.get("operation"), site.get("interface"))
+                or "site" not in site
+                or node.get("site") != site["site"]
+                or "result_type" not in site
+                or node.get("type") != site["result_type"]
+                or [a.get("type") for a in args] != site.get("argument_types")
+            ):
+                raise ValueError(
+                    "scheduled math site does not match operation, interface or types"
+                )
+            if id(node) in pending:
+                raise ValueError("duplicate scheduled math operation path")
+            pending.add(id(node))
+            interfaces[symbol] = interfaces.get(symbol, 0) + 1
+    summary = dict(
+        semantics_version=1,
+        scope="scheduled_operations",
+        binding_sha256=module[seal],
+        selected="preserve_operation",
+        vector_eligibility="not_qualified",
+        functions=len(owners),
+        sites=len(pending),
+        interfaces=interfaces,
+    )
+    return summary, pending
+
+
 def _lower_image(path, revision, scheduled, destination):
     from .lowering import Lowerer
     from .model import encode_unit
@@ -441,10 +558,13 @@ def _lower_image(path, revision, scheduled, destination):
         scheduled["module"],
         functions=[read_member(path.parent, f) for f in scheduled["functions"]],
     )
+    math, pending_math = _math_decisions(module, scheduled["functions"], physical)
     destination = Path(destination).resolve()
     destination.mkdir(parents=True, exist_ok=True)
-    lowerer = Lowerer(module, physical)
+    lowerer = Lowerer(module, physical, pending_math=pending_math)
     units = lowerer.units()
+    if pending_math:
+        raise ValueError("scheduled math path does not refer to a lowered operation")
     members = [
         dict(output=name, tree=member(destination, "target-units", encode_unit(unit)))
         for name, unit in units.items()
@@ -490,6 +610,8 @@ def _lower_image(path, revision, scheduled, destination):
         coordinate_maps=lowerer.coordinate_maps,
         record_field_offset_checks=lowerer.layout_scope,
     )
+    if math is not None:
+        metadata["math_interface_consumption"] = math
     if "XTensor" in lowerer.libraries.links:
         operator_sdks["XTensor"] = _seal_xtensor(
             destination, physical["operator_backends"]["ndarray"]
@@ -701,6 +823,47 @@ def _print_image(path, product, directory, runtime, jobs, image=None):
     return sources, options
 
 
+def _math_product_metadata(product):
+    """Carry a target-local B2a receipt without reopening the physical schedule."""
+    key = "math_interface_consumption"
+    if key not in product:
+        return {}
+    audit = product[key]
+    fields = {
+        "semantics_version",
+        "scope",
+        "binding_sha256",
+        "selected",
+        "vector_eligibility",
+        "functions",
+        "sites",
+        "interfaces",
+    }
+    if not isinstance(audit, dict) or set(audit) != fields:
+        raise ValueError("invalid target math consumption receipt")
+    by_interface = audit.get("interfaces")
+    if (
+        type(audit.get("semantics_version")) is not int
+        or audit["semantics_version"] != 1
+        or audit.get("scope") != "scheduled_operations"
+        or (audit.get("selected"), audit.get("vector_eligibility"))
+        != ("preserve_operation", "not_qualified")
+        or not isinstance(audit.get("binding_sha256"), str)
+        or not re.fullmatch(r"[0-9a-f]{64}", audit["binding_sha256"])
+        or type(audit.get("functions")) is not int
+        or type(audit.get("sites")) is not int
+        or not 1 <= audit["functions"] <= audit["sites"]
+        or not isinstance(by_interface, dict)
+        or not all(
+            isinstance(k, str) and k and type(v) is int and v > 0
+            for k, v in by_interface.items()
+        )
+        or sum(by_interface.values()) != audit["sites"]
+    ):
+        raise ValueError("invalid or unsupported target math consumption receipt")
+    return {key: audit}
+
+
 def print_target(target, destination, *, jobs=4):
     """Print and atomically publish one CMake project for all declared images."""
     if type(jobs) is not int or jobs < 1:
@@ -747,6 +910,7 @@ def print_target(target, destination, *, jobs=4):
                         sources=[(directory / s).as_posix() for s in sources],
                         build_options=options,
                         target_ir_sha256=child_hash,
+                        **_math_product_metadata(data),
                     )
                 )
             # Link processes may each consume the entire compiler budget for LTO.
@@ -783,6 +947,7 @@ def print_target(target, destination, *, jobs=4):
             header, first_source = _HEADER, sources[0]
             image = dict(product, build_options=options)
             metadata = {key: image[key] for key in _METADATA}
+            metadata.update(_math_product_metadata(product))
         members = [
             file_receipt(staging, f) for f in sorted(staging.rglob("*")) if f.is_file()
         ]

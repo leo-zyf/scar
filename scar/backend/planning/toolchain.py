@@ -131,9 +131,49 @@ def _source_math_declarations(contract, headers):
             and proof["line"] > 0
         )
         declarations.setdefault(row["interface"], []).append(
-            dict(declaration=row, evidence_verified=verified)
+            dict(
+                declaration=row,
+                evidence_verified=verified,
+                target_applicability=_source_math_target(contract, row),
+            )
         )
     return declarations
+
+
+def _source_math_target(contract, declaration):
+    """Consume the source compiler's ABI predicate and its captured evidence."""
+    condition = declaration.get("target_condition")
+    if condition is None:
+        return True
+    mode = contract.get("target_mode", {})
+    proof = mode.get("evidence", {})
+    expected = dict(
+        source_contract_field="target_mode",
+        rule="gnu_x86_multilib_abi_name",
+        compiler_frontend_sha256=contract.get("compiler", {})
+        .get("frontend", {})
+        .get("sha256"),
+        option_query_stdout_sha256=contract.get("option_query", {}).get(
+            "stdout_sha256"
+        ),
+    )
+    if (
+        condition.get("evaluation") != "derived"
+        or type(condition.get("value")) is not bool
+        or mode.get("semantics_version") != 1
+        or not mode.get("multilib_abi")
+        or proof.get("kind") != "derived"
+        or any(not expected[key] for key in expected)
+        or any(
+            proof.get(key) != value
+            for key, value in expected.items()
+            if key != "source_contract_field"
+        )
+        or condition.get("evidence") != expected
+        or condition["value"] != (condition.get("selector") == mode["multilib_abi"])
+    ):
+        return None
+    return condition["value"]
 
 
 _MATH_OPERANDS = frozenset(
@@ -218,7 +258,10 @@ def math_interfaces(module, source_members, scheduled_members, compilation):
                 signature.get("semantics_version") == 1
                 and signature.get("normalized_name") == symbol
                 and signature.get("result_type") == node.get("type") is not None
-                and signature.get("argument_types") == arguments
+                and signature.get(
+                    "normalized_argument_types", signature.get("argument_types")
+                )
+                == arguments
                 and None not in arguments
             )
             candidates = catalog.get(symbol, [])
@@ -240,9 +283,12 @@ def math_interfaces(module, source_members, scheduled_members, compilation):
                 missing.append("source_math_declaration")
             elif not any(c["evidence_verified"] for c in candidates):
                 missing.append("verified_source_math_header")
-            if any(
-                c["declaration"].get("target_condition") is not None for c in candidates
-            ):
+            applicable = [
+                c
+                for c in candidates
+                if c["evidence_verified"] and c["target_applicability"] is True
+            ]
+            if candidates and not applicable:
                 missing.append("source_declaration_target_condition")
             if not node.get("site"):
                 missing.append("source_site")
@@ -276,6 +322,7 @@ def math_interfaces(module, source_members, scheduled_members, compilation):
                         "policy",
                         "caller_observations",
                         "runtime_fp_environment",
+                        "target_mode",
                     )
                 },
             )

@@ -262,6 +262,9 @@ def seal(module, out, *, status, graph_sha256, contract, logical_optimization):
     # protocol fragments remain in the logical planning report.
     payload.pop("artifact_analysis", None)
     payload.pop("resource_analysis", None)
+    imports = payload.get("source_imports")
+    if imports is not None:
+        payload["source_imports"] = member(out, "analysis", imports)
     inventory = dict(payload.get("resource_model", {}))
     if "artifact_flow" in inventory:
         flow = inventory["artifact_flow"]
@@ -278,7 +281,14 @@ def seal(module, out, *, status, graph_sha256, contract, logical_optimization):
     if "resource_model" in payload:
         payload["resource_model"] = inventory
     if status != "READY":
-        payload = {"entry": module["entry"]}
+        payload = {
+            "entry": module["entry"],
+            **(
+                {"source_imports": payload["source_imports"]}
+                if imports is not None
+                else {}
+            ),
+        }
         if "artifact_flow" in inventory:
             payload["resource_model"] = {"artifact_flow": inventory["artifact_flow"]}
     functions = [member(out, "functions", f) for f in payload.pop("functions", [])]

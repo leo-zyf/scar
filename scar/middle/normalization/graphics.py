@@ -149,6 +149,7 @@ class Graphics:
                 ],
                 profile=_PROFILE,
                 scope="process",
+                source_protocol="python.import",
                 initialization="import_once",
                 configuration="source_runtime",
                 current_figure="preserve_existing",
@@ -317,6 +318,7 @@ class Graphics:
             context=Value(_CONTEXT, None).at(_SLOT, scope="global").value,
             profile=_PROFILE,
             scope="process",
+            source_protocol="python.import",
             initialization="import_once",
             cache="sys.modules",
             exported_binding=dict(
@@ -333,7 +335,8 @@ class Graphics:
                 initial_registry="pristine_or_verified",
             ),
         )
-        steps.append(dict(op="expr", value=operation))
+        if not node["request"].get("binding_index", 0):
+            steps.append(dict(op="expr", value=operation))
         return Value(
             "graphics_class",
             _AXES3D + ".Axes3D",

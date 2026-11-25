@@ -1317,6 +1317,9 @@ def test_product_identity_pool_and_shared_arrays_across_target_units(tmp_path):
 def test_math_interface_declaration_remains_distinct_from_vector_authorization(
     tmp_path,
 ):
+    from copy import deepcopy
+
+    from scar.backend.cpp20 import lower_scheduled
     from scar.backend.planning import schedule_ir
     from scar.contract import digest, json_bytes, read_member
 
@@ -1359,9 +1362,18 @@ def test_math_interface_declaration_remains_distinct_from_vector_authorization(
         type="f64",
         source_intrinsic_contract=signed,
     )
-    integer_power = dict(power, name="powi", site="graph/3")
-    untouched = dict(
-        op="library_call", provider="project", name="pow", site="graph/4", args=args
+    integer_power = dict(
+        power,
+        name="powi",
+        site="graph/3",
+        args=[args[0], dict(op="literal", type="i32", value=3)],
+    )
+    untouched = dict(op="call", callee="pow", site="graph/4", args=args)
+    local_pow = dict(
+        name="pow",
+        params=[dict(name=n, type="f64") for n in ("x", "y")],
+        result="f64",
+        body=[dict(op="return", value=dict(op="var", name="x", type="f64"))],
     )
     body = [dict(op="expr", value=node) for node in (integer_power, power, untouched)]
     ref = dict(
@@ -1388,6 +1400,7 @@ def test_math_interface_declaration_remains_distinct_from_vector_authorization(
         )
     )
     body[0]["validation_evidence"] = dict(power, site="graph/not-executed")
+    body.append(dict(op="return", value=dict(op="literal", type="i32", value=0)))
     fn = dict(
         name="main",
         result="i32",
@@ -1406,7 +1419,7 @@ def test_math_interface_declaration_remains_distinct_from_vector_authorization(
         document(
             IR,
             status="READY",
-            functions=[source],
+            functions=[source, member(origin, "functions", local_pow)],
             module=dict(
                 entry="main",
                 resource_model=inventory,
@@ -1457,6 +1470,73 @@ def test_math_interface_declaration_remains_distinct_from_vector_authorization(
         "caller_fenv_observation_proof",
         "target_vector_library_abi_qualification",
     } <= set(site["obligations"])
+
+    other_member = package["functions"][1]["sha256"]
+    for owner_changes, site_changes, error in (
+        ({}, {}, "missing or mismatched physical math"),
+        ({"scheduled_function_sha256": other_member}, {}, "function member"),
+        ({}, {"selected": "vector_call"}, "unsupported scheduled math"),
+        ({}, {"vector_eligibility": "qualified"}, "unsupported scheduled math"),
+        ({}, {"argument_types": ["f64", "i64"]}, "does not match"),
+        (
+            {},
+            {
+                "operation_path": ["body", 0, "validation_evidence"],
+                "site": "graph/not-executed",
+            },
+            "does not refer to a lowered operation",
+        ),
+    ):
+        changed = deepcopy(physical)
+        binding = changed["math_interfaces"]
+        owner = binding["functions"]["main"]
+        owner.update(owner_changes)
+        owner["sites"][0].update(site_changes)
+        expected_sha = (
+            digest(json_bytes(binding)) if owner_changes or site_changes else "0" * 64
+        )
+        changed_package = dict(
+            package,
+            module=dict(package["module"], math_interface_binding_sha256=expected_sha),
+            physical=member(destination, "scheduled-units", changed),
+        )
+        bad = destination / "invalid.json"
+        write_json(bad, changed_package)
+        with pytest.raises(ValueError, match=error):
+            lower_scheduled(bad, tmp_path / "rejected")
+        assert not (tmp_path / "rejected/target-ir.json").exists()
+
+    target, printed = tmp_path / "target", tmp_path / "project"
+    for stage, incoming, out in (("B2a", filename, target), ("B2b", target, printed)):
+        subprocess.run(
+            [sys.executable, "-B", "-c", _RUN_LAYER, stage, str(incoming), str(out)],
+            cwd=tmp_path,
+            env=dict(
+                os.environ, PYTHONPATH=str(Path(scar.__file__).resolve().parents[1])
+            ),
+            check=True,
+            capture_output=True,
+            timeout=60,
+        )
+        if stage == "B2a":
+            destination.rename(tmp_path / "hidden-schedule")
+    audit = json.loads((target / "target-ir.json").read_bytes())[
+        "math_interface_consumption"
+    ]
+    assert audit == dict(
+        semantics_version=1,
+        scope="scheduled_operations",
+        binding_sha256=package["module"]["math_interface_binding_sha256"],
+        selected="preserve_operation",
+        vector_eligibility="not_qualified",
+        functions=1,
+        sites=2,
+        interfaces={"pow": 2},
+    )
+    assert (
+        json.loads((printed / "cpp20.json").read_bytes())["math_interface_consumption"]
+        == audit
+    )
 
 
 def test_invocation_access_qualifies_only_sealed_definition_parameters(tmp_path):

@@ -2,7 +2,7 @@
 
 import math
 
-from scar.contract import python_provider_id
+from scar.contract import digest, json_bytes, python_provider_id
 from . import scalars, sequences, text
 from .values import Value, argument_evidence, literal, sequence_kind, source_site, wire
 
@@ -218,6 +218,7 @@ def _glob_import(frame, node, source, steps):
         ],
         scope="process_module_registry",
         module="glob",
+        source_protocol="python.import",
         source_provider="stdlib:glob",
         source_sha256=source["sha256"],
         source_effects=node.get("effects", ["UNKNOWN"]),
@@ -380,6 +381,118 @@ def builtin(frame, node, name):
 _IMPORTLIB_PROFILE = "cpython-importlib-registry-v1"
 
 
+class ImportOccurrences:
+    """One source IMPORT_NAME, its individual bindings and its effect producers."""
+
+    def __init__(self, functions):
+        self.rows = {}
+        self.nodes = {}
+        self.last = {}
+        for owner, fn in functions.items():
+            work = [fn.get("body", [])]
+            while work:
+                part = work.pop()
+                if isinstance(part, list):
+                    work.extend(reversed(part))
+                elif isinstance(part, dict):
+                    if part.get("op") == "python_import":
+                        self.get(owner, part)
+                    else:
+                        work.extend(reversed(tuple(part.values())))
+
+    def get(self, owner, node):
+        key = (owner, node.get("site") or id(node))
+        if key in self.nodes:
+            return self.nodes[key][1]
+        req = node.get("request", {})
+        request = {
+            k: req.get(k, default)
+            for k, default in (
+                ("form", None),
+                ("module", node.get("module")),
+                ("level", 0),
+                ("fromlist", []),
+            )
+        }
+        site = node.get("site") or f"{owner}/import/{len(self.nodes)}"
+        previous = self.last.get(owner, {})
+        index = req.get("binding_index", 0)
+        if (
+            request["form"] == "from"
+            and index
+            and previous.get("request") == request
+            and previous.get("location") == node.get("location")
+            and len(previous["bindings"]) == index
+        ):
+            row = previous
+        else:
+            identity = digest(json_bytes([owner, site, request]))
+            source = node.get("import_resolution") or node.get("source_provider") or {}
+            row = self.rows.setdefault(
+                identity,
+                dict(
+                    id=identity,
+                    owner=owner,
+                    site=site,
+                    **({"location": node["location"]} if node.get("location") else {}),
+                    request=request,
+                    resolved_module=node.get("module"),
+                    source_provider_id=python_provider_id(source),
+                    source_effects=node.get("effects", ["UNKNOWN"]),
+                    producer_sites=[],
+                    bindings=[],
+                    effect_coverage="UNPROVEN",
+                    activation="unvisited",
+                    obligations=[
+                        "cache_or_cold_initialization",
+                        "import_hooks_audit_and_failures",
+                    ],
+                ),
+            )
+        binding = dict(
+            name=node.get("binding", {}).get("name"),
+            member=node.get("member"),
+            site=site,
+        )
+        if binding not in row["bindings"]:
+            row["bindings"].append(binding)
+        self.last[owner] = row
+        self.nodes[key] = (node, row)
+        return row
+
+    @staticmethod
+    def producer(row, operation, role):
+        operation.setdefault("site", row["site"])
+        operation["source_import_occurrence"] = row["id"]
+        item = dict(
+            owner=row["owner"],
+            site=operation.get("site", row["site"]),
+            opcode=operation["op"],
+            role=role,
+            **{
+                k: operation[k] for k in ("operator_family", "callee") if k in operation
+            },
+        )
+        if item not in row["producer_sites"]:
+            row["producer_sites"].append(item)
+        row["effect_coverage"] = "MODELED" if role == "source_import" else "PARTIAL"
+        if role == "source_import":
+            row["obligations"] = ["qualify_equivalent_source_import_on_target"]
+
+    def product(self, skipped, omitted):
+        for row in self.rows.values():
+            if row["activation"] == "unvisited" and (
+                row["owner"] in omitted
+                or all((row["owner"], b["site"]) in skipped for b in row["bindings"])
+            ):
+                row["activation"] = "proven_inactive"
+        return dict(
+            semantics_version=1,
+            scope="source_import_occurrences",
+            occurrences=list(self.rows.values()),
+        )
+
+
 def require_registry_operator(project, operation):
     project.require_operator(
         "module_registry",
@@ -396,7 +509,7 @@ def require_registry_operator(project, operation):
     )
 
 
-def registry_import(frame, node, origin):
+def registry_import(frame, node, origin, occurrence):
     """Separate the loader's named cache ports from unconstrained callbacks."""
     name = node["module"]
     stored = frame.provider_sources.get(name, {})
@@ -411,40 +524,30 @@ def registry_import(frame, node, origin):
         return None
     parts = name.split(".")
     keys = [".".join(parts[:i]) for i in range(1, len(parts) + 1)]
-    if child := node.get("member_resolution", {}).get("module"):
-        keys.append(child)
+    conditional = [
+        name + "." + member
+        for member in occurrence["request"]["fromlist"]
+        if member.isidentifier()
+    ]
     return dict(
         op="module_import_preserves",
         type="bool",
         operator_family="module_registry",
-        source_protocol="python.import",
+        source_protocol="module_state_comparison",
+        occurrence=occurrence["id"],
+        producer_sites=occurrence["producer_sites"],
+        occurrence_effect_coverage=occurrence["effect_coverage"],
         module=name,
         request=node["request"],
         source_provider_id=stored["provider_id"],
         source_sha256=stored["sha256"],
         direct_registry_keys=keys,
-        source_effects=node.get("effects", ["UNKNOWN"]),
-        effects=["CTRL", "STATE", "IO", "MEM"],
-        may_raise=True,
-        reads=[
-            "module.registry",
-            "process.import_hooks",
-            "process.audit_hooks",
-            "filesystem",
-        ],
-        writes=[
-            "requested_registry_entries",
-            "module.namespace",
-            "import.external_effects",
-        ],
-        allocates="UNKNOWN",
-        frees="UNKNOWN",
-        aliases="UNKNOWN",
-        escapes="UNKNOWN",
-        rng_effect="UNKNOWN",
-        external_effect="UNKNOWN",
-        ordering_effect="source_import_order",
-        initialization="execute_or_discharge_original_import_including_hooks_audit_and_failures",
+        conditional_registry_keys=conditional,
+        effects=["CTRL", "STATE"],
+        may_raise=False,
+        reads=["occurrence.before", "occurrence.after"],
+        writes=[],
+        ordering_effect="read_completed_occurrence_before_normal_continuation",
         checked_interval="state_immediately_before_and_after_this_import",
         checks={},
         **source_site(node),
@@ -610,6 +713,7 @@ def import_provider(frame, node, steps):
         )
     if module not in _MEMBERS:
         frame.fail(node, "host_provider", f"no host namespace contract for {module}")
+    primary = not node["request"].get("binding_index", 0)
     if module == "glob":
         if prior and prior.get("direct_imports") != source.get("direct_imports"):
             frame.fail(
@@ -617,12 +721,17 @@ def import_provider(frame, node, steps):
                 "glob_import_sources",
                 "one program resolves conflicting glob dependencies",
             )
-        _glob_import(frame, node, source, steps)
+        if primary:
+            _glob_import(frame, node, source, steps)
     namespace_facts = source
     if module == "importlib":
         namespace_facts = {
             **source,
-            "namespace_instance": _importlib_namespace(frame, node, source, steps),
+            "namespace_instance": (
+                _importlib_namespace(frame, node, source, steps)
+                if primary
+                else frame.project.registry.get("importlib", {})
+            ),
         }
     if module == "os.path":
         _path_identity(frame, node, source)

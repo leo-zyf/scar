@@ -61,6 +61,10 @@ def _plan_image(graph, folder, revision, out, *, optimize_graph, shape, trip_cou
         contract=graph["contract"],
         logical_optimization=optimize_graph,
     )
+    import_analysis = {}
+    if "source_imports" in module:
+        _, _, product = open_product(ir_path, "exec-ir.json", IR)
+        import_analysis["source_imports"] = product["module"]["source_imports"]
     artifact_analysis = module.get("artifact_analysis")
     if artifact_analysis is not None:
         artifact_analysis = {
@@ -101,6 +105,7 @@ def _plan_image(graph, folder, revision, out, *, optimize_graph, shape, trip_cou
         issues=issues,
         baseline_defects=module.get("baseline_defects", []),
         normalizations=module.get("normalizations", []),
+        **import_analysis,
         **(
             {"artifact_analysis": artifact_analysis}
             if artifact_analysis is not None

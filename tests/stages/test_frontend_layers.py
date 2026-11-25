@@ -997,6 +997,12 @@ def test_fortran_capture_then_offline_normalization(tmp_path, monkeypatch):
         "  write(42) n\n"
         "  close(42)\n"
         "end subroutine\n"
+        "real function real_power(i,x)\n"
+        "  integer :: i\nreal :: x\nreal_power = i ** x\nend\n"
+        "real(8) function mixed_power(x,y)\n"
+        "  real :: x\nreal(8) :: y\nmixed_power = x ** y\nend\n"
+        "integer function integer_power(i,j)\n"
+        "  integer :: i,j\ninteger_power = i ** j\nend\n"
     )
     facts = fortran.parse_unit(source, (), root=tmp_path)
     assert not facts.diagnostics
@@ -1009,7 +1015,8 @@ def test_fortran_capture_then_offline_normalization(tmp_path, monkeypatch):
         monkeypatch, fortran, facts, (ParserFactory, "create"), (utils, "walk")
     )
     assert not output["diagnostics"]
-    (routine,) = output["functions"]
+    by_name = {f["name"]: f for f in output["functions"]}
+    routine = by_name["write_number_"]
     assert routine["name"] == "write_number_"
     assert routine["params"][-1]["character_of"] == "path"
     assert routine["params"][-1]["type"] == facts.target.size_type
@@ -1020,6 +1027,29 @@ def test_fortran_capture_then_offline_normalization(tmp_path, monkeypatch):
         "_gfortran_st_write_done",
         "_gfortran_st_close",
     }
+    from scar.contract import walk_operations
+
+    for name, source_types, normalized in (
+        ("real_power_", ["i32", "f32"], ["f32", "f32"]),
+        ("mixed_power_", ["f32", "f64"], ["f64", "f64"]),
+        ("integer_power_", ["i32", "i32"], ["i32", "i32"]),
+    ):
+        power = next(
+            n
+            for n in walk_operations(by_name[name]["body"])
+            if n.get("op") == "intrinsic" and n.get("name") in {"pow", "powi"}
+        )
+        assert [a["type"] for a in power["args"]] == normalized
+        assert power["source_intrinsic_contract"]["argument_types"] == source_types
+        assert (
+            power["source_intrinsic_contract"]["normalized_argument_types"]
+            == normalized
+        )
+        if name != "integer_power_":
+            assert power["args"][0]["op"] == "cast"
+            assert power["args"][0]["value"]["type"] == source_types[0]
+        else:
+            assert power["name"] == "powi"
 
 
 def test_definition_parameter_access_preconditions_are_source_proven(

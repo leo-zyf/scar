@@ -974,6 +974,11 @@ class Body:
                 # Integer exponents retain the base type, including an integral result.
                 dtype = a if b.startswith("i") else numeric_type(a, b)
                 name = "powi" if b.startswith("i") else "pow"
+                if name == "pow":
+                    # Materialize Fortran's operand conversions in the graph;
+                    # C++ overload promotion is a different language rule.
+                    left = cast(dtype, left) if a != dtype else left
+                    right = cast(dtype, right) if b != dtype else right
                 return self._intrinsic_result(
                     "**",
                     name,
@@ -990,6 +995,7 @@ class Body:
                         if b.startswith("i")
                         else "fortran_numeric_exponent_kind_promotion"
                     ),
+                    normalized_argument_types=[left["type"], right["type"]],
                 )
             op = _OPERATORS[operator]
             dtype = numeric_type(a, b)

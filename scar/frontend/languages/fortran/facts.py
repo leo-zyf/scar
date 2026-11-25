@@ -679,6 +679,88 @@ _NUMERIC_OPTIONS = {
     "signaling_nans": "-fsignaling-nans",
     "protect_parens": "-fprotect-parens",
 }
+_TARGET_MODE_OPTIONS = ("-m16", "-m32", "-m64", "-mx32")
+
+
+def _source_target_mode(rows, compiler, stdout_sha256):
+    options = {
+        option: (
+            rows[option] == "[enabled]"
+            if rows.get(option) in {"[enabled]", "[disabled]"}
+            else None
+        )
+        for option in _TARGET_MODE_OPTIONS
+    }
+    result = {
+        "semantics_version": 1,
+        "compiler_target": compiler["target"],
+        "options": options,
+        "multilib_abi": None,
+        "instruction_bits": None,
+        "pointer_bits": None,
+        "evidence": {
+            "kind": "derived",
+            "rule": "gnu_x86_multilib_abi_name",
+            "compiler_frontend_sha256": compiler["frontend"]["sha256"],
+            "option_query_stdout_sha256": stdout_sha256,
+            "definition": "https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.3.0/gcc/config/i386/i386.cc#L17398-L17406",
+        },
+    }
+    architecture = compiler["target"].split("-", 1)[0]
+    if not re.fullmatch(r"x86_64|i[3-6]86", architecture):
+        result["unresolved"] = "unsupported_compiler_target_family"
+    elif any(value is None for value in options.values()):
+        result["unresolved"] = "target_mode_options_not_explicit"
+    else:
+        # GNU's x86 target hook tests ISA_64BIT, then ABI_X32. The -m32
+        # query is an inverse ISA_64BIT mask, so it is also true under -m16.
+        m16, m32, m64, mx32 = (options[option] for option in _TARGET_MODE_OPTIONS)
+        mode = (
+            ("x86_64", 64, 64)
+            if m64 and not (m16 or m32 or mx32)
+            else (
+                ("x32", 64, 32)
+                if mx32 and not (m16 or m32 or m64)
+                else (
+                    ("i386", 16 if m16 else 32, 32)
+                    if m32 and not (m64 or mx32)
+                    else None
+                )
+            )
+        )
+        if mode is None:
+            result["unresolved"] = "inconsistent_target_mode_options"
+        else:
+            result.update(
+                zip(("multilib_abi", "instruction_bits", "pointer_bits"), mode)
+            )
+    return result
+
+
+def _target_condition(selector, target_mode):
+    condition = {"selector": selector, "evaluation": "unresolved"}
+    if selector not in {"x86_64", "x32", "i386"}:
+        condition["reason"] = "unsupported_gnu_multilib_selector"
+    elif target_mode["multilib_abi"] is None:
+        condition["reason"] = target_mode["unresolved"]
+    else:
+        evidence = target_mode["evidence"]
+        condition.update(
+            evaluation="derived",
+            value=selector == target_mode["multilib_abi"],
+            evidence={
+                "source_contract_field": "target_mode",
+                **{
+                    key: evidence[key]
+                    for key in (
+                        "rule",
+                        "compiler_frontend_sha256",
+                        "option_query_stdout_sha256",
+                    )
+                },
+            },
+        )
+    return condition
 
 
 @lru_cache(maxsize=16)
@@ -903,6 +985,7 @@ def _numeric_contract(path, root, flags, capture, source_sha256):
         "-Q",
         "--help=optimizers",
         "--help=fortran",
+        "--help=target",
         str(path),
     ]
     result = subprocess.run(command, cwd=root, capture_output=True, timeout=30)
@@ -910,9 +993,15 @@ def _numeric_contract(path, root, flags, capture, source_sha256):
         raise Gap("numeric_policy", "GNU source-context option query failed")
     rows = {}
     for line in (result.stdout + result.stderr).decode(errors="replace").splitlines():
-        match = re.match(r"^\s*(-f[\w-]+)(?:=\[[^]]+\])?\s+(.*?)\s*$", line)
-        if match and match[1] in _NUMERIC_OPTIONS.values():
+        match = re.match(r"^\s*(-[fm][\w-]+)(?:=\[[^]]+\])?\s+(.*?)\s*$", line)
+        if match and match[1] in {*_NUMERIC_OPTIONS.values(), *_TARGET_MODE_OPTIONS}:
             rows[match[1]] = match[2]
+    target_mode = _source_target_mode(rows, identity, sha256(result.stdout).hexdigest())
+    for interface in inputs["source_math_interfaces"]:
+        if condition := interface["target_condition"]:
+            interface["target_condition"] = _target_condition(
+                condition["selector"], target_mode
+            )
     policy, unresolved = {}, []
     for name, option in _NUMERIC_OPTIONS.items():
         chosen = rows.get(option)
@@ -947,6 +1036,7 @@ def _numeric_contract(path, root, flags, capture, source_sha256):
             "unresolved": inputs["unresolved"],
         },
         "source_math_interfaces": inputs["source_math_interfaces"],
+        "target_mode": target_mode,
         "option_query": {
             "command": command,
             "cwd": str(root),

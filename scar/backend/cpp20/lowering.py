@@ -280,8 +280,9 @@ def _qualified_parameters(module, physical):
 class Lowerer:
     unit_weight_limit = 4000
 
-    def __init__(self, module, physical):
+    def __init__(self, module, physical, *, pending_math=None):
         self.module = module
+        self.pending_math = pending_math
         self.qualified_parameters = _qualified_parameters(module, physical)
         self.regions = physical.get("regions", {})
         self.operator_backends = physical.get("operator_backends", {})
@@ -1235,6 +1236,9 @@ class Lowerer:
         if id(expr) in self.axis_names:
             return self.axis_names[id(expr)]
         op = expr["op"]
+        if self.pending_math and op in {"intrinsic", "call", "library_call"}:
+            # Ids refer only to this decoded module; the sealed identities are paths and hashes.
+            self.pending_math.discard(id(expr))
         E = self.expression
         if op in {
             "library_construct",

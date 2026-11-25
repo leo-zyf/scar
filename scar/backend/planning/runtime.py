@@ -36,6 +36,77 @@ _CONTRACT = dict(
 )
 
 
+def import_effects(module, bindings):
+    """Keep source occurrence coverage separate from native interface supply."""
+    ledger = module.get("source_imports")
+    if ledger is None:
+        return None
+    if (
+        ledger.get("semantics_version") != 1
+        or ledger.get("scope") != "source_import_occurrences"
+        or not isinstance(ledger.get("occurrences"), list)
+    ):
+        raise ValueError("invalid source import occurrence product")
+    operations = {
+        (
+            fn["name"],
+            node.get("site"),
+            node["op"],
+            node.get("source_import_occurrence"),
+        ): node
+        for fn in module["functions"]
+        for node in walk_operations(fn["body"])
+    }
+    rows, identities = [], set()
+    counts = dict(visited=0, unvisited=0, proven_inactive=0)
+    for occurrence in ledger["occurrences"]:
+        identity = occurrence["id"]
+        activation = occurrence["activation"]
+        if identity in identities or activation not in counts:
+            raise ValueError("ambiguous source import occurrence or activation")
+        identities.add(identity)
+        counts[activation] += 1
+        producers = []
+        for ref in occurrence["producer_sites"]:
+            key = (ref["owner"], ref.get("site"), ref["opcode"], identity)
+            operation = operations.get(key)
+            family = ref.get("operator_family")
+            supplied = operation is not None and family in bindings
+            producers.append(
+                dict(
+                    **ref,
+                    operation_present=operation is not None,
+                    native_interface_supplied=supplied,
+                    evidence_scope="registered target interface only; not a proof of the complete import effects",
+                )
+            )
+        rows.append(
+            dict(
+                id=identity,
+                owner=occurrence["owner"],
+                site=occurrence.get("site"),
+                activation=activation,
+                source_coverage=occurrence["effect_coverage"],
+                producers=producers,
+                obligations=occurrence["obligations"],
+                complete_effect_equivalence=(
+                    "unproven"
+                    if activation == "visited"
+                    else "not_an_execution_observation"
+                ),
+            )
+        )
+    return dict(
+        semantics_version=1,
+        scope="source_import_occurrences",
+        ledger_sha256=digest(json_bytes(ledger)),
+        coverage="INCOMPLETE" if counts["visited"] else "NO_VISITED_IMPORTS",
+        activation_counts=counts,
+        occurrences=rows,
+        qualification="Existing native API qualification does not discharge omitted initialization, callbacks, audit or failure effects",
+    )
+
+
 def _file(path):
     path = Path(path).resolve(strict=True)
     data = path.read_bytes()

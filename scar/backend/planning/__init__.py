@@ -391,6 +391,8 @@ def _load_module(path, ir):
     module = dict(
         ir["module"], functions=[read_member(path.parent, r) for r in ir["functions"]]
     )
+    if "source_imports" in module:
+        module["source_imports"] = read_member(path.parent, module["source_imports"])
     if "resource_flow" in module.get("resource_model", {}):
         inventory = dict(module["resource_model"])
         inventory["resource_flow"] = read_member(
@@ -417,6 +419,12 @@ def _schedule_image(
     module.pop("compilation_binding_sha256", None)
     module.pop("math_interface_binding_sha256", None)
     requirements, bindings, issues = _qualify(module, image_context)
+    import_effects = runtime.import_effects(module, bindings)
+    import_receipt = (
+        member(destination, "analysis", module["source_imports"])
+        if import_effects is not None
+        else None
+    )
     if binding := bindings.get("posix_runtime"):
         module["posix_runtime_binding_sha256"] = digest(json_bytes(binding))
     if "process" in bindings:
@@ -485,6 +493,8 @@ def _schedule_image(
             physical["math_interfaces"] = math
             selected["math_interface_binding_sha256"] = digest(json_bytes(math))
         del selected["functions"]
+        if import_receipt is not None:
+            selected["source_imports"] = import_receipt
         if "resource_flow" in selected.get("resource_model", {}):
             inventory = dict(selected["resource_model"])
             inventory["resource_flow"] = member(
@@ -501,6 +511,8 @@ def _schedule_image(
         )
     if requirements:
         physical["operator_requirements"] = requirements
+    if import_effects is not None:
+        physical["source_import_effects"] = dict(import_effects, ledger=import_receipt)
     if bindings:
         physical["operator_backends"] = bindings
     inventory = module.get("resource_model")
