@@ -198,9 +198,11 @@ class Body:
         defaults,
         target,
         *,
+        io_filenames,
         interoperable=False,
     ):
         self.target = target
+        self.io_filenames = io_filenames
         self.interoperable = interoperable
         self.symbols = symbols
         self.function_name, self.result_name = function_name, result_name
@@ -1469,13 +1471,20 @@ class Body:
             return assign({"op": "member", "base": dt, "field": field}, value)
 
         source = self.location(node)
+        filename = self.io_filenames.get(source["line"])
+        if filename is None:
+            raise Gap(
+                "io_location",
+                "GNU I/O descriptor filename is unresolved at this source line",
+                node,
+            )
         steps = [
             decl(
                 name,
                 {"kind": "record", "name": profile.record["name"]},
                 {"op": "init_list", "items": []},
             ),
-            set_field("filename", {"op": "string", "value": source["file"]}),
+            set_field("filename", {"op": "string", "value": filename}),
             set_field("line", literal("i32", source["line"])),
             set_field("flags", literal("i32", profile.flags[mode])),
             set_field("unit", unit),

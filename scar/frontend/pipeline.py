@@ -26,7 +26,7 @@ def _unit(job):
     index, root, profile, revision, out, source_hashes, parsed, source_bytes = job
     path = root / profile["path"]
     language = profile["language"].lower()
-    flags = profile.get("flags", [])
+    flags = profile.get("source_flags", profile.get("flags", []))
     if language in {"c", "c++", "cpp", "cxx"}:
         from .languages.c_family import parse_unit, normalize_unit
     elif language in {"fortran", "f77", "f90"}:
@@ -52,9 +52,17 @@ def _unit(job):
                 root=root,
                 language="c" if language == "c" else "c++",
                 source_hashes=source_hashes,
+                working_directory=profile.get("working_directory"),
+                source_operand=profile.get("source_operand"),
             )
         elif parsed is None:
-            parsed = parse_unit(path, flags, root=root)
+            parsed = parse_unit(
+                path,
+                flags,
+                root=root,
+                working_directory=profile.get("working_directory"),
+                source_operand=profile.get("source_operand"),
+            )
         unit = normalize_unit(parsed)
     except ValueError as error:
         unit = dict(
@@ -112,6 +120,11 @@ def _unit(job):
         path=profile["path"],
         language=language,
         flags=flags,
+        **{
+            field: profile[field]
+            for field in ("working_directory", "source_operand")
+            if field in profile
+        },
         compilation_profile_sha256=digest(json_bytes(profile)),
         revision=revision,
         source_facts=source_facts,

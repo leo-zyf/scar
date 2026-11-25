@@ -405,7 +405,7 @@ class _Unit:
     def __init__(self, facts: ParsedUnit):
         self.facts = facts
         self.unit_tag = hashlib.sha256(
-            "\0".join((facts.source_name, *facts.flags)).encode()
+            "\0".join((facts.source_name, *facts.source_context, *facts.flags)).encode()
         ).hexdigest()[:16]
         self.functions = {}
         self.externs = {}

@@ -140,7 +140,7 @@ def _language(source, arguments):
     return _SOURCE_LANGUAGES.get(_suffix(source))
 
 
-def _profile_flags(arguments, directory):
+def _profile_flags(arguments, directory, *, source_spelling=False):
     result, i = [], 1
     while i < len(arguments):
         token = arguments[i]
@@ -165,7 +165,11 @@ def _profile_flags(arguments, directory):
             result.extend(
                 [
                     "-I" if token == "-J" else token,
-                    _option_path(arguments[i + 1], token, directory),
+                    (
+                        arguments[i + 1]
+                        if source_spelling
+                        else _option_path(arguments[i + 1], token, directory)
+                    ),
                 ]
             )
             i += 2
@@ -183,7 +187,16 @@ def _profile_flags(arguments, directory):
             if joined == "--sysroot":
                 value = value.removeprefix("=")
             prefix = "-I" if joined == "-J" else joined
-            result.extend([prefix, _option_path(value, joined, directory)])
+            result.extend(
+                [
+                    prefix,
+                    (
+                        value
+                        if source_spelling
+                        else _option_path(value, joined, directory)
+                    ),
+                ]
+            )
             i += 1
             continue
         if token in _VALUE_OPTIONS:
@@ -316,8 +329,21 @@ def normalize_build(facts, *, targets=None, entry="main", require_root=True):
                 path=source,
             )
             continue
+        operands = [
+            token
+            for token in _operands(arguments)
+            if canonical_path(token, directory) == source
+        ]
+        if len(operands) != 1:
+            issue(
+                "source_operand",
+                "the compile command does not identify one spelling of this source operand",
+                path=source,
+            )
+            continue
         try:
             flags = _profile_flags(arguments, directory)
+            source_flags = _profile_flags(arguments, directory, source_spelling=True)
         except ValueError as error:
             issue("compiler_options", str(error), path=source)
             continue
@@ -325,6 +351,9 @@ def normalize_build(facts, *, targets=None, entry="main", require_root=True):
             "path": posixpath.relpath(source, root),
             "language": language,
             "flags": flags,
+            "working_directory": directory,
+            "source_operand": operands[0],
+            **({"source_flags": source_flags} if source_flags != flags else {}),
             "source_compiler": {
                 "driver": arguments[0],
                 "candidates": [],

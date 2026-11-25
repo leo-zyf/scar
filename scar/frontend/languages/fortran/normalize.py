@@ -307,6 +307,7 @@ def normalize_unit(parsed: ParsedUnit) -> dict:
                     parsed.location,
                     parsed.defaults,
                     parsed.target,
+                    io_filenames=parsed.io_filenames,
                 )
                 temporary = []
                 if _bind_storage(
@@ -352,6 +353,7 @@ def normalize_unit(parsed: ParsedUnit) -> dict:
                 parsed.location,
                 parsed.defaults,
                 parsed.target,
+                io_filenames=parsed.io_filenames,
                 interoperable=interoperable,
             )
             builder.interfaces = procedure.interfaces

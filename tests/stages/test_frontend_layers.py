@@ -1724,6 +1724,35 @@ def test_fortran_nonpreprocessed_identity_tracks_opened_includes(tmp_path, monke
     )
 
 
+def test_fortran_io_uses_gnu_filename_and_preserves_source_operand(tmp_path):
+    from scar.contract import walk_operations
+    from scar.frontend.languages.fortran import normalize_unit, parse_unit
+
+    cwd, src = tmp_path / "build", tmp_path / "src"
+    cwd.mkdir()
+    src.mkdir()
+    path = src / "trace.F90"
+    path.write_text(
+        'program app\nprint *, __FILE__\n#line 27 "virtual.f90"\nwrite(98,*) 10\nend\n'
+    )
+    spelling = "../src/./trace.F90"
+    parsed = parse_unit(
+        path,
+        ["-cpp"],
+        root=tmp_path,
+        working_directory=str(cwd),
+        source_operand=spelling,
+    )
+    path.unlink()
+    unit = normalize_unit(parsed)
+    assert unit["diagnostics"] == []
+    strings = [
+        n["value"] for n in walk_operations(unit["functions"]) if n["op"] == "string"
+    ]
+    assert strings == ["virtual.f90", spelling, "virtual.f90"]
+    assert parsed.io_filenames == {2: "virtual.f90", 27: "virtual.f90"}
+
+
 def test_fortran_capture_then_offline_normalization(tmp_path, monkeypatch):
     from fparser.two import utils
     from fparser.two.parser import ParserFactory
@@ -1954,6 +1983,93 @@ def test_clang_localizes_unmodeled_declarations_attributes_and_numeric_kinds(
     assert [row["code"] for row in c_unit["diagnostics"]] == [
         "c_family.declaration.dynamic_type_bound"
     ]
+
+
+def test_captured_compiler_paths_preserve_macro_values_and_physical_source_locks(
+    tmp_path,
+):
+    from hashlib import sha256
+
+    from scar.contract import read_member
+    from scar.frontend import build
+
+    root = tmp_path / "source"
+    for name in ("app", "obj", "include"):
+        (root / name).mkdir(parents=True)
+    sources = {
+        "app/main.cc": (
+            "#include <assert.h>\n#include <stdio.h>\n#include <origin.h>\n"
+            'extern "C" const char *c_origin(void), *mapped(void);\n'
+            "int main(int argc, char **) { assert(argc); puts(__FILE__);\n"
+            "  puts(header_origin()); puts(c_origin()); puts(mapped()); return 0; }\n"
+        ),
+        "app/unit.c": (
+            "const char *c_origin(void) { return __FILE__; }\n"
+            '#line 80 "mapped.c"\n'
+            "const char *mapped(void) { return __FILE__; }\n"
+        ),
+        "include/origin.h": "static const char *header_origin() { return __FILE__; }\n",
+    }
+    for name, body in sources.items():
+        (root / name).write_text(body)
+    (root / "Makefile").write_text(
+        "program:\n"
+        "\tcd app && g++ -I../include -c ./main.cc -o ../obj/main.o\n"
+        "\tcd obj && gcc -c ../app/unit.c -o unit.o\n"
+        "\tg++ obj/main.o obj/unit.o -o program\n"
+    )
+    events = tmp_path / "events.json"
+    subprocess.run(
+        ["bear", "intercept", "--force-preload", "--output", events, "--", "make"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+    )
+    observed = subprocess.check_output([root / "program"], text=True).splitlines()
+    assert observed == ["./main.cc", "../include/origin.h", "../app/unit.c", "mapped.c"]
+    manifest = tmp_path / "request.json"
+    manifest.write_text(
+        json.dumps(
+            dict(
+                source_root="source",
+                targets=["program"],
+                build_trace=dict(provider="bear-3-intercept", path=events.name),
+            )
+        )
+    )
+    out = tmp_path / "graph"
+    build(manifest, out)
+    graph = json.loads((out / "graph.json").read_bytes())
+    assert graph["coverage"]["totals"]["diagnostic_sites"] == 0
+    profiles = read_member(out, graph["build"]["graph"])["compilation_profiles"]
+    assert {
+        p["path"]: (p["working_directory"], p["source_operand"]) for p in profiles
+    } == {
+        "app/main.cc": (str(root / "app"), "./main.cc"),
+        "app/unit.c": (str(root / "obj"), "../app/unit.c"),
+    }
+    locked, spellings, assertion_files = {}, set(), []
+    for unit in graph["units"]:
+        profile = next(p for p in profiles if p["path"] == unit["path"])
+        assert unit["flags"] == profile.get("source_flags", profile["flags"])
+        assert unit["working_directory"] == profile["working_directory"]
+        assert unit["source_operand"] == profile["source_operand"]
+        locked.update(unit["source_facts"]["files"])
+        functions = read_member(out, unit["graph"])["functions"]
+        for fn in functions:
+            spellings.update(n["value"] for n in fn["nodes"] if n["op"] == "string")
+            if fn["signature"]["name"] == "mapped" and fn["defined"]:
+                assert fn["signature"]["location"] == dict(
+                    file="app/unit.c", line=3, column=13
+                )
+            for node in fn["nodes"]:
+                if node.get("callee") == "__assert_fail":
+                    assertion_files.append(fn["nodes"][node["args"][1]["port"]])
+    assert assertion_files == [dict(op="string", value="./main.cc")]
+    assert locked == {
+        p: sha256(body.encode()).hexdigest() for p, body in sources.items()
+    }
+    assert set(observed) <= spellings
 
 
 def test_clang_capture_locks_included_buffers_then_normalizes_offline(

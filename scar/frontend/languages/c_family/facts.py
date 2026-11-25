@@ -102,11 +102,6 @@ class SourceToken:
     offset: int
 
 
-def _project_name(root, filename):
-    real = (root / filename).resolve()
-    return real.relative_to(root).as_posix() if real.is_relative_to(root) else None
-
-
 def _language(filename, flags):
     mode = None
     for i, arg in enumerate(flags):
@@ -144,10 +139,25 @@ def _language(filename, flags):
 class ParsedUnit:
     """Read-only semantic input to F2; indexes and token cache are private to this unit."""
 
-    def __init__(self, translation_unit, api, root, source_name, flags, source_hashes):
+    def __init__(
+        self,
+        translation_unit,
+        api,
+        root,
+        source_name,
+        flags,
+        source_hashes,
+        working_directory,
+        source_operand,
+    ):
         self._translation_unit = translation_unit
         self._api = api
         self.source_name = source_name
+        self.source_context = (
+            ()
+            if working_directory == root and source_operand == source_name
+            else (os.path.relpath(working_directory, root), source_operand)
+        )
         self.flags = tuple(flags)
         self.language = _language(source_name, flags)
         self.compiler_id = api.conf.lib.clang_getClangVersion()
@@ -158,7 +168,12 @@ class ParsedUnit:
 
         def register(filename):
             if filename not in self._files:
-                relative = _project_name(root, filename)
+                physical = (working_directory / filename).resolve()
+                relative = (
+                    physical.relative_to(root).as_posix()
+                    if physical.is_relative_to(root)
+                    else None
+                )
                 self._files[filename] = relative
                 self._files.setdefault(os.path.normpath(filename), relative)
 
@@ -166,7 +181,11 @@ class ParsedUnit:
             filename = file.name
             register(filename)
             relative = self._files[filename]
-            external = str((root / filename).resolve()) if relative is None else None
+            external = (
+                str((working_directory / filename).resolve())
+                if relative is None
+                else None
+            )
             if relative in digests or external in external_headers:
                 return
             size = ctypes.c_size_t()
@@ -196,7 +215,7 @@ class ParsedUnit:
                 )
             digests[relative] = actual
 
-        capture(translation_unit.get_file(source_name))
+        capture(translation_unit.get_file(source_operand))
         for inclusion in translation_unit.get_includes():
             capture(inclusion.include)
         self.source_digests = MappingProxyType(digests)
@@ -334,18 +353,33 @@ class ParsedUnit:
 
 
 def parse_unit(
-    path: Path, flags: list[str], *, root: Path, language=None, source_hashes=None
+    path: Path,
+    flags: list[str],
+    *,
+    root: Path,
+    language=None,
+    source_hashes=None,
+    working_directory=None,
+    source_operand=None,
 ) -> ParsedUnit:
     """Parse exactly one locked compilation profile without executing the input."""
     path, root = Path(path).resolve(), Path(root).resolve()
     relative = path.relative_to(root).as_posix()
+    cwd = (
+        (root / working_directory).resolve() if working_directory is not None else root
+    )
+    operand = relative if source_operand is None else source_operand
+    if (cwd / operand).resolve() != path:
+        raise ValueError(
+            "compiler source operand does not resolve to the locked input in its working directory"
+        )
     if language is not None and not any(s.startswith("-x") for s in flags):
         dialect = {"c": "c", "c++": "c++", "cpp": "c++", "cxx": "c++"}[language.lower()]
         flags = ["-x", dialect, *flags]
     api = _clang()
     ast_unit = api.Index.create().parse(
-        relative,
-        args=["-working-directory", str(root), *flags],
+        operand,
+        args=["-working-directory", str(cwd), *flags],
         options=api.TranslationUnit.PARSE_DETAILED_PROCESSING_RECORD,
     )
-    return ParsedUnit(ast_unit, api, root, relative, flags, source_hashes)
+    return ParsedUnit(ast_unit, api, root, relative, flags, source_hashes, cwd, operand)

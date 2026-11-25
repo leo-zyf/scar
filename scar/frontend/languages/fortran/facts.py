@@ -933,6 +933,24 @@ def _selected_text(source, path):
     return "\n".join(lines) + "\n", locations
 
 
+def _io_filenames(tree):
+    """Recover the filename values that GNU actually places in I/O descriptors."""
+    locations = {}
+    for match in re.finditer(
+        rb"^\s*(\w+\.\d+)\.common\.filename = (.+);\n"
+        rb"\s*\1\.common\.line = (\d+);$",
+        tree,
+        re.M,
+    ):
+        name = re.fullmatch(rb'&"([^"\\]*)"\[1\]\{[^\n]*\}', match[2])
+        value = os.fsdecode(name[1]) if name else None
+        line = int(match[3])
+        if line in locations and locations[line] != value:
+            value = None
+        locations[line] = value
+    return locations
+
+
 def _logical_flags(flags):
     result = []
     i = 0
@@ -1276,6 +1294,7 @@ def _compiler_read_inventory(prefix, compiler, frontend):
 
 
 def _semantic_inputs(capture, root, frontend):
+    cwd = Path(capture["working_directory"])
     invocations = []
     for line in capture["semantic_stderr"].decode(errors="replace").splitlines():
         try:
@@ -1301,14 +1320,16 @@ def _semantic_inputs(capture, root, frontend):
             else:
                 continue
             if selected:
-                inputs[selected] = "gnu_semantic_preinclude"
+                inputs[str((cwd / selected).resolve())] = "gnu_semantic_preinclude"
     source_coverage = "unresolved_without_preprocessor_dependency_inventory"
     identities, open_witness = {}, None
     if capture.get("dependencies") is not None:
         source_coverage = "unresolved_dependency_inventory"
         try:
             for selected in _dependency_inputs(capture["dependencies"]):
-                inputs.setdefault(selected, "gnu_semantic_dependency")
+                inputs.setdefault(
+                    str((cwd / selected).resolve()), "gnu_semantic_dependency"
+                )
             source_coverage = "same_semantic_command_dependency_inventory"
         except ValueError as error:
             unresolved.append(
@@ -1320,7 +1341,8 @@ def _semantic_inputs(capture, root, frontend):
             files, identities, open_witness, missing = _compiler_read_inventory(
                 prefix, Path(capture["compiler"]).resolve(), frontend
             )
-            if not {capture["semantic_command"][-1], *inputs}.issubset(files):
+            main_file = str((cwd / capture["semantic_command"][-1]).resolve())
+            if not {main_file, *inputs}.issubset(files):
                 raise ValueError(
                     "expected semantic source or preinclude open is missing"
                 )
@@ -1405,10 +1427,11 @@ def _semantic_inputs(capture, root, frontend):
 
 def _numeric_contract(path, root, flags, capture, source_sha256):
     compiler = capture["compiler"]
+    cwd = Path(capture["working_directory"])
     selected = _logical_flags(flags)
     frontend_query = subprocess.run(
         [compiler, *selected, "-print-prog-name=f951"],
-        cwd=root,
+        cwd=cwd,
         check=True,
         capture_output=True,
         text=True,
@@ -1432,9 +1455,9 @@ def _numeric_contract(path, root, flags, capture, source_sha256):
         "--help=optimizers",
         "--help=fortran",
         "--help=target",
-        str(path),
+        capture["semantic_command"][-1],
     ]
-    result = subprocess.run(command, cwd=root, capture_output=True, timeout=30)
+    result = subprocess.run(command, cwd=cwd, capture_output=True, timeout=30)
     if result.returncode:
         raise Gap("numeric_policy", "GNU source-context option query failed")
     rows = {}
@@ -1469,7 +1492,7 @@ def _numeric_contract(path, root, flags, capture, source_sha256):
         "source_flags": list(flags),
         "validated_command": capture["semantic_command"],
         "semantic_capture": {
-            "cwd": str(root),
+            "cwd": str(cwd),
             "returncode": capture["semantic_returncode"],
             "stdout_sha256": capture["semantic_stdout_sha256"],
             "stderr_sha256": sha256(capture["semantic_stderr"]).hexdigest(),
@@ -1554,6 +1577,8 @@ def _numeric_semantics_sha256(contract, temporary):
         for index, arg in enumerate(argv):
             if index and argv[index - 1] == "-J" and arg == str(temporary):
                 values[index] = {"capture_output": "module_directory"}
+            elif arg == "-fdump-tree-original=" + str(temporary / "descriptor.tree"):
+                values[index] = {"capture_output": "gnu_io_descriptors"}
             elif (
                 index
                 and argv[index - 1] == "-MF"
@@ -1598,7 +1623,7 @@ def _numeric_semantics_sha256(contract, temporary):
     return digest(json_bytes(selected))
 
 
-def _compile_capture(path, root, flags, tmp):
+def _compile_capture(path, cwd, flags, tmp, operand):
     compiler = shutil.which("gfortran")
     if compiler is None:
         raise Gap("compiler", "gfortran is required")
@@ -1608,7 +1633,7 @@ def _compile_capture(path, root, flags, tmp):
         command = [compiler, *flags, *args]
         started = time_ns()
         run_args = dict(
-            cwd=root,
+            cwd=cwd,
             env={**os.environ, "TMPDIR": str(tmp)},
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -1667,18 +1692,29 @@ def _compile_capture(path, root, flags, tmp):
             in {".F", ".FOR", ".fpp", ".FPP", ".F90", ".F95", ".F03", ".F08"}
         ),
     )
-    semantic_flags = ["-J", str(tmp), "-v", "-fsyntax-only", "-fdump-fortran-original"]
+    io_dump = tmp / "descriptor.tree"
+    semantic_flags = [
+        "-J",
+        str(tmp),
+        "-v",
+        "-fsyntax-only",
+        "-fdump-fortran-original",
+        "-fdump-tree-original=" + str(io_dump),
+    ]
     dependencies = tmp / "source.d"
     dependency_flags = (
         ["-MD", "-MF", str(dependencies), "-MT", "scar-fortran-source"]
         if preprocess
         else []
     )
-    receipt = {"compiler": compiler}
+    receipt = {"compiler": compiler, "working_directory": str(cwd)}
     dump = capture(
-        [*semantic_flags, *dependency_flags, str(path)],
+        [*semantic_flags, *dependency_flags, operand],
         receipt,
         observe_reads=not preprocess,
+    )
+    receipt["io_filenames"] = (
+        _io_filenames(io_dump.read_bytes()) if io_dump.is_file() else {}
     )
     dependency_bytes = dependencies.read_bytes() if dependencies.exists() else None
     receipt["dependencies"] = (
@@ -1690,11 +1726,14 @@ def _compile_capture(path, root, flags, tmp):
         sha256(dependency_bytes).hexdigest() if dependency_bytes is not None else None
     )
     source = (
-        capture(["-E", str(path)])
+        capture(["-E", operand])
         if preprocess
         else path.read_text(encoding="utf-8", errors="surrogateescape")
     )
     text, locations = _selected_text(source, path)
+    locations = [
+        (str(path) if file == operand else file, line) for file, line in locations
+    ]
     width = 72 if fixed else 132
     prefix = "-ffixed-line-length-" if fixed else "-ffree-line-length-"
     for flag in flags:
@@ -1842,6 +1881,7 @@ class ParsedUnit:
     intrinsic_bindings: dict = field(default_factory=dict)
     external_headers: dict = field(default_factory=dict)
     source_coverage: dict = field(default_factory=dict)
+    io_filenames: dict = field(default_factory=dict)
 
     def location(self, node):
         original = node
@@ -1866,7 +1906,7 @@ class ParsedUnit:
         return {"file": str(self.path), "line": 1}
 
 
-def _capture_unit(path, root, flags):
+def _capture_unit(path, root, flags, cwd, operand):
     from fparser.two.utils import FortranSyntaxError, walk
     from fparser.two import Fortran2003 as F
 
@@ -1880,13 +1920,13 @@ def _capture_unit(path, root, flags):
     with TemporaryDirectory(prefix="scar-fortran-") as temporary:
         tmp = Path(temporary)
         text, locations, fixed, dump, capture, semantic_flags, commands = (
-            _compile_capture(path, root, flags, tmp)
+            _compile_capture(path, cwd, flags, tmp, operand)
         )
         numeric, external_headers, included_sources = _numeric_contract(
             path, root, flags, commands, source_sha256
         )
         try:
-            tree = _syntax(text, fixed, root, path, flags)
+            tree = _syntax(text, fixed, cwd, path, flags)
         except FortranSyntaxError as exc:
             compatible = _TOKEN.sub(
                 lambda m: m[0][:-1] + " " if m["unary"] else m[0], text
@@ -1920,7 +1960,7 @@ def _capture_unit(path, root, flags):
                 "evidence": "gnu_dump_equivalent_ignoring_builtin_unary_plus",
                 "returncode": compatibility_receipt["semantic_returncode"],
             }
-            tree = _syntax(compatible, fixed, root, path, flags)
+            tree = _syntax(compatible, fixed, cwd, path, flags)
     if sha256(path.read_bytes()).hexdigest() != source_sha256:
         raise Gap("source_changed", "raw source changed during semantic capture")
     tables = _facts(dump)
@@ -1939,6 +1979,7 @@ def _capture_unit(path, root, flags):
         numeric_semantics_sha256=_numeric_semantics_sha256(numeric, tmp),
         intrinsic_bindings=_intrinsic_bindings(dump),
         external_headers=external_headers,
+        io_filenames=commands["io_filenames"],
     )
     programs = list(_programs(tree))
     bindings = {}
@@ -2148,12 +2189,25 @@ def _capture_target(flags, tree):
     )
 
 
-def parse_unit(path, flags=(), *, root, abi=None):
+def parse_unit(
+    path, flags=(), *, root, abi=None, working_directory=None, source_operand=None
+):
     """Read the selected source and capture the compiler evidence needed by F2."""
     path = Path(path).resolve()
     root = Path(root).resolve()
     try:
-        return _capture_unit(path, root, flags)
+        cwd = Path(working_directory) if working_directory is not None else root
+        operand = source_operand if source_operand is not None else str(path)
+        if (
+            (source_operand is None) != (working_directory is None)
+            or not cwd.is_absolute()
+            or (cwd / operand).resolve() != path
+        ):
+            raise Gap(
+                "source_operand",
+                "compiler source operand must resolve to the locked input in its working directory",
+            )
+        return _capture_unit(path, root, flags, cwd, operand)
     except (ImportError, Gap, subprocess.SubprocessError, OSError) as error:
         description = str(error)
         line = re.search(r"(?:at line |:(?=\d+:))(\d+)", description, re.I)
