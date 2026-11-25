@@ -458,7 +458,7 @@ def _refresh_import_effects(occurrence, *, origin=None):
 class ImportOccurrences:
     """One source IMPORT_NAME, its individual bindings and its effect producers."""
 
-    def __init__(self, functions, *, entry_environment=None):
+    def __init__(self, functions, *, entry_environment=None, sites=None):
         if entry_environment is not None:
             validate_python_entry_environment(entry_environment)
         self.entry_environment = entry_environment
@@ -490,6 +490,13 @@ class ImportOccurrences:
         self.initialization_points = {}
         self.provider_region = None
         self.comparisons = {}
+        if sites is None:
+            sites = self.source_sites(functions)
+        for owner, node in sites:
+            self.get(owner, node)
+
+    @staticmethod
+    def source_sites(functions):
         for owner, fn in functions.items():
             work = [fn.get("body", [])]
             while work:
@@ -498,7 +505,7 @@ class ImportOccurrences:
                     work.extend(reversed(part))
                 elif isinstance(part, dict):
                     if part.get("op") == "python_import":
-                        self.get(owner, part)
+                        yield owner, part
                     else:
                         work.extend(reversed(tuple(part.values())))
 

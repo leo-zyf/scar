@@ -269,7 +269,14 @@ def _binding_use(node, evaluating):
 
 
 class _Project:
-    def __init__(self, functions, *, entry_environment=None, function_definitions=None):
+    def __init__(
+        self,
+        functions,
+        *,
+        entry_environment=None,
+        function_definitions=None,
+        source_index=None,
+    ):
         self.functions = functions
         self.function_definitions = function_definitions or {}
         self.initializers = {
@@ -293,6 +300,8 @@ class _Project:
         self.types = {}
         self.closed = {}
         self.activations = {}
+        self.loader_refinements = {}
+        self.loader_activations = {}
         self.prefixes = []
         self.result_kinds = {}
         self.result_facts = {}
@@ -320,13 +329,20 @@ class _Project:
         self.registry_reads = {}
         self.registry_writes = {}
         self.import_markers = []
+        if source_index is None:
+            sites = tuple(host_protocols.ImportOccurrences.source_sites(functions))
+            bindings = _global_bindings(functions)
+            sequence_facts = None
+        else:
+            sites, bindings, sequence_facts = source_index
         self.source_imports = host_protocols.ImportOccurrences(
-            functions, entry_environment=entry_environment
+            functions, entry_environment=entry_environment, sites=sites
         )
-        self.shadow, self.single_bind_globals, self.global_writers = _global_bindings(
-            functions
+        self.shadow, self.single_bind_globals, self.global_writers = bindings
+        self.sequences = sequences.Domains(
+            functions, self.single_bind_globals, source_facts=sequence_facts
         )
-        self.sequences = sequences.Domains(functions, self.single_bind_globals)
+        self.source_index = sites, bindings, self.sequences.source_facts
 
     def require_operator(self, family, operation, **contract):
         requirement = self.required_operators.setdefault(
@@ -1818,6 +1834,20 @@ class _Frame:
             )
         occurrence["activation"] = "visited"
         mod = node["module"]
+        key = self.name, node.get("site")
+        if key in self.project.loader_refinements:
+            # The source operation owns both dispatch and result. No unconditional
+            # module-body call or abstract effects from its trial can precede it.
+            if not namespace_operations.publish_plain_import(
+                self, node, occurrence, steps, source_code=self.scope.get("source_code")
+            ):
+                self.fail(
+                    node,
+                    "import_publication_evidence",
+                    "the source loader has no matching instruction and store",
+                )
+            self.project.loader_activations[key] = self.project.loader_refinements[key]
+            return
         if (
             self.initializing
             and self.project.imports.open_namespace
@@ -2030,6 +2060,11 @@ class _Frame:
                                     name
                                 )
                             ],
+                            **(
+                                {"loader_ports": node["loader_ports"]}
+                                if "loader_ports" in node
+                                else {}
+                            ),
                             producer_role="module_body",
                             required="actual_import_result_or_exception_before_caller_store",
                         ),
@@ -3630,6 +3665,76 @@ class _Frame:
         )
 
 
+def _compile_protocol_entry(module, functions):
+    """Refine an image's source-import return edges to a fixed point."""
+    source_index = None
+    refinements = {}
+    entry = module["entry"]
+    # Widen a failed module-identity assumption only at its owning source
+    # instruction. Re-enter with fresh mutable state: imports can patch older
+    # guards, so a shallow frame rollback would retain speculative producers.
+    while True:
+        project = _Project(
+            functions,
+            entry_environment=module.get("python_entry_environment"),
+            function_definitions=module.get("python_definitions"),
+            source_index=source_index,
+        )
+        project.loader_refinements = refinements
+        project.execution_images = module.get("execution_images", [])
+        project.text_profiles = module.get("text_profiles", {})
+        issue = None
+        try:
+            if (
+                entry not in functions
+                or functions[entry].get("python_scope", {}).get("kind") != "module"
+            ):
+                raise _Unclosed(
+                    entry,
+                    functions.get(entry, {}),
+                    "project_entry",
+                    "module entry required for closed Python name binding",
+                )
+            project.compile(entry, ())
+        except _Unclosed as error:
+            issue = error.issue
+            evidence = issue.get("source_evidence", {})
+            ports = evidence.get("loader_ports")
+            key = issue["symbol"], issue.get("site")
+            if (
+                issue["code"] == "python.import_initializer_identity"
+                and ports
+                and ports["site"] == key[1]
+                and key not in refinements
+                and len(ports["body"]["candidates"]) == 1
+                and ports["body"]["candidates"][0]["initializer"]
+                == evidence["initializer"]
+                and evidence["initializer"] in project.closed
+            ):
+                project.finish_imports()
+                try:
+                    body = project.sequences.resolve(
+                        project.closed[evidence["initializer"]]
+                    )
+                except ValueError:
+                    # A trial with unresolved element types has no sealed body.
+                    return project, issue
+                refinements[key] = dict(
+                    owner=key[0],
+                    site=key[1],
+                    symbol=evidence["initializer"],
+                    location=issue["location"],
+                    loader_ports=ports,
+                    rejected_assumption=evidence,
+                    completion="conditional_source_body",
+                    qualification="requires_actual_activation_frame_and_all_specialized_entry_facts",
+                    function=body,
+                )
+                source_index = project.source_index
+                continue
+        return project, issue
+
+
 def normalize_protocols(module):
     """Certify each reachable protocol, retaining closed signatures on a partial result."""
     functions = {
@@ -3639,67 +3744,66 @@ def normalize_protocols(module):
     }
     if not functions:
         return module, [], []
-    project = _Project(
-        functions,
-        entry_environment=module.get("python_entry_environment"),
-        function_definitions=module.get("python_definitions"),
-    )
-    project.execution_images = module.get("execution_images", [])
-    project.text_profiles = module.get("text_profiles", {})
-    issue = None
+    project, issue = _compile_protocol_entry(module, functions)
+    entry = module["entry"]
     omitted = set()
-    try:
-        entry = module["entry"]
-        if (
-            entry not in functions
-            or functions[entry].get("python_scope", {}).get("kind") != "module"
-        ):
-            raise _Unclosed(
-                entry,
-                functions.get(entry, {}),
-                "project_entry",
-                "module entry required for closed Python name binding",
-            )
-        project.compile(entry, ())
-        omitted = set(module.get("python_candidate_only", ())).difference(
-            project.closed
-        )
-        omitted.update(project.objects.class_bodies)
-        omitted.update(project.inactive_bodies(module.get("activation_graph")))
-        for name, fn in functions.items():
-            if name not in project.closed and name not in omitted:
-                raise _Unclosed(
-                    name,
-                    fn,
-                    "reachable_protocol",
-                    "no proven activation or call signature for this reachable body",
+    obligation_analysis = None
+    resolved_symbols = None
+    if issue is None:
+        try:
+            if project.loader_activations:
+                candidate = next(iter(project.loader_activations.values()))
+                error = _Unclosed(
+                    candidate["owner"],
+                    candidate,
+                    "loader_activation_contract",
+                    "the source importer owns the caller result; executing its conditional graph body requires the actual activation frame and entry facts",
                 )
-        _, open_obligations = obligations.resolve(
-            module.get("protocol_obligations", ()),
-            functions=functions,
-            closed=project.closed,
-            omitted=omitted,
-            class_proofs=project.objects.proofs,
-            normalized_sites=project.normalized_sites,
-            skipped_sites=project.skipped_sites,
-            live_sites=project.live_sites,
-        )
-        if open_obligations:
-            obligation = open_obligations[0]
-            raise _Unclosed(
-                obligation["symbol"],
-                {
-                    "location": {
-                        k: obligation[k]
-                        for k in ("file", "line", "column")
-                        if k in obligation
-                    }
-                },
-                "frontend_obligation",
-                obligation["detail"],
+                error.issue["source_evidence"] = {
+                    "initializer": candidate["symbol"],
+                    "loader_ports": candidate["loader_ports"],
+                }
+                raise error
+            omitted = set(module.get("python_candidate_only", ())).difference(
+                project.closed
             )
-    except _Unclosed as error:
-        issue = error.issue
+            omitted.update(project.objects.class_bodies)
+            omitted.update(project.inactive_bodies(module.get("activation_graph")))
+            for name, fn in functions.items():
+                if name not in project.closed and name not in omitted:
+                    raise _Unclosed(
+                        name,
+                        fn,
+                        "reachable_protocol",
+                        "no proven activation or call signature for this reachable body",
+                    )
+            resolved_symbols = frozenset(project.closed)
+            obligation_analysis, open_obligations = obligations.resolve(
+                module.get("protocol_obligations", ()),
+                functions=functions,
+                closed=project.closed,
+                omitted=omitted,
+                class_proofs=project.objects.proofs,
+                normalized_sites=project.normalized_sites,
+                skipped_sites=project.skipped_sites,
+                live_sites=project.live_sites,
+            )
+            if open_obligations:
+                obligation = open_obligations[0]
+                raise _Unclosed(
+                    obligation["symbol"],
+                    {
+                        "location": {
+                            k: obligation[k]
+                            for k in ("file", "line", "column")
+                            if k in obligation
+                        }
+                    },
+                    "frontend_obligation",
+                    obligation["detail"],
+                )
+        except _Unclosed as error:
+            issue = error.issue
     # Deferred region ownership uses object identity. Resolve those regions
     # before freezing types, which copies the canonical operations.
     project.finish_imports()
@@ -3712,16 +3816,17 @@ def normalize_protocols(module):
             ).issue
     if issue is not None:
         project.sequences.freeze(project, partial=True)
-    obligation_analysis, _ = obligations.resolve(
-        module.get("protocol_obligations", ()),
-        functions=functions,
-        closed=project.closed,
-        omitted=omitted,
-        class_proofs=project.objects.proofs,
-        normalized_sites=project.normalized_sites,
-        skipped_sites=project.skipped_sites,
-        live_sites=project.live_sites,
-    )
+    if obligation_analysis is None or resolved_symbols != project.closed.keys():
+        obligation_analysis, _ = obligations.resolve(
+            module.get("protocol_obligations", ()),
+            functions=functions,
+            closed=project.closed,
+            omitted=omitted,
+            class_proofs=project.objects.proofs,
+            normalized_sites=project.normalized_sites,
+            skipped_sites=project.skipped_sites,
+            live_sites=project.live_sites,
+        )
     module["source_obligations"] = obligation_analysis
     module["source_imports"] = project.source_imports.product(
         project.skipped_sites, omitted
@@ -3740,6 +3845,11 @@ def normalize_protocols(module):
         single_bind_globals=sorted(project.single_bind_globals),
         status="INCOMPLETE" if issue else "READY",
         source_obligation_groups=obligation_analysis["groups"],
+        **(
+            {"conditional_loader_fragments": list(project.loader_activations.values())}
+            if project.loader_activations
+            else {}
+        ),
         **(
             {"operator_requirements": project.operator_requirements()}
             if project.required_operators

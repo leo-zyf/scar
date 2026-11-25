@@ -16,7 +16,7 @@ def _slot(function, node):
 
 
 class Domains:
-    def __init__(self, functions, single_bind_globals):
+    def __init__(self, functions, single_bind_globals, *, source_facts=None):
         self.bindings, self.parents, self.sources, self.next_state, self.states = (
             {},
             {},
@@ -27,8 +27,15 @@ class Domains:
         self.functions, self.single_bind_globals = functions, single_bind_globals
         self.contents = {}
         self.sized_variables = set()
-        self.namespaces, self.callables = self._imports(functions, single_bind_globals)
-        self.static_lists = self._static_uses(functions, single_bind_globals)
+        if source_facts is None:
+            self.namespaces, self.callables = self._imports(
+                functions, single_bind_globals
+            )
+            static = frozenset(self._static_uses(functions, single_bind_globals))
+            source_facts = self.namespaces, self.callables, static
+        self.source_facts = source_facts
+        self.namespaces, self.callables, static = source_facts
+        self.static_lists = set(static)
 
     def _imports(self, functions, single_bind_globals):
         namespaces, callables = {}, {}

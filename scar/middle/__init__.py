@@ -83,11 +83,15 @@ def _plan_image(graph, folder, revision, out, *, shape, trip_count):
     protocol_analysis = module.get("protocol_analysis")
     if protocol_analysis is not None:
         protocol_analysis = dict(protocol_analysis)
-        if "closed_fragments" in protocol_analysis:
-            protocol_analysis["closed_fragments"] = [
-                {**fragment, "function": member(out, "analysis", fragment["function"])}
-                for fragment in protocol_analysis["closed_fragments"]
-            ]
+        for group in ("closed_fragments", "conditional_loader_fragments"):
+            if group in protocol_analysis:
+                protocol_analysis[group] = [
+                    {
+                        **fragment,
+                        "function": member(out, "analysis", fragment["function"]),
+                    }
+                    for fragment in protocol_analysis[group]
+                ]
         if "prefix_fragments" in protocol_analysis:
             protocol_analysis["prefix_fragments"] = [
                 {

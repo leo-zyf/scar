@@ -9366,12 +9366,36 @@ def test_initializer_return_does_not_prove_caller_import_binding(tmp_path, monke
     build(entry, graph)
     source.unlink()
     assert plan(graph, out)["status"] == "INCOMPLETE"
-    [gap] = json.loads((out / "plan.json").read_bytes())["issues"]
+    from scar.contract import read_member
+
+    report = json.loads((out / "plan.json").read_bytes())
+    [gap] = report["issues"]
     assert (
-        gap["code"] == "python.import_initializer_identity"
+        gap["code"] == "python.loader_activation_contract"
         and gap["location"]["line"] == 1
     )
-    evidence = gap["source_evidence"]
+    analysis = report["protocol_analysis"]
+    [conditional] = analysis["conditional_loader_fragments"]
+    [caller] = analysis["closed_fragments"]
+    assert caller["symbol"] == "__main__" and conditional["symbol"] != caller["symbol"]
+    assert conditional["completion"] == "conditional_source_body"
+    [published] = read_member(out, caller["function"])["body"]
+    action = published["value"]
+    assert action["op"] == "module_import_publish"
+    assert action["import_call"]["result"] == action["binding"]["value"]["result"]
+    assert action["import_call"]["body"] == conditional["loader_ports"]["body"]
+    assert action["site"] == conditional["site"] == gap["site"]
+    ir = json.loads((out / "exec-ir.json").read_bytes())
+    ledger = read_member(out, ir["module"]["source_imports"])
+    current, child = ledger["occurrences"]
+    assert (current["activation"], current["effect_coverage"]) == ("visited", "MODELED")
+    assert [p["role"] for p in current["producer_sites"]] == ["source_import"]
+    assert (
+        child["owner"] == conditional["symbol"] and child["activation"] == "unvisited"
+    )
+    assert not child["producer_sites"]
+    assert not ir["functions"]
+    evidence = conditional["rejected_assumption"]
     assert evidence["publication"]["publication"]["module"] == name
     assert evidence["publication"]["state"] == "initializing"
     state = evidence["registry_after_body"]
