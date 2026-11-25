@@ -4953,7 +4953,9 @@ def test_import_state_snapshots_share_guards_and_keep_epochs_monotone():
     state.binding_written(slot)
     marker, operation = dict(op="block", body=[]), dict(op="module_import_preserves")
     state.bind_windows(
-        "package", [(marker, operation, proof, state.snapshot()["binding_epoch"])]
+        "package",
+        [(marker, operation, proof, state.snapshot()["binding_epoch"])],
+        proof,
     )
     before = state.snapshot()
     copied = state.copy_snapshot(before)
@@ -4984,22 +4986,18 @@ def test_import_state_snapshots_share_guards_and_keep_epochs_monotone():
     normal = state.join_snapshots([before, after])
     assert normal["registry"]["package"]["state"] == "unresolved"
     assert not normal["import_windows"]
-    guarded = state.copy_snapshot(after)
-    guarded["import_windows"]["package"] = [(marker, operation, proof, later_epoch)]
+    state.bind_windows("package", [(marker, operation, proof, later_epoch)], proof)
+    guarded = state.snapshot()
     for paths in ([guarded, guarded], [before, guarded]):
         joined = state.join_snapshots(paths)
         assert joined["registry"]["package"]["state"] == "unresolved"
         assert joined["import_windows"]["package"][0][1] is operation
     assert not state.join_snapshots([guarded, after])["import_windows"]
-    mismatch = state.copy_snapshot(guarded)
-    mismatch["import_windows"]["package"] = [
-        (
-            marker,
-            operation,
-            dict(state="ready", initializer="replacement:init"),
-            later_epoch,
-        )
-    ]
+    replacement = dict(state="ready", initializer="replacement:init")
+    state.bind_windows(
+        "package", [(marker, operation, replacement, later_epoch)], replacement
+    )
+    mismatch = state.snapshot()
     assert not state.join_snapshots([guarded, mismatch])["import_windows"]
     exceptional = state.exceptional_prefix(before, before, may_write=True)
     assert set(exceptional["registry"]["package"]["possible_states"]) == {
@@ -5191,6 +5189,77 @@ def test_import_effect_summaries_keep_named_ports_and_unknown_callbacks():
     assert effect["external_effect"] == effect["other_registry_writes"] == "UNKNOWN"
     assert effect["namespace_writes"]["other"] == "UNKNOWN"
     assert effect["producer_sites"][0]["opcode"] == producer["op"]
+
+
+def test_captured_effects_chain_across_module_completion_and_normal_branches():
+    from scar.middle.normalization.protocols import _Project, _Frame
+
+    function = dict(
+        name="entry",
+        params=[],
+        body=[],
+        result="unit",
+        python_scope=dict(kind="module", module="entry"),
+    )
+    project = _Project({"entry": function})
+    project.active.append("entry")
+    frame = _Frame(project, function, ())
+    state = project.imports
+    initializing = dict(state="initializing", initializer="entry")
+    ready = dict(initializing, state="ready")
+    state.bind_registry("entry", initializing)
+
+    def action(capture):
+        steps = []
+        frame.effect(
+            dict(
+                op="captured_action",
+                capture=capture,
+                writes=["import.external_effects"],
+            ),
+            "unit",
+            steps,
+            True,
+        )
+        return steps
+
+    early = action("initializer")
+    state.bind_registry("entry", ready)
+    first = action("first")
+    start = state.snapshot()
+    branch = action("branch")
+    fork = state.snapshot()
+    state.restore(state.join_snapshots([start, fork]))
+    last = action("last")
+    assert state.registry_entry("entry")["state"] == "unresolved"
+    assert project.registry_entry("entry", {})["state"] == "unresolved"
+    project.observe_import("entry", "namespace", {}, "worker")
+    for steps, expected in [
+        (early, initializing),
+        (first, ready),
+        (branch, ready),
+        (last, ready),
+    ]:
+        producer, guard = steps
+        checks = guard["condition"]["checks"]["entry"]
+        assert checks["before"] == expected
+        assert checks["namespace"]["first_member"] == "worker"
+        assert "registry" not in checks
+        fallback = guard["else"][0]["value"]
+        assert fallback["producer_capture"] == producer["value"]["capture"]
+        assert fallback["op"] == "state_effect_continuation_required"
+    # An uncaptured callback or an exceptional prefix on just one branch
+    # invalidates the shared continuation, regardless of predecessor order.
+    state.restore(start)
+    frame.effect(dict(op="opaque_action", writes=["UNKNOWN"]), "unit", [], True)
+    opaque = state.snapshot()
+    exceptional = state.exceptional_prefix(start, fork, may_write=True)
+    for unknown in (opaque, exceptional):
+        for paths in ([unknown, fork], [fork, unknown]):
+            state.restore(state.join_snapshots(paths))
+            action("later")
+            assert not state.windows("entry")
+            assert project.registry_entry("entry", {})["state"] == "unresolved"
 
 
 @pytest.mark.parametrize(

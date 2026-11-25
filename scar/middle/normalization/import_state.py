@@ -40,11 +40,32 @@ class ImportState:
     def windows(self, key):
         return tuple(self._windows.get(key, ()))
 
-    def bind_windows(self, key, windows):
+    @staticmethod
+    def normal_identity(entry, windows):
+        """Identity now, conditional on success at each covered effect site."""
+        if entry.get("state") in {"initializing", "ready"}:
+            return entry
+        if entry.get("state") == "unresolved" and windows:
+            return entry.get("on_preservation")
+
+    def bind_windows(self, key, windows, expected):
         self._windows[key] = list(windows)
+        entry = self._registry[key]
+        if entry["state"] == "unresolved":
+            self._registry[key] = dict(entry, on_preservation=expected)
 
     def drop_windows(self, key):
         self._windows.pop(key, None)
+
+    def invalidate_entry(self, key, change):
+        previous = self._registry.get(key, {})
+        self._registry[key] = change
+        self.drop_windows(key)
+        if (
+            previous.get("state") != "absent"
+            and self.namespace_owner(key) in self._namespaces
+        ):
+            self._namespace_writes[key] = change
 
     def namespace_change(self, key):
         return self._namespace_writes.get(key)
@@ -84,16 +105,10 @@ class ImportState:
         change = dict(
             state="unresolved", epoch=self.next_epoch(), owner=owner, **source
         )
-        self._windows.clear()
-        for key, previous in self._registry.items():
+        for key in self._registry:
             # Unknown contents still have a version. Another possible write
             # advances it, including a previously absent registry entry.
-            self._registry[key] = change
-            if (
-                previous["state"] != "absent"
-                and self.namespace_owner(key) in self._namespaces
-            ):
-                self._namespace_writes[key] = change
+            self.invalidate_entry(key, change)
         return change
 
     @staticmethod
@@ -164,56 +179,40 @@ class ImportState:
             )
         for name, proof in result["registry"].items():
             histories = [state["import_windows"].get(name, ()) for state in states]
-            first = histories[0]
-            # Unchanged paths can carry checks from different lifecycle points.
-            # Keep the original checks and their states at their own occurrences.
-            if first and all(
-                state["registry"].get(name) == proof
-                and state["namespace_writes"].get(name)
-                == states[0]["namespace_writes"].get(name)
-                and len(history) == len(first)
-                and all(a is b for a, b in zip(first, history))
+            if not any(histories):
+                continue
+            identities = [
+                ImportState.normal_identity(state["registry"].get(name, {}), history)
                 for state, history in zip(states, histories)
-            ):
-                result["import_windows"][name] = list(first)
-                continue
-            candidates = [
-                before for history in histories for _, _, before, _ in history
             ]
-            expected = (
-                proof
-                if proof["state"] in {"ready", "initializing"}
-                else (candidates[0] if candidates else None)
-            )
-            if expected is None or expected["state"] not in {"ready", "initializing"}:
-                continue
-            # Every incoming normal path must supply the same identity proof,
-            # or retain its own comparison at the original import occurrence.
-            # A plain unknown effect with no such continuation invalidates it.
-            if any(
-                state["registry"].get(name, {"state": "absent"}) != expected
-                and not (
-                    state["registry"].get(name, {}).get("state") == "unresolved"
-                    and state["import_windows"].get(name)
-                    and all(
-                        before == expected
-                        for _, _, before, _ in state["import_windows"][name]
-                    )
+            expected = identities[0]
+            if (
+                expected is None
+                or any(value != expected for value in identities)
+                or any(
+                    state["namespace_writes"].get(name) and not history
+                    for state, history in zip(states, histories)
                 )
-                for state in states
             ):
+                # A guard reached through another arm cannot account for an
+                # uncovered mutation or a different module lifetime here.
+                result["namespace_writes"][name] = dict(
+                    state="unresolved",
+                    reason="uncovered_effect_on_normal_path",
+                    epoch=result["binding_epoch"],
+                )
                 continue
             windows, seen = [], set()
-            for state in states:
-                for marker, operation, before, epoch in state["import_windows"].get(
-                    name, ()
-                ):
+            for history in histories:
+                for marker, operation, before, epoch in history:
                     key = (id(marker), id(operation), json_bytes(before), epoch)
-                    if before == expected and key not in seen:
+                    if key not in seen:
                         seen.add(key)
                         windows.append((marker, operation, before, epoch))
             if windows:
                 result["import_windows"][name] = windows
+                if proof["state"] == "unresolved":
+                    result["registry"][name] = dict(proof, on_preservation=expected)
         return result
 
     def exceptional_prefix(self, start, after, *, may_write):

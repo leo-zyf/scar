@@ -405,13 +405,10 @@ class _Project:
         baseline = self.imports.snapshot() if before is None else before
         epoch = baseline["binding_epoch"]
         completed = completed or {}
-        for name, proof in baseline["registry"].items():
+        for name, entry in baseline["registry"].items():
             prior = baseline["import_windows"].get(name, ())
-            if proof["state"] == "unresolved" and prior:
-                first = prior[0][2]
-                if all(window[2] == first for window in prior):
-                    proof = first
-            if proof["state"] not in {"ready", "initializing"}:
+            proof = self.imports.normal_identity(entry, prior)
+            if proof is None:
                 continue
             if (
                 name in operation["direct_registry_keys"]
@@ -426,7 +423,22 @@ class _Project:
                     )
                 self.imports.drop_windows(name)
                 continue
-            self.imports.bind_windows(name, [*prior, (marker, operation, proof, epoch)])
+            if not prior and name in baseline["namespace_writes"]:
+                # No comparison covers the earlier opaque write. Starting a
+                # new comparison here would conceal the missing prefix.
+                self.imports.invalidate_entry(
+                    name,
+                    dict(
+                        state="unresolved",
+                        epoch=self.imports.next_epoch(),
+                        owner=owner,
+                        **values.source_site(node),
+                    ),
+                )
+                continue
+            self.imports.bind_windows(
+                name, [*prior, (marker, operation, proof, epoch)], proof
+            )
             pending = True
         if pending:
             self.import_markers.append(marker)
@@ -468,8 +480,11 @@ class _Project:
         windows = self.imports.windows(name)
         if current.get("state") != "unresolved" or not windows:
             return current
-        expected = windows[0][2]
-        if not all(window[2] == expected for window in windows):
+        expected = self.imports.normal_identity(current, windows)
+        # A folded registry lookup also needs one lifecycle/identity
+        # precondition for every prior comparison. Namespace preservation can
+        # span initialization without claiming that stronger cache hit.
+        if expected is None or any(before != expected for _, _, before, _ in windows):
             return current
         self.observe_import(name, "registry", node)
         self.imports.bind_registry(name, expected)
