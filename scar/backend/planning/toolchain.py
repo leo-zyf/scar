@@ -10,6 +10,7 @@ from tempfile import TemporaryDirectory
 
 from scar.contract import (
     digest,
+    external_math_declaration,
     json_bytes,
     validate_access_contract,
     validate_numeric_contract,
@@ -379,7 +380,6 @@ def _math_operations(function, names, external_math):
                 and symbol in names
                 or op == "call"
                 and symbol in external_math
-                and symbol in names
             ):
                 yield list(path), node, symbol
             pending.extend(
@@ -398,11 +398,10 @@ def math_interfaces(module, source_members, scheduled_members, compilation):
     functions = module["functions"]
     defined = {f["name"] for f in functions}
     external_math = {
-        decl["name"]
+        decl["name"]: interface
         for decl in module.get("externs", ())
         if decl["name"] not in defined
-        and decl.get("provider") == "libc"
-        and decl.get("header") == "math.h"
+        and (interface := external_math_declaration(decl)) is not None
     }
     profiles, catalogs, decisions = {}, {}, {}
     for fn, scheduled in zip(functions, scheduled_members, strict=True):
@@ -449,7 +448,11 @@ def math_interfaces(module, source_members, scheduled_members, compilation):
             if not same_signature:
                 missing.append("source_intrinsic_signature")
             if not candidates:
-                missing.append("source_math_declaration")
+                missing.append(
+                    "source_vector_math_declaration"
+                    if node["op"] == "call"
+                    else "source_math_declaration"
+                )
             elif not any(c["evidence_verified"] for c in candidates):
                 missing.append("verified_source_math_header")
             applicable = [
@@ -469,6 +472,11 @@ def math_interfaces(module, source_members, scheduled_members, compilation):
                     operation_path=path,
                     operation=node["op"],
                     interface=symbol,
+                    **(
+                        {"external_declaration": external_math[symbol]}
+                        if node["op"] == "call"
+                        else {}
+                    ),
                     argument_types=arguments,
                     result_type=node.get("type"),
                     source_intrinsic_signature_verified=same_signature,
@@ -512,7 +520,7 @@ def math_interfaces(module, source_members, scheduled_members, compilation):
     return dict(
         semantics_version=1,
         scope="scheduled_operations",
-        coverage="selected executable operands in function bodies/initializers; real-power and compiler-declared interface spellings",
+        coverage="selected executable operands in function bodies/initializers; resolved external math calls, real-power and compiler-declared interfaces",
         source_contracts=profiles,
         functions=decisions,
         target=dict(

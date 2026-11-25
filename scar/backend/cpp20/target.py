@@ -8,6 +8,7 @@ from scar.contract import (
     PHYSICAL,
     digest,
     document,
+    external_math_declaration,
     file_receipt,
     json_bytes,
     member,
@@ -413,6 +414,25 @@ def _math_decisions(module, receipts, physical):
             op = node.get("op")
             symbol = node.get("callee") if op == "call" else node.get("name")
             external = externs.get(symbol, {}) if isinstance(symbol, str) else {}
+            if "external_declaration" in site:
+                declaration = external_math_declaration(external)
+                if (
+                    op != "call"
+                    or declaration is None
+                    or json_bytes(declaration)
+                    != json_bytes(site["external_declaration"])
+                ):
+                    raise ValueError(
+                        "scheduled math external declaration does not match"
+                    )
+            elif op == "call" and (
+                external.get("provider"),
+                external.get("header"),
+            ) != ("libc", "math.h"):
+                # Original v1 decisions only identified direct calls through math.h.
+                raise ValueError(
+                    "scheduled math site lacks a matching source declaration"
+                )
             args = node.get("args")
             if (
                 not isinstance(symbol, str)
@@ -420,9 +440,6 @@ def _math_decisions(module, receipts, physical):
                 or op not in {"intrinsic", "call", "library_call"}
                 or op == "library_call"
                 and (node.get("provider") != "cxx_standard" or "receiver" in node)
-                or op == "call"
-                and (external.get("provider"), external.get("header"))
-                != ("libc", "math.h")
                 or not isinstance(args, list)
                 or not all(isinstance(a, dict) for a in args)
                 or (op, symbol) != (site.get("operation"), site.get("interface"))

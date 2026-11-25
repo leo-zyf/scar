@@ -1416,6 +1416,19 @@ def test_math_interface_declaration_remains_distinct_from_vector_authorization(
         )
     )
     body[0]["validation_evidence"] = dict(power, site="graph/not-executed")
+    cosine = dict(
+        name="cos",
+        provider="libm",
+        params=[dict(name="x", type="f64")],
+        result="f64",
+        location=dict(file="/sdk/bits/mathcalls.h", line=62),
+    )
+    body.append(
+        dict(
+            op="expr",
+            value=dict(op="call", callee="cos", site="graph/5", args=args[:1]),
+        )
+    )
     body.append(dict(op="return", value=dict(op="literal", type="i32", value=0)))
     fn = dict(
         name="main",
@@ -1438,6 +1451,7 @@ def test_math_interface_declaration_remains_distinct_from_vector_authorization(
             functions=[source, member(origin, "functions", local_pow)],
             module=dict(
                 entry="main",
+                externs=[cosine],
                 resource_model=inventory,
                 math_interface_binding_sha256="forged",
             ),
@@ -1463,7 +1477,36 @@ def test_math_interface_declaration_remains_distinct_from_vector_authorization(
         True,
         False,
     ]
-    site, mapped = decision["sites"]
+    site, mapped, external = decision["sites"]
+    assert external["site"] == "graph/5" and external["external_declaration"] == dict(
+        symbol="cos",
+        provider="libm",
+        declaration_sha256=digest(json_bytes(cosine)),
+        parameter_types=["f64"],
+        result="f64",
+        variadic=False,
+    )
+    assert external["selected"] == "preserve_operation"
+    assert "source_vector_math_declaration" in external["obligations"]
+    forged = deepcopy(physical)
+    forged_math = forged["math_interfaces"]
+    forged_math["functions"]["main"]["sites"][-1]["external_declaration"][
+        "result"
+    ] = "f32"
+    bad = destination / "forged-abi.json"
+    write_json(
+        bad,
+        dict(
+            package,
+            module=dict(
+                package["module"],
+                math_interface_binding_sha256=digest(json_bytes(forged_math)),
+            ),
+            physical=member(destination, "scheduled-units", forged),
+        ),
+    )
+    with pytest.raises(ValueError, match="external declaration does not match"):
+        lower_scheduled(bad, tmp_path / "rejected")
     assert mapped["site"] == "graph/ref" and mapped["operation_path"] == [
         "body",
         3,
@@ -1546,8 +1589,8 @@ def test_math_interface_declaration_remains_distinct_from_vector_authorization(
         selected="preserve_operation",
         vector_eligibility="not_qualified",
         functions=1,
-        sites=2,
-        interfaces={"pow": 2},
+        sites=3,
+        interfaces={"pow": 2, "cos": 1},
     )
     assert (
         json.loads((printed / "cpp20.json").read_bytes())["math_interface_consumption"]
