@@ -276,6 +276,10 @@ def seal(module, out, *, status, graph_sha256, contract, logical_optimization):
     imports = payload.get("source_imports")
     if imports is not None:
         payload["source_imports"] = member(out, "analysis", imports)
+    if isinstance(payload.get("source_obligations"), dict):
+        payload["source_obligations"] = member(
+            out, "analysis", payload["source_obligations"]
+        )
     inventory = dict(payload.get("resource_model", {}))
     if "artifact_flow" in inventory:
         flow = inventory["artifact_flow"]
@@ -294,6 +298,11 @@ def seal(module, out, *, status, graph_sha256, contract, logical_optimization):
     if status != "READY":
         payload = {
             "entry": module["entry"],
+            **(
+                {"source_obligations": payload["source_obligations"]}
+                if "source_obligations" in payload
+                else {}
+            ),
             **(
                 {"source_imports": payload["source_imports"]}
                 if imports is not None

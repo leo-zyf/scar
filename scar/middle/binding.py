@@ -65,6 +65,8 @@ _SITE_OPERATIONS = {
     "python_select",
     "sequence_comprehension",
     "assignment_expression",
+    "unsupported",
+    "python_define",
     "mapping",
     "mapping_comprehension",
     "map",

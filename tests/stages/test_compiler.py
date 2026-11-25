@@ -147,6 +147,8 @@ seen = -1
 observed = [(seen := i) for i in range(3)]
 print(len(observed), observed[0], observed[-1], seen)
 print(probe(31) if True else never_called())
+if False:
+    skipped = {item for item in range(3)}
 """)
     expected = subprocess.run(
         [sys.executable, "-B", entry], capture_output=True, timeout=30

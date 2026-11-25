@@ -627,6 +627,10 @@ def _load_module(path, ir):
     )
     if "source_imports" in module:
         module["source_imports"] = read_member(path.parent, module["source_imports"])
+    if "source_obligations" in module:
+        module["source_obligations"] = read_member(
+            path.parent, module["source_obligations"]
+        )
     if "resource_flow" in module.get("resource_model", {}):
         inventory = dict(module["resource_model"])
         inventory["resource_flow"] = read_member(
@@ -746,6 +750,10 @@ def _schedule_image(
         del selected["functions"]
         if import_receipt is not None:
             selected["source_imports"] = import_receipt
+        if "source_obligations" in selected:
+            selected["source_obligations"] = member(
+                destination, "analysis", selected["source_obligations"]
+            )
         if "resource_flow" in selected.get("resource_model", {}):
             inventory = dict(selected["resource_model"])
             inventory["resource_flow"] = member(

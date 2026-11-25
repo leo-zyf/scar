@@ -11,6 +11,7 @@ from . import (
     host_protocols,
     mappings,
     objects,
+    obligations,
     processes,
     products,
     scalars,
@@ -245,6 +246,7 @@ class _Project:
         self.pending_signatures = {}
         self.recursive_uses = set()
         self.function_defaults = {}
+        self.normalized_sites = set()
         self.providers = {}
         self.array_ops = set()
         self.process_ops = set()
@@ -1724,7 +1726,10 @@ class _Frame:
         previous = self.source_expression
         self.source_expression = node
         try:
-            return self._evaluate(node, steps, discard, truth_context=truth_context)
+            result = self._evaluate(node, steps, discard, truth_context=truth_context)
+            if node.get("site") is not None:
+                self.project.normalized_sites.add((self.name, node["site"]))
+            return result
         finally:
             self.source_expression = previous
 
@@ -3107,28 +3112,30 @@ def normalize_protocols(module):
                     "reachable_protocol",
                     "no proven activation or call signature for this reachable body",
                 )
-        for obligation in module.get("protocol_obligations", ()):
-            if obligation.get("symbol") in omitted or project.objects.discharged(
-                obligation
-            ):
-                continue
-            if obligation.get("field") not in {
-                "dispatch",
-                "native_binding",
-                "provider_binding",
-            }:
-                raise _Unclosed(
-                    obligation["symbol"],
-                    {
-                        "location": {
-                            k: obligation[k]
-                            for k in ("file", "line", "column")
-                            if k in obligation
-                        }
-                    },
-                    "frontend_obligation",
-                    obligation["detail"],
-                )
+        _, open_obligations = obligations.resolve(
+            module.get("protocol_obligations", ()),
+            functions=functions,
+            closed=project.closed,
+            omitted=omitted,
+            class_proofs=project.objects.proofs,
+            normalized_sites=project.normalized_sites,
+            skipped_sites=project.skipped_sites,
+            live_sites=project.live_sites,
+        )
+        if open_obligations:
+            obligation = open_obligations[0]
+            raise _Unclosed(
+                obligation["symbol"],
+                {
+                    "location": {
+                        k: obligation[k]
+                        for k in ("file", "line", "column")
+                        if k in obligation
+                    }
+                },
+                "frontend_obligation",
+                obligation["detail"],
+            )
         try:
             project.sequences.freeze(project)
         except ValueError as error:
@@ -3139,6 +3146,17 @@ def normalize_protocols(module):
         issue = error.issue
         project.sequences.freeze(project, partial=True)
     project.finish_imports()
+    obligation_analysis, _ = obligations.resolve(
+        module.get("protocol_obligations", ()),
+        functions=functions,
+        closed=project.closed,
+        omitted=omitted,
+        class_proofs=project.objects.proofs,
+        normalized_sites=project.normalized_sites,
+        skipped_sites=project.skipped_sites,
+        live_sites=project.live_sites,
+    )
+    module["source_obligations"] = obligation_analysis
     module["source_imports"] = project.source_imports.product(
         project.skipped_sites, omitted
     )
@@ -3155,6 +3173,7 @@ def normalize_protocols(module):
         closed=contracts,
         single_bind_globals=sorted(project.single_bind_globals),
         status="INCOMPLETE" if issue else "READY",
+        source_obligation_groups=obligation_analysis["groups"],
         **(
             {"operator_requirements": project.operator_requirements()}
             if project.required_operators
