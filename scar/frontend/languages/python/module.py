@@ -427,6 +427,7 @@ class _ModuleGraph:
         self.constant_stores = parsed.constant_stores
         self.source_code = parsed.source_code
         self.name_loads = parsed.name_loads
+        self.import_stores = parsed.import_stores
         self.source_lines = parsed.source_text.splitlines()
         self.diagnostic_file = str(parsed.path)
 
@@ -1700,6 +1701,11 @@ class _Scope:
             from_import = isinstance(node, ast.ImportFrom)
             fromlist = [a.name for a in node.names] if from_import else []
             member_hooks = {}
+            import_store = (
+                self.unit.import_stores.get(tuple_position(node))
+                if self.module_scope and not from_import
+                else None
+            )
             for i, (module, bound, fact) in enumerate(self.unit.module_bindings(node)):
                 alias = node.names[i]
                 self.invalidate_shared()
@@ -1773,6 +1779,16 @@ class _Scope:
                         member=alias.name,
                         alias=alias.asname,
                         bound_value=fact,
+                        **(
+                            {
+                                "source_import_store": {
+                                    **import_store,
+                                    "code_sha256": self.unit.source_code["code_sha256"],
+                                }
+                            }
+                            if import_store
+                            else {}
+                        ),
                         request={
                             "form": "from" if from_import else "import",
                             "module": (

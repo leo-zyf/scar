@@ -834,6 +834,93 @@ def test_module_name_loads_follow_actual_callee_and_argument_ports(tmp_path):
     )
 
 
+def test_module_import_store_matches_cpython_stack_and_source_span(tmp_path):
+    import dis
+    import sys
+
+    from scar.contract import read_member
+    from scar.frontend import build
+    from scar.frontend.languages.python.environment import code_digest
+
+    (tmp_path / "pkg").mkdir()
+    for relative in ("pkg/__init__.py", "pkg/leaf.py", "other.py"):
+        (tmp_path / relative).write_text("")
+    entry = tmp_path / "driver.py"
+    source = (
+        "global chosen\n"
+        "if enabled:\n    import pkg.leaf\n    import other as chosen\n"
+        "import pkg.leaf as projected\n"
+        "import other, other as second\n"
+        "from pkg import leaf\n"
+        "if False:\n    import absent\n"
+        "try:\n    enabled\nfinally:\n    import other\n"
+        "def nested():\n    import other\n"
+    )
+    entry.write_text(source)
+    code = compile(source, str(entry), "exec", dont_inherit=True)
+    by_offset = {i.offset: i for i in dis.get_instructions(code)}
+    out = tmp_path / "graph"
+    build(entry, out)
+    graph = json.loads((out / "graph.json").read_bytes())
+    unit = read_member(
+        out, next(u["graph"] for u in graph["units"] if u["path"] == entry.name)
+    )
+    root = next(f for f in unit["functions"] if f["signature"]["name"] == "__main__")
+    sites = [n for n in root["nodes"] if "source_import_store" in n]
+    if sys.implementation.name != "cpython" or not any(
+        col is not None for _, _, col, _ in getattr(code, "co_positions", lambda: ())()
+    ):
+        assert not sites
+        return
+    assert [(n["location"]["line"], n["module"]) for n in sites] == [
+        (3, "pkg.leaf"),
+        (4, "other"),
+    ]
+    code_sha = code_digest(code)
+    assert root["signature"]["python_scope"]["source_code"]["code_sha256"] == code_sha
+    for node, destination, store_opcode in zip(
+        sites, ("pkg", "chosen"), ("STORE_NAME", "STORE_GLOBAL"), strict=True
+    ):
+        port = node["source_import_store"]
+        assert node["op"] == "python_import" and port["code_sha256"] == code_sha
+        loc = node["location"]
+        assert port["position"] == [
+            loc["line"],
+            loc["end_line"],
+            loc["column"] - 1,
+            loc["end_column"] - 1,
+        ]
+        assert node["request"]["fromlist"] == [] and port["fromlist"]["value"] is None
+        expected = [
+            ("level", "LOAD_CONST", 0),
+            ("fromlist", "LOAD_CONST", None),
+            ("import_name", "IMPORT_NAME", node["request"]["module"]),
+            ("store", store_opcode, destination),
+        ]
+        for field, opcode, value in expected:
+            operand = port[field]
+            ins = by_offset[operand["offset"]]
+            assert (ins.opname, ins.arg, list(ins.positions)) == (
+                opcode,
+                operand["index"],
+                port["position"],
+            )
+            assert operand["opcode"] == opcode
+            if opcode == "LOAD_CONST":
+                assert code.co_consts[ins.arg] == operand["value"] == value
+            else:
+                assert code.co_names[ins.arg] == operand["name"] == value
+        assert (
+            root["nodes"][node["binding"]["port"]]["name"] == f"py:driver:{destination}"
+        )
+    assert all(
+        "source_import_store" not in n
+        for f in unit["functions"]
+        if f is not root
+        for n in f["nodes"]
+    )
+
+
 def test_scalar_annotation_contract_uses_captured_compiler_semantics(
     tmp_path, monkeypatch
 ):
