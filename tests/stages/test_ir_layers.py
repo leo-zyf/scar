@@ -8547,6 +8547,21 @@ def test_open_module_store_and_delete_use_actual_operands_and_mappings(tmp_path)
         ("DELETE_NAME", "first"),
     ]
     assert deletion["evaluation"] == [] and "completed_effects" in deletion["unwind"]
+    unit = next(
+        u
+        for u in json.loads((graph / "graph.json").read_bytes())["units"]
+        if u["path"] == "pkg/__init__.py"
+    )
+    function_id, port = deletion["site"].split("/")
+    function = next(
+        f
+        for f in read_member(graph, unit["graph"])["functions"]
+        if f["id"] == function_id
+    )
+    assert (
+        function["nodes"][int(port)]["source_expression"]
+        == deletion["source_expression"]
+    )
 
     def run(mode, from_ir):
         log = []

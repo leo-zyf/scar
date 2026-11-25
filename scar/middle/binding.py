@@ -91,6 +91,7 @@ _SITE_OPERATIONS = {
     "map",
     "for",
     "assign",
+    "unbind",
     "binary",
     "if",
     "while",
