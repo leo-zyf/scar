@@ -1014,6 +1014,125 @@ def test_module_call_expression_seals_ordered_operands_once(tmp_path, monkeypatc
             ] == digest(json_bytes(value))
 
 
+def test_module_named_exception_arms_join_native_match_edges_and_alias_cleanup(
+    tmp_path,
+):
+    import dis
+    import sys
+
+    from scar.contract import read_member
+    from scar.frontend import build
+
+    if sys.implementation.name != "cpython" or sys.version_info[:2] not in {
+        (3, 12),
+        (3, 14),
+    }:
+        import pytest
+
+        pytest.skip("this test compares the CPython 3.12 and 3.14 handler encodings")
+
+    path = tmp_path / "handle.py"
+    text = (
+        "global first, problem\n"
+        "try:\n    run()\n"
+        "except first as problem:\n    save(problem)\n"
+        "except second:\n    raise\n"
+        "try:\n    run()\nexcept (first, second):\n    pass\n"
+        "try:\n    run()\nexcept first as other:\n    if choose():\n        raise\n    save(other)\n"
+        "while flag:\n    try:\n        run()\n    except first as problem:\n        break\n"
+        "def nested():\n    try:\n        run()\n    except first:\n        raise\n"
+    )
+    path.write_text(text)
+    code = compile(text, str(path), "exec", dont_inherit=True)
+    native = {i.offset: i for i in dis.get_instructions(code)}
+    table = [e._asdict() for e in dis.Bytecode(code).exception_entries]
+    out = tmp_path / "graph"
+    build(path, out)
+    unit = read_member(
+        out, json.loads((out / "graph.json").read_bytes())["units"][0]["graph"]
+    )
+    all_receipts = [
+        n
+        for f in unit["functions"]
+        for n in f["nodes"]
+        if "source_exception_handler" in n
+    ]
+    if not any(i.positions.col_offset is not None for i in native.values()):
+        assert not all_receipts
+        return
+    module = next(f for f in unit["functions"] if f["signature"]["name"] == "__main__")
+    arms = [n for n in module["nodes"] if "source_exception_handler" in n]
+    assert arms == all_receipts and [n["location"]["line"] for n in arms] == [4, 6]
+    first, second = [n["source_exception_handler"] for n in arms]
+    for index, (node, port) in enumerate(zip(arms, (first, second), strict=True)):
+        assert port["load"] == module["nodes"][node["test"]["port"]]["source_name_load"]
+        assert (port["arm_index"], port["arm_count"]) == (index, 2)
+        assert (
+            port["code_sha256"]
+            == module["signature"]["python_scope"]["source_code"]["code_sha256"]
+        )
+        assert port["check"]["opcode"] == "CHECK_EXC_MATCH"
+        assert (
+            port["branch"]["target"]
+            == native[port["branch"]["offset"]].argval
+            == port["mismatch"]["offset"]
+        )
+        assert port["exception_table"] and all(
+            e in table for e in port["exception_table"]
+        )
+        for row in [
+            port["entry"],
+            port["load"],
+            port["check"],
+            port["branch"],
+            *port["matched"],
+            port["mismatch"],
+            *port["normal_exit"],
+            *port["exceptional_cleanup"],
+            *port["unwind"],
+        ]:
+            ins = native[row["offset"]]
+            assert (row["opcode"], row.get("oparg"), row["position"]) == (
+                ins.opname,
+                ins.arg,
+                list(ins.positions) if ins.positions.lineno is not None else None,
+            )
+            if "name" in row:
+                assert code.co_names[row["index"]] == row["name"] == ins.argval
+    assert (
+        first["load"]["opcode"] == "LOAD_GLOBAL"
+        and first["matched"][-1]["name"] == "problem"
+    )
+    assert first["mismatch"]["offset"] == second["load"]["offset"]
+    assert first["entry"] == second["entry"] and first["unwind"] == second["unwind"]
+    assert [r["opcode"] for r in first["normal_exit"]] == [
+        "POP_EXCEPT",
+        "LOAD_CONST",
+        "STORE_GLOBAL",
+        "DELETE_GLOBAL",
+    ]
+    assert [r["opcode"] for r in first["exceptional_cleanup"]] == [
+        "LOAD_CONST",
+        "STORE_GLOBAL",
+        "DELETE_GLOBAL",
+        "RERAISE",
+    ]
+    assert first["body_raise"] is None and first["normal_exit"][1]["value"] is None
+    assert any(
+        e["start"] <= first["body_offset"] < e["end"]
+        and e["target"] == first["exceptional_cleanup"][0]["offset"]
+        for e in first["exception_table"]
+    )
+    assert second["matched"][-1]["opcode"] == "POP_TOP"
+    assert (
+        second["mismatch"]["opcode"] == "RERAISE" and second["mismatch"]["oparg"] == 0
+    )
+    assert (
+        second["normal_exit"] == second["exceptional_cleanup"] == []
+        and second["body_raise"]["opcode"] == "RAISE_VARARGS"
+    )
+
+
 def test_scalar_annotation_contract_uses_captured_compiler_semantics(
     tmp_path, monkeypatch
 ):

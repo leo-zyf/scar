@@ -429,6 +429,7 @@ class _ModuleGraph:
         self.name_loads = parsed.name_loads
         self.import_stores = parsed.import_stores
         self.call_expressions = parsed.call_expressions
+        self.exception_handlers = parsed.exception_handlers
         self.source_lines = parsed.source_text.splitlines()
         self.diagnostic_file = str(parsed.path)
 
@@ -2194,6 +2195,16 @@ class _Scope:
                         interrupted[h.name] = {"maybe_unbound": True}
                     final_inputs.extend((exceptional, interrupted))
                 states.append(outgoing)
+                source = {}
+                if self.symbol == self.unit.root_symbol and (
+                    receipt := self.unit.exception_handlers.get(tuple_position(h))
+                ):
+                    code_sha = self.unit.source_code["code_sha256"]
+                    source["source_exception_handler"] = dict(
+                        receipt,
+                        code_sha256=code_sha,
+                        load={**receipt["load"], "code_sha256": code_sha},
+                    )
                 arms.append(
                     R(
                         h,
@@ -2203,6 +2214,7 @@ class _Scope:
                         binding=binding,
                         body=handler,
                         cleanup=cleanup,
+                        **source,
                     )
                 )
             self.merge(*states, *final_inputs)

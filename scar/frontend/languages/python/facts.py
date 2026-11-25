@@ -2,6 +2,7 @@
 
 import ast
 import builtins
+from bisect import bisect_right
 from collections import defaultdict, deque
 from dataclasses import dataclass, field, replace
 import dis
@@ -80,6 +81,7 @@ class ParsedUnit:
     name_loads: dict = field(default_factory=dict)
     import_stores: dict = field(default_factory=dict)
     call_expressions: dict = field(default_factory=dict)
+    exception_handlers: dict = field(default_factory=dict)
 
     @property
     def source_digests(self):
@@ -401,6 +403,250 @@ def _call_expression_sites(program, instructions, calls, handlers):
     return sites
 
 
+def _handler_instruction(ins):
+    op = ins.opname
+    row = dict(
+        opcode=op,
+        offset=ins.offset,
+        position=list(ins.positions) if ins.positions.lineno is not None else None,
+    )
+    if ins.arg is not None:
+        row["oparg"] = ins.arg
+    if op in {
+        "LOAD_NAME",
+        "LOAD_GLOBAL",
+        "STORE_NAME",
+        "STORE_GLOBAL",
+        "DELETE_NAME",
+        "DELETE_GLOBAL",
+    }:
+        row.update(
+            name=ins.argval, index=ins.arg >> 1 if op == "LOAD_GLOBAL" else ins.arg
+        )
+    elif op == "LOAD_CONST":
+        row.update(index=ins.arg, value=ins.argval)
+    elif op == "POP_JUMP_IF_FALSE":
+        row["target"] = ins.argval
+    return row
+
+
+def _exception_handler_sites(instructions, entries, tries, loads):
+    """Join a module try's source clauses to its actual match, cleanup and unwind edges."""
+    by_offset = {ins.offset: i for i, ins in enumerate(instructions)}
+    starts = [e.start for e in entries]
+    jumps = (
+        set(dis.hasjump) if hasattr(dis, "hasjump") else set(dis.hasjabs + dis.hasjrel)
+    )
+
+    def covering(offset):
+        i = bisect_right(starts, offset) - 1
+        return entries[i] if i >= 0 and offset < entries[i].end else None
+
+    def within(position, node):
+        return (
+            None not in position
+            and (node.lineno, node.col_offset) <= (position.lineno, position.col_offset)
+            and (position.end_lineno, position.end_col_offset)
+            <= (node.end_lineno, node.end_col_offset)
+        )
+
+    def alias_cleanup(sequence, binding):
+        return (
+            len(sequence) == 3
+            and sequence[0].opname == "LOAD_CONST"
+            and sequence[0].argval is None
+            and sequence[1].opname == binding.opname
+            and sequence[1].arg == binding.arg
+            and sequence[2].opname == binding.opname.replace("STORE_", "DELETE_")
+            and sequence[2].arg == binding.arg
+        )
+
+    def arm(handler, index, first, mismatch, entry_op, primary, unwind):
+        # A break or continue can restore the handled exception before its actual
+        # jump. Such an exit is not an ordinary fallthrough, even if the clearing
+        # sequence is byte-for-byte identical.
+        if not all(
+            isinstance(
+                stmt,
+                (
+                    ast.Assign,
+                    ast.AnnAssign,
+                    ast.AugAssign,
+                    ast.Expr,
+                    ast.Delete,
+                    ast.Raise,
+                    ast.Pass,
+                    ast.Import,
+                    ast.ImportFrom,
+                ),
+            )
+            for stmt in handler.body
+        ):
+            return None
+        span = tuple_position(handler)
+        target = unwind[0].offset
+        load, check, branch = instructions[first : first + 3]
+        header = instructions[first + 3 : mismatch]
+        if (
+            not header
+            or check.opname != "CHECK_EXC_MATCH"
+            or branch.opname != "POP_JUMP_IF_FALSE"
+            or branch.argval != instructions[mismatch].offset
+            or check.positions != span
+            or branch.positions != span
+        ):
+            return None
+        count = 2 if header[0].opname == "NOT_TAKEN" else 1
+        matched = header[:count]
+        binding = matched[-1]
+        if (
+            len(matched) != count
+            or any(row.positions != span for row in matched)
+            or (
+                handler.name
+                and (
+                    binding.opname not in {"STORE_NAME", "STORE_GLOBAL"}
+                    or binding.argval != handler.name
+                )
+            )
+            or (not handler.name and binding.opname != "POP_TOP")
+        ):
+            return None
+        table = set(primary)
+
+        def targets(ins, dest):
+            entry = covering(ins.offset)
+            if entry and entry.target == dest and entry.depth == 1 and entry.lasti:
+                table.add(entry)
+                return True
+            return False
+
+        if not all(targets(i, target) for i in (load, check, branch, binding)):
+            return None
+        remaining = header[count:]
+        end = next(
+            (
+                i
+                for i, row in enumerate(remaining)
+                if row.opname in {"POP_EXCEPT", "RAISE_VARARGS"}
+            ),
+            None,
+        )
+        if end is None:
+            return None
+        finish = remaining[end]
+        raises = finish.opname == "RAISE_VARARGS"
+        body = remaining[: end + int(raises)]
+        # Several compiled control paths can share the same source span. Only
+        # follow a straight-line suite with an unambiguous exit and cleanup.
+        if any(
+            row.opcode in jumps
+            or row.is_jump_target
+            or row.opname in {"RETURN_VALUE", "RETURN_CONST", "RERAISE", "EXTENDED_ARG"}
+            or not any(within(row.positions, stmt) for stmt in handler.body)
+            for row in body
+        ):
+            return None
+        normal = [] if raises else remaining[end : end + (4 if handler.name else 1)]
+        if handler.name and normal and not alias_cleanup(normal[1:], binding):
+            return None
+        exceptional = []
+        if handler.name:
+            exceptional = header[-4:]
+            if (
+                not alias_cleanup(exceptional[:-1], binding)
+                or exceptional[-1].opname != "RERAISE"
+                or exceptional[-1].arg != 1
+            ):
+                return None
+        body_target = exceptional[0].offset if exceptional else target
+        if not all(targets(row, body_target) for row in body):
+            return None
+        if not all(targets(row, target) for row in exceptional):
+            return None
+        for row in normal:
+            entry = covering(row.offset)
+            if entry:
+                table.add(entry)
+        return dict(
+            semantics_version=1,
+            position=list(span),
+            arm_index=index,
+            entry=_handler_instruction(entry_op),
+            load=loads[tuple_position(handler.type)],
+            check=_handler_instruction(check),
+            branch=_handler_instruction(branch),
+            matched=list(map(_handler_instruction, matched)),
+            body_offset=remaining[0].offset,
+            body_raise=_handler_instruction(finish) if raises else None,
+            mismatch=_handler_instruction(instructions[mismatch]),
+            normal_exit=list(map(_handler_instruction, normal)),
+            exceptional_cleanup=list(map(_handler_instruction, exceptional)),
+            unwind=list(map(_handler_instruction, unwind)),
+            exception_table=[dict(e._asdict()) for e in sorted(table)],
+        )
+
+    sites = {}
+    for node in tries:
+        lookups = [
+            loads.get(tuple_position(h.type)) if isinstance(h.type, ast.Name) else None
+            for h in node.handlers
+        ]
+        if not lookups or not all(lookups):
+            continue
+        indexes = [by_offset[row["offset"]] for row in lookups]
+        first = indexes[0]
+        if first == 0:
+            continue
+        entry_op = instructions[first - 1]
+        primary = [e for e in entries if e.target == entry_op.offset]
+        if (
+            entry_op.opname != "PUSH_EXC_INFO"
+            or not primary
+            or any(e.depth != 0 or e.lasti for e in primary)
+            or any(
+                not any(
+                    within(instructions[by_offset[e.start]].positions, stmt)
+                    for stmt in node.body
+                )
+                for e in primary
+            )
+        ):
+            continue
+        header_entry = covering(entry_op.offset)
+        if not header_entry or not header_entry.lasti or header_entry.depth != 1:
+            continue
+        start = by_offset[header_entry.target]
+        unwind = instructions[start : start + 3]
+        if [row.opname for row in unwind] != ["COPY", "POP_EXCEPT", "RERAISE"] or (
+            unwind[0].arg,
+            unwind[2].arg,
+        ) != (3, 1):
+            continue
+        last = start - 1
+        if instructions[last].opname != "RERAISE" or instructions[last].arg != 0:
+            continue
+        mismatch_entry = covering(instructions[last].offset)
+        if (
+            not mismatch_entry
+            or mismatch_entry.target != header_entry.target
+            or mismatch_entry.depth != 1
+            or not mismatch_entry.lasti
+        ):
+            continue
+        table = [*primary, header_entry, mismatch_entry]
+        arms = [
+            arm(h, i, a, b, entry_op, table, unwind) if a + 3 < b else None
+            for i, (h, a, b) in enumerate(
+                zip(node.handlers, indexes, [*indexes[1:], last], strict=True)
+            )
+        ]
+        if all(arms):
+            for h, receipt in zip(node.handlers, arms, strict=True):
+                sites[tuple_position(h)] = dict(receipt, arm_count=len(arms))
+    return sites
+
+
 def _compiler_sites(tree, path, relative, source_hash):
     """Capture positioned construction and binding facts from one compilation."""
     if sys.implementation.name != "cpython" or not hasattr(CodeType, "co_positions"):
@@ -417,7 +663,7 @@ def _compiler_sites(tree, path, relative, source_hash):
             and not any(isinstance(e, ast.Starred) for e in node.elts)
         ):
             nodes[tuple_position(node)] = node
-    assignments, names, imports, calls = [], {}, {}, {}
+    assignments, names, imports, calls, tries = [], {}, {}, {}, []
     for node in scope_nodes(tree.body):
         if (
             isinstance(node, ast.Assign)
@@ -433,6 +679,8 @@ def _compiler_sites(tree, path, relative, source_hash):
             names[tuple_position(node.target)] = node.target.id
         elif isinstance(node, ast.Import) and len(node.names) == 1:
             imports[tuple_position(node)] = node.names[0]
+        elif isinstance(node, ast.Try) and node.handlers:
+            tries.append(node)
         elif isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
             calls[tuple_position(node.value)] = node.value
     if not (nodes or mappings or assignments or names or imports or calls):
@@ -445,11 +693,12 @@ def _compiler_sites(tree, path, relative, source_hash):
         if assignments or names or imports or calls
         else None
     )
-    handlers = (
-        {e.target for e in dis.Bytecode(program).exception_entries}
-        if assignments or imports or calls
-        else set()
+    entries = (
+        dis.Bytecode(program).exception_entries
+        if assignments or imports or calls or tries
+        else ()
     )
+    handlers = {e.target for e in entries}
     stores = (
         _constant_store_sites(program, instructions, assignments, handlers)
         if assignments
@@ -461,6 +710,11 @@ def _compiler_sites(tree, path, relative, source_hash):
     )
     call_expressions = (
         _call_expression_sites(program, instructions, calls, handlers) if calls else {}
+    )
+    exception_handlers = (
+        _exception_handler_sites(instructions, entries, tries, loads)
+        if tries and loads
+        else {}
     )
     source_code = (
         dict(
@@ -542,6 +796,7 @@ def _compiler_sites(tree, path, relative, source_hash):
         name_loads=loads,
         import_stores=import_stores,
         call_expressions=call_expressions,
+        exception_handlers=exception_handlers,
     )
 
 
