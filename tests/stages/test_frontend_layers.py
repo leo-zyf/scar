@@ -1184,6 +1184,53 @@ def test_module_name_loads_follow_actual_callee_and_argument_ports(tmp_path):
     )
 
 
+def test_module_code_digest_keeps_slice_type_source_path_and_legacy_bytes(tmp_path):
+    from hashlib import sha256
+    import marshal
+    import os
+    import sys
+
+    import scar
+    from scar.frontend.languages.python.environment import code_digest
+
+    def sample(filename, constant):
+        code = compile("x = 0", filename, "exec")
+        return code.replace(co_consts=(*code.co_consts, (slice(0), constant)))
+
+    simple = compile("x = (1, 2, True)", "base.py", "exec")
+    assert code_digest(simple) == sha256(marshal.dumps(simple, 2)).hexdigest()
+    actual = code_digest(sample("first.py", slice(1, 2, None)))
+    assert all(
+        actual != code_digest(sample(name, item))
+        for name, item in (
+            ("first.py", ("slice", 1, 2, None)),
+            ("first.py", slice(True, 2, None)),
+            ("first.py", slice(1, 2, 1)),
+            ("other.py", slice(1, 2, None)),
+        )
+    )
+    source = "def select(items): return items[2:7, 1:]\n"
+    path = tmp_path / "entry.py"
+    path.write_text(source)
+    expected = code_digest(compile(source, str(path), "exec", dont_inherit=True))
+    check = (
+        "import sys; from pathlib import Path; from scar.frontend.languages.python.environment import code_digest; "
+        "p = Path(sys.argv[1]); print(code_digest(compile(p.read_bytes(), str(p), 'exec', dont_inherit=True)))"
+    )
+    for seed in ("7", "17"):
+        env = dict(
+            os.environ,
+            PYTHONHASHSEED=seed,
+            PYTHONPATH=str(Path(scar.__file__).resolve().parents[1]),
+        )
+        assert (
+            subprocess.check_output(
+                [sys.executable, "-B", "-c", check, str(path)], env=env, text=True
+            ).strip()
+            == expected
+        )
+
+
 def test_module_import_store_matches_cpython_stack_and_source_span(tmp_path):
     import dis
     import sys

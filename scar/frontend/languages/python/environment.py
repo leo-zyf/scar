@@ -9,7 +9,7 @@ import marshal
 import os
 from pathlib import Path
 import sys
-from types import BuiltinFunctionType, MemberDescriptorType, ModuleType
+from types import BuiltinFunctionType, CodeType, MemberDescriptorType, ModuleType
 
 
 @cache
@@ -122,8 +122,33 @@ def capture_import_environment(entries):
     return ImportEnvironment(entries, analysis, cache_states)
 
 
+def _slice_aware_constant(value):
+    # Marshal v2 has reference-independent bytes, but cannot serialize slices.
+    # Type-tag every tuple so a source tuple cannot imitate an encoded slice.
+    if type(value) is CodeType:
+        return value.replace(
+            co_consts=tuple(map(_slice_aware_constant, value.co_consts))
+        )
+    if type(value) is tuple:
+        return ("tuple", tuple(map(_slice_aware_constant, value)))
+    if type(value) is slice:
+        return (
+            "slice",
+            *map(_slice_aware_constant, (value.start, value.stop, value.step)),
+        )
+    if type(value) is frozenset:
+        return frozenset(map(_slice_aware_constant, value))
+    return value
+
+
 def code_digest(code):
-    return sha256(marshal.dumps(code, 2)).hexdigest()
+    try:
+        payload = marshal.dumps(code, 2)
+    except ValueError:
+        payload = marshal.dumps(
+            ("scar.slice-aware-code.v1", _slice_aware_constant(code)), 2
+        )
+    return sha256(payload).hexdigest()
 
 
 def run_script(script, arguments, initial_directory, *, data=None):
