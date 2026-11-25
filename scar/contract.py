@@ -33,7 +33,13 @@ MODULE_REGISTRY_OPERATIONS = frozenset(
         "module_global_store",
         "module_import_continuation_required",
         "module_import_preserves",
+        "module_name_load",
         "module_namespace_initialize",
+        "module_object_expression",
+        "source_object_call",
+        "source_object_compare",
+        "source_object_discard",
+        "source_object_truth",
         "module_state_preserves",
         "state_effect_continuation_required",
     }
@@ -1617,7 +1623,10 @@ def walk_records(value, *, exclude_fields=()):
             pending.extend(item)
         elif isinstance(item, dict):
             yield item
-            pending.extend(v for k, v in item.items() if k not in exclude_fields)
+            if exclude_fields:
+                pending.extend(v for k, v in item.items() if k not in exclude_fields)
+            else:
+                pending.extend(item.values())
 
 
 def walk_operations(value, *, exclude_fields=()):

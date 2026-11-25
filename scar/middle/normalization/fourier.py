@@ -2,7 +2,7 @@
 
 from scar.contract import digest, json_bytes, python_provider_id
 
-from . import host_protocols
+from . import host_protocols, namespace_operations
 from .values import Value, array_kind, literal, source_site, wire
 
 _ROOT = "numpy"
@@ -159,7 +159,7 @@ def _guard(frame, steps, operation, common, continuation):
         semantics=continuation,
     )
     for item in (operation, fallback):
-        host_protocols.require_registry_operator(frame.project, item["op"])
+        namespace_operations.require_registry_operator(frame.project, item["op"])
     matched = frame.effect(operation, "bool", steps)
     steps.append(
         {

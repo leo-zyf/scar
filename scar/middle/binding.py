@@ -10,6 +10,7 @@ from scar.contract import (
     semantic_form as semantics,
     validate_images,
     walk_operations as _operations,
+    walk_records,
     validate_text_profiles,
     validate_numeric_contract,
     validate_source_literal,
@@ -120,13 +121,13 @@ def _definition(graph):
             return [read(v) for v in value]
         if not isinstance(value, dict):
             return value
-        if set(value) == {"port"}:
+        if "port" in value and len(value) == 1:
             port = value["port"]
             if type(port) is not int or not 0 <= port < len(nodes) or port in active:
                 raise ValueError(f"invalid operand port {port} in {graph['id']}")
             active.add(port)
             result = read(nodes[port])
-            if result["op"] in _SITE_OPERATIONS:
+            if result["op"] in _SITE_OPERATIONS or "source_name_load" in result:
                 result["site"] = f"{graph['id']}/{port}"
             active.remove(port)
             return result
@@ -685,6 +686,27 @@ def bind(graph, folder):
             signature = fn["signature"]
             name = signature["name"]
             function_names.append(name)
+            scope = signature.get("python_scope", {})
+            code = scope.get("source_code")
+            if code is not None:
+                facts = unit.get("source_facts", {})
+                if not (
+                    isinstance(code, dict)
+                    and unit.get("language") == "python"
+                    and scope.get("kind") == code.get("kind") == "module"
+                    and name == scope.get("initializer")
+                    and code.get("source_key")
+                    == scope.get("source_key")
+                    == unit["path"]
+                    and facts.get("files", {}).get(unit["path"])
+                    == code.get("source_sha256")
+                    and isinstance(code.get("source_sha256"), str)
+                    and facts.get("compiler") == code.get("compiler")
+                    and isinstance(code.get("compiler"), str)
+                ):
+                    raise ValueError(
+                        "module code identity disagrees with its captured compilation unit"
+                    )
             if signature.get("calling_convention") == "python" and fn.get(
                 "source_defined"
             ):
@@ -904,27 +926,35 @@ def bind(graph, folder):
                         accesses=fn.get("accesses", []),
                         state_flow=fn.get("state_flow"),
                     )
-    defined_symbols = {
-        node["symbol"]
-        for node in _operations(list(functions.values()))
-        if node["op"] == "python_define"
-    }
+    # Use the selected definitions once to index dependencies for this image.
+    defined_symbols, referenced_globals = set(), set()
+    used_records = set(active_objects)
+    indirect_calls = False
+    for row in walk_records(list(functions.values())):
+        op = row.get("op")
+        if op == "var":
+            referenced_globals.add(row["name"])
+        elif op == "python_define":
+            defined_symbols.add(row["symbol"])
+        elif op == "indirect_call":
+            indirect_calls = True
+        if row.get("kind") == "record":
+            used_records.add(row["name"])
     python_definitions = {
         name: descriptor
         for name, descriptor in python_definitions.items()
         if name in defined_symbols
     }
-    referenced_globals = {
+    referenced_globals.update(
         n["name"]
         for n in _operations(
             [
-                list(functions.values()),
                 [g for g in globals_.values() if not g.get("external")],
                 [records[name] for name in active_objects if name in records],
             ]
         )
         if n["op"] == "var"
-    }
+    )
     globals_ = {
         name: g
         for name, g in globals_.items()
@@ -953,21 +983,18 @@ def bind(graph, folder):
         issue(
             "missing_entry_body", graph["entry"], "no executable definition for entry"
         )
-    used_records = set(active_objects)
 
     def record_references(value):
-        if isinstance(value, list):
-            for item in value:
-                record_references(item)
-        elif isinstance(value, dict):
-            if value.get("kind") == "record":
-                used_records.add(value["name"])
-            for item in value.values():
-                record_references(item)
+        used_records.update(
+            row["name"] for row in walk_records(value) if row.get("kind") == "record"
+        )
 
-    record_references(
-        [list(functions.values()), list(globals_.values()), list(externs.values())]
-    )
+    for row in walk_records(list(globals_.values())):
+        if row.get("kind") == "record":
+            used_records.add(row["name"])
+        if row.get("op") == "indirect_call":
+            indirect_calls = True
+    record_references(list(externs.values()))
     expanded = set()
     while used_records - expanded:
         for name in sorted(used_records - expanded):
@@ -981,7 +1008,8 @@ def bind(graph, folder):
             record_references(record)
             used_records.update(b["name"] for b in record.get("bases", ()))
     issues.extend(d for d in layout_issues if d["symbol"] in used_records)
-    issues.extend(_close_callbacks(functions, externs, globals_, graph["entry"]))
+    if indirect_calls:
+        issues.extend(_close_callbacks(functions, externs, globals_, graph["entry"]))
     issues = list({json_bytes(d): d for d in issues}.values())
     protocol_names = {
         name

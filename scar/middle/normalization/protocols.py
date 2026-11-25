@@ -12,6 +12,7 @@ from . import (
     integers,
     host_protocols,
     mappings,
+    namespace_operations,
     objects,
     obligations,
     processes,
@@ -572,9 +573,9 @@ class _Project:
                     else "module_import_continuation_required"
                 )
                 for op in (operation["op"], continuation):
-                    host_protocols.require_registry_operator(self, op)
+                    namespace_operations.require_registry_operator(self, op)
                 if captured_effect:
-                    host_protocols.require_registry_operator(
+                    namespace_operations.require_registry_operator(
                         self, "capture_effect_state"
                     )
                 marker.clear()
@@ -1983,6 +1984,12 @@ class _Frame:
 
     def _evaluate(self, node, steps, discard=False, *, truth_context=False):
         op = node["op"]
+        if self.project.open_python_namespace:
+            result = namespace_operations.open_object_expression(
+                self, node, steps, truth_context=truth_context, discard=discard
+            )
+            if result is not None:
+                return result
         if op == "python_select":
             if node.get("site") is not None:
                 self.project.live_sites.add((self.name, node["site"]))
@@ -2189,6 +2196,12 @@ class _Frame:
         self.fail(node, "operation_contract", f"unclosed expression {op}")
 
     def call(self, node, steps, discard):
+        if not isinstance(node.get("target"), dict):
+            self.fail(
+                node,
+                "call_target",
+                "the source call has no captured callable expression",
+            )
         target = self.evaluate(node["target"], steps)
         if target.kind == "sequence_method":
             receiver, method = target.value
@@ -3283,12 +3296,14 @@ class _Frame:
             if op == "expr":
                 self.evaluate(node["value"], steps, discard=True)
             elif op == "assign":
-                if not host_protocols.store_open_module_constant(self, node, steps):
+                if not namespace_operations.store_open_module_constant(
+                    self, node, steps
+                ):
                     self.store(
                         node["target"], self.evaluate(node["value"], steps), steps
                     )
             elif op == "python_import":
-                group = host_protocols.global_fromlist(self, body, index)
+                group = namespace_operations.global_fromlist(self, body, index)
                 if group is None:
                     self.imported(node, steps)
                 else:
@@ -3296,7 +3311,7 @@ class _Frame:
                     self.import_origin(node)
                     occurrence["activation"] = "visited"
                     evidence = self.package_fromlist(node, occurrence, dynamic=True)
-                    host_protocols.namespace_effect(
+                    namespace_operations.namespace_effect(
                         self,
                         node,
                         steps,
@@ -3324,9 +3339,9 @@ class _Frame:
             elif (
                 op == "unbind"
                 and self.project.open_python_namespace
-                and host_protocols.global_delete_slots(self, node)
+                and namespace_operations.global_delete_slots(self, node)
             ):
-                host_protocols.namespace_effect(
+                namespace_operations.namespace_effect(
                     self,
                     node,
                     steps,

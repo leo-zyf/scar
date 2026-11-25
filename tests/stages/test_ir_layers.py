@@ -20,6 +20,30 @@ _LAYERS = {
 }
 
 
+def test_binding_rejects_module_code_from_another_source_revision(tmp_path):
+    from scar.contract import read_member
+    from scar.frontend import build
+    from scar.middle.binding import bind
+
+    source = tmp_path / "entry.py"
+    source.write_text("name = 'sample'\nprint(name)\n")
+    folder = tmp_path / "graph"
+    build(source, folder)
+    graph = json.loads((folder / "graph.json").read_bytes())
+    unit = graph["units"][0]
+    fragment = read_member(folder, unit["graph"])
+    scope = next(
+        fn["signature"]["python_scope"]
+        for fn in fragment["functions"]
+        if fn["signature"].get("python_scope", {}).get("source_code")
+    )
+    scope["source_code"]["source_sha256"] = "0" * 64
+    unit["graph"] = member(folder, "units", fragment)
+    source.unlink()
+    with pytest.raises(ValueError, match="captured compilation unit"):
+        bind(graph, folder)
+
+
 def test_middle_products_reject_out_of_order_passes_and_keep_inputs_owned(tmp_path):
     canonical = dict(
         entry="main",
@@ -514,7 +538,7 @@ def test_package_fromlist_publication_and_deletion_retain_order_and_callbacks(tm
     package.mkdir()
     (package / "__init__.py").write_text(
         "from . import child as first, child as second\ndel first, second\n"
-        "from other.library import action as first, action as second\nfirst(second)\n"
+        "from other.library import action as first, action as second\nfirst(second)\nboundary = 1\n"
     )
     (package / "child.py").write_text("print('child')\n")
     other = tmp_path / "other"
@@ -589,16 +613,24 @@ builtins.__import__ = importer
     report = json.loads((ir / "plan.json").read_bytes())
     [issue] = report["issues"]
     assert (
-        issue["code"] == "python.global_binding_after_import"
-        and issue["location"]["line"] == 4
+        issue["code"] == "python.global_store_after_callback"
+        and issue["location"]["line"] == 5
     )
-    assert issue["source_evidence"]["slot"] == "py:pkg:first"
     analysis = report["protocol_analysis"]
     fragment = next(
         f for f in analysis["prefix_fragments"] if f["symbol"] == "py:pkg:<init>"
     )
     prefix = read_member(ir, fragment["fragment"])
-    publish, delete, foreign = [s["value"] for s in prefix["body"]]
+    publish, delete, foreign, use = [s["value"] for s in prefix["body"]]
+    assert (
+        use["op"] == "module_object_expression"
+        and use["expression"]["op"] == "source_object_discard"
+    )
+    call = use["expression"]["value"]
+    assert call["op"] == "source_object_call"
+    assert [
+        operand["instruction"]["name"] for operand in [call["target"], *call["args"]]
+    ] == ["first", "second"]
     assert (
         foreign["op"] == "module_fromlist_publish" and foreign["location"]["line"] == 3
     )
@@ -611,7 +643,7 @@ builtins.__import__ = importer
     assert [
         (b["binding_index"], b["name"], b["slot"]) for b in foreign["bindings"]
     ] == [(0, "first", "py:pkg:first"), (1, "second", "py:pkg:second")]
-    previous = issue["source_evidence"]["prior_publication"]
+    previous = call["target"]["source_evidence"]["prior_publication"]
     assert (
         previous["occurrence"] == foreign["occurrence"]
         and previous["binding_index"] == 0
@@ -7114,3 +7146,215 @@ def test_open_module_literal_store_uses_active_code_and_source_mapping(tmp_path)
         "module_registry",
     )
     assert failure["registry_checks"]["operator_counts"] == {"module_global_store": 1}
+
+
+def test_open_object_expression_connects_live_callees_arguments_comparisons_and_truth(
+    tmp_path,
+):
+    import operator
+    from types import SimpleNamespace
+
+    from scar.contract import read_member
+    from scar.frontend import build
+    from scar.middle import plan
+
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    source = pkg / "__init__.py"
+    source.write_text(
+        "from . import child as gone\ndel gone\n"
+        "if outer(inner(arg)) < right(bound) or outer(arg) >= right(limit):\n    pass\n"
+        "boundary = 1\ndef declaration():\n    global limit\n"
+    )
+    (pkg / "child.py").write_text("pass\n")
+    entry = tmp_path / "entry.py"
+    entry.write_text("import pkg\n")
+    code = compile(source.read_bytes(), str(source), "exec")
+    graph, out = tmp_path / "graph", tmp_path / "out"
+    build(entry, graph)
+    source.unlink()
+
+    def lower(index, out):
+        assert plan(index, out)["status"] == "INCOMPLETE"
+        report = json.loads((out / "plan.json").read_bytes())
+        [issue] = report["issues"]
+        row = next(
+            r
+            for r in report["protocol_analysis"]["prefix_fragments"]
+            if r["symbol"] == "py:pkg:<init>"
+        )
+        return issue, read_member(out, row["fragment"])
+
+    issue, fragment = lower(graph, out)
+    assert (issue["code"], issue["location"]["line"]) == (
+        "python.global_store_after_callback",
+        5,
+    )
+    evaluation = fragment["body"][2]["init"]
+    assert (evaluation["op"], evaluation["type"]) == (
+        "module_object_expression",
+        "bool",
+    )
+    assert evaluation["external_effect"] == "UNKNOWN" and evaluation["may_raise"]
+    assert "source_equivalent" in evaluation["on_code_mismatch"]
+    expr = evaluation["expression"]
+    assert expr["op"] == "select" and expr["then"] == {
+        "op": "literal",
+        "type": "bool",
+        "value": True,
+    }
+    left = expr["condition"]["value"]
+    right = expr["else"]["value"]
+    assert left["operator"] == "lt" and right["operator"] == "gte"
+    assert right["right"]["args"][0]["lookup_order"] == [
+        "frame.globals",
+        "frame.builtins",
+    ]
+    assert left["left"]["args"][0]["target"]["lookup_order"] == [
+        "frame.locals",
+        "frame.globals",
+        "frame.builtins",
+    ]
+
+    def execute(mode, interpreted):
+        trace = []
+        local = {"arg": "argument", "limit": "wrong locals limit"}
+        builtins_ = {
+            "__import__": lambda *a: SimpleNamespace(child=0),
+            "bound": "builtin bound",
+        }
+        global_ = {"__builtins__": builtins_, "limit": "global limit"}
+        scopes = {
+            "frame.locals": local,
+            "frame.globals": global_,
+            "frame.builtins": builtins_,
+        }
+
+        class Result:
+            def __lt__(self, rhs):
+                trace.append("compare lt")
+                return Decision()
+
+            def __ge__(self, rhs):
+                trace.append("compare ge")
+                return Decision()
+
+        class Decision:
+            def __bool__(self):
+                trace.append("truth")
+                return mode == "stop"
+
+        class Callable:
+            def __init__(self, label):
+                self.label = label
+
+            def __call__(self, arg):
+                trace.append(self.label + "(" + arg + ")")
+                return Result()
+
+            def __del__(self):
+                if self.label == "old":
+                    trace.append("release old")
+
+        def inner(arg):
+            trace.append("inner(" + arg + ")")
+            local["outer"] = Callable("new")
+            if mode == "raise":
+                raise LookupError("inner")
+            return "inner result"
+
+        local.update(outer=Callable("old"), inner=inner)
+        global_["right"] = Callable("right")
+
+        def value(n):
+            op = n["op"]
+            if op == "module_name_load":
+                name = n["instruction"]["name"]
+                for domain in n["lookup_order"]:
+                    if name in scopes[domain]:
+                        return scopes[domain][name]
+                raise NameError(name)
+            if op == "source_object_call":
+                return value(n["target"])(*[value(arg) for arg in n["args"]])
+            if op == "source_object_compare":
+                return {"lt": operator.lt, "gte": operator.ge}[n["operator"]](
+                    value(n["left"]), value(n["right"])
+                )
+            if op == "source_object_truth":
+                return bool(value(n["value"]))
+            if op == "select":
+                return value(n["then"] if value(n["condition"]) else n["else"])
+            assert op == "literal"
+            return n["value"]
+
+        try:
+            if interpreted:
+                value(expr)
+            else:
+                exec(code, global_, local)
+        except LookupError as error:
+            trace.append("raised " + str(error))
+        return trace
+
+    prefix = [
+        "inner(argument)",
+        "old(inner result)",
+        "release old",
+        "right(builtin bound)",
+        "compare lt",
+        "truth",
+    ]
+    for mode, expected in (
+        ("stop", prefix),
+        (
+            "continue",
+            prefix + ["new(argument)", "right(global limit)", "compare ge", "truth"],
+        ),
+        ("raise", ["inner(argument)", "release old", "raised inner"]),
+    ):
+        assert execute(mode, False) == expected
+        assert execute(mode, True) == expected
+
+    index = json.loads((graph / "graph.json").read_bytes())
+    unit = next(row for row in index["units"] if row["path"] == "pkg/__init__.py")
+    original = read_member(graph, unit["graph"])
+    for variant in ("foreign_code", "missing_target", "spread", "keywords"):
+        payload = deepcopy(original)
+        mod = next(
+            fn
+            for fn in payload["functions"]
+            if fn["signature"]["name"] == "py:pkg:<init>"
+        )
+        nodes = mod["nodes"]
+        call = next(
+            n
+            for n in nodes
+            if n.get("op") in {"call", "python_invoke"} and n["location"]["line"] == 3
+        )
+        operand = nodes[call["target"]["port"]]
+        if variant == "foreign_code":
+            operand["source_name_load"]["code_sha256"] = "0" * 64
+        elif variant == "missing_target":
+            del call["target"]
+        elif variant == "spread":
+            call["args"] = [{"port": len(nodes)}]
+            nodes.append(
+                dict(
+                    op="starred",
+                    value={"port": nodes.index(operand)},
+                    location=operand["location"],
+                )
+            )
+        else:
+            call["keywords"] = [{"name": None, "value": call["args"][0]}]
+        unit["graph"] = member(graph, "units", payload)
+        path = graph / (variant + ".json")
+        write_json(path, index)
+        issue, fragment = lower(path, tmp_path / ("plan-" + variant))
+        assert issue["location"]["line"] == 3
+        if variant == "missing_target":
+            assert issue["code"] == "python.call_target"
+        assert all(
+            s.get("init", {}).get("op") != "module_object_expression"
+            for s in fragment["body"]
+        )
