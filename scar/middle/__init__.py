@@ -88,7 +88,11 @@ def _plan_image(graph, folder, revision, out, *, shape, trip_count):
                 protocol_analysis[group] = [
                     {
                         **fragment,
-                        "function": member(out, "analysis", fragment["function"]),
+                        **{
+                            field: member(out, "analysis", fragment[field])
+                            for field in ("function", "source_imports")
+                            if field in fragment
+                        },
                     }
                     for fragment in protocol_analysis[group]
                 ]
