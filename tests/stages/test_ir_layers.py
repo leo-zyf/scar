@@ -90,7 +90,7 @@ def test_binding_rejects_exception_edge_to_a_different_handler(tmp_path):
 
     source = tmp_path / "entry.py"
     source.write_text(
-        "try:\n    action()\nexcept ValueError as err:\n    first(err)\nexcept TypeError:\n    second()\n"
+        "try:\n    action()\nexcept ValueError as err:\n    first(err)\nexcept TypeError:\n    raise\n"
     )
     folder = tmp_path / "graph"
     build(source, folder)

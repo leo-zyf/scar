@@ -189,6 +189,17 @@ def _exception_edges(proof, following):
         < proof["matched"][-1]["offset"]
         < proof["body_offset"]
         <= miss["offset"]
+        and (
+            len(proof["matched"]) == 1
+            or (
+                len(proof["matched"]) == 2
+                and proof["matched"][0]["opcode"] == "NOT_TAKEN"
+                and branch["offset"]
+                < proof["matched"][0]["offset"]
+                < proof["matched"][1]["offset"]
+                and proof["matched"][0]["position"] == branch["position"]
+            )
+        )
         and [r["opcode"] for r in unwind] == ["COPY", "POP_EXCEPT", "RERAISE"]
         and any(
             e["target"] == entry["offset"] and e["depth"] == 0 and e["lasti"] is False
@@ -196,7 +207,7 @@ def _exception_edges(proof, following):
         )
         and all(
             reaches(r["offset"], unwind[0]["offset"], 1)
-            for r in (load, check, branch, *proof["matched"], *cleanup)
+            for r in (load, check, branch, proof["matched"][-1], *cleanup)
         )
     ):
         raise ValueError("source exception dispatch edges are inconsistent")
