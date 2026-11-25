@@ -7,6 +7,7 @@ from collections import Counter, defaultdict, deque
 from dataclasses import dataclass, field, replace
 import dis
 from functools import cache
+from itertools import pairwise
 from pathlib import Path
 import symtable
 import sys
@@ -291,6 +292,7 @@ _STATEMENT_END = {
     ast.Raise: {"RAISE_VARARGS"},
     ast.Assign: {"STORE_NAME", "STORE_GLOBAL"},
     ast.Delete: {"DELETE_NAME", "DELETE_GLOBAL"},
+    ast.If: {"POP_JUMP_IF_TRUE", "POP_JUMP_IF_FALSE"},
 }
 
 
@@ -422,6 +424,11 @@ def _expression_instruction(program, ins, parts, keywords):
             ):
                 return None
             row["intrinsic"] = ins.argrepr
+    elif opcode in {"POP_JUMP_IF_TRUE", "POP_JUMP_IF_FALSE", "TO_BOOL"}:
+        if not any(isinstance(n, ast.Call) for n in parts):
+            return None
+        if opcode != "TO_BOOL":
+            row["target"] = ins.argval
     elif opcode == "RAISE_VARARGS":
         if not any(
             isinstance(n, ast.Raise)
@@ -434,13 +441,119 @@ def _expression_instruction(program, ins, parts, keywords):
     return row
 
 
+def _condition_operand(test):
+    if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
+        test = test.operand
+    return test if isinstance(test, ast.Call) else None
+
+
+def _branch_receipt(node, after, instructions, end, offsets, rows):
+    """Match the actual successors of a call's truth jump to the source suites."""
+    operand = _condition_operand(node.test)
+    negated = operand is not node.test
+    pos = tuple_position(operand)
+    branch = instructions[end]
+    if branch.opname != ("POP_JUMP_IF_TRUE" if negated else "POP_JUMP_IF_FALSE"):
+        return None
+    # 3.12 truth-tests the object in the jump. Later bytecode must produce an
+    # exact bool first. A separate UNARY_NOT is not interchangeable with this lowering.
+    truth = 1 if sys.version_info >= (3, 13) else 0
+    if (
+        len(rows) < 2 + truth
+        or rows[-2 - truth]["opcode"] not in {"CALL", "CALL_KW"}
+        or truth
+        and rows[-2]["opcode"] != "TO_BOOL"
+        or any(row["position"] != list(pos) for row in rows[-2 - truth :])
+    ):
+        return None
+    then = end + 1
+    if then >= len(instructions):
+        return None
+    marker = None
+    if instructions[then].opname == "NOT_TAKEN":
+        ins = instructions[then]
+        if ins.positions != pos or ins.is_jump_target:
+            return None
+        marker = dict(opcode=ins.opname, offset=ins.offset, position=list(pos))
+        then += 1
+    other = offsets[branch.argval]
+    if not then < other:
+        return None
+
+    def destination(index, statement, kind):
+        ins = instructions[index]
+
+        def inside(spot):
+            return (
+                None not in spot
+                and (statement.lineno, statement.col_offset)
+                <= (spot.lineno, spot.col_offset)
+                and (spot.end_lineno, spot.end_col_offset)
+                <= (statement.end_lineno, statement.end_col_offset)
+            )
+
+        if (
+            ins.opname == "EXTENDED_ARG"
+            or not inside(ins.positions)
+            or any(inside(other.positions) for other in instructions[then:index])
+        ):
+            return None
+        return dict(
+            kind=kind,
+            offset=ins.offset,
+            opcode=ins.opname,
+            position=list(ins.positions),
+            statement_position=list(tuple_position(statement)),
+        )
+
+    yes = destination(then, node.body[0], "suite")
+    target = instructions[other]
+    if node.orelse:
+        no = destination(other, node.orelse[0], "suite")
+    elif after is not None:
+        no = destination(other, after, "continuation")
+    elif (
+        target.opname in {"RETURN_CONST", "LOAD_CONST"}
+        and target.argval is None
+        and target.positions == pos
+    ):
+        ret = target
+        if target.opname == "LOAD_CONST":
+            if other + 1 >= len(instructions):
+                return None
+            ret = instructions[other + 1]
+            if ret.opname != "RETURN_VALUE" or ret.is_jump_target:
+                return None
+        no = dict(
+            kind="implicit_return",
+            opcode=target.opname,
+            offset=target.offset,
+            position=list(pos),
+            statement_position=None,
+            constant_index=target.arg,
+            return_offset=ret.offset,
+        )
+    else:
+        return None
+    if yes and no:
+        return dict(
+            condition_position=list(tuple_position(node.test)),
+            operand_position=list(pos),
+            negated=negated,
+            fallthrough_marker=marker,
+            then=yes,
+            **{"else": no},
+        )
+
+
 def _statement_expression(program, instructions, root, end, handlers):
     """Capture source operands and the terminal operation consuming them."""
-    span = tuple_position(root)
+    expr = _condition_operand(root.test) if isinstance(root, ast.If) else root
+    span = tuple_position(expr)
     parts, keywords = defaultdict(list), defaultdict(list)
     discarded_call = isinstance(root, ast.Call)
     needs_object_ports = not discarded_call
-    for node in ast.walk(root):
+    for node in ast.walk(expr):
         if isinstance(node, (ast.Load, ast.Store, ast.Del, ast.keyword)):
             continue
         if not isinstance(
@@ -526,13 +639,20 @@ def _statement_expression(program, instructions, root, end, handlers):
         )
     ):
         return None
-    return dict(semantics_version=1, position=list(span), instructions=rows)
+    return dict(
+        semantics_version=1, position=list(tuple_position(root)), instructions=rows
+    )
 
 
-def _statement_expression_sites(program, instructions, expressions, handlers, stores):
+def _statement_expression_sites(
+    program, instructions, expressions, handlers, stores, following
+):
     # Multiple compiled copies of a finally suite have the same source span.
     ends = defaultdict(list)
+    offsets = {}
     for index, ins in enumerate(instructions):
+        offsets[ins.offset] = index
+
         root = expressions.get(ins.positions)
         if root is not None and ins.opname in _STATEMENT_END[type(root)]:
             ends[ins.positions].append(index)
@@ -545,6 +665,18 @@ def _statement_expression_sites(program, instructions, expressions, handlers, st
                 program, instructions, root, matches[0], handlers
             )
             if receipt is not None:
+                if isinstance(root, ast.If):
+                    edges = _branch_receipt(
+                        root,
+                        following.get(root),
+                        instructions,
+                        matches[0],
+                        offsets,
+                        receipt["instructions"],
+                    )
+                    if edges is None:
+                        continue
+                    receipt["branch"] = edges
                 sites[span] = receipt
     return sites
 
@@ -797,10 +929,18 @@ def _compiler_sites(tree, path, relative, source_hash):
     """Capture positioned construction and binding facts from one compilation."""
     if sys.implementation.name != "cpython" or not hasattr(CodeType, "co_positions"):
         return {}
-    nodes, mappings, syntax = {}, {}, deque([tree])
+    nodes, mappings, following, syntax = {}, {}, {}, deque([tree])
     while syntax:
         node = syntax.popleft()
         syntax.extend(ast.iter_child_nodes(node))
+        for field in ("body", "orelse", "finalbody"):
+            suite = getattr(node, field, None)
+            if isinstance(suite, list):
+                following.update(
+                    (a, b)
+                    for a, b in pairwise(suite)
+                    if isinstance(a, ast.If) and not a.orelse
+                )
         if isinstance(node, ast.Dict):
             mappings[tuple_position(node)] = []
         elif (
@@ -833,6 +973,8 @@ def _compiler_sites(tree, path, relative, source_hash):
             tries.append(node)
         elif isinstance(node, ast.Raise):
             expressions[tuple_position(node)] = node
+        elif isinstance(node, ast.If) and (operand := _condition_operand(node.test)):
+            expressions[tuple_position(operand)] = node
         elif isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
             expressions[tuple_position(node.value)] = node.value
     if not (nodes or mappings or assignments or names or imports or expressions):
@@ -862,7 +1004,7 @@ def _compiler_sites(tree, path, relative, source_hash):
     )
     statement_expressions = (
         _statement_expression_sites(
-            program, instructions, expressions, handlers, stores
+            program, instructions, expressions, handlers, stores, following
         )
         if expressions
         else {}

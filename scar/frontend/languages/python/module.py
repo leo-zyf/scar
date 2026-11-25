@@ -2070,7 +2070,16 @@ class _Scope:
             yes, left = self.branch(node.body, before)
             no, right = self.branch(node.orelse, before)
             self.merge(left, right)
-            return [R(node, "if", condition=condition, then=yes, **{"else": no})]
+            return [
+                R(
+                    node,
+                    "if",
+                    condition=condition,
+                    then=yes,
+                    **{"else": no},
+                    **self.source_expression(node),
+                )
+            ]
         if isinstance(node, (ast.For, ast.AsyncFor, ast.While)):
             iterator = None if isinstance(node, ast.While) else self.expr(node.iter)[0]
             before = self.env.copy()

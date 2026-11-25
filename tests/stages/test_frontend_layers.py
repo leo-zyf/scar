@@ -1005,6 +1005,86 @@ def test_module_display_ports_bind_typed_pool_items_and_dynamic_order(tmp_path):
     )
 
 
+def test_module_if_call_receipt_binds_truth_and_both_successors(tmp_path):
+    import dis
+    import sys
+
+    from scar.contract import read_member
+    from scar.frontend import build
+
+    text = (
+        "if choose(arg):\n    left()\nelse:\n    right()\n"
+        "if not probe.value(flag):\n    selected()\nnext_step()\n"
+        "if choose(arg) or other():\n    compound()\n"
+        "try:\n    check()\nfinally:\n    if decide():\n        duplicated()\n"
+        "if final():\n    done()\n"
+    )
+    path = tmp_path / "branch.py"
+    path.write_text(text)
+    code = compile(text, str(path), "exec", dont_inherit=True)
+    out = tmp_path / "graph"
+    build(path, out)
+    fn = next(
+        f
+        for f in read_member(
+            out, json.loads((out / "graph.json").read_bytes())["units"][0]["graph"]
+        )["functions"]
+        if f["signature"]["name"] == "__main__"
+    )
+    native = {i.offset: i for i in dis.get_instructions(code)}
+    ordered = list(native)
+    found = [n for n in fn["nodes"] if n["op"] == "if" and "source_expression" in n]
+    if not any(i.positions.col_offset is not None for i in native.values()):
+        assert not found
+        return
+    assert [n["location"]["line"] for n in found] == [1, 5, 15]
+    for n, kind in zip(
+        found, ("suite", "continuation", "implicit_return"), strict=True
+    ):
+        receipt = n["source_expression"]
+        rows = receipt["instructions"]
+        edges = receipt["branch"]
+        jumped = rows[-1]
+        j = native[jumped["offset"]]
+        negated = n["location"]["line"] == 5
+        assert edges["negated"] is negated and edges["else"]["kind"] == kind
+        assert (
+            jumped["opcode"]
+            == j.opname
+            == ("POP_JUMP_IF_TRUE" if negated else "POP_JUMP_IF_FALSE")
+        )
+        assert edges["else"]["offset"] == jumped["target"] == j.argval
+        assert edges["operand_position"] == list(j.positions)
+        assert [r["opcode"] for r in rows] == [
+            native[o].opname
+            for o in ordered[
+                ordered.index(rows[0]["offset"]) : ordered.index(j.offset) + 1
+            ]
+        ]
+        assert ("TO_BOOL" in [r["opcode"] for r in rows]) == (
+            sys.version_info >= (3, 13)
+        )
+        offset = ordered.index(j.offset) + 1
+        if marker := edges["fallthrough_marker"]:
+            assert (
+                native[ordered[offset]].opname == marker["opcode"] == "NOT_TAKEN"
+                and marker["offset"] == ordered[offset]
+            )
+            offset += 1
+        assert edges["then"]["offset"] == ordered[offset]
+        for dest in (edges["then"], edges["else"]):
+            actual = native[dest["offset"]]
+            assert dest["opcode"] == actual.opname and dest["position"] == list(
+                actual.positions
+            )
+        if kind == "suite":
+            assert edges["else"]["statement_position"] == [4, 4, 4, 11]
+        elif kind == "continuation":
+            assert edges["else"]["statement_position"] == [7, 7, 0, 11]
+        else:
+            assert code.co_consts[edges["else"]["constant_index"]] is None
+
+
 def test_module_name_loads_follow_actual_callee_and_argument_ports(tmp_path):
     import dis
     import sys
