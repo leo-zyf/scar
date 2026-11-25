@@ -951,6 +951,8 @@ def _schedule_image(
     module.pop("builtin_scalar_mapping_binding_sha256", None)
     requirements, bindings, issues = _qualify(module, image_context)
     import_effects = runtime.import_effects(module, bindings)
+    if not issues and (missing := runtime.import_effect_issue(import_effects)):
+        issues.append(missing)
     import_receipt = (
         member(destination, "analysis", module["source_imports"])
         if import_effects is not None

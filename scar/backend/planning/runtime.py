@@ -459,10 +459,46 @@ def import_effects(module, bindings):
             if "entry_environment" in ledger
             else {}
         ),
-        coverage="INCOMPLETE" if counts["visited"] else "NO_VISITED_IMPORTS",
+        coverage=(
+            "INCOMPLETE"
+            if counts["visited"] or counts["unvisited"]
+            else "NO_VISITED_IMPORTS"
+        ),
         activation_counts=counts,
         occurrences=rows,
         qualification="Existing native API qualification does not discharge omitted initialization, callbacks, audit or failure effects",
+    )
+
+
+def import_effect_issue(report):
+    """Refuse delivery when an executable source import lacks target equivalence."""
+    if report is None:
+        return None
+    pending = [
+        row
+        for row in report["occurrences"]
+        if row["activation"] != "proven_inactive"
+        and row["complete_effect_equivalence"] != "proven"
+    ]
+    if not pending:
+        return None
+    first = pending[0]
+    return dict(
+        code="unqualified_source_import",
+        reported_by="B1",
+        detail="source import initialization, callbacks and errors require a target implementation or an equivalence proof",
+        qualification=dict(
+            stage="external_effects",
+            rule="source_import.observable_effects",
+            evidence=dict(
+                ledger_sha256=report["ledger_sha256"],
+                count=len(pending),
+                first_occurrence=first["id"],
+                owner=first["owner"],
+                site=first["site"],
+                obligations=first["obligations"],
+            ),
+        ),
     )
 
 

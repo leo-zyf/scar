@@ -3052,6 +3052,33 @@ def test_registry_diagnostic_preserves_observation_scope_and_actual_reads(tmp_pa
         and observation["selected_module_cache_count"] == 2
     )
     assert audit["occurrences"][0]["complete_effect_equivalence"] == "unproven"
+    # Older IR may contain an import occurrence whose source-visible loader
+    # was omitted entirely. An otherwise executable body cannot discharge it.
+    legacy = json.loads((source / "exec-ir.json").read_bytes())
+    function = {
+        **fn,
+        "body": [dict(op="return", value=dict(op="literal", type="i32", value=0))],
+    }
+    legacy["functions"] = [member(source, "functions", function)]
+    write_json(source / "exec-ir.json", legacy)
+    unqualified = tmp_path / "unused-import"
+    schedule_ir(source, unqualified, policy="serial")
+    missing = json.loads((unqualified / "physical-plan.json").read_bytes())
+    assert missing["status"] == "INCOMPLETE"
+    assert [i["code"] for i in missing["issues"]] == ["unqualified_source_import"]
+    assert (
+        missing["issues"][0]["qualification"]["evidence"]["first_occurrence"]
+        == occurrence["id"]
+    )
+
+    inactive = deepcopy(ledger)
+    inactive["occurrences"][0]["activation"] = "proven_inactive"
+    legacy["module"]["source_imports"] = member(source, "analysis", inactive)
+    write_json(source / "exec-ir.json", legacy)
+    closed = tmp_path / "inactive-import"
+    schedule_ir(source, closed, policy="serial")
+    assert json.loads((closed / "physical-plan.json").read_bytes())["status"] == "READY"
+
     corrupt = deepcopy(ledger)
     corrupt["entry_environment"]["analysis"]["application_initial_cache"] = "proven"
     with pytest.raises(ValueError, match="application premises"):
