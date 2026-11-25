@@ -76,27 +76,52 @@ jobs:
           "$RUNNER_TEMP/scar-verify/bin/python" -m black --check scar tests tools
           find scar -type f \( -name '*.cpp' -o -name '*.hpp' \) \
             -exec clang-format-18 --dry-run --Werror --style=file {} +
-      - name: Verify isolated stages from installed wheel
+      - name: Verify each CPU stage suite from the installed wheel
+        id: stages
         run: |
           verify="$RUNNER_TEMP/scar-verify/bin/python"
           cd "$RUNNER_TEMP"
           "$verify" -m scar --help
-          "$verify" -m pytest --import-mode=importlib -q "$GITHUB_WORKSPACE/tests/stages" \
-            --basetemp="$RUNNER_TEMP/scar-stages" \
-            --junitxml="$RUNNER_TEMP/scar-gates.xml"
-          "$verify" - "$RUNNER_TEMP/scar-gates.xml" <<'PY'
-          import sys
+          mkdir -p scar-gates scar-stages
+          result=0
+          for file in "$GITHUB_WORKSPACE"/tests/stages/test_*.py; do
+            suite=$(basename "$file" .py)
+            echo "::group::$suite"
+            "$verify" -m pytest --import-mode=importlib -p no:cacheprovider -q "$file" \
+              --basetemp="$RUNNER_TEMP/scar-stages/$suite" \
+              --junitxml="$RUNNER_TEMP/scar-gates/$suite.xml" || result=1
+            echo "::endgroup::"
+          done
+          "$verify" - <<'PYTHON'
+          import os
+          from pathlib import Path
           from xml.etree import ElementTree
 
-          report = ElementTree.parse(sys.argv[1])
-          if any(int(suite.get("skipped", 0)) for suite in report.iter("testsuite")):
-              raise SystemExit("CPU stage gates require the complete toolchain")
-          PY
+          suites = sorted((Path(os.environ["GITHUB_WORKSPACE"]) / "tests/stages").glob("test_*.py"))
+          if not suites:
+              raise SystemExit("no CPU stage suites found")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+              print("| Suite | Tests | Failures | Errors | Skips |", file=summary)
+              print("| --- | ---: | ---: | ---: | ---: |", file=summary)
+              complete = True
+              for suite in suites:
+                  path = Path("scar-gates") / (suite.stem + ".xml")
+                  rows = list(ElementTree.parse(path).iter("testsuite")) if path.exists() else []
+                  counts = [sum(int(row.get(k, 0)) for row in rows) for k in ("tests", "failures", "errors", "skipped")]
+                  print("|", suite.stem, "|", " | ".join(map(str, counts)), "|", file=summary)
+                  complete &= counts[0] > 0 and not any(counts[1:])
+          if not complete:
+              raise SystemExit("one or more CPU stage suites were missing, failed or skipped")
+          PYTHON
+          exit "$result"
+      - name: Check generated source and collect the mixed CPU project
+        if: ${{ !cancelled() && (steps.stages.outcome == 'success' || steps.stages.outcome == 'failure') }}
+        run: |
           find "$RUNNER_TEMP/scar-stages" -type f \( -name '*.cpp' -o -name '*.hpp' \) \
             -path '*/delivery/project/*' ! -path '*/project/vendor/*' \
             -exec clang-format-18 --dry-run --Werror --style=file {} +
           tar -czf "$RUNNER_TEMP/scar-mixed-stages.tar.gz" \
-            -C "$RUNNER_TEMP/scar-stages/test_locked_mixed_target_three0" \
+            -C "$RUNNER_TEMP/scar-stages/test_compiler/test_locked_mixed_target_three0" \
             hidden-frontend relocated-plan delivery
       - name: Upload packages and stage results
         if: always()
@@ -105,5 +130,5 @@ jobs:
           name: scar-cpu-${{ matrix.python }}
           path: |
             ${{ runner.temp }}/scar-packages/*
-            ${{ runner.temp }}/scar-gates.xml
+            ${{ runner.temp }}/scar-gates/*.xml
             ${{ runner.temp }}/scar-mixed-stages.tar.gz
