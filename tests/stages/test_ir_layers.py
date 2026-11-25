@@ -8969,3 +8969,113 @@ def test_open_condition_consumes_one_actual_truth_and_routes_its_result(tmp_path
                 if mode == "true"
                 else ["rebound left"] + trace
             )
+
+
+def test_open_binary_uses_original_operands_and_transfers_the_slot_result(tmp_path):
+    from types import SimpleNamespace
+
+    from scar.contract import read_member
+    from scar.frontend import build
+    from scar.middle import plan
+
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    source = pkg / "__init__.py"
+    source.write_text(
+        "from . import child as gone\ndel gone\n"
+        "result = left() + right()\nboundary = 0 or 1\n"
+    )
+    code = compile(source.read_bytes(), str(source), "exec")
+    (pkg / "child.py").write_text("pass\n")
+    entry = tmp_path / "entry.py"
+    entry.write_text("import pkg\n")
+    graph, out = tmp_path / "graph", tmp_path / "plan"
+    build(entry, graph)
+    source.unlink()
+    assert plan(graph, out)["status"] == "INCOMPLETE"
+    report = json.loads((out / "plan.json").read_bytes())
+    [gap] = report["issues"]
+    assert (gap["location"]["line"], gap["code"]) == (
+        4,
+        "python.global_store_after_callback",
+    )
+    row = next(
+        r
+        for r in report["protocol_analysis"]["prefix_fragments"]
+        if r["symbol"] == "py:pkg:<init>"
+    )
+    store = read_member(out, row["fragment"])["body"][-1]["value"]
+    steps = store["evaluation"]
+    assert [s["op"] for s in steps] == [
+        "module_name_load",
+        "source_object_call",
+        "module_name_load",
+        "source_object_call",
+        "source_object_binary",
+    ]
+    lhs, rhs, binary = steps[1], steps[3], steps[4]
+    assert binary["left"] == {"from_offset": lhs["offset"]} and binary["right"] == {
+        "from_offset": rhs["offset"]
+    }
+    assert (
+        store["value"] == {"from_offset": binary["offset"]}
+        and store["may_raise"]
+        and binary["may_raise"]
+    )
+    source_op = store["source_expression"]["instructions"][-2]
+    assert (
+        source_op["opcode"] == "BINARY_OP" and source_op["offset"] == binary["offset"]
+    )
+    assert (
+        source_op["oparg"] == binary["oparg"] == 0
+        and source_op["operator"] == binary["operator"] == "add"
+    )
+
+    for mode in (
+        "subclass",
+        "fallback",
+        "unsupported",
+        "right_failure",
+        "slot_failure",
+    ):
+        events = []
+        token = object()
+
+        class L:
+            def __add__(self, r):
+                events.append("left slot")
+                return token if mode == "fallback" else NotImplemented
+
+        class R(L):
+            def __radd__(self, l):
+                events.append("right slot")
+                if mode == "slot_failure":
+                    raise LookupError("slot")
+                return token if mode == "subclass" else NotImplemented
+
+        def left():
+            events.append("left operand")
+            return L()
+
+        def right():
+            events.append("right operand")
+            if mode == "right_failure":
+                raise LookupError("right")
+            return R()
+
+        env = dict(
+            left=left,
+            right=right,
+            __builtins__={"__import__": lambda *a: SimpleNamespace(child=0)},
+        )
+        if mode in {"subclass", "fallback"}:
+            exec(code, env)
+            assert env["result"] is token
+        else:
+            with pytest.raises(TypeError if mode == "unsupported" else LookupError):
+                exec(code, env)
+            assert "result" not in env
+        suffix = [] if mode == "right_failure" else ["right slot"]
+        if mode in {"fallback", "unsupported"}:
+            suffix.append("left slot")
+        assert events == ["left operand", "right operand", *suffix]

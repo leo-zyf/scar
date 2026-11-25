@@ -48,6 +48,7 @@ MODULE_REGISTRY_OPERATIONS = frozenset(
         "source_object_format",
         "source_object_build_string",
         "source_object_build_sequence",
+        "source_object_binary",
         "source_object_list_update",
         "source_object_call",
         "source_object_compare",

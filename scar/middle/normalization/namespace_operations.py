@@ -10,6 +10,7 @@ from scar.contract import (
     python_literal_sequence_sha256,
     walk_operations,
 )
+from scar.source_contracts import python_binary_operator
 from .values import literal, source_site
 
 REGISTRY_PROFILE = "cpython-importlib-registry-v1"
@@ -659,6 +660,35 @@ class _SourceExpressionRegion:
             return self.constant(node), None
         if op == "aggregate":
             return self.sequence(node), None
+        if op == "binary":
+            left = self.value(node.get("left"))
+            right = self.value(node.get("right"))
+            ins = self.take("BINARY_OP", source=node)
+            source_op = python_binary_operator(ins["oparg"])
+            operator = node.get("operator")
+            if (
+                source_op is None
+                or source_op[0] != operator
+                or ins.get("operator") != operator
+            ):
+                raise ValueError(
+                    "binary instruction disagrees with the source operation"
+                )
+            return (
+                self.emit(
+                    ins,
+                    "source_object_binary",
+                    node,
+                    oparg=ins["oparg"],
+                    operator=operator,
+                    left=left,
+                    right=right,
+                    may_raise=True,
+                    dispatch="source_binary_slots_with_subtype_and_reflected_priority_NotImplemented_and_operator_specific_fallback",
+                    ownership="retain_left_through_right_evaluation_then_consume_operands_and_transfer_actual_result",
+                ),
+                None,
+            )
         if op == "format_field":
             return self.field(node), None
         if op == "format_string":
