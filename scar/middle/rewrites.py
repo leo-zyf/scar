@@ -393,8 +393,9 @@ def _forward_materializations(fn, changes):
     """Elide a private pointwise copy stage, retaining the frozen mask stage.
 
     Only value-only compiler temporaries qualify, never source allocations.
-    The producer contains no arithmetic or conversion: moving its loads across
-    disjoint stores therefore preserves floating-environment evaluation order.
+    External masked stores only move loads. An unescaped frame-local target can
+    also receive its same-type arithmetic at the original producer position;
+    that target is inaccessible while floating operations evaluate in order.
     """
     nodes = list(_nodes(fn["body"]))
     params = {p["name"]: p for p in fn["params"]}
@@ -550,7 +551,269 @@ def _forward_materializations(fn, changes):
                 return plain(spec["to"])
         return None
 
+    # Count uses through operand roles. An element passed to a reference
+    # parameter can escape even when the IR contains no address-of operator.
+    element_uses = {}
+    for node in nodes:
+        op = node["op"]
+        if op == "assign":
+            operands = (node["target"], node["value"])
+        elif op == "binary" and node["operator"] in {
+            "add",
+            "sub",
+            "mul",
+            "div",
+            "eq",
+            "ne",
+            "lt",
+            "le",
+            "gt",
+            "ge",
+        }:
+            operands = (node["left"], node["right"])
+        elif op == "unary" and node["operator"] in {"pos", "neg", "not"}:
+            operands = (node["value"],)
+        else:
+            continue
+        for operand in operands:
+            if operand.get("op") == "index":
+                base = operand["base"]
+                if base.get("op") == "var" and base.get("scope") != "global":
+                    name = base["name"]
+                    element_uses[name] = element_uses.get(name, 0) + 1
+
+    def private_buffer(name, dominating):
+        declarations = bindings.get(name, ())
+        return (
+            declarations[0]
+            if len(declarations) == 1
+            and declarations[0]["op"] == "buffer"
+            and id(declarations[0]) in dominating
+            and name not in params
+            and element_uses.get(name, 0) == uses.get(name)
+            else None
+        )
+
+    def affine(expr, index):
+        """A unit-stride index proof; the original expression is not rewritten."""
+        op = expr["op"]
+        if (
+            op == "literal"
+            and expr.get("type") in {"i32", "i64"}
+            and type(expr.get("value")) is int
+        ):
+            return 0, expr["value"]
+        if op == "var" and expr.get("scope") != "global" and expr["name"] == index:
+            return 1, 0
+        if op == "cast" and expr.get("type") == "i64":
+            return affine(expr["value"], index)
+        if op == "unary" and expr.get("operator") in {"neg", "pos"}:
+            value = affine(expr["value"], index)
+            if value is not None:
+                sign = -1 if expr["operator"] == "neg" else 1
+                return sign * value[0], sign * value[1]
+        if op == "binary" and expr.get("operator") in {"add", "sub", "mul"}:
+            left, right = affine(expr["left"], index), affine(expr["right"], index)
+            if left is not None and right is not None:
+                if expr["operator"] == "add":
+                    return left[0] + right[0], left[1] + right[1]
+                if expr["operator"] == "sub":
+                    return left[0] - right[0], left[1] - right[1]
+                if left[0] == 0:
+                    return left[1] * right[0], left[1] * right[1]
+                if right[0] == 0:
+                    return right[1] * left[0], right[1] * left[1]
+        return None
+
+    def address(expr, index):
+        if affine(expr, index) is not None or domain(expr) in {"i32", "i64"}:
+            return True
+        if expr["op"] == "cast" and expr.get("type") == "i64":
+            return address(expr["value"], index)
+        return (
+            expr["op"] == "binary"
+            and expr.get("operator") in {"add", "sub", "mul", "div", "mod"}
+            and all(address(expr[key], index) for key in ("left", "right"))
+        )
+
+    def proof_index(value, index, extent, guards):
+        if (
+            value["op"] == "binary"
+            and value.get("operator") == "mod"
+            and semantics(value["left"]) == {"op": "var", "name": index}
+        ):
+            radix = value["right"]
+            if radix["op"] in {"var", "literal"} and domain(radix) in {"i32", "i64"}:
+                if semantics(radix) != semantics(extent):
+                    guards.setdefault(str(semantics(radix)), radix)
+                return value["left"]
+        return {
+            key: (
+                proof_index(child, index, extent, guards)
+                if isinstance(child, dict) and "op" in child
+                else child
+            )
+            for key, child in value.items()
+        }
+
+    def arithmetic_type(value, index, target, target_index, dominating, extent, guards):
+        if value.get("external_effect") == "UNKNOWN" or value.get("writes") not in (
+            None,
+            [],
+        ):
+            return None
+        op = value["op"]
+        if op == "literal":
+            return value.get("type")
+        if op == "binary" and value.get("operator") in {"add", "sub", "mul", "div"}:
+            left, right = (
+                arithmetic_type(
+                    value[key], index, target, target_index, dominating, extent, guards
+                )
+                for key in ("left", "right")
+            )
+            return left if left == right else None
+        if op == "var" and value.get("scope") != "global" and value["name"] in private:
+            return plain(fn["state_contract"]["scalars"][value["name"]]["type"])
+        if op != "index" or len(value.get("indices", ())) != 1:
+            return None
+        base = value["base"]
+        if (
+            base.get("op") != "var"
+            or base.get("scope") == "global"
+            or not address(value["indices"][0], index)
+        ):
+            return None
+        name = base["name"]
+        if name == target:
+            actual = affine(
+                proof_index(value["indices"][0], index, extent, guards), index
+            )
+            expected = affine(proof_index(target_index, index, extent, guards), index)
+            if actual is None or actual != expected:
+                return None
+        local = private_buffer(name, dominating)
+        if local is not None:
+            return local["type"]
+        spec = parameter(name).get("type", {})
+        return (
+            plain(spec["to"])
+            if isinstance(spec, dict) and spec.get("kind") == "ptr"
+            else None
+        )
+
+    def local_forward(buffer, producer, consumer, dominating):
+        if (
+            producer.get("op") != "map"
+            or consumer.get("op") != "map"
+            or len(producer["body"]) != 1
+            or len(consumer["body"]) != 1
+            or producer["index"] != consumer["index"]
+            or not domain(buffer["extent"])
+            or semantics(buffer["extent"]) != semantics(producer["extent"])
+            or semantics(buffer["extent"]) != semantics(consumer["extent"])
+        ):
+            return None
+        source, dest = producer["body"][0], consumer["body"][0]
+        index = producer["index"]
+        if (
+            source.get("op") != "assign"
+            or dest.get("op") != "assign"
+            or not _indexed(source["target"], index)
+            or source["target"]["base"].get("scope") == "global"
+            or source["target"]["base"]["name"] != buffer["name"]
+            or semantics(dest["value"]) != semantics(source["target"])
+        ):
+            return None
+        target = dest["target"]
+        if (
+            target.get("op") != "index"
+            or len(target.get("indices", ())) != 1
+            or target["base"].get("op") != "var"
+            or target["base"].get("scope") == "global"
+        ):
+            return None
+        name, selected = target["base"]["name"], target["indices"][0]
+        owner = private_buffer(name, dominating)
+        guards = {}
+        layout = affine(proof_index(selected, index, producer["extent"], guards), index)
+        if (
+            owner is None
+            or owner["type"] != buffer["type"]
+            or layout is None
+            or abs(layout[0]) != 1
+            or arithmetic_type(
+                source["value"],
+                index,
+                name,
+                selected,
+                dominating,
+                producer["extent"],
+                guards,
+            )
+            != buffer["type"]
+        ):
+            return None
+        changes.append(
+            dict(
+                rule="pointwise_materialization_forwarding",
+                site=consumer.get("site"),
+                temporary=buffer["name"],
+                element_type=buffer["type"],
+                removed_traversals=1,
+                storage_proof=dict(
+                    destination=name,
+                    unique_local_allocation=True,
+                    direct_element_uses=uses[name],
+                    index_coefficient=layout[0],
+                    index_offset=layout[1],
+                    self_reads="same_destination_index_only",
+                    runtime_equalities=[
+                        dict(left=producer["extent"], right=radix)
+                        for radix in guards.values()
+                    ],
+                ),
+                proof="unique value-only temporary; unescaped local destination with injective index; same-type arithmetic remains in original producer order; only inaccessible private stores move",
+            )
+        )
+        forwarded = {
+            **producer,
+            "proof": "M3 verified private destination and same-index self reads",
+            "body": [{**source, "target": target}],
+        }
+        if not guards:
+            return forwarded
+        condition = None
+        for radix in guards.values():
+            equal = dict(
+                op="binary",
+                operator="eq",
+                type="bool",
+                left=producer["extent"],
+                right=radix,
+            )
+            condition = (
+                equal
+                if condition is None
+                else dict(
+                    op="binary",
+                    operator="land",
+                    type="bool",
+                    left=condition,
+                    right=equal,
+                )
+            )
+        fallback = [buffer, producer, consumer]
+        guard_fallbacks.add(id(fallback))
+        return dict(
+            op="if", condition=condition, then=[forwarded], **{"else": fallback}
+        )
+
+    guard_fallbacks = set()
+
     def sequence(body, dominating=frozenset()):
+        if id(body) in guard_fallbacks:
+            return
         dominating = set(dominating)
         position = 0
         while position < len(body):
@@ -558,6 +821,17 @@ def _forward_materializations(fn, changes):
             if len(candidate) == 3:
                 buffer, producer, consumer = candidate
                 temp = buffer.get("name")
+                if (
+                    temporary(temp) is buffer
+                    and buffer["type"] in {"f32", "f64"}
+                    and uses.get(temp) == 2
+                ):
+                    forwarded = local_forward(buffer, producer, consumer, dominating)
+                    if forwarded is not None:
+                        body[position : position + 3] = [forwarded]
+                        dominating.add(id(forwarded))
+                        position += 1
+                        continue
                 first, last = guarded_assignment(producer), guarded_assignment(consumer)
                 if (
                     temporary(temp) is buffer

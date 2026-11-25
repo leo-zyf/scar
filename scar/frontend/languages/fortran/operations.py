@@ -1419,6 +1419,7 @@ class Body:
                             "name": scratch,
                             "type": target_sym.dtype,
                             "extent": extent,
+                            "storage": "compiler_temporary",
                         },
                         mapping(cell, value, "disjoint local result buffer"),
                         mapping(

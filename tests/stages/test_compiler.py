@@ -4470,3 +4470,76 @@ inspect(base, base)
         expected.stdout,
         expected.stderr,
     )
+
+
+def test_private_pointwise_snapshot_forwarding_survives_all_stages(tmp_path):
+    from scar.contract import write_json
+
+    source = tmp_path / "source"
+    source.mkdir()
+    caller = source / "caller.c"
+    caller.write_text(
+        "#include <stdio.h>\nextern void update_(const int*,const double*,const double*,double*);\n"
+        "int main(void){ double x[9]={1.,1.125,1.25,1.375,1.5,1.625,1.75,1.875,2.};\n"
+        "double rhs[8]={1.125,2.,0.,0.5,0.,2.,0.,0.}; double out[8]={0};\n"
+        'for(int n=0;n<=8;n+=1){ update_(&n,x,rhs,out);for(int i=0;i<n;++i) printf("%a\\n",out[i]);}return 0;}\n'
+    )
+    kernel = source / "update.f90"
+    kernel.write_text(
+        "subroutine update(n,x,rhs,out)\nimplicit none\ninteger,intent(in)::n\n"
+        "real(8),intent(in)::x(n+1),rhs(n)\nreal(8),intent(out)::out(n)\nreal(8)::work(n)\n"
+        "work=x(1:n)\nwork(1:n)=(x(2:n+1)-rhs(1:n))/work(1:n)\nout=work\nend subroutine\n"
+    )
+    _run(["gcc", "-std=c99", "-O3", "-c", caller, "-o", source / "caller.o"], source)
+    _run(
+        ["gfortran", "-std=f2008", "-O3", "-c", kernel, "-o", source / "update.o"],
+        source,
+    )
+    _run(
+        [
+            "gfortran",
+            source / "caller.o",
+            source / "update.o",
+            "-o",
+            source / "original",
+        ],
+        source,
+    )
+    expected = _run([source / "original"], source)
+    request = tmp_path / "request.json"
+    write_json(
+        request,
+        dict(
+            source_root=str(source),
+            entry="main",
+            units=[
+                dict(path=caller.name, language="c", flags=["-std=c99", "-O3"]),
+                dict(path=kernel.name, language="fortran", flags=["-std=f2008", "-O3"]),
+            ],
+        ),
+    )
+    graph, plan, delivery = (tmp_path / name for name in ("graph", "plan", "delivery"))
+    _stage(tmp_path, "frontend", "build", "--manifest", request, "--out", graph)
+    shutil.rmtree(source)
+    _stage(tmp_path, "middle", "plan", "--graph", graph, "--out", plan)
+    logical = json.loads((plan / "plan.json").read_bytes())
+    changes = [
+        c
+        for c in logical["changes"]
+        if c["rule"] == "pointwise_materialization_forwarding"
+    ]
+    assert len(changes) == 1 and changes[0]["storage_proof"]["index_coefficient"] == 1
+    shutil.rmtree(graph)
+    result = _stage(
+        tmp_path,
+        "backend",
+        "compile",
+        "--ir",
+        plan,
+        "--physical",
+        "serial",
+        "--out",
+        delivery,
+    )
+    shutil.rmtree(plan)
+    assert _run([result["executable"]], tmp_path) == expected

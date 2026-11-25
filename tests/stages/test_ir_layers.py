@@ -5975,3 +5975,166 @@ def test_unbounded_integer_contracts_keep_ranges_effects_and_conversion_errors()
     assert returns.return_facts == {"range": (-10, 40)}
     protocols._Frame.record_return(returns, unbounded)
     assert returns.return_facts == {}
+
+
+def test_private_pointwise_snapshots_require_real_non_escape_and_injective_indices():
+    def var(name):
+        return dict(op="var", name=name)
+
+    def literal(value):
+        return dict(op="literal", type="i64", value=value)
+
+    def binary(op, left, right):
+        return dict(op="binary", operator=op, left=left, right=right)
+
+    # The Fortran-style address is mechanically shown to be i, not selected
+    # by a variable name or supplied human-readable proof string.
+    index = binary(
+        "sub",
+        dict(
+            op="cast",
+            type="i64",
+            value=binary("add", literal(1), binary("mul", literal(1), var("i"))),
+        ),
+        literal(1),
+    )
+
+    def cell(name, at=None):
+        return dict(
+            op="index", base=var(name), indices=[deepcopy(index if at is None else at)]
+        )
+
+    def mapping(target, value):
+        return dict(
+            op="map",
+            index="i",
+            extent=var("n"),
+            independent=True,
+            body=[dict(op="assign", target=target, value=value)],
+        )
+
+    destination = dict(op="buffer", name="local", type="f64", extent=var("n"))
+    temporary = dict(
+        op="buffer",
+        name="snapshot",
+        type="f64",
+        extent=var("n"),
+        storage="compiler_temporary",
+    )
+    rhs = binary(
+        "div",
+        binary(
+            "sub", cell("input", binary("add", var("i"), literal(1))), cell("input")
+        ),
+        cell("local"),
+    )
+    source = mapping(cell("snapshot", var("i")), rhs)
+    copy = mapping(cell("local"), cell("snapshot", var("i")))
+    function = _canonical_function(
+        dict(
+            name="update",
+            params=[
+                dict(name="n", type="i64"),
+                dict(name="input", type=dict(kind="ptr", to="f64")),
+            ],
+            result="void",
+            body=[destination, dict(op="block", body=[temporary, source, copy])],
+        )
+    )
+
+    def rewrite(fn):
+        return _layer(
+            "rewrites",
+            "from scar.middle.rewrites import optimize\nchanges=optimize(data)\nprint(json.dumps(dict(function=data,changes=changes)))",
+            fn,
+        )
+
+    result = rewrite(function)
+    edits = [
+        c
+        for c in result["changes"]
+        if c["rule"] == "pointwise_materialization_forwarding"
+    ]
+    assert len(edits) == 1 and edits[0]["storage_proof"]["index_coefficient"] == 1
+    body = result["function"]["body"][1]["body"]
+    assert len(body) == 1 and body[0]["body"][0]["target"] == cell("local")
+    assert body[0]["body"][0]["value"] == rhs
+    for mutation in (
+        "shifted-self",
+        "address-escape",
+        "raw-escape",
+        "reference-escape",
+        "global-homonym",
+        "another-consumer",
+        "not-private",
+        "not-temporary",
+        "noninjective",
+        "different-element",
+        "opaque",
+    ):
+        bad = deepcopy(function)
+        steps = bad["body"][1]["body"]
+        if mutation == "shifted-self":
+            steps[1]["body"][0]["value"]["right"] = cell(
+                "local", binary("add", var("i"), literal(1))
+            )
+        elif mutation == "address-escape":
+            bad["body"].append(
+                dict(
+                    op="expr",
+                    value=dict(
+                        op="call",
+                        callee="opaque",
+                        args=[dict(op="unary", operator="addr", value=cell("local"))],
+                    ),
+                )
+            )
+        elif mutation == "raw-escape":
+            bad["body"].append(
+                dict(
+                    op="expr",
+                    value=dict(op="call", callee="opaque", args=[var("local")]),
+                )
+            )
+        elif mutation == "reference-escape":
+            bad["body"].append(
+                dict(
+                    op="expr",
+                    value=dict(
+                        op="call",
+                        callee="save_ref",
+                        parameter_modes=["reference"],
+                        args=[cell("local", literal(0))],
+                    ),
+                )
+            )
+        elif mutation == "global-homonym":
+            foreign = cell("local", literal(0))
+            foreign["base"]["scope"] = "global"
+            bad["body"].append(
+                dict(
+                    op="expr",
+                    value=dict(
+                        op="call",
+                        callee="save_ref",
+                        args=[var("local"), foreign],
+                    ),
+                )
+            )
+        elif mutation == "another-consumer":
+            steps.append(dict(op="expr", value=cell("snapshot", literal(0))))
+        elif mutation == "not-private":
+            bad["body"] = bad["body"][1:]
+            bad["params"].append(dict(name="local", type=dict(kind="ptr", to="f64")))
+        elif mutation == "not-temporary":
+            steps[0].pop("storage")
+        elif mutation == "noninjective":
+            steps[2]["body"][0]["target"] = cell("local", literal(0))
+        elif mutation == "different-element":
+            steps[0]["type"] = "f32"
+        else:
+            steps[1]["body"][0]["value"] = dict(op="call", callee="unknown", args=[])
+        assert not any(
+            c["rule"] == "pointwise_materialization_forwarding"
+            for c in rewrite(bad)["changes"]
+        ), mutation
