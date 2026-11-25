@@ -891,8 +891,10 @@ def test_module_import_store_matches_cpython_stack_and_source_span(tmp_path):
             loc["end_column"] - 1,
         ]
         assert node["request"]["fromlist"] == [] and port["fromlist"]["value"] is None
+        level = by_offset[port["level"]["offset"]]
+        assert level.opname in {"LOAD_CONST", "LOAD_SMALL_INT"}
         expected = [
-            ("level", "LOAD_CONST", 0),
+            ("level", level.opname, 0),
             ("fromlist", "LOAD_CONST", None),
             ("import_name", "IMPORT_NAME", node["request"]["module"]),
             ("store", store_opcode, destination),
@@ -900,12 +902,13 @@ def test_module_import_store_matches_cpython_stack_and_source_span(tmp_path):
         for field, opcode, value in expected:
             operand = port[field]
             ins = by_offset[operand["offset"]]
-            assert (ins.opname, ins.arg, list(ins.positions)) == (
-                opcode,
-                operand["index"],
-                port["position"],
-            )
-            assert operand["opcode"] == opcode
+            assert (ins.opname, list(ins.positions)) == (opcode, port["position"])
+            assert operand["opcode"] == opcode and ins.argval == value
+            if opcode == "LOAD_SMALL_INT":
+                assert "index" not in operand
+                assert operand["oparg"] == ins.arg == operand["value"] == 0
+                continue
+            assert operand["index"] == ins.arg and "oparg" not in operand
             if opcode == "LOAD_CONST":
                 assert code.co_consts[ins.arg] == operand["value"] == value
             else:

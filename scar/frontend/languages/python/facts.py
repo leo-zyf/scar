@@ -194,27 +194,37 @@ def _import_store_sites(program, instructions, imports):
         if opcode not in {"STORE_NAME", "STORE_GLOBAL"} or len(window) != 4:
             continue
         level, fromlist, request, store = (i for i, _, _ in window)
+        level_opcode = window[0][1]
         alias = imports[span]
         if (
-            [op for _, op, _ in window]
-            != ["LOAD_CONST", "LOAD_CONST", "IMPORT_NAME", opcode]
+            window[1][1] != "LOAD_CONST"
+            or window[2][1] != "IMPORT_NAME"
             or any(
                 i.positions != span or index and incoming
                 for index, (i, _, incoming) in enumerate(window)
             )
-            or type(program.co_consts[level.arg]) is not int
-            or program.co_consts[level.arg] != 0
             or program.co_consts[fromlist.arg] is not None
             or program.co_names[request.arg] != alias.name
             or program.co_names[store.arg]
             != (alias.asname or alias.name.partition(".")[0])
         ):
             continue
+        if level_opcode == "LOAD_CONST":
+            if (
+                type(program.co_consts[level.arg]) is not int
+                or program.co_consts[level.arg] != 0
+            ):
+                continue
+            source_level = {"index": level.arg}
+        elif level_opcode == "LOAD_SMALL_INT" and level.arg == 0:
+            source_level = {"oparg": level.arg}
+        else:
+            continue
         sites[span] = dict(
             semantics_version=1,
             position=list(span),
             level=dict(
-                opcode="LOAD_CONST", index=level.arg, offset=level.offset, value=0
+                opcode=level_opcode, offset=level.offset, value=0, **source_level
             ),
             fromlist=dict(
                 opcode="LOAD_CONST",

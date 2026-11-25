@@ -126,6 +126,19 @@ def _bind_import_store(node, scope):
     level, fromlist, imported, stored = (proof[key] for key in ports)
     code = scope.get("source_code") or {}
     position = proof.get("position")
+    # CPython may load the import level from its constant table or encode
+    # zero in the instruction itself. Only the former owns a table index.
+    immediate = level.get("opcode") == "LOAD_SMALL_INT"
+    indexed = (
+        (fromlist, imported, stored)
+        if immediate
+        else (level, fromlist, imported, stored)
+    )
+    level_matches = (
+        type(level.get("oparg")) is int and level["oparg"] == 0 and "index" not in level
+        if immediate
+        else level.get("opcode") == "LOAD_CONST" and "oparg" not in level
+    )
     if not (
         type(proof.get("semantics_version")) is int
         and proof["semantics_version"] == 1
@@ -138,7 +151,8 @@ def _bind_import_store(node, scope):
         and request.get("module") == imported.get("name") == module
         and request.get("level") == 0
         and request.get("fromlist") == []
-        and level.get("opcode") == fromlist.get("opcode") == "LOAD_CONST"
+        and level_matches
+        and fromlist.get("opcode") == "LOAD_CONST"
         and type(level.get("value")) is int
         and level["value"] == 0
         and "value" in fromlist
@@ -149,10 +163,10 @@ def _bind_import_store(node, scope):
         and target.get("op") == "var"
         and target.get("scope") == "global"
         and target.get("name") == f"py:{scope['module']}:{slot}"
+        and all(type(p.get("index")) is int and p["index"] >= 0 for p in indexed)
         and all(
-            type(proof[key].get(field)) is int and proof[key][field] >= 0
-            for key in ports
-            for field in ("index", "offset")
+            type(p.get("offset")) is int and p["offset"] >= 0
+            for p in (level, fromlist, imported, stored)
         )
         and level["offset"] < fromlist["offset"] < imported["offset"] < stored["offset"]
     ):
