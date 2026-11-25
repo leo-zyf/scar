@@ -74,7 +74,13 @@ def _fromlist_group(frame, body, index):
     ):
         return None
     port = first.get("source_fromlist")
-    code = _module_code(frame) if port is not None else None
+    # This operation can itself open the namespace. Its source instruction
+    # still selects the mapping before any later callback has run.
+    code = (
+        _module_code(frame, source_code=frame.scope.get("source_code"))
+        if port is not None
+        else None
+    )
     verified = (
         code is not None
         and port["code_sha256"] == code["code_sha256"]
@@ -182,9 +188,11 @@ def publish_fromlist(frame, body, index, steps):
     frame.import_origin(first)
     occurrence["activation"] = "visited"
     evidence = frame.package_fromlist(first, occurrence, dynamic=True)
-    publication = "STORE_NAME_after_each_successful_lookup_in_current_frame_globals"
+    publication = "bind_each_successful_member_in_source_order_to_its_lexical_slot"
     publications = [dict(occurrence=occurrence["id"], **b) for b in bindings]
-    source = {}
+    source = {
+        "mapping_qualification": "require_source_store_or_proven_module_locals_globals_identity"
+    }
     if port is not None:
         for binding, source_port in zip(bindings, port["bindings"], strict=True):
             read = _import_member(source_port["read"], {"result": "import_result"})

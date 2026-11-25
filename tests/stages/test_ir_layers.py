@@ -930,6 +930,7 @@ builtins.__import__ = importer
         )
     )
     assert publish["request"]["fromlist"] == ["child", "child"]
+    assert all(b["namespace"] == "frame.locals" for b in publish["bindings"])
     assert (
         [b["name"] for b in publish["bindings"]]
         == delete["names"]
