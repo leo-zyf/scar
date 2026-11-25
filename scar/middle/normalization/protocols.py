@@ -24,6 +24,7 @@ from . import (
     products,
     scalars,
     sequences,
+    source_frames,
     text,
     values,
 )
@@ -3913,6 +3914,16 @@ def normalize_protocols(module):
     obligation_analysis = None
     resolved_symbols = None
     conditional = _conditional_loader_fragments(project)
+    call_targets = namespace_operations.link_conditional_function_calls(
+        project, conditional
+    )
+    callee_fragments = []
+    for symbol in sorted(call_targets):
+        descriptor = project.function_definitions.get(symbol, {})
+        definition = functions.get(symbol, descriptor)
+        callee_fragments.append(
+            source_frames.conditional_function_body(definition, descriptor)
+        )
     if issue is None:
         issue = next(
             (
@@ -3931,7 +3942,7 @@ def normalize_protocols(module):
                     candidate,
                     "loader_activation_contract",
                     f"{len(conditional)} caller-owned conditional module activation(s) need matching live frames or source continuations; "
-                    f"{sum(len(f['activation_handoff']['function_activations']) for f in conditional)} published function creation site(s) need subsequent call semantics",
+                    f"{len(call_targets)} published function(s) are linked to conditional source calls; native dispatch and continuations remain open",
                 )
                 error.issue["source_evidence"] = {
                     "initializer": candidate["symbol"],
@@ -4024,6 +4035,11 @@ def normalize_protocols(module):
         status="INCOMPLETE" if issue else "READY",
         source_obligation_groups=obligation_analysis["groups"],
         **({"conditional_loader_fragments": conditional} if conditional else {}),
+        **(
+            {"conditional_function_fragments": callee_fragments}
+            if callee_fragments
+            else {}
+        ),
         **(
             {"operator_requirements": project.operator_requirements()}
             if project.required_operators

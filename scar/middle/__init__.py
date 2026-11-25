@@ -83,7 +83,11 @@ def _plan_image(graph, folder, revision, out, *, shape, trip_count):
     protocol_analysis = module.get("protocol_analysis")
     if protocol_analysis is not None:
         protocol_analysis = dict(protocol_analysis)
-        for group in ("closed_fragments", "conditional_loader_fragments"):
+        for group in (
+            "closed_fragments",
+            "conditional_loader_fragments",
+            "conditional_function_fragments",
+        ):
             if group in protocol_analysis:
                 protocol_analysis[group] = [
                     {

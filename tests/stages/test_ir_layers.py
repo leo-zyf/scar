@@ -10106,3 +10106,51 @@ def test_conditional_module_rebuilds_from_unknown_bindings_and_owns_its_imports(
     assert not any(
         row["producer_sites"] for row in candidate["source_imports"]["occurrences"]
     )
+
+
+def test_conditional_callee_reads_bound_slots_and_returns_through_original_call(
+    tmp_path,
+):
+    from scar.contract import read_member
+    from scar.frontend import build
+    from scar.middle import plan
+
+    package = tmp_path / "lib"
+    package.mkdir()
+    (package / "child.py").write_text("pass\n")
+    source = package / "__init__.py"
+    source.write_text(
+        "from . import child as old\ndel old\n"
+        "def transform(item):\n"
+        "    result = api.apply(item, 'v')\n"
+        "    return result\n"
+        "callback()\n"
+    )
+    entry = tmp_path / "run.py"
+    entry.write_text("import lib\nlib.transform(get_item())\n")
+    graph, output = tmp_path / "graph", tmp_path / "plan"
+    build(entry, graph)
+    source.unlink()
+    entry.unlink()
+    plan(graph / "graph.json", output)
+    report = json.loads((output / "plan.json").read_bytes())
+    [fragment] = report["protocol_analysis"]["conditional_function_fragments"]
+    assert fragment["completion"] == "conditional_source_body"
+    assert fragment["entry"]["parameters"] == [
+        dict(name="item", binding="positional", slot=0)
+    ]
+    assign, exit_ = read_member(output, fragment["function"])["body"]
+    load, attribute, argument, constant, call, store = assign["steps"]
+    assert load["lookup_order"] == ["frame.globals", "frame.builtins"]
+    assert attribute["base"] == {"from_offset": load["offset"]}
+    assert argument["op"] == "frame_local_load" and argument["slot"] == 0
+    assert call["target"] == {"from_offset": attribute["offset"]}
+    assert call["args"] == [{"from_offset": a["offset"]} for a in (argument, constant)]
+    assert store["op"] == "frame_local_store" and store["slot"] == 1
+    assert store["value"] == {"from_offset": call["offset"]}
+    reread, returned = exit_["steps"]
+    assert reread["op"] == "frame_local_load" and reread["slot"] == store["slot"]
+    assert returned["op"] == "frame_return"
+    assert returned["value"] == {"from_offset": reread["offset"]}
+    assert report["status"] == "INCOMPLETE"
+    assert not json.loads((output / "exec-ir.json").read_bytes())["functions"]
