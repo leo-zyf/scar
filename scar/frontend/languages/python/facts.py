@@ -6,7 +6,6 @@ from collections import defaultdict, deque
 from dataclasses import dataclass, field, replace
 import dis
 from functools import cache
-from math import isfinite
 from pathlib import Path, PurePosixPath
 import symtable
 import sys
@@ -14,7 +13,7 @@ from types import CodeType
 import unicodedata
 
 from scar.contract import digest, json_bytes
-from .imports import Imports, relative_module as _relative
+from .imports import Imports, numeric_wire_value, relative_module as _relative
 
 
 @dataclass(frozen=True)
@@ -279,6 +278,8 @@ def _function(module, qualified):
 
 
 def _literal_fact(value):
+    if isinstance(numeric_wire_value(value), dict):
+        return {"class": type(value).__name__}
     return {"class": type(value).__name__, "values": [value]}
 
 
@@ -325,10 +326,10 @@ def _catalog(tree, module):
         ):
             v = node.value.value
             if (
-                type(v) in {str, int, bool, type(None)}
-                or type(v) is float
-                and isfinite(v)
-            ) and not (isinstance(v, str) and len(v) > 4096):
+                type(v) in {str, int, float, bool, type(None)}
+                and not isinstance(numeric_wire_value(v), dict)
+                and not (isinstance(v, str) and len(v) > 4096)
+            ):
                 for target in (
                     node.targets if isinstance(node, ast.Assign) else [node.target]
                 ):
@@ -595,7 +596,10 @@ def _capture_project(entry, root, directory, imports, read) -> ParsedProject:
                 if (name, member) not in facts.import_value_uses:
                     continue
                 for candidate in export.get("candidates", ()):
-                    enqueue(candidate["module"], (candidate["name"], candidate["line"]))
+                    if candidate.get("kind", "definition") == "definition":
+                        enqueue(
+                            candidate["module"], (candidate["name"], candidate["line"])
+                        )
 
     def visible_modules(name):
         # Catalog membership is image-wide. A translation profile needs only

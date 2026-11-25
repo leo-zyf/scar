@@ -582,7 +582,7 @@ def _output(frame, node, kind, steps, *, facts=None, discard=False, **fields):
     )
 
 
-def import_provider(frame, node):
+def import_provider(frame, node, steps):
     source = node.get("source_provider", {})
     if python_source_boundary(source) != "numpy-public-v1":
         frame.fail(
@@ -606,14 +606,31 @@ def import_provider(frame, node):
         "exports": {**(prior or {}).get("exports", {}), **source.get("exports", {})},
     }
     if node["request"]["form"] == "import":
-        return Value("provider_namespace", "numpy")
-    return provider_member(frame, node, node["member"])
+        facts = {}
+        if any(
+            candidate.get("kind") == "literal"
+            for exported in frame.provider_sources.get("numpy", {})
+            .get("exports", {})
+            .values()
+            for candidate in exported.get("candidates", ())
+        ):
+            facts["source_namespace"] = frame.source_namespace(node, "numpy")
+        return Value("provider_namespace", "numpy", facts)
+    return provider_member(frame, node, node["member"], steps)
 
 
-def provider_member(frame, node, name):
+def provider_member(frame, node, name, steps, namespace=None):
     if name not in _PROVIDED:
-        frame.fail(
-            node, "provider_member", f"no closed numerical contract for numpy.{name}"
+        return frame.source_export(
+            node,
+            "numpy",
+            name,
+            steps,
+            namespace=(
+                namespace.facts.get("source_namespace")
+                if namespace is not None
+                else None
+            ),
         )
     return (
         Value("dtype", "f64") if name == "float64" else Value("array_constructor", name)
@@ -1019,7 +1036,9 @@ def _implementation(frame, node, name, sources):
     matches = [
         p
         for p in candidates
-        if p.get("sha256") == sources[implementation] and p.get("name") == name
+        if p.get("kind", "definition") == "definition"
+        and p.get("sha256") == sources[implementation]
+        and p.get("name") == name
     ]
     if provider.get("version") != "2.5.5" or len(matches) != 1:
         frame.fail(

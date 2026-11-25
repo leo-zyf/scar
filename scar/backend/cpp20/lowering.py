@@ -16,6 +16,7 @@ from scar.contract import (
 from .control import ControlFlow, ERROR_TYPE, TEXT_STREAM_TYPE
 from .libraries import Libraries
 from .model import (
+    Attribute,
     Decl,
     Expr,
     Stmt,
@@ -29,6 +30,7 @@ from .model import (
     integer,
     name,
     named,
+    numeric_definition,
     template,
     symbol_name,
     unary,
@@ -280,9 +282,11 @@ def _qualified_parameters(module, physical):
 class Lowerer:
     unit_weight_limit = 4000
 
-    def __init__(self, module, physical, *, pending_math=None):
+    def __init__(self, module, physical, *, pending_math=None, numeric_options=None):
         self.module = module
         self.pending_math = pending_math
+        self.numeric_options = numeric_options or {}
+        self.attributed_definitions = {}
         self.qualified_parameters = _qualified_parameters(module, physical)
         self.regions = physical.get("regions", {})
         self.operator_backends = physical.get("operator_backends", {})
@@ -2193,6 +2197,16 @@ class Lowerer:
                 definition = replace(
                     decl, body=self.control.finish_function(fn["name"], body)
                 )
+                if options := self.numeric_options.get(fn["name"]):
+                    attribute = Attribute(
+                        "gnu::optimize", tuple(Expr("string", value=v) for v in options)
+                    )
+                    definition = replace(
+                        definition, attributes=(*definition.attributes, attribute)
+                    )
+                    self.attributed_definitions[fn["name"]] = digest(
+                        json_bytes(numeric_definition(definition))
+                    )
             if parts and group_weight + self.weight > self.unit_weight_limit:
                 flush()
                 group_weight = 0

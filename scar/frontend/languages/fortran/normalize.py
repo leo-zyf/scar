@@ -3,6 +3,7 @@
 from dataclasses import replace
 import math
 import struct
+from scar.contract import digest, json_bytes
 from .facts import Gap, ParsedUnit, kind, ptr
 from .operations import Body, decl, literal, number, var
 
@@ -257,6 +258,19 @@ def normalize_unit(parsed: ParsedUnit) -> dict:
     if parsed.diagnostics:
         return out
     out["source_numeric_contract"] = parsed.source_numeric_contract
+    numeric = None
+    if parsed.source_numeric_contract:
+        source = parsed.source_numeric_contract
+        numeric = dict(
+            semantics_version=1,
+            scope="function",
+            source_contract_sha256=digest(json_bytes(source)),
+            permissions=dict(
+                may_omit_math_errno=source["policy"].get("math_errno") is False,
+                may_assume_default_rounding=source["policy"].get("rounding_math")
+                is False,
+            ),
+        )
     globals_ = []
     externs = {}
     records = {}
@@ -303,6 +317,7 @@ def normalize_unit(parsed: ParsedUnit) -> dict:
             "location": parsed.location(head),
             "source_numeric_contract": parsed.source_numeric_contract,
             "source_intrinsic_bindings": list(procedure.intrinsic_bindings),
+            **({"numeric_contract": numeric} if numeric is not None else {}),
         }
         out["functions"].append(fn)
         if procedure.problem:

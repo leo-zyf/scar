@@ -21,6 +21,7 @@ from scar.contract import (
     read_image_product,
     read_member,
     validate_images,
+    validate_numeric_contract,
     write_json,
 )
 from scar.host import cpu_availability
@@ -269,7 +270,17 @@ def _mpi_checks(receipt):
     return lines
 
 
-def _package(root, sources, openmp, libraries, jobs, options, image=None, mpi=None):
+def _package(
+    root,
+    sources,
+    openmp,
+    libraries,
+    jobs,
+    options,
+    image=None,
+    mpi=None,
+    numeric_compiler=None,
+):
     unknown = libraries - {
         "MPI",
         "Threads",
@@ -307,6 +318,15 @@ def _package(root, sources, openmp, libraries, jobs, options, image=None, mpi=No
         f"    target_compile_options({objects} PRIVATE -Werror -Kieee -Mnofma)",
         "endif()",
     ]
+    if numeric_compiler:
+        lines.extend(
+            (
+                'file(SHA256 "${CMAKE_CXX_COMPILER}" scar_numeric_compiler_sha256)',
+                f'if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR NOT scar_numeric_compiler_sha256 STREQUAL "{numeric_compiler}")',
+                '    message(FATAL_ERROR "Function numeric options require their qualified GNU C++ compiler")',
+                "endif()",
+            )
+        )
     interprocedural = options["interprocedural"]
     if interprocedural["mode"] == "gnu_lto":
         lines.extend(
@@ -437,6 +457,125 @@ def _math_operation(function, path):
     return node
 
 
+def _is_digest(value):
+    return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
+
+
+def _numeric_decisions(module, receipts, physical):
+    from .model import NUMERIC_FUNCTION_OPTIONS
+
+    functions = {}
+    for fn, receipt in zip(module["functions"], receipts, strict=True):
+        contract = validate_numeric_contract(fn)
+        if contract is not None:
+            functions[fn["name"]] = (fn, receipt["sha256"], contract)
+    key = "numeric_permissions_binding_sha256"
+    decision = physical.get("numeric_permissions")
+    if not functions and decision is None and key not in module:
+        return None, {}
+    if not isinstance(decision, dict) or module.get(key) != digest(
+        json_bytes(decision)
+    ):
+        raise ValueError("missing or mismatched function numeric permission binding")
+    qualification = decision.get("qualification")
+    rows = decision.get("functions")
+    if (
+        type(decision.get("semantics_version")) is not int
+        or decision["semantics_version"] != 1
+        or decision.get("scope") != "function_definitions"
+        or decision.get("feature") != "gnu_function_numeric_options"
+        or not isinstance(rows, dict)
+        or not rows
+        or rows.keys() != functions.keys()
+        or not isinstance(qualification, dict)
+        or type(qualification.get("supported")) is not bool
+    ):
+        raise ValueError("invalid function numeric permission binding")
+    supported = qualification["supported"]
+    compiler_sha = None
+    if supported:
+        compiler = qualification.get("compiler") or {}
+        checks = qualification.get("observations") or {}
+        if (
+            qualification.get("compiler_id") != "GNU"
+            or not isinstance(compiler, dict)
+            or not compiler.get("path")
+            or type(compiler.get("size")) is not int
+            or compiler["size"] < 1
+            or not _is_digest(compiler.get("sha256"))
+            or not _is_digest(qualification.get("probe_sha256"))
+            or not _is_digest(qualification.get("tree_sha256"))
+            or qualification.get("evidence") != "gnu_optimized_tree_compile_only"
+            or qualification.get("application_executed") is not False
+            or qualification.get("baseline_fp")
+            != ["-fno-fast-math", "-frounding-math", "-ffp-contract=off"]
+            or not isinstance(checks, dict)
+            or not isinstance(checks.get("options_per_probe_function"), dict)
+            or not all(
+                checks.get(k) is True
+                for k in (
+                    "strict_neighbors_retain_sqrt_errno_path",
+                    "strict_neighbor_retains_dynamic_rounding",
+                    "local_rounding_constant_folded",
+                )
+            )
+        ):
+            raise ValueError(
+                "function numeric permissions require a qualified GNU compiler"
+            )
+        compiler_sha = compiler["sha256"]
+        image_compiler = (
+            physical.get("compilation", {}).get("qualification", {}).get("compiler")
+        )
+        if image_compiler is not None and image_compiler != compiler:
+            raise ValueError("function numeric compiler differs from image compiler")
+    elif (
+        not isinstance(qualification.get("reason"), str)
+        or not qualification["reason"].strip()
+    ):
+        raise ValueError("strict numeric fallback requires a qualification reason")
+    options, audit = {}, {}
+    for name, (fn, member_sha, contract) in functions.items():
+        row = rows[name]
+        expected = [
+            option
+            for claim, option in NUMERIC_FUNCTION_OPTIONS.items()
+            if supported
+            and contract["permissions"][claim]
+            and not any(
+                fn.get("method", {}).get(k)
+                for k in ("defaulted", "deleted", "implicit")
+            )
+        ]
+        if (
+            not isinstance(row, dict)
+            or row.get("scheduled_function_sha256") != member_sha
+            or not _is_digest(row.get("exec_function_sha256"))
+            or row.get("contract_sha256") != digest(json_bytes(contract))
+            or row.get("options") != expected
+            or (
+                expected
+                and expected not in checks["options_per_probe_function"].values()
+            )
+        ):
+            raise ValueError(
+                "numeric options differ from the scheduled function or its permissions"
+            )
+        audit[name] = dict(scheduled_function_sha256=member_sha, options=expected)
+        if expected:
+            options[name] = expected
+    return (
+        dict(
+            semantics_version=1,
+            scope="function_definitions",
+            binding_sha256=module[key],
+            compiler_sha256=compiler_sha if options else None,
+            functions=audit,
+        ),
+        options,
+    )
+
+
 def _math_decisions(module, receipts, physical):
     seal = "math_interface_binding_sha256"
     if seal not in module and "math_interfaces" not in physical:
@@ -559,9 +698,14 @@ def _lower_image(path, revision, scheduled, destination):
         functions=[read_member(path.parent, f) for f in scheduled["functions"]],
     )
     math, pending_math = _math_decisions(module, scheduled["functions"], physical)
+    numeric, options_by_function = _numeric_decisions(
+        module, scheduled["functions"], physical
+    )
     destination = Path(destination).resolve()
     destination.mkdir(parents=True, exist_ok=True)
-    lowerer = Lowerer(module, physical, pending_math=pending_math)
+    lowerer = Lowerer(
+        module, physical, pending_math=pending_math, numeric_options=options_by_function
+    )
     units = lowerer.units()
     if pending_math:
         raise ValueError("scheduled math path does not refer to a lowered operation")
@@ -612,6 +756,14 @@ def _lower_image(path, revision, scheduled, destination):
     )
     if math is not None:
         metadata["math_interface_consumption"] = math
+    if numeric is not None:
+        if options_by_function.keys() != lowerer.attributed_definitions.keys():
+            raise ValueError(
+                "missing emitted definition for a function numeric permission"
+            )
+        for name, sha in lowerer.attributed_definitions.items():
+            numeric["functions"][name]["target_signature_sha256"] = sha
+        metadata["numeric_permission_consumption"] = numeric
     if "XTensor" in lowerer.libraries.links:
         operator_sdks["XTensor"] = _seal_xtensor(
             destination, physical["operator_backends"]["ndarray"]
@@ -734,8 +886,50 @@ def lower_scheduled(source, destination):
     return target
 
 
+def _numeric_target_compiler(product, actual):
+    """Verify the target-only receipt against the definitions being printed."""
+    audit = product.get("numeric_permission_consumption")
+    if audit is None and not actual:
+        return None
+    if (
+        not isinstance(audit, dict)
+        or type(audit.get("semantics_version")) is not int
+        or audit["semantics_version"] != 1
+        or audit.get("scope") != "function_definitions"
+        or not _is_digest(audit.get("binding_sha256"))
+        or not isinstance(audit.get("functions"), dict)
+        or not audit["functions"]
+    ):
+        raise ValueError("missing or invalid target numeric permission receipt")
+    expected = {}
+    for row in audit["functions"].values():
+        if not isinstance(row, dict) or not _is_digest(
+            row.get("scheduled_function_sha256")
+        ):
+            raise ValueError("invalid target numeric function member")
+        if row.get("options") == [] and "target_signature_sha256" not in row:
+            continue
+        sha = row.get("target_signature_sha256")
+        if not _is_digest(sha) or sha in expected:
+            raise ValueError("invalid or duplicate numeric target definition")
+        expected[sha] = row.get("options")
+    compiler = audit.get("compiler_sha256")
+    if expected != actual or (
+        not _is_digest(compiler) if actual else compiler is not None
+    ):
+        raise ValueError(
+            "numeric permissions do not match the printed target definitions"
+        )
+    return compiler
+
+
 def _print_image(path, product, directory, runtime, jobs, image=None):
-    from .model import build_options, from_data, validate_build_options
+    from .model import (
+        build_options,
+        from_data,
+        numeric_definition,
+        validate_build_options,
+    )
     from .printer import print_unit
 
     options = (
@@ -770,6 +964,7 @@ def _print_image(path, product, directory, runtime, jobs, image=None):
             raise ValueError("duplicate target SDK header")
         target.write_bytes(read_blob(path.parent, header["blob"]))
     sources = []
+    numeric_definitions = {}
     local_headers, sdk_headers = set(), set()
     for part in product["units"]:
         output = part["output"]
@@ -784,6 +979,15 @@ def _print_image(path, product, directory, runtime, jobs, image=None):
         local_headers.update(name for kind, name in tree.includes if kind == "local")
         sdk_headers.update(name for kind, name in tree.includes if kind == "system")
         file.write_text(print_unit(tree), encoding="utf-8")
+        declarations = list(tree.declarations)
+        while declarations:
+            decl = declarations.pop()
+            declarations.extend(decl.members)
+            if decl.attributes and (signature := numeric_definition(decl)):
+                sha = digest(json_bytes(signature))
+                if sha in numeric_definitions:
+                    raise ValueError("duplicate attributed numeric definition")
+                numeric_definitions[sha] = signature["options"]
         if output != _HEADER:
             sources.append(output)
     if not sources or not (directory / _HEADER).is_file():
@@ -817,17 +1021,31 @@ def _print_image(path, product, directory, runtime, jobs, image=None):
         mpi = read_member(path.parent, bindings["MPI"])
         _validate_mpi_sdk(mpi)
         write_json(directory / "mpi-sdk.json", mpi)
+    compiler = _numeric_target_compiler(product, numeric_definitions)
     _package(
-        directory, sources, product["openmp"], libraries, jobs, options, image, mpi
+        directory,
+        sources,
+        product["openmp"],
+        libraries,
+        jobs,
+        options,
+        image,
+        mpi,
+        numeric_compiler=compiler,
     )
     return sources, options
 
 
 def _math_product_metadata(product):
-    """Carry a target-local B2a receipt without reopening the physical schedule."""
+    """Carry the target-local numerical receipts after verifying their C++ product."""
+    metadata = (
+        {"numeric_permission_consumption": product["numeric_permission_consumption"]}
+        if "numeric_permission_consumption" in product
+        else {}
+    )
     key = "math_interface_consumption"
     if key not in product:
-        return {}
+        return metadata
     audit = product[key]
     fields = {
         "semantics_version",
@@ -861,7 +1079,7 @@ def _math_product_metadata(product):
         or sum(by_interface.values()) != audit["sites"]
     ):
         raise ValueError("invalid or unsupported target math consumption receipt")
-    return {key: audit}
+    return {**metadata, key: audit}
 
 
 def print_target(target, destination, *, jobs=4):

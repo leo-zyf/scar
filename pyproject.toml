@@ -23,7 +23,7 @@ namespaces = false
 
 [tool.setuptools.package-data]
 "scar.backend.cpp20" = ["runtime.hpp", "array.hpp", "array_io.hpp", "host.hpp", "exceptions.hpp", "format.hpp", "text.hpp", "sequence.hpp"]
-"scar.backend.planning" = ["calibration.cpp", "system_probe.cpp", "access_probe.cpp"]
+"scar.backend.planning" = ["calibration.cpp", "system_probe.cpp", "access_probe.cpp", "numeric_probe.cpp"]
 "scar.backend.planning.mpi" = ["probe.cpp"]
 
 [tool.pytest.ini_options]

@@ -358,6 +358,7 @@ class _Project:
         unused = {
             id(marker) for marker in self.import_markers if marker["op"] == "block"
         }
+        unused.update(self.source_imports.empty_markers())
         if unused:
             # Prefix reports and completed bodies may have copied a statement
             # list. They share the original marker objects.
@@ -917,6 +918,14 @@ class _Frame:
             dict(scope="source_candidates_only", modules=sources) if sources else None
         )
 
+    def source_export(self, node, module, member, steps, namespace=None):
+        if namespace is None and node.get("op") == "python_import":
+            namespace = host_protocols.source_namespace(self, node, module)
+        return host_protocols.source_export(self, node, namespace, member, steps)
+
+    def source_namespace(self, node, module):
+        return host_protocols.source_namespace(self, node, module)
+
     def import_origin(self, node):
         """Resolve the requested module independently of its execution contract."""
         module = node["module"]
@@ -1208,6 +1217,8 @@ class _Frame:
             )
         origin = self.import_origin(node)
         if origin is not None:
+            if primary:
+                self.project.source_imports.begin(occurrence, node, steps)
             start = len(steps)
             status = origin["status"]
             if req.get("level"):
@@ -1221,9 +1232,11 @@ class _Frame:
                 receipt = self.project.providers["stdlib:" + mod.partition(".")[0]]
                 receipt["import_effects"] = node.get("effects", ["UNKNOWN"])
             elif status == "verified_distribution" and mod == "numpy":
-                value = arrays.import_provider(self, node)
+                value = arrays.import_provider(self, node, steps)
             elif status == "verified_distribution" and graphics.handles_import(node):
                 value = self.project.graphics.import_provider(self, node, steps)
+            elif host_protocols.literal_exports(self, mod):
+                value = host_protocols.source_provider(self, node, origin, steps)
             else:
                 identity = (
                     f"{origin['distribution']} {origin['version']}"
@@ -1492,11 +1505,11 @@ class _Frame:
             process_member = processes.member(self, node, base, node["field"], steps)
             if process_member is not None:
                 return process_member
-            host_member = host_protocols.member(self, node, base, node["field"])
+            host_member = host_protocols.member(self, node, base, node["field"], steps)
             if host_member is not None:
                 return host_member
             if base.kind == "provider_namespace":
-                return arrays.provider_member(self, node, node["field"])
+                return arrays.provider_member(self, node, node["field"], steps, base)
             if base.kind == "graphics_namespace":
                 return self.project.graphics.member(self, node, base, node["field"])
             if values.is_array(base.kind):

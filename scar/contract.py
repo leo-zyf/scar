@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -33,6 +34,124 @@ _PYTHON_SOURCE_INTERFACES = {
         (3, 11, 3),
     ),
 }
+
+
+def validate_numeric_contract(function):
+    """Validate portable permissions against sealed source policy evidence."""
+    contract = function.get("numeric_contract")
+    if contract is None:
+        return None
+    if not isinstance(contract, dict):
+        raise ValueError("invalid numerical function contract")
+    source = function.get("source_numeric_contract")
+    permissions = contract.get("permissions")
+    options = {
+        "may_omit_math_errno": "math_errno",
+        "may_assume_default_rounding": "rounding_math",
+    }
+    if (
+        type(contract.get("semantics_version")) is not int
+        or contract["semantics_version"] != 1
+        or contract.get("scope") != "function"
+        or not isinstance(source, dict)
+        or type(source.get("semantics_version")) is not int
+        or source["semantics_version"] != 1
+        or source.get("scope") != "compilation_unit"
+        or not isinstance(source.get("policy"), dict)
+        or contract.get("source_contract_sha256") != digest(json_bytes(source))
+        or not isinstance(permissions, dict)
+        or permissions.keys() != options.keys()
+        or any(type(value) is not bool for value in permissions.values())
+    ):
+        raise ValueError("invalid or detached numerical function contract")
+    policy = source.get("policy", {})
+    if any(
+        allowed and policy.get(options[key]) is not False
+        for key, allowed in permissions.items()
+    ):
+        raise ValueError("numerical permission exceeds captured source policy")
+    return contract
+
+
+def validate_source_literal(candidate):
+    """Check a source fact's type and lineage, without approving its runtime binding."""
+    literal = candidate.get("literal")
+    if candidate.get("kind") != "literal" or not isinstance(literal, dict):
+        raise ValueError("expected a typed source literal candidate")
+    types = {
+        "unit": ("builtins.NoneType", type(None)),
+        "bool": ("builtins.bool", bool),
+        "i64": ("builtins.int", int),
+        "f64": ("builtins.float", float),
+        "text": ("builtins.str", str),
+        "python_int": ("builtins.int", int),
+        "python_float": ("builtins.float", float),
+    }
+    kind = literal.get("type")
+    if kind not in types or candidate.get("source_type") != types[kind][0]:
+        raise ValueError("source literal and exact Python type disagree")
+    if "value" in literal:
+        value = literal["value"]
+        if type(value) is not types[kind][1]:
+            raise ValueError("source literal value has the wrong type")
+    elif kind in {"python_int", "python_float"} and isinstance(
+        literal.get("value_hex"), str
+    ):
+        try:
+            value = (
+                int(literal["value_hex"], 16)
+                if kind == "python_int"
+                else float.fromhex(literal["value_hex"])
+            )
+        except ValueError as error:
+            raise ValueError("invalid source numeric literal encoding") from error
+    else:
+        raise ValueError("source literal lacks a lossless value")
+    if (
+        kind == "i64"
+        and not -(1 << 63) <= value < 1 << 63
+        or kind == "f64"
+        and not math.isfinite(value)
+        or kind == "python_int"
+        and (
+            -(1 << 63) <= value < 1 << 63
+            or candidate.get("representation") != "requires_integer_range_contract"
+        )
+        or kind == "python_float"
+        and (
+            math.isfinite(value)
+            or candidate.get("representation") != "requires_nonfinite_float_contract"
+        )
+    ):
+        raise ValueError("source literal representation contradicts its range")
+    for key in ("provider_id", "sha256"):
+        if not isinstance(candidate.get(key), str) or not re.fullmatch(
+            r"[0-9a-f]{64}", candidate[key]
+        ):
+            raise ValueError("source literal lacks a captured identity")
+    if (
+        any(
+            type(candidate.get(key)) is not int or candidate[key] < 1
+            for key in ("line", "end_line", "column", "end_column")
+        )
+        or candidate["end_line"] < candidate["line"]
+    ):
+        raise ValueError("source literal lacks a valid source span")
+    route = candidate.get("via")
+    if (
+        not isinstance(route, list)
+        or not route
+        or not isinstance(route[-1], dict)
+        or route[-1].get("kind") != "literal"
+    ):
+        raise ValueError("source literal lacks its producer lineage")
+    leaf = route[-1]
+    if any(
+        leaf.get(key) != candidate.get(key)
+        for key in ("module", "name", "sha256", "member", "provider_id", "line")
+    ):
+        raise ValueError("source literal and its producer lineage disagree")
+    return literal
 
 
 def python_provider_id(record):

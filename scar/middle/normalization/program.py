@@ -466,11 +466,12 @@ def normalize(bound):
     from .mpi import qualify as qualify_mpi
     from .artifacts import analyze as analyze_artifacts
     from .buffers import analyze_buffers
-    from scar.contract import validate_artifact_flow
+    from scar.contract import validate_artifact_flow, validate_numeric_contract
 
     module = deepcopy(bound)
     module, protocol_changes, issues = normalize_protocols(module)
     for function in module["functions"]:
+        validate_numeric_contract(function)
         _parameter_access(function)
     module["artifact_analysis"] = analyze_artifacts(module)
     buffers = analyze_buffers(module, module["artifact_analysis"]["graph"])

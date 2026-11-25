@@ -289,6 +289,133 @@ data=json.loads(sys.stdin.read())
     return json.loads(result.stdout)
 
 
+def test_source_literal_exports_require_actual_lookup_and_source_continuation():
+    from scar.contract import python_provider_id
+
+    source = dict(
+        module="time",
+        status="verified_stdlib",
+        platform="linux",
+        origin="/sealed/time.py",
+        member="time.py",
+        sha256="a" * 64,
+        loader="path",
+        proof_scope="resolved_module",
+        hash_basis="provider_file",
+        interpreter="cpython 3.12.3",
+    )
+    source["provider_id"] = python_provider_id(source)
+    candidate = dict(
+        kind="literal",
+        source_type="builtins.str",
+        literal=dict(type="text", value="source-value"),
+        module="time",
+        name="stamp",
+        member="time.py",
+        origin=source["origin"],
+        sha256=source["sha256"],
+        provider_id=source["provider_id"],
+        line=5,
+        end_line=5,
+        column=1,
+        end_column=21,
+        conditions=[],
+        via=[
+            dict(
+                kind="literal",
+                module="time",
+                name="stamp",
+                member="time.py",
+                line=5,
+                sha256=source["sha256"],
+                provider_id=source["provider_id"],
+            )
+        ],
+    )
+    source["exports"] = dict(
+        stamp=dict(status="source_candidates", candidates=[candidate], unresolved=[])
+    )
+    result = _layer(
+        "normalization",
+        """from copy import deepcopy
+from scar.middle.normalization.protocols import _Project,_Frame,_Unclosed
+from scar.contract import walk_operations
+def setup(source):
+    def imported(member,index):
+        return dict(op='python_import',module='time',member=member,
+            source_provider=source,import_resolution=source,provider='python_package',
+            request=dict(form='from',level=0,module='time',fromlist=['sleep','stamp'],binding_index=index),
+            binding=dict(op='var',name='py:test:'+member,scope='global'),
+            effects=['CTRL','STATE','IO'],site='source/from/'+str(index),location=dict(file='entry.py',line=1))
+    imports=[imported('sleep',0),imported('stamp',1)]
+    entry=dict(name='entry',params=[],body=imports,python_scope=dict(kind='module',module='test',main=True,initializer='entry',provider_sources={'time':source}))
+    project=_Project({'entry':entry});project.active.append('entry')
+    return project,_Frame(project,entry,()),imports
+project,frame,imports=setup(data)
+steps=[]
+frame.imported(imports[0],steps)
+assert steps[0]['op']=='block' and not steps[0]['body']
+frame.imported(imports[1],steps)
+operations=list(walk_operations(steps))
+initializers=[n for n in operations if n['op']=='module_namespace_initialize']
+assert len(initializers)==1 and steps[0]['body'][0]['value'] is initializers[0]
+assert initializers[0]['request']['fromlist']==['sleep','stamp']
+assert initializers[0]['initialization']['fromlist'].startswith('perform_complete')
+assert project.names['py:test:sleep'].kind=='host_callable'
+bound=project.names['py:test:stamp']
+assert bound.exact=='source-value' and bound.value['op']=='var'
+guard=next(n for n in operations if n['op']=='module_export_matches')
+value=next(n for n in operations if n['op']=='module_export_value')
+continuation=next(n for n in operations if n['op']=='module_export_continuation_required')
+assert guard['capture']==value['capture']==continuation['capture']
+assert guard['checks'] and guard['external_effect']=='UNKNOWN'
+assert guard['instance_scope']=='per_dynamic_lookup_in_current_activation'
+assert continuation['noreturn'] and 'not_raise_or_repeat_lookup' in continuation['semantics']
+assert value['projection'].startswith('actual_captured_object')
+assert 'capture' not in bound.facts['source_export_binding']
+row=next(iter(project.source_imports.rows.values()))
+assert len(row['bindings'])==2 and row['effect_coverage']=='MODELED'
+assert len(row['producer_sites'])==1
+assert {'module_export_matches','module_export_value','module_export_continuation_required'} <= set(project.operator_requirements()['module_registry']['operations'])
+try:
+    frame.evaluate(dict(op='binary',operator='is',left=bound.value,right=bound.value),steps)
+except _Unclosed as error: identity_gap=error.issue['code']
+else: raise AssertionError('source scalar identity was folded by value')
+bad=deepcopy(data);bad['exports']['stamp']['candidates'][0]['literal']=dict(type='python_int',value=1<<100)
+bad['exports']['stamp']['candidates'][0]['source_type']='builtins.int'
+bad['exports']['stamp']['candidates'][0]['representation']='requires_integer_range_contract'
+project,frame,imports=setup(bad)
+try:
+    frame.imported(imports[0],[]);frame.imported(imports[1],[])
+except _Unclosed as error: representation_gap=error.issue['code']
+else: raise AssertionError('large source integer was silently narrowed')
+generic=deepcopy(data);generic.update(module='source_library',status='verified_distribution',distribution='source-library',version='1.0',origin='/sealed/source_library.py',member='source_library.py')
+from scar.contract import python_provider_id
+generic['provider_id']=python_provider_id(generic)
+leaf=generic['exports']['stamp']['candidates'][0]
+leaf.update(module=generic['module'],origin=generic['origin'],member=generic['member'],provider_id=generic['provider_id'])
+leaf['via']=[dict(kind='literal',module=generic['module'],name='stamp',member=generic['member'],line=5,sha256=generic['sha256'],provider_id=generic['provider_id'])]
+node=dict(op='python_import',module='source_library',provider='python_package',source_provider=generic,import_resolution=generic,request=dict(form='import',module='source_library',level=0),alias='lib',binding=dict(op='var',name='py:test:lib',scope='global'),site='source/import',effects=['UNKNOWN'])
+reader=dict(name='reader',params=[],call_protocol=dict(kind='regular'),python_scope=dict(kind='function',module='test',initializer='entry'),body=[dict(op='return',value=dict(op='member',base=dict(op='var',name='py:test:alias',scope='global'),field='stamp',site='source/lookup'))])
+entry=dict(name='entry',params=[],body=[node],python_scope=dict(kind='module',module='test',main=True,initializer='entry',provider_sources={'source_library':generic}))
+project=_Project({'entry':entry,'reader':reader});project.active.append('entry');frame=_Frame(project,entry,());steps=[]
+frame.imported(node,steps)
+frame.store(dict(op='var',name='py:test:alias',scope='global'),project.names['py:test:lib'],steps)
+first=project.compile('reader',());second=project.compile('reader',())
+assert first is second and project.result_facts['reader']['exact']=='source-value'
+assert 'source_export_binding' not in project.result_facts['reader']
+lookup=next(n for n in walk_operations(first) if n['op']=='module_export_matches')
+assert lookup['lookup']=='attribute' and lookup['namespace_binding']['occurrence']==next(iter(project.source_imports.rows))
+assert lookup['instance_scope']=='per_dynamic_lookup_in_current_activation'
+print(json.dumps(dict(identity_gap=identity_gap,representation_gap=representation_gap,lookup=lookup['op'])))
+""",
+        source,
+    )
+    assert result["representation_gap"] == "python.source_export_representation"
+    assert result["identity_gap"] == "python.arithmetic_contract"
+    assert result["lookup"] == "module_export_matches"
+
+
 def test_binding_preserves_unit_scoped_provider_and_export_evidence(
     tmp_path, monkeypatch
 ):
@@ -2812,7 +2939,10 @@ print(json.dumps({'checked':list(results)}))
 
 
 def test_middle_layers_consume_only_preceding_products(tmp_path):
+    from scar.contract import digest, json_bytes
+
     numeric = dict(
+        semantics_version=1,
         scope="compilation_unit",
         source=dict(path="/removed/unit.f90", sha256="a" * 64),
         source_flags=["-O3"],
@@ -2857,6 +2987,15 @@ def test_middle_layers_consume_only_preceding_products(tmp_path):
     )
     for function in (main, update):
         function["source_numeric_contract"] = deepcopy(numeric)
+        function["numeric_contract"] = dict(
+            semantics_version=1,
+            scope="function",
+            source_contract_sha256=digest(json_bytes(numeric)),
+            permissions=dict(
+                may_omit_math_errno=True,
+                may_assume_default_rounding=False,
+            ),
+        )
     functions = [function_graph(f, "revision") for f in (main, update)]
     globals_ = function_graph(
         dict(name="@initializers", result="void", params=[], body=[]), "revision"
@@ -2919,25 +3058,32 @@ print(json.dumps(module))
     assert "declarations" in bound and "normalizations" not in bound
     assert bound["state_evidence"]["main"]["graph_id"] == functions[0]["id"]
     assert all(f["source_numeric_contract"] == numeric for f in bound["functions"])
+    assert all(
+        f["numeric_contract"] == main["numeric_contract"] for f in bound["functions"]
+    )
     _layer(
         "binding",
         """from scar.middle.binding import bind
 from scar.contract import read_member, member
 from pathlib import Path
 folder=Path(data['folder'])
-for field in ('source', 'interface', 'function'):
+for field in ('source', 'interface', 'function', 'permission'):
     graph=json.loads(json.dumps(data['graph']))
     unit=graph['units'][0]
     if field=='source': unit['source_facts']['files']['unit.f90']='c'*64
     elif field=='interface': unit['source_facts']['external_headers']['/removed/math.h']['sha256']='c'*64
-    else:
+    elif field=='function':
         payload=read_member(folder,unit['graph'])
         payload['functions'][0]['signature']['source_numeric_contract']['policy']['math_errno']=True
+        unit['graph']=member(folder,'units',payload)
+    else:
+        payload=read_member(folder,unit['graph'])
+        payload['functions'][0]['signature']['numeric_contract']['permissions']['may_assume_default_rounding']=True
         unit['graph']=member(folder,'units',payload)
     try: bind(graph,folder)
     except ValueError: pass
     else: raise AssertionError('inconsistent numerical '+field+' evidence accepted')
-print(json.dumps({'rejected':3}))
+print(json.dumps({'rejected':4}))
 """,
         dict(graph=graph, folder=str(tmp_path)),
     )
@@ -2955,6 +3101,10 @@ print(json.dumps(module))
     call = normalized["functions"][0]["body"][1]["value"]
     assert call["args"][0]["op"] == "unary" and call["args"][0]["operator"] == "addr"
     assert "declarations" not in normalized and "declarations" in bound
+    assert all(
+        f["numeric_contract"] == main["numeric_contract"]
+        for f in normalized["functions"]
+    )
     coordinate = dict(
         name="coordinate",
         result="void",
@@ -3034,6 +3184,16 @@ print(json.dumps({'path':str(path),'facts':facts}))
         sum(
             "source_numeric_contract"
             in json.loads((tmp_path / "sealed" / receipt["path"]).read_bytes())
+            for receipt in product["functions"]
+        )
+        == 2
+    )
+    assert (
+        sum(
+            json.loads((tmp_path / "sealed" / receipt["path"]).read_bytes()).get(
+                "numeric_contract"
+            )
+            == main["numeric_contract"]
             for receipt in product["functions"]
         )
         == 2

@@ -7,6 +7,7 @@ import shlex
 from scar.contract import digest, json_bytes
 
 from . import io as io_effects
+from .imports import numeric_wire_value
 from .facts import (
     _function,
     _literal_fact,
@@ -824,10 +825,10 @@ class _Scope:
             v = node.value
             if type(v) in (str, int, float, bool, type(None)):
                 f = _literal_fact(v)
-                value = v
+                value = numeric_wire_value(v)
             elif isinstance(v, complex):
                 f = {"class": "complex"}
-                value = [v.real, v.imag]
+                value = [numeric_wire_value(v.real), numeric_wire_value(v.imag)]
             elif isinstance(v, bytes):
                 f = {"class": "bytes"}
                 value = list(v)

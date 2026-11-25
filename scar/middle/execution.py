@@ -11,6 +11,7 @@ from scar.contract import (
     member,
     validate_resource_flow,
     validate_access_contract,
+    validate_numeric_contract,
     write_json,
     walk_operations as _nodes,
     control_regions,
@@ -253,6 +254,7 @@ def seal(module, out, *, status, graph_sha256, contract, logical_optimization):
     if status == "READY":
         for function in module["functions"]:
             validate_access_contract(function)
+            validate_numeric_contract(function)
     if status == "READY" and any(
         fn.get("execution_kind") == "python_protocol" for fn in module["functions"]
     ):

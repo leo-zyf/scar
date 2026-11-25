@@ -2,7 +2,12 @@
 
 import math
 
-from scar.contract import digest, json_bytes, python_provider_id
+from scar.contract import (
+    digest,
+    json_bytes,
+    python_provider_id,
+    validate_source_literal,
+)
 from . import scalars, sequences, text
 from .values import Value, argument_evidence, literal, sequence_kind, source_site, wire
 
@@ -388,6 +393,8 @@ class ImportOccurrences:
         self.rows = {}
         self.nodes = {}
         self.last = {}
+        self.initialization_points = {}
+        self.comparisons = {}
         for owner, fn in functions.items():
             work = [fn.get("body", [])]
             while work:
@@ -460,8 +467,13 @@ class ImportOccurrences:
         self.nodes[key] = (node, row)
         return row
 
-    @staticmethod
-    def producer(row, operation, role):
+    def begin(self, row, node, steps):
+        if row["id"] not in self.initialization_points:
+            marker = dict(op="block", body=[], **source_site(node))
+            self.initialization_points[row["id"]] = (marker, node)
+            steps.append(marker)
+
+    def producer(self, row, operation, role):
         operation.setdefault("site", row["site"])
         operation["source_import_occurrence"] = row["id"]
         item = dict(
@@ -478,6 +490,18 @@ class ImportOccurrences:
         row["effect_coverage"] = "MODELED" if role == "source_import" else "PARTIAL"
         if role == "source_import":
             row["obligations"] = ["qualify_equivalent_source_import_on_target"]
+        for comparison in self.comparisons.get(row["id"], ()):
+            comparison["occurrence_effect_coverage"] = row["effect_coverage"]
+
+    def comparison(self, row, operation):
+        self.comparisons.setdefault(row["id"], []).append(operation)
+
+    def empty_markers(self):
+        return {
+            id(marker)
+            for marker, _ in self.initialization_points.values()
+            if not marker["body"]
+        }
 
     def product(self, skipped, omitted):
         for row in self.rows.values():
@@ -529,7 +553,7 @@ def registry_import(frame, node, origin, occurrence):
         for member in occurrence["request"]["fromlist"]
         if member.isidentifier()
     ]
-    return dict(
+    operation = dict(
         op="module_import_preserves",
         type="bool",
         operator_family="module_registry",
@@ -551,6 +575,267 @@ def registry_import(frame, node, origin, occurrence):
         checked_interval="state_immediately_before_and_after_this_import",
         checks={},
         **source_site(node),
+    )
+    frame.project.source_imports.comparison(occurrence, operation)
+    return operation
+
+
+def source_namespace(frame, node, module):
+    occurrence = frame.project.source_imports.get(frame.name, node)
+    source = frame.provider_sources.get(module, {})
+    if (
+        source.get("status") not in {"verified_stdlib", "verified_distribution"}
+        or not source.get("sha256")
+        or source.get("provider_id") != python_provider_id(source)
+    ):
+        frame.fail(
+            node,
+            "source_namespace",
+            f"{module} has no sealed source namespace identity",
+        )
+    return dict(
+        module=module,
+        occurrence=occurrence["id"],
+        source_provider_id=source["provider_id"],
+        source_sha256=source["sha256"],
+        source=source,
+    )
+
+
+def literal_exports(frame, module):
+    source = frame.provider_sources.get(module, {})
+    return any(
+        candidate.get("kind") == "literal"
+        for export in source.get("exports", {}).values()
+        for candidate in export.get("candidates", ())
+    )
+
+
+def source_provider(frame, node, origin, steps):
+    namespace = Value(
+        "source_namespace",
+        node["module"],
+        {"source_namespace": source_namespace(frame, node, node["module"])},
+    )
+    if node["request"]["form"] == "from":
+        return source_export(
+            frame, node, namespace.facts["source_namespace"], node["member"], steps
+        )
+    return namespace
+
+
+def _initialize_source_namespace(frame, node, namespace):
+    ledger = frame.project.source_imports
+    row = ledger.rows[namespace["occurrence"]]
+    if any(producer["role"] == "source_import" for producer in row["producer_sites"]):
+        return row
+    point = ledger.initialization_points.get(row["id"])
+    if point is None:
+        frame.fail(
+            node,
+            "source_import_position",
+            "the namespace lookup has no preceding source IMPORT_NAME position",
+        )
+    marker, original = point
+    operation = dict(
+        op="module_namespace_initialize",
+        type="unit",
+        operator_family="module_registry",
+        semantics_version=1,
+        source_protocol="python.import",
+        module=namespace["module"],
+        source_provider_id=namespace["source_provider_id"],
+        source_sha256=namespace["source_sha256"],
+        request=row["request"],
+        effects=["CTRL", "STATE", "IO", "MEM", "OPAQUE"],
+        source_effects=row["source_effects"],
+        may_raise=True,
+        reads=[
+            "module.registry",
+            "process.import_hooks",
+            "process.audit_hooks",
+            "filesystem",
+        ],
+        writes=[
+            "requested_registry_entries",
+            "module.namespace",
+            "import.external_effects",
+        ],
+        allocates="UNKNOWN",
+        frees="UNKNOWN",
+        aliases="UNKNOWN",
+        escapes="UNKNOWN",
+        rng_effect="UNKNOWN",
+        external_effect="UNKNOWN",
+        ordering_effect="source_import_order",
+        namespace_binding=dict(
+            occurrence=row["id"],
+            instance_scope="per_successful_dynamic_import",
+            retains="actual_IMPORT_NAME_result",
+        ),
+        initialization=dict(
+            policy="one_original_IMPORT_NAME_at_its_source_position",
+            fromlist="perform_complete_source_fromlist_precheck_before_any_IMPORT_FROM",
+            hooks="preserve_import_callbacks_audit_and_failures",
+            unknown_namespace="do_not_assume_candidate_is_current_binding",
+        ),
+        **source_site(original),
+    )
+    require_registry_operator(frame.project, operation["op"])
+    ledger.producer(row, operation, "source_import")
+    marker["body"].append(dict(op="expr", value=operation))
+    return row
+
+
+def source_export(frame, node, namespace, name, steps):
+    if not namespace:
+        frame.fail(
+            node,
+            "source_namespace",
+            "the source namespace binding was not preserved across this activation",
+        )
+    source = namespace["source"]
+    export = source.get("exports", {}).get(name, {})
+    candidates = [
+        candidate
+        for candidate in export.get("candidates", ())
+        if candidate.get("kind") == "literal"
+    ]
+    if export.get("status") != "source_candidates" or not candidates:
+        frame.fail(
+            node,
+            "source_export",
+            f"no literal source candidate for {namespace['module']}.{name}",
+        )
+    try:
+        expected = validate_source_literal(candidates[0])
+        kind = expected["type"]
+        if kind not in {"unit", "bool", "i64", "f64", "text"}:
+            raise ValueError(
+                "source literal needs another native representation contract"
+            )
+        for candidate in candidates:
+            if (
+                json_bytes(validate_source_literal(candidate)) != json_bytes(expected)
+                or candidate["via"][0].get("provider_id")
+                != namespace["source_provider_id"]
+                or candidate["via"][0].get("sha256") != namespace["source_sha256"]
+                or any(
+                    not step.get("provider_id") or not step.get("sha256")
+                    for step in candidate["via"]
+                )
+            ):
+                raise ValueError(
+                    "inconsistent source literal alternatives or export path"
+                )
+    except ValueError as error:
+        frame.fail(
+            node,
+            "source_export_representation",
+            str(error),
+        )
+    value = expected["value"]
+    row = _initialize_source_namespace(frame, node, namespace)
+    capture = digest(
+        json_bytes(
+            [frame.name, node.get("site"), source_site(node), frame.temporary(), name]
+        )
+    )
+    common = dict(
+        operator_family="module_registry",
+        semantics_version=1,
+        capture=capture,
+        instance_scope="per_dynamic_lookup_in_current_activation",
+        namespace_binding=dict(
+            occurrence=row["id"],
+            source_provider_id=namespace["source_provider_id"],
+            source_sha256=namespace["source_sha256"],
+            module=namespace["module"],
+        ),
+        member=name,
+        lookup=("IMPORT_FROM" if node.get("op") == "python_import" else "attribute"),
+        **source_site(node),
+    )
+    operation = dict(
+        op="module_export_matches",
+        type="bool",
+        **common,
+        candidate=dict(
+            source_type=candidates[0]["source_type"],
+            literal=expected,
+            provenance=candidates,
+            unresolved=export.get("unresolved", []),
+            **({"on_missing": export["on_missing"]} if "on_missing" in export else {}),
+        ),
+        checks=[
+            "capture_actual_source_lookup_once",
+            "exact_builtin_source_type",
+            "binary64_bits" if kind == "f64" else "exact_primitive_value",
+        ],
+        lookup_effects="preserve___getattr___exceptions_and_IMPORT_FROM_fallback_without_repeating_lookup",
+        effects=["CTRL", "STATE", "IO", "MEM", "OPAQUE"],
+        may_raise=True,
+        reads=["source.import_binding", "module.namespace"],
+        writes=["lookup.capture", "import.external_effects"],
+        allocates="UNKNOWN",
+        frees="UNKNOWN",
+        aliases="UNKNOWN",
+        escapes="UNKNOWN",
+        rng_effect="UNKNOWN",
+        external_effect="UNKNOWN",
+    )
+    for op in (
+        "module_export_matches",
+        "module_export_value",
+        "module_export_continuation_required",
+    ):
+        require_registry_operator(frame.project, op)
+    matched = frame.effect(operation, "bool", steps)
+    steps.append(
+        dict(
+            op="if",
+            condition=matched.value,
+            then=[],
+            **{
+                "else": [
+                    dict(
+                        op="expr",
+                        value=dict(
+                            op="module_export_continuation_required",
+                            type="void",
+                            **common,
+                            noreturn=True,
+                            effects=["CTRL", "OPAQUE"],
+                            reads=["lookup.capture", "source.continuation"],
+                            writes=["source.continuation"],
+                            external_effect="UNKNOWN",
+                            semantics="transfer_to_source_equivalent_continuation_with_the_captured_actual_object_not_raise_or_repeat_lookup",
+                        ),
+                    )
+                ]
+            },
+        )
+    )
+    facts = {
+        **literal(value).facts,
+        "source_export_binding": dict(
+            normal_edge="exact_source_type_and_value_checked",
+            identity="same_captured_object_requires_identity_protocol_if_observed",
+        ),
+    }
+    return frame.effect(
+        dict(
+            op="module_export_value",
+            type=wire(kind),
+            **common,
+            effects=["STATE"],
+            reads=["lookup.capture"],
+            writes=[],
+            projection="actual_captured_object_after_successful_match_not_constant_rematerialization",
+        ),
+        kind,
+        steps,
+        facts=facts,
     )
 
 
@@ -724,6 +1009,11 @@ def import_provider(frame, node, steps):
         if primary:
             _glob_import(frame, node, source, steps)
     namespace_facts = source
+    if literal_exports(frame, module):
+        namespace_facts = {
+            **source,
+            "source_namespace": source_namespace(frame, node, module),
+        }
     if module == "importlib":
         namespace_facts = {
             **source,
@@ -749,21 +1039,27 @@ def import_provider(frame, node, steps):
     )
     namespace = Value("host_namespace", module, namespace_facts)
     if node["request"]["form"] == "from":
-        return member(frame, node, namespace, node["member"])
+        return member(frame, node, namespace, node["member"], steps)
     if module == "os.path" and not node.get("alias"):
         return Value("host_namespace", "os", source)
     return namespace
 
 
-def member(frame, node, base, name):
+def member(frame, node, base, name, steps):
     if base.kind == _STREAM:
         if name not in _METHODS:
             frame.fail(node, "stream_member", f"no closed stream method for {name}")
         return Value("host_method", (base, name))
+    if base.kind == "source_namespace":
+        return source_export(
+            frame, node, base.facts.get("source_namespace"), name, steps
+        )
     if base.kind != "host_namespace":
         return None
     if name not in _MEMBERS.get(base.value, ()):
-        frame.fail(node, "host_member", f"no host API contract for {base.value}.{name}")
+        return source_export(
+            frame, node, base.facts.get("source_namespace"), name, steps
+        )
     qualified = base.value + "." + name
     if qualified in {"subprocess.PIPE", "subprocess.STDOUT"}:
         return literal(-1 if name == "PIPE" else -2)

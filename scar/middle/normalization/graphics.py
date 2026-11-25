@@ -219,6 +219,7 @@ class Graphics:
             export.get("status") != "source_candidates"
             or export.get("unresolved") != []
             or len(candidates) != 1
+            or candidates[0].get("kind", "definition") != "definition"
         ):
             frame.fail(
                 node,

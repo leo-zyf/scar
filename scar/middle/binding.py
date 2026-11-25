@@ -10,6 +10,8 @@ from scar.contract import (
     validate_images,
     walk_operations as _operations,
     validate_text_profiles,
+    validate_numeric_contract,
+    validate_source_literal,
 )
 
 
@@ -21,6 +23,10 @@ def _provider_sources(records):
             raise ValueError(
                 f"provider record does not identify requested module {module}"
             )
+        for export in record.get("exports", {}).values():
+            for candidate in export.get("candidates", ()):
+                if candidate.get("kind") == "literal":
+                    validate_source_literal(candidate)
         if record.get("status") not in {"verified_distribution", "verified_stdlib"}:
             sources[module] = record
             continue
@@ -110,6 +116,7 @@ def _validate_numeric_evidence(unit, payload):
             raise ValueError("mathematical interface lacks its captured header")
     for function in payload["functions"]:
         signature = function["signature"]
+        validate_numeric_contract(signature)
         captured = signature.get("source_numeric_contract")
         if captured is not None and captured != contract:
             raise ValueError("function numerical evidence disagrees with its unit")

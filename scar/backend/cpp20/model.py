@@ -173,6 +173,46 @@ def _defines_symbol(attribute):
     return namespace in {"gnu", "__gnu__"} and name in {"alias", "ifunc", "weakref"}
 
 
+NUMERIC_FUNCTION_OPTIONS = {
+    "may_omit_math_errno": "no-math-errno",
+    "may_assume_default_rounding": "no-rounding-math",
+}
+
+
+def numeric_definition(decl):
+    """Identify a locally attributed overload, without hashing its function body."""
+    attributes = [
+        a
+        for a in decl.attributes
+        if tuple(token.strip("_") for token in a.name.removeprefix("::").split("::"))
+        == ("gnu", "optimize")
+    ]
+    if not attributes:
+        return None
+    _require(
+        len(attributes) == 1
+        and decl.kind == "function"
+        and decl.body is not None
+        and attributes[0].name == "gnu::optimize",
+        "numeric options require a function definition",
+    )
+    options = [
+        a.value for a in attributes[0].args if type(a) is Expr and a.kind == "string"
+    ]
+    _require(
+        options
+        and len(options) == len(attributes[0].args)
+        and options == [v for v in NUMERIC_FUNCTION_OPTIONS.values() if v in options],
+        "unsupported target function numeric options",
+    )
+    return dict(
+        name=decl.name,
+        parameter_types=[to_data(p.type) for p in decl.params],
+        qualifiers=list(decl.qualifiers),
+        options=options,
+    )
+
+
 def _type_identifier(value):
     if not isinstance(value, str) or value not in _BUILTINS:
         identifier(value)
@@ -650,6 +690,8 @@ def _validate(node):
         if kind == "new" and node.qualifier == "default" and node.args:
             raise ValueError("default initialization has no explicit arguments")
     elif cls is Decl:
+        if node.attributes:
+            numeric_definition(node)
         if kind == "param":
             if node.definition == "variadic":
                 _require(

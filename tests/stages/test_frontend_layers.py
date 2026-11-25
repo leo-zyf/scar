@@ -758,6 +758,7 @@ def test_external_exports_follow_aliases_and_preserve_source_evidence(
 ):
     from base64 import urlsafe_b64encode
     from hashlib import sha256
+    from math import copysign
     import sys
 
     project, installed = tmp_path / "project", tmp_path / "installed"
@@ -765,15 +766,25 @@ def test_external_exports_follow_aliases_and_preserve_source_evidence(
     package = installed / "source_library"
     package.mkdir(parents=True)
     sources = {
-        "source_library/__init__.py": "from .unknown import *\nfrom .first import produce as selected\nsaved = selected\nfrom .second import produce as selected\n",
+        "source_library/__init__.py": (
+            "from .unknown import *\nfrom .first import produce as selected\nsaved = selected\nfrom .second import produce as selected\n"
+            "from .values import public, changing, large, zero, infinite, flag, nothing, data\n"
+            "def __getattr__(name): return runtime_lookup(name)\n"
+        ),
         "source_library/unknown.py": "__all__ = unknown_at_runtime()\n",
         "source_library/first.py": 'def produce(x):\n    """not a statement site"""\n    def nested():\n        return 999\n    return x + 1\n',
         "source_library/second.py": "def produce(x):\n    return x + 2\n",
+        "source_library/values.py": (
+            "tag = 'science'\npublic = tag\ntag = 'later'\nchanging = 7\n"
+            "if runtime_flag(): globals()['changing'] = runtime_value()\n"
+            "large = 9223372036854775808\nzero = -0.0\ninfinite = -1e999\n"
+            "flag = True\nnothing = None\ndata = b'abc'\n"
+        ),
     }
-    metadata = installed / "source_library-1.0.dist-info"
+    metadata = installed / "source_library-999.dist-info"
     metadata.mkdir()
     (metadata / "METADATA").write_text(
-        "Metadata-Version: 2.1\nName: source-library\nVersion: 1.0\n"
+        "Metadata-Version: 2.1\nName: source-library\nVersion: 999\n"
     )
     (metadata / "top_level.txt").write_text("source_library\n")
     records = []
@@ -786,7 +797,10 @@ def test_external_exports_follow_aliases_and_preserve_source_evidence(
     (metadata / "RECORD").write_text("".join(records))
     monkeypatch.syspath_prepend(str(installed))
     entry = project / "entry.py"
-    entry.write_text("import source_library as api\napi.saved(1)\napi.selected(2)\n")
+    entry.write_text(
+        "import source_library as api\napi.saved(1)\napi.selected(2)\n"
+        "from source_library import public, changing, large, zero, infinite, flag, nothing, data\n"
+    )
     assert "source_library" not in sys.modules
     facts = python.parse_unit(entry, root=project)
     exports = facts.providers["source_library"]["exports"]
@@ -799,6 +813,54 @@ def test_external_exports_follow_aliases_and_preserve_source_evidence(
     assert exports["selected"]["unresolved"] == []
     assert first["locations"] == {"3": "def nested():", "5": "return x + 1"}
     assert all(step["sha256"] for step in first["via"])
+    assert first["kind"] == second["kind"] == "definition"
+
+    (literal,) = exports["public"]["candidates"]
+    assert (literal["kind"], literal["source_type"], literal["literal"]) == (
+        "literal",
+        "builtins.str",
+        {"type": "text", "value": "science"},
+    )
+    assert (
+        literal["name"],
+        literal["version"],
+        literal["line"],
+        literal["column"],
+    ) == ("tag", "999", 1, 1)
+    assert (
+        literal["end_line"] == 1 and literal["end_column"] == len("tag = 'science'") + 1
+    )
+    assert [(s["kind"], s["name"]) for s in literal["via"]] == [
+        ("from", "public"),
+        ("alias", "public"),
+        ("literal", "tag"),
+    ]
+    for step in literal["via"]:
+        assert step["sha256"] == sha256(sources[step["member"]].encode()).hexdigest()
+        assert len(step["provider_id"]) == 64
+    assert exports["public"]["on_missing"]["hook"] == "__getattr__"
+    assert exports["__getattr__"]["candidates"][0]["kind"] == "definition"
+    assert exports["changing"]["candidates"][0]["conditions"][0]["branch"] == "else"
+    assert {u["reason"] for u in exports["changing"]["unresolved"]} == {
+        "namespace_write"
+    }
+    large = exports["large"]["candidates"][0]
+    assert large["literal"] == {"type": "python_int", "value": 1 << 63}
+    assert large["representation"] == "requires_integer_range_contract"
+    assert copysign(1, exports["zero"]["candidates"][0]["literal"]["value"]) == -1
+    assert exports["infinite"]["candidates"][0]["literal"] == {
+        "type": "python_float",
+        "value_hex": "-inf",
+    }
+    assert exports["flag"]["candidates"][0]["source_type"] == "builtins.bool"
+    assert exports["nothing"]["candidates"][0]["literal"] == {
+        "type": "unit",
+        "value": None,
+    }
+    assert (
+        exports["data"]["candidates"] == []
+        and exports["data"]["unresolved"][0]["source_type"] == "builtins.bytes"
+    )
     assert "source_library" not in sys.modules
     (package / "second.py").write_text("def produce(x):\n    return x + 900\n")
     changed = python.parse_unit(entry, root=project).providers["source_library"][

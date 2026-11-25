@@ -1937,3 +1937,229 @@ def test_link_image_compilation_survives_target_relocation(tmp_path):
         assert ("-flto=1" in line) == (output == "first")
         assert ("-flto-partition=one" in line) == (output == "first")
         assert subprocess.run([build / "images" / image["id"] / output]).returncode == 7
+
+
+def test_function_numeric_permissions_preserve_strict_neighbors_across_lto(
+    tmp_path, monkeypatch
+):
+    from copy import deepcopy
+    from scar.backend.build import build
+    from scar.backend.cpp20 import lower_scheduled, print_target
+    from scar.backend.cpp20.lowering import Lowerer
+    from scar.backend.planning import schedule_ir
+    from scar.contract import digest, json_bytes, read_member
+
+    monkeypatch.setenv("CXX", "g++")
+    monkeypatch.setenv("CMAKE_BUILD_PARALLEL_LEVEL", "2")
+    # Three syntax nodes in each small sqrt definition: group a permitted and a
+    # strict definition together, then start a separate TU for the next neighbor.
+    monkeypatch.setattr(Lowerer, "unit_weight_limit", 6)
+    source, plan, target, delivery = (
+        tmp_path / s for s in ("source", "plan", "target", "delivery")
+    )
+
+    def var(name, ty):
+        return dict(op="var", name=name, type=ty)
+
+    def integer(value):
+        return dict(op="literal", type="i32", value=value)
+
+    def invoke(symbol, result, *args):
+        return dict(op="call", callee=symbol, args=list(args), type=result)
+
+    def compare(op, a, b):
+        return dict(op="binary", operator=op, type="bool", left=a, right=b)
+
+    def sqrt_fn(name):
+        return dict(
+            name=name,
+            params=[dict(name="x", type="f64")],
+            result="f64",
+            body=[
+                dict(
+                    op="return",
+                    value=dict(
+                        op="intrinsic", name="sqrt", args=[var("x", "f64")], type="f64"
+                    ),
+                )
+            ],
+        )
+
+    local = sqrt_fn("permitted")
+    local["source_numeric_contract"] = dict(
+        semantics_version=1,
+        scope="compilation_unit",
+        policy=dict(math_errno=False, rounding_math=False),
+        caller_observations=dict(errno="unproven", fenv="unproven"),
+    )
+    local["numeric_contract"] = dict(
+        semantics_version=1,
+        scope="function",
+        source_contract_sha256=digest(json_bytes(local["source_numeric_contract"])),
+        permissions=dict(may_omit_math_errno=True, may_assume_default_rounding=True),
+    )
+    functions = [local, sqrt_fn("strict_same"), sqrt_fn("strict_other")]
+    point = dict(kind="ptr", to="i32")
+    error = dict(op="unary", operator="deref", value=var("error", point), type="i32")
+    main = dict(
+        name="main",
+        result="i32",
+        params=[
+            dict(name="argc", type="i32"),
+            dict(name="argv", type=dict(kind="ptr", to=dict(kind="ptr", to="char"))),
+        ],
+        body=[
+            dict(
+                op="decl",
+                name="error",
+                type=point,
+                init=invoke("__errno_location", point),
+            ),
+            dict(
+                op="decl",
+                name="x",
+                type="f64",
+                init=dict(
+                    op="cast",
+                    type="f64",
+                    value=dict(
+                        op="unary", operator="neg", value=var("argc", "i32"), type="i32"
+                    ),
+                ),
+            ),
+        ],
+    )
+    for i, fn in enumerate(functions):
+        main["body"].extend(
+            [
+                dict(op="assign", target=error, value=integer(0)),
+                dict(
+                    op="decl",
+                    name=f"root{i}",
+                    type="f64",
+                    init=invoke(fn["name"], "f64", var("x", "f64")),
+                ),
+                dict(
+                    op="if",
+                    condition=dict(
+                        op="unary",
+                        operator="not",
+                        type="bool",
+                        value=dict(
+                            op="intrinsic",
+                            name="isnan",
+                            type="bool",
+                            args=[var(f"root{i}", "f64")],
+                        ),
+                    ),
+                    then=[dict(op="return", value=integer(1 + i))],
+                    **{"else": []},
+                ),
+            ]
+        )
+        if fn is not local:
+            main["body"].append(
+                dict(
+                    op="if",
+                    condition=compare("eq", error, integer(0)),
+                    then=[dict(op="return", value=integer(4 + i))],
+                    **{"else": []},
+                )
+            )
+    main["body"].append(dict(op="return", value=integer(0)))
+    write_json(
+        source / "exec-ir.json",
+        document(
+            IR,
+            status="READY",
+            module=dict(
+                entry="main",
+                externs=[
+                    dict(
+                        name="__errno_location",
+                        params=[],
+                        result=point,
+                        provider="libc",
+                        header="errno.h",
+                    )
+                ],
+            ),
+            functions=[member(source, "functions", f) for f in [main, *functions]],
+        ),
+    )
+    scheduled = schedule_ir(source, plan, policy="serial", workers=1)
+    pkg = json.loads(scheduled.read_bytes())
+    physical = read_member(plan, pkg["physical"])
+    binding = physical["numeric_permissions"]
+    assert binding["qualification"]["supported"], binding["qualification"]
+    assert binding["functions"].keys() == {"permitted"}
+    assert binding["functions"]["permitted"]["options"] == [
+        "no-math-errno",
+        "no-rounding-math",
+    ]
+    assert physical["compilation"]["mode"] == "gnu_lto"
+
+    def altered(binding):
+        mod = {
+            k: v
+            for k, v in pkg["module"].items()
+            if k != "numeric_permissions_binding_sha256"
+        }
+        phys = deepcopy(physical)
+        if binding is None:
+            del phys["numeric_permissions"]
+        else:
+            phys["numeric_permissions"] = binding
+            mod["numeric_permissions_binding_sha256"] = digest(json_bytes(binding))
+        path = plan / "altered.json"
+        write_json(
+            path, dict(pkg, module=mod, physical=member(plan, "scheduled-units", phys))
+        )
+        return path
+
+    for key, value in (
+        ("options", ["fast-math"]),
+        ("scheduled_function_sha256", "0" * 64),
+    ):
+        bad = deepcopy(binding)
+        bad["functions"]["permitted"][key] = value
+        with pytest.raises(ValueError, match="numeric options"):
+            lower_scheduled(altered(bad), tmp_path / "rejected")
+    with pytest.raises(ValueError, match="numeric permission"):
+        lower_scheduled(altered(None), tmp_path / "rejected")
+    fallback = deepcopy(binding)
+    fallback.update(
+        qualification=dict(supported=False, reason="unavailable compiler feature")
+    )
+    fallback["functions"]["permitted"]["options"] = []
+    fallback_target = lower_scheduled(altered(fallback), tmp_path / "strict")
+    assert (
+        json.loads(fallback_target.read_bytes())["numeric_permission_consumption"][
+            "compiler_sha256"
+        ]
+        is None
+    )
+
+    ir = lower_scheduled(scheduled, target)
+    receipt = json.loads(ir.read_bytes())["numeric_permission_consumption"]
+    assert (
+        receipt["functions"]["permitted"]["scheduled_function_sha256"]
+        == binding["functions"]["permitted"]["scheduled_function_sha256"]
+    )
+    plan.rename(tmp_path / "moved-schedule")
+    result = print_target(ir, delivery)
+    assert result["numeric_permission_consumption"] == receipt
+    tus = [f.read_text() for f in (delivery / "project/src").glob("*.cpp")]
+    same = next(tu for tu in tus if "gnu::optimize" in tu)
+    assert "strict_same(" in same and "strict_other(" not in same
+    assert any("strict_other(" in tu and "gnu::optimize" not in tu for tu in tus)
+    assert (
+        "gnu::optimize"
+        not in (delivery / "project/include/scar/program.hpp").read_text()
+    )
+    cmake = (delivery / "project/CMakeLists.txt").read_text()
+    assert "-fno-fast-math -frounding-math -ffp-contract=off" in cmake
+    assert "-fno-math-errno" not in cmake and "-fno-rounding-math" not in cmake
+    target.rename(tmp_path / "moved-target")
+    executable = build(delivery / "cpp20.json")
+    subprocess.run([str(executable)], check=True)

@@ -12,6 +12,7 @@ from importlib.metadata import distributions, packages_distributions
 from importlib.util import resolve_name
 from io import BytesIO
 import locale
+from math import isfinite
 import os
 from pathlib import Path
 import sys
@@ -474,6 +475,26 @@ class Imports:
                 continue
             for member in sorted(members):
                 evidence = self.exports.get(module, member)
+                if (
+                    "." not in member
+                    and member != "__getattr__"
+                    and any(c["kind"] == "literal" for c in evidence["candidates"])
+                ):
+                    hook = self.exports.get(module, "__getattr__")
+                    if hook["candidates"] or any(
+                        u["reason"] not in {"unbound", "deleted"}
+                        for u in hook["unresolved"]
+                    ):
+                        additions[module]["__getattr__"] = hook
+                        evidence = dict(
+                            evidence,
+                            on_missing=dict(
+                                kind="package_attribute_missing",
+                                module=module,
+                                name=member,
+                                hook="__getattr__",
+                            ),
+                        )
                 additions[module][member] = evidence
                 root, _, tail = module.partition(".")
                 if tail and records[root].get("status") == "verified_distribution":
@@ -524,6 +545,65 @@ def _namespace(target):
 _DEFINITIONS = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
 _IMPLICIT = object()
 _DYNAMIC = object()
+
+
+def _literal_value(node):
+    """A literal token or a single numeric sign, without evaluating user code."""
+    if isinstance(node, ast.Constant):
+        return node.value
+    if (
+        isinstance(node, ast.UnaryOp)
+        and isinstance(node.op, (ast.UAdd, ast.USub))
+        and isinstance(node.operand, ast.Constant)
+        and type(node.operand.value) in (int, float)
+    ):
+        value = node.operand.value
+        return -value if isinstance(node.op, ast.USub) else value
+    return _DYNAMIC
+
+
+def numeric_wire_value(value):
+    """Keep source numeric tokens lossless when JSON cannot encode the number."""
+    if type(value) is float and not isfinite(value):
+        return {"float_hex": value.hex()}
+    if type(value) is int and value.bit_length() > 2048:
+        limit = getattr(sys, "get_int_max_str_digits", lambda: 0)()
+        if limit and value.bit_length() > 3 * limit:
+            try:
+                str(value)
+            except ValueError:
+                return {"integer_hex": hex(value)}
+    return value
+
+
+def _literal_source(value):
+    source_type = "builtins." + type(value).__name__
+    kind = {
+        str: "text",
+        bool: "bool",
+        type(None): "unit",
+        int: "i64",
+        float: "f64",
+    }.get(type(value))
+    if kind is None:
+        return {"source_type": source_type}
+    fields = {"source_type": source_type}
+    if kind == "i64" and not -(1 << 63) <= value < 1 << 63:
+        kind = "python_int"
+        fields["representation"] = "requires_integer_range_contract"
+        encoded = numeric_wire_value(value)
+        if isinstance(encoded, dict):
+            return {
+                **fields,
+                "literal": {"type": kind, "value_hex": encoded["integer_hex"]},
+            }
+    elif kind == "f64" and not isfinite(value):
+        return {
+            **fields,
+            "literal": {"type": "python_float", "value_hex": value.hex()},
+            "representation": "requires_nonfinite_float_contract",
+        }
+    return {**fields, "literal": {"type": kind, "value": value}}
 
 
 def _strings(value):
@@ -698,7 +778,7 @@ def _statement_lines(definition, lines):
 
 
 class ExportSources:
-    """Resolve only requested names to possible definitions in verified source bytes."""
+    """Trace requested namespace bindings to possible sources in verified bytes."""
 
     def __init__(self, imports):
         self.imports = imports
@@ -798,19 +878,16 @@ class ExportSources:
                         elif isinstance(node, ast.AnnAssign) and node.value is None:
                             continue
                         else:
-                            path = (
-                                _dotted(node.value)
+                            rhs = (
+                                node.value
                                 if direct and not isinstance(node, ast.AugAssign)
-                                else ()
+                                else None
                             )
-                            state = [
-                                _Binding(
-                                    "alias" if path else "computed_binding",
-                                    node,
-                                    module,
-                                    path,
-                                )
-                            ]
+                            path = _dotted(rhs)
+                            kind = "alias" if path else "computed_binding"
+                            if _literal_value(rhs) is not _DYNAMIC:
+                                kind = "literal"
+                            state = [_Binding(kind, node, module, path)]
                     for t in targets:
                         if isinstance(t, ast.Subscript) and _namespace(t.value):
                             if isinstance(t.slice, ast.Constant):
@@ -915,12 +992,13 @@ class ExportSources:
         def walk(owner, path, before=None, active=frozenset(), guards=(), via=()):
             key = (owner, path, before)
 
-            def issue(reason, conditions=guards, line=None):
+            def issue(reason, conditions=guards, line=None, **fields):
                 item = dict(
                     module=owner,
                     name=".".join(path),
                     reason=reason,
                     conditions=list(conditions),
+                    **fields,
                 )
                 if line:
                     item["line"] = line
@@ -949,6 +1027,7 @@ class ExportSources:
                     module=owner,
                     sha256=record["sha256"],
                     member=record["member"],
+                    provider_id=record["provider_id"],
                     name=first,
                     line=node.lineno if node else None,
                     kind=binding.kind,
@@ -965,8 +1044,34 @@ class ExportSources:
                         chain,
                     )
 
-                if binding.kind == "definition" and not rest:
-                    identity = (owner, node.lineno, node.name)
+                if binding.kind in {"definition", "literal"} and not rest:
+                    if binding.kind == "literal":
+                        fields = _literal_source(_literal_value(node.value))
+                        if "literal" not in fields:
+                            issue(
+                                "unsupported_literal_type",
+                                conditions,
+                                node.lineno,
+                                **fields,
+                                provider_id=step["provider_id"],
+                                via=list(chain),
+                            )
+                            continue
+                    else:
+                        fields = dict(
+                            locations=_statement_lines(node, source.lines),
+                            decorators=[
+                                dict(line=d.lineno, expression=ast.unparse(d))
+                                for d in node.decorator_list
+                            ],
+                        )
+                    identity = (
+                        owner,
+                        node.lineno,
+                        node.col_offset,
+                        first,
+                        binding.kind,
+                    )
                     route = dict(conditions=list(conditions), via=list(chain))
                     if identity in candidates:
                         previous = candidates[identity]
@@ -984,17 +1089,18 @@ class ExportSources:
                             "distribution",
                             "version",
                             "sha256",
+                            "provider_id",
                         )
                     }
                     item.update(
-                        name=node.name,
+                        kind=binding.kind,
+                        name=first,
                         line=node.lineno,
                         end_line=node.end_lineno,
-                        locations=_statement_lines(node, source.lines),
-                        decorators=[
-                            dict(line=d.lineno, expression=ast.unparse(d))
-                            for d in node.decorator_list
-                        ],
+                        # One-based UTF-8 byte columns; end is exclusive.
+                        column=node.col_offset + 1,
+                        end_column=node.end_col_offset + 1,
+                        **fields,
                         **route,
                     )
                     candidates[identity] = item

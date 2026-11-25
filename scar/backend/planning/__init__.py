@@ -418,6 +418,7 @@ def _schedule_image(
     module.pop("parameter_access_binding_sha256", None)
     module.pop("compilation_binding_sha256", None)
     module.pop("math_interface_binding_sha256", None)
+    module.pop("numeric_permissions_binding_sha256", None)
     requirements, bindings, issues = _qualify(module, image_context)
     import_effects = runtime.import_effects(module, bindings)
     import_receipt = (
@@ -486,6 +487,16 @@ def _schedule_image(
             fn["name"]: receipt
             for fn, receipt in zip(module["functions"], ir["functions"], strict=True)
         }
+        numeric = toolchain.numeric_permissions(
+            selected,
+            source_members,
+            functions,
+            compilation,
+            cache=(image_context or {}).get("compiler_features"),
+        )
+        if numeric:
+            physical["numeric_permissions"] = numeric
+            selected["numeric_permissions_binding_sha256"] = digest(json_bytes(numeric))
         math = toolchain.math_interfaces(
             selected, source_members, functions, compilation
         )

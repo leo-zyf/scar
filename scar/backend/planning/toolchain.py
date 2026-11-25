@@ -8,7 +8,13 @@ import shutil
 import subprocess
 from tempfile import TemporaryDirectory
 
-from scar.contract import digest, json_bytes, validate_access_contract, walk_operations
+from scar.contract import (
+    digest,
+    json_bytes,
+    validate_access_contract,
+    validate_numeric_contract,
+    walk_operations,
+)
 from scar.host import cpu_availability
 
 
@@ -86,6 +92,169 @@ def parameter_access(module, *, cache=None):
         scope="invocation",
         feature="gnu_restrict_parameter",
         qualifier="__restrict__" if qualification["supported"] else None,
+        qualification=qualification,
+        functions=functions,
+    )
+
+
+_NUMERIC_OPTIONS = {
+    "may_omit_math_errno": "no-math-errno",
+    "may_assume_default_rounding": "no-rounding-math",
+}
+_STRICT_FP = ["-fno-fast-math", "-frounding-math", "-ffp-contract=off"]
+
+
+def _numeric_probe_observations(output):
+    """Read the GNU optimizer's independent records for the fixed probe definitions."""
+    parts = re.split(r"^;; Function (\w+) \(", output, flags=re.MULTILINE)
+    bodies = dict(zip(parts[1::2], parts[2::2], strict=True))
+    expected = {
+        "scar_strict_before": [],
+        "scar_local_errno": ["no-math-errno"],
+        "scar_local_rounding": ["no-rounding-math"],
+        "scar_local_both": ["no-math-errno", "no-rounding-math"],
+        "scar_strict_after": [],
+        "scar_strict_rounding": [],
+    }
+    for name, options in expected.items():
+        body = bodies.get(name, "")
+        observed = re.findall(r'"(no-math-errno|no-rounding-math)"', body)
+        if not body or observed != options:
+            raise ValueError("GNU optimizer did not confirm isolated function options")
+
+    def errno_path(name):
+        return re.search(r"\b(?:__builtin_)?sqrt\s*\(", bodies[name]) is not None
+
+    if not (
+        errno_path("scar_strict_before")
+        and errno_path("scar_strict_after")
+        and re.search(r"= 1(?:\.0+)?e\+0 \+ ", bodies["scar_strict_rounding"])
+        and re.search(r"return 1(?:\.0+)?e\+0;", bodies["scar_local_rounding"])
+    ):
+        raise ValueError("GNU probe did not distinguish local and strict FP behavior")
+    return dict(
+        options_per_probe_function=expected,
+        strict_neighbors_retain_sqrt_errno_path=True,
+        strict_neighbor_retains_dynamic_rounding=True,
+        local_rounding_constant_folded=True,
+        local_sqrt_retains_errno_path=errno_path("scar_local_errno"),
+    )
+
+
+def _numeric_feature(compilation, cache):
+    identity = compilation["qualification"]
+    if not identity.get("compiler_id"):
+        identity = _ipo_feature(cache)
+    if identity.get("compiler_id") != "GNU":
+        return dict(supported=False, reason="GNU C++ compiler has not been identified")
+    source = Path(__file__).with_name("numeric_probe.cpp")
+    try:
+        args = shlex.split(os.environ.get("CXX") or "c++")
+        compiler = shutil.which(args[0]) if args else None
+        if not compiler or _file(compiler) != identity.get("compiler"):
+            return dict(
+                supported=False, reason="target compiler invocation is unverified"
+            )
+        target_flags = shlex.split(os.environ.get("CXXFLAGS", ""))
+        probe_sha = digest(source.read_bytes())
+    except (OSError, ValueError) as exc:
+        return dict(supported=False, reason=str(exc))
+    flags = [
+        *args[1:],
+        *target_flags,
+        "-O3",
+        "-DNDEBUG",
+        "-std=c++20",
+        "-Werror",
+        *_STRICT_FP,
+        "-fno-lto",
+    ]
+    result = dict(
+        supported=False,
+        compiler_id="GNU",
+        compiler=identity["compiler"],
+        compiler_version=identity["compiler_version"],
+        probe_sha256=probe_sha,
+        arguments=flags,
+        baseline_fp=_STRICT_FP,
+        evidence="gnu_optimized_tree_compile_only",
+        application_executed=False,
+    )
+    key = ("function_numeric", digest(json_bytes(result)))
+    if key not in cache:
+        with TemporaryDirectory(prefix="scar-numeric-options-") as scratch:
+            try:
+                process = subprocess.run(
+                    [
+                        compiler,
+                        *flags,
+                        "-fdump-tree-optimized=probe.tree",
+                        "-c",
+                        str(source),
+                        "-o",
+                        "probe.o",
+                    ],
+                    cwd=scratch,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+                if process.returncode:
+                    raise ValueError(
+                        "GNU numeric option probe failed: " + process.stderr[-1000:]
+                    )
+                tree = (Path(scratch) / "probe.tree").read_bytes()
+                observations = _numeric_probe_observations(tree.decode())
+                result.update(
+                    supported=True, observations=observations, tree_sha256=digest(tree)
+                )
+            except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
+                result["reason"] = str(exc)
+        cache[key] = result
+    return cache[key]
+
+
+def numeric_permissions(
+    module, source_members, scheduled_members, compilation, *, cache=None
+):
+    """Transfer source compilation permissions at each emitted definition boundary."""
+    functions = {}
+    for fn, scheduled in zip(module["functions"], scheduled_members, strict=True):
+        contract = validate_numeric_contract(fn)
+        if contract is None:
+            continue
+        row = dict(
+            exec_function_sha256=source_members[fn["name"]]["sha256"],
+            scheduled_function_sha256=scheduled["sha256"],
+            contract_sha256=digest(json_bytes(fn["numeric_contract"])),
+            options=[],
+        )
+        if not any(
+            fn.get("method", {}).get(k) for k in ("defaulted", "deleted", "implicit")
+        ):
+            row["options"] = [
+                option
+                for key, option in _NUMERIC_OPTIONS.items()
+                if fn["numeric_contract"]["permissions"][key]
+            ]
+        functions[fn["name"]] = row
+    if not functions:
+        return None
+    qualification = (
+        _numeric_feature(compilation, {} if cache is None else cache)
+        if any(row["options"] for row in functions.values())
+        else dict(
+            supported=False,
+            reason="no emitted function grants local floating-point options",
+        )
+    )
+    if not qualification["supported"]:
+        for row in functions.values():
+            row["options"] = []
+    return dict(
+        semantics_version=1,
+        scope="function_definitions",
+        feature="gnu_function_numeric_options",
         qualification=qualification,
         functions=functions,
     )

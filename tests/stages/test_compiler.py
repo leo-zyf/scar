@@ -3066,6 +3066,19 @@ def test_fortran_numeric_facts_preserve_source_kinds_and_selected_policy(tmp_pat
         )
         signature = function["signature"]
         contract = signature["source_numeric_contract"]
+        from scar.contract import digest, json_bytes, validate_numeric_contract
+
+        permissions = validate_numeric_contract(signature)
+        assert permissions == dict(
+            semantics_version=1,
+            scope="function",
+            source_contract_sha256=digest(json_bytes(contract)),
+            permissions=dict(
+                may_omit_math_errno=contract["policy"]["math_errno"] is False,
+                may_assume_default_rounding=contract["policy"]["rounding_math"]
+                is False,
+            ),
+        )
         assert {key: contract["policy"][key] for key in expected} == expected
         assert contract["source"]["sha256"] == facts["files"][source.name]
         assert contract["caller_observations"] == dict(
