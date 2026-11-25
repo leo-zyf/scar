@@ -135,6 +135,47 @@ def test_binding_matches_stack_consumers_to_sealed_graph_ports(tmp_path):
         record[field] = original
 
 
+def test_binding_checks_branch_successors_and_binary_dispatch(tmp_path):
+    from scar.contract import read_member
+    from scar.frontend import build
+    from scar.middle.binding import bind
+
+    source = tmp_path / "entry.py"
+    source.write_text("if not pick():\n    first()\nvalue = left + right\nlater()\n")
+    folder = tmp_path / "graph"
+    build(source, folder)
+    index = json.loads((folder / "graph.json").read_bytes())
+    unit = index["units"][0]
+    fragment = read_member(folder, unit["graph"])
+    nodes = next(
+        f["nodes"]
+        for f in fragment["functions"]
+        if f["signature"].get("python_scope", {}).get("kind") == "module"
+    )
+    branch = next(n["source_expression"] for n in nodes if n["op"] == "if")
+    assignment = next(n["source_expression"] for n in nodes if n["op"] == "assign")
+    binary = next(i for i in assignment["instructions"] if i["opcode"] == "BINARY_OP")
+    source.unlink()
+    bind(index, folder)
+    for obj, key, changed, message in (
+        (
+            branch["instructions"][-1],
+            "target",
+            branch["branch"]["then"]["offset"],
+            "jump target",
+        ),
+        (branch["branch"]["else"], "statement_position", [4, 4, 0, 7], "continuation"),
+        (binary, "oparg", 10, "binary instruction"),
+        (binary, "operator", "sub", "binary instruction"),
+    ):
+        original = obj[key]
+        obj[key] = changed
+        unit["graph"] = member(folder, "units", fragment)
+        with pytest.raises(ValueError, match=message):
+            bind(index, folder)
+        obj[key] = original
+
+
 def test_binding_rejects_exception_edge_to_a_different_handler(tmp_path):
     from scar.contract import read_member
     from scar.frontend import build

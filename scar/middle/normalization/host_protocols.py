@@ -463,9 +463,24 @@ class ImportOccurrences:
             validate_python_entry_environment(entry_environment)
         self.entry_environment = entry_environment
         self.observed_bindings = {}
+        self.observed_requests = {}
         sample = (entry_environment or {}).get("import_binding_sample", {})
         for event in sample.get("events", ()):
-            if "site" in event:
+            if "site" not in event:
+                continue
+            if event.get("phase") == "before_IMPORT_NAME":
+                self.observed_requests.setdefault(event["site"], []).append(
+                    {
+                        key: event[key]
+                        for key in (
+                            "code_sha256",
+                            "instruction",
+                            "import_callable",
+                            "registry_state",
+                        )
+                    }
+                )
+            else:
                 self.observed_bindings.setdefault(event["site"], []).append(
                     event["result"]
                 )
@@ -541,6 +556,8 @@ class ImportOccurrences:
             member=node.get("member"),
             site=site,
         )
+        if site in self.observed_requests:
+            row["observed_before_import"] = self.observed_requests[site]
         if site in self.observed_bindings:
             binding["observed_after_store"] = self.observed_bindings[site]
         if binding not in row["bindings"]:

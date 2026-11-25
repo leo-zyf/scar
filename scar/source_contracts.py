@@ -2,6 +2,32 @@
 
 import re
 
+# CPython's non-inplace BINARY_OP arguments, validated against the active
+# disassembler when capturing. The consumer can read the wire on another host.
+_BINARY_OPERATORS = (
+    ("add", "+"),
+    ("bitand", "&"),
+    ("floordiv", "//"),
+    ("lshift", "<<"),
+    ("matmult", "@"),
+    ("mult", "*"),
+    ("mod", "%"),
+    ("bitor", "|"),
+    ("pow", "**"),
+    ("rshift", ">>"),
+    ("sub", "-"),
+    ("div", "/"),
+    ("bitxor", "^"),
+)
+
+
+def python_binary_operator(index):
+    """Return the AST operator and source spelling of a regular BINARY_OP."""
+    if type(index) is int and 0 <= index < len(_BINARY_OPERATORS):
+        return _BINARY_OPERATORS[index]
+    return None
+
+
 # A capture boundary names a public interface candidate, never a purity proof.
 PYTHON_HOST_MODULES = frozenset(
     {

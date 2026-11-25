@@ -9,6 +9,9 @@ from scar.contract import (
 )
 
 
+from scar.source_contracts import python_binary_operator
+
+
 def _source_position(location):
     return [
         location["line"],
@@ -110,7 +113,106 @@ def bind_constant_store(node, scope):
         raise ValueError("source constant load disagrees with its literal")
 
 
-def bind_source_expression(node, scope):
+def _bind_condition_edges(node, proof, code, successor):
+    branch = proof.get("branch")
+    condition = node.get("condition", {})
+    negated = condition.get("op") == "unary" and condition.get("operator") == "not"
+    operand = condition.get("value", {}) if negated else condition
+
+    def position(operation):
+        loc = operation.get("location") if isinstance(operation, dict) else None
+        return (
+            _source_position(loc)
+            if loc and loc.get("file") == code["source_key"]
+            else None
+        )
+
+    def enters(edge, statement, kind):
+        span = position(statement)
+        spot = edge.get("position")
+        return (
+            span is not None
+            and edge.get("kind") == kind
+            and edge.get("statement_position") == span
+            and isinstance(spot, list)
+            and len(spot) == 4
+            and all(type(x) is int for x in spot)
+            and (span[0], span[2])
+            <= (spot[0], spot[2])
+            <= (spot[1], spot[3])
+            <= (span[1], span[3])
+        )
+
+    rows = proof["instructions"]
+    jump = rows[-1]
+    operand_pos = position(operand)
+    if not (
+        isinstance(branch, dict)
+        and operand_pos
+        and branch.get("condition_position") == position(condition)
+        and branch.get("operand_position") == operand_pos
+        and branch.get("negated") is negated
+        and jump["opcode"] == ("POP_JUMP_IF_TRUE" if negated else "POP_JUMP_IF_FALSE")
+        and jump["position"] == operand_pos
+        and type(jump.get("target")) is int
+    ):
+        raise ValueError("source condition disagrees with the graph condition or jump")
+    then, other = branch.get("then"), branch.get("else")
+    if not all(
+        isinstance(edge, dict)
+        and type(edge.get("offset")) is int
+        and isinstance(edge.get("opcode"), str)
+        and edge["opcode"]
+        for edge in (then, other)
+    ):
+        raise ValueError("source condition has invalid successor instructions")
+    marker = branch.get("fallthrough_marker")
+    if not (
+        jump["offset"] < then["offset"] < other["offset"] == jump["target"]
+        and (
+            marker is None
+            or (
+                isinstance(marker, dict)
+                and marker.get("opcode") == "NOT_TAKEN"
+                and marker.get("position") == operand_pos
+                and type(marker.get("offset")) is int
+                and jump["offset"] < marker["offset"] < then["offset"]
+            )
+        )
+        and node.get("then")
+        and enters(then, node["then"][0], "suite")
+    ):
+        raise ValueError(
+            "source condition disagrees with its fallthrough or jump target"
+        )
+    if node.get("else") or successor is not None:
+        suite = node.get("else")
+        if not enters(
+            other,
+            suite[0] if suite else successor,
+            "suite" if suite else "continuation",
+        ):
+            raise ValueError(
+                "source condition disagrees with its alternative or continuation"
+            )
+    elif not (
+        other.get("kind") == "implicit_return"
+        and other.get("statement_position") is None
+        and other.get("position") == operand_pos
+        and type(other.get("constant_index")) is int
+        and other["constant_index"] >= 0
+        and type(other.get("return_offset")) is int
+        and (
+            other["opcode"] == "RETURN_CONST"
+            and other["return_offset"] == other["offset"]
+            or other["opcode"] == "LOAD_CONST"
+            and other["return_offset"] > other["offset"]
+        )
+    ):
+        raise ValueError("source condition lacks the module's implicit return")
+
+
+def bind_source_expression(node, scope, successor=None):
     """Bind positioned instruction evidence; M2 verifies semantic evaluation order."""
     proof, code = node["source_expression"], scope.get("source_code") or {}
     loc = node["location"]
@@ -145,7 +247,7 @@ def bind_source_expression(node, scope):
                 "value": None,
             }:
                 raise ValueError("source raise omits an evaluated operand")
-    elif operation not in {"assign", "unbind"} and not (
+    elif operation not in {"assign", "unbind", "if"} and not (
         isinstance(node.get("target"), dict)
         and isinstance(node.get("args"), list)
         and isinstance(node.get("keywords"), list)
@@ -155,6 +257,7 @@ def bind_source_expression(node, scope):
     last = position[1], position[3]
     previous = -1
     sequences = None
+    binary_ports = None
     for instruction in proof["instructions"]:
         if not isinstance(instruction, dict):
             raise ValueError("invalid source instruction in call region")
@@ -187,6 +290,29 @@ def bind_source_expression(node, scope):
         pool_aggregate = instruction.get("type") == "tuple" and (
             "item_count" in instruction or "items_sha256" in instruction
         )
+        if opcode == "BINARY_OP":
+            if binary_ports is None:
+                binary_ports = {}
+                for item in walk_operations(node, exclude_fields={"source_expression"}):
+                    loc = item.get("location")
+                    if (
+                        item["op"] == "binary"
+                        and loc
+                        and loc.get("file") == code["source_key"]
+                    ):
+                        key = tuple(_source_position(loc))
+                        binary_ports[key] = None if key in binary_ports else item
+            expr = binary_ports.get(tuple(span))
+            operator = python_binary_operator(instruction.get("oparg"))
+            if not (
+                expr
+                and operator
+                and operator[0] == expr.get("operator") == instruction.get("operator")
+                and all(isinstance(expr.get(k), dict) for k in ("left", "right"))
+            ):
+                raise ValueError(
+                    "source binary instruction disagrees with its operands or operator"
+                )
         if aggregate_opcode or pool_aggregate:
             if sequences is None:
                 sequences = _sequence_operands(node, code["source_key"])
@@ -308,6 +434,8 @@ def bind_source_expression(node, scope):
             )
         ):
             raise ValueError("source deletion disagrees with its ordered targets")
+    elif operation == "if":
+        _bind_condition_edges(node, proof, code, successor)
     elif last["opcode"] != "POP_TOP":
         raise ValueError("source call region has no final result discard")
 

@@ -50,10 +50,10 @@ def _entry_environment(graph, folder):
     sample = facts.get("import_binding_sample")
     if sample is not None and sample["image"] == selected:
         evidence = read_member(folder, sample["evidence"])
-        if (
-            evidence["image"] != selected
-            or evidence["scope"] != "instrumented_script_successful_module_bindings"
-        ):
+        if evidence["image"] != selected or evidence["scope"] not in {
+            "instrumented_script_successful_module_bindings",
+            "instrumented_script_import_sites",
+        }:
             raise ValueError(
                 "import binding observation disagrees with the selected image"
             )
@@ -123,9 +123,13 @@ def _definition(graph):
     nodes = graph["nodes"]
     active = set()
 
-    def read(value):
+    def read(value, successor=None):
         if isinstance(value, list):
-            return [read(v) for v in value]
+            # Control-flow receipts can name the next statement in this suite.
+            return [
+                read(v, value[i + 1] if i + 1 < len(value) else None)
+                for i, v in enumerate(value)
+            ]
         if not isinstance(value, dict):
             return value
         if "port" in value and len(value) == 1:
@@ -139,8 +143,18 @@ def _definition(graph):
             if "source_constant_store" in result:
                 bind_constant_store(result, graph["signature"].get("python_scope", {}))
             if "source_expression" in result:
+                following = None
+                if result["op"] == "if" and successor is not None:
+                    next_port = (
+                        successor.get("port") if isinstance(successor, dict) else None
+                    )
+                    if type(next_port) is not int or not 0 <= next_port < len(nodes):
+                        raise ValueError(
+                            "source condition has no graph continuation port"
+                        )
+                    following = nodes[next_port]
                 bind_source_expression(
-                    result, graph["signature"].get("python_scope", {})
+                    result, graph["signature"].get("python_scope", {}), following
                 )
             if result["op"] == "try":
                 bind_exception_arms(result, graph["signature"].get("python_scope", {}))

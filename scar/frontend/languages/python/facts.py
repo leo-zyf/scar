@@ -15,6 +15,7 @@ from types import CodeType
 import unicodedata
 
 from scar.contract import digest, json_bytes
+from scar.source_contracts import python_binary_operator
 from .environment import code_digest
 from .imports import (
     Imports,
@@ -380,6 +381,18 @@ def _expression_instruction(program, ins, parts, keywords):
             )
         else:
             return None
+    elif opcode == "BINARY_OP":
+        binary = python_binary_operator(arg)
+        if (
+            not binary
+            or ins.argrepr != binary[1]
+            or not any(
+                isinstance(n, ast.BinOp) and type(n.op).__name__.lower() == binary[0]
+                for n in parts
+            )
+        ):
+            return None
+        row["operator"] = binary[0]
     elif opcode in {"CALL", "CALL_KW"}:
         if not any(
             isinstance(n, ast.Call) and arg == len(n.args) + len(n.keywords)
@@ -554,12 +567,13 @@ def _statement_expression(program, instructions, root, end, handlers):
     discarded_call = isinstance(root, ast.Call)
     needs_object_ports = not discarded_call
     for node in ast.walk(expr):
-        if isinstance(node, (ast.Load, ast.Store, ast.Del, ast.keyword)):
+        if isinstance(node, (ast.Load, ast.Store, ast.Del, ast.keyword, ast.operator)):
             continue
         if not isinstance(
             node,
             (
                 ast.Call,
+                ast.BinOp,
                 ast.Raise,
                 ast.List,
                 ast.Tuple,
