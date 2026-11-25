@@ -209,6 +209,48 @@ def test_function_construction_uses_the_declared_child_code(tmp_path):
         bind(index, folder)
 
 
+def test_loader_owns_result_separately_from_conditional_source_body(tmp_path):
+    from scar.frontend import build
+    from scar.middle.binding import bind
+    from scar.middle.normalization.host_protocols import ImportOccurrences
+
+    entry = tmp_path / "entry.py"
+    entry.write_text("import helper as loaded\n")
+    child = tmp_path / "helper.py"
+    child.write_text("tag = 'source'\n")
+    folder = tmp_path / "graph"
+    build(entry, folder)
+    graph = json.loads((folder / "graph.json").read_bytes())
+    entry.unlink()
+    child.unlink()
+    module, issues, _ = bind(graph, folder)
+    assert not issues
+    functions = {f["name"]: f for f in module["functions"]}
+    node = functions["__main__"]["body"][0]
+    ports = node["loader_ports"]
+    receipt = node["source_import_store"]
+    assert ports["site"] == node["site"]
+    assert ports["dispatch"] == {
+        "instruction": receipt["import_name"]["offset"],
+        "result": "import_result",
+    }
+    assert ports["binding"] == {
+        "instruction": receipt["store"]["offset"],
+        "input": "import_result",
+        "on_import_exception": "skip",
+    }
+    body = ports["body"]
+    assert body["selection"] == "each_actual_matching_code_activation"
+    assert body["completion"] == "return_to_loader_or_propagate"
+    (candidate,) = body["candidates"]
+    assert candidate["initializer"] == node["initializers"][0]
+    child_code = functions[candidate["initializer"]]["python_scope"]["source_code"]
+    assert candidate["code_sha256"] == child_code["code_sha256"]
+    assert candidate["source_key"] == child_code["source_key"]
+    ledger = ImportOccurrences(functions).get("__main__", node)
+    assert ledger["loader_ports"] == ports and ledger["activation"] == "unvisited"
+
+
 def test_binding_rejects_exception_edge_to_a_different_handler(tmp_path):
     from scar.contract import read_member
     from scar.frontend import build

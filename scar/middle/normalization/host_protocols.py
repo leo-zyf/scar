@@ -556,6 +556,8 @@ class ImportOccurrences:
             member=node.get("member"),
             site=site,
         )
+        if "loader_ports" in node:
+            row["loader_ports"] = node["loader_ports"]
         if site in self.observed_requests:
             row["observed_before_import"] = self.observed_requests[site]
         if site in self.observed_bindings:

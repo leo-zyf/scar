@@ -570,6 +570,54 @@ def bind_import_store(node, scope):
         raise ValueError("source import operands disagree with their graph ports")
 
 
+def loader_ports(node, site, declarations):
+    """Connect a resolved source body to its optional activation inside IMPORT_NAME."""
+    symbols = node.get("initializers", ())
+    if not node.get("graph_backed") or not symbols:
+        return None
+    proof = node["source_import_store"]
+    candidates = []
+    for symbol in symbols:
+        scope = declarations.get(symbol, {}).get("python_scope", {})
+        code = scope.get("source_code", {})
+        if not (
+            scope.get("initializer") == symbol
+            and scope.get("kind") == code.get("kind") == "module"
+            and code.get("source_key") == scope.get("source_key")
+            and code.get("code_sha256")
+            and code.get("source_sha256")
+        ):
+            return None
+        candidates.append(
+            dict(
+                initializer=symbol,
+                module=scope["module"],
+                source_key=code["source_key"],
+                code_sha256=code["code_sha256"],
+            )
+        )
+    if candidates[-1]["module"] != node["module"]:
+        return None
+    return dict(
+        site=site,
+        importer=dict(frame="builtins", key="__import__"),
+        dispatch=dict(
+            instruction=proof["import_name"]["offset"], result="import_result"
+        ),
+        body=dict(
+            selection="each_actual_matching_code_activation",
+            inputs=["active_frame", "actual_module_globals"],
+            completion="return_to_loader_or_propagate",
+            candidates=candidates,
+        ),
+        binding=dict(
+            instruction=proof["store"]["offset"],
+            input="import_result",
+            on_import_exception="skip",
+        ),
+    )
+
+
 def _exception_edges(proof, following):
     """Check references among the captured region's entry, branches and unwinds."""
     entry, load, check, branch, miss = (

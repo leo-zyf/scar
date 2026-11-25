@@ -8,6 +8,7 @@ from .source_binding import (
     bind_import_store,
     bind_source_expression,
     bind_source_definition,
+    loader_ports,
 )
 from scar.contract import (
     digest,
@@ -141,6 +142,10 @@ def _definition(graph, declarations=None):
             result = read(nodes[port])
             if result["op"] == "python_import" and "source_import_store" in result:
                 bind_import_store(result, graph["signature"].get("python_scope", {}))
+                if dispatch := loader_ports(
+                    result, f"{graph['id']}/{port}", declarations or {}
+                ):
+                    result["loader_ports"] = dispatch
             if "source_definition" in result:
                 bind_source_definition(
                     result,

@@ -278,6 +278,9 @@ def publish_plain_import(frame, node, occurrence, steps):
                 level_operand,
             ],
             result="import_result",
+            **(
+                {"body": node["loader_ports"]["body"]} if "loader_ports" in node else {}
+            ),
             registry="actual_importer_controls_cache_initialization_hooks_and_audit",
         ),
         binding=binding,
