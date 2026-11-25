@@ -294,6 +294,29 @@ _STATEMENT_END = {
 }
 
 
+def _pool_display_items(value, parts):
+    """Bind the entire compiler tuple to the display's ordered scalar literals."""
+    for display in parts:
+        if not isinstance(display, (ast.List, ast.Tuple)) or len(display.elts) != len(
+            value
+        ):
+            continue
+        if not all(
+            isinstance(node, ast.Constant)
+            and type(node.value) is type(item)
+            and node.value == item
+            for node, item in zip(display.elts, value)
+        ):
+            continue
+        tokens = [
+            ["literal", type(item).__name__, numeric_wire_value(item)] for item in value
+        ]
+        return dict(
+            type="tuple", item_count=len(value), items_sha256=digest(json_bytes(tokens))
+        )
+    return None
+
+
 def _expression_instruction(program, ins, parts, keywords):
     opcode = getattr(ins, "baseopname", ins.opname)
     arg, span = ins.arg, ins.positions
@@ -334,8 +357,15 @@ def _expression_instruction(program, ins, parts, keywords):
         value = arg if opcode == "LOAD_SMALL_INT" else program.co_consts[arg]
         if opcode != "LOAD_SMALL_INT":
             row["index"] = arg
-        if type(value) is tuple and value in keywords:
-            row.update(type="tuple", names=list(value))
+        if type(value) is tuple:
+            if value in keywords:
+                row.update(type="tuple", names=list(value))
+            elif opcode == "LOAD_CONST" and (
+                items := _pool_display_items(value, parts)
+            ):
+                row.update(items)
+            else:
+                return None
         elif opcode != "KW_NAMES" and any(
             isinstance(n, ast.Constant)
             and type(n.value) is type(value)
@@ -365,6 +395,33 @@ def _expression_instruction(program, ins, parts, keywords):
     elif opcode == "BUILD_STRING":
         if not any(isinstance(n, ast.JoinedStr) for n in parts):
             return None
+    elif opcode in {
+        "BUILD_LIST",
+        "BUILD_TUPLE",
+        "LIST_APPEND",
+        "LIST_EXTEND",
+        "CALL_INTRINSIC_1",
+    }:
+        display = next((n for n in parts if isinstance(n, (ast.List, ast.Tuple))), None)
+        if display is None:
+            return None
+        if opcode == "BUILD_LIST" and not (
+            arg == 0 or isinstance(display, ast.List) and arg == len(display.elts)
+        ):
+            return None
+        if opcode == "BUILD_TUPLE" and not (
+            isinstance(display, ast.Tuple) and arg == len(display.elts)
+        ):
+            return None
+        if opcode in {"LIST_APPEND", "LIST_EXTEND"} and arg != 1:
+            return None
+        if opcode == "CALL_INTRINSIC_1":
+            if (
+                not isinstance(display, ast.Tuple)
+                or ins.argrepr != "INTRINSIC_LIST_TO_TUPLE"
+            ):
+                return None
+            row["intrinsic"] = ins.argrepr
     elif opcode == "RAISE_VARARGS":
         if not any(
             isinstance(n, ast.Raise)
@@ -391,6 +448,8 @@ def _statement_expression(program, instructions, root, end, handlers):
             (
                 ast.Call,
                 ast.Raise,
+                ast.List,
+                ast.Tuple,
                 ast.Assign,
                 ast.Delete,
                 ast.Name,
@@ -399,6 +458,10 @@ def _statement_expression(program, instructions, root, end, handlers):
                 ast.JoinedStr,
                 ast.FormattedValue,
             ),
+        ):
+            return None
+        if isinstance(node, (ast.List, ast.Tuple)) and any(
+            isinstance(elt, (ast.List, ast.Tuple, ast.Starred)) for elt in node.elts
         ):
             return None
         if isinstance(node, ast.Constant) and type(node.value) not in (
@@ -418,7 +481,7 @@ def _statement_expression(program, instructions, root, end, handlers):
             keywords[pos].append(keys)
             keywords[tuple_position(node.func)].append(keys)
         needs_object_ports |= isinstance(
-            node, (ast.Attribute, ast.Constant, ast.JoinedStr)
+            node, (ast.Attribute, ast.Constant, ast.JoinedStr, ast.List, ast.Tuple)
         )
     if not (needs_object_ports or keywords):
         return None

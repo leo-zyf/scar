@@ -1,6 +1,12 @@
 """M1 validation of optional source instruction evidence against graph ports."""
 
-from scar.contract import digest, json_bytes, python_constant_rhs_sha256
+from scar.contract import (
+    digest,
+    json_bytes,
+    python_constant_rhs_sha256,
+    python_literal_sequence_sha256,
+    walk_operations,
+)
 
 
 def _source_position(location):
@@ -26,6 +32,23 @@ def _namespace_target(instruction, target, scope):
         and not target.get("cell")
         and target.get("name") == f"py:{scope['module']}:{name}"
     )
+
+
+def _sequence_operands(node, source_key):
+    """Index uniquely positioned display operands within one statement."""
+    result = {}
+    for item in walk_operations(node, exclude_fields={"source_expression"}):
+        loc = item.get("location")
+        if (
+            item["op"] == "aggregate"
+            and item.get("kind") in ("tuple", "list")
+            and isinstance(item.get("items"), list)
+            and isinstance(loc, dict)
+            and loc.get("file") == source_key
+        ):
+            position = tuple(_source_position(loc))
+            result[position] = None if position in result else item
+    return result
 
 
 def bind_constant_store(node, scope):
@@ -131,6 +154,7 @@ def bind_source_expression(node, scope):
     first = position[0], position[2]
     last = position[1], position[3]
     previous = -1
+    sequences = None
     for instruction in proof["instructions"]:
         if not isinstance(instruction, dict):
             raise ValueError("invalid source instruction in call region")
@@ -153,6 +177,61 @@ def bind_source_expression(node, scope):
         ):
             raise ValueError("invalid source instruction position or operand")
         previous = offset
+        aggregate_opcode = opcode in {
+            "BUILD_LIST",
+            "BUILD_TUPLE",
+            "LIST_EXTEND",
+            "LIST_APPEND",
+            "CALL_INTRINSIC_1",
+        }
+        pool_aggregate = instruction.get("type") == "tuple" and (
+            "item_count" in instruction or "items_sha256" in instruction
+        )
+        if aggregate_opcode or pool_aggregate:
+            if sequences is None:
+                sequences = _sequence_operands(node, code["source_key"])
+            display = sequences.get(tuple(span))
+            if display is None:
+                raise ValueError(
+                    "source sequence instruction lacks a unique display port"
+                )
+            count = len(display["items"])
+            arg = instruction.get("oparg")
+            if pool_aggregate:
+                fingerprint = python_literal_sequence_sha256(display["items"])
+                if not (
+                    opcode == "LOAD_CONST"
+                    and "names" not in instruction
+                    and type(arg) is int
+                    and instruction.get("index") == arg
+                    and type(instruction.get("item_count")) is int
+                    and instruction["item_count"] == count
+                    and fingerprint is not None
+                    and instruction.get("items_sha256") == fingerprint
+                ):
+                    raise ValueError(
+                        "source constant tuple disagrees with its ordered display items"
+                    )
+            elif not (
+                type(arg) is int
+                and (
+                    opcode == "BUILD_LIST"
+                    and arg <= count
+                    or opcode == "BUILD_TUPLE"
+                    and display["kind"] == "tuple"
+                    and arg == count
+                    or opcode in {"LIST_EXTEND", "LIST_APPEND"}
+                    and arg == 1
+                    or opcode == "CALL_INTRINSIC_1"
+                    and display["kind"] == "tuple"
+                    and arg == 6
+                    and instruction.get("intrinsic") == "INTRINSIC_LIST_TO_TUPLE"
+                )
+            ):
+                raise ValueError(
+                    "source sequence instruction disagrees with its display operands"
+                )
+            continue
         if opcode in {
             "LOAD_NAME",
             "LOAD_ATTR",

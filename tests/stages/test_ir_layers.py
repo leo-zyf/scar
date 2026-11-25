@@ -91,6 +91,7 @@ def test_binding_matches_stack_consumers_to_sealed_graph_ports(tmp_path):
     entry = tmp_path / "entry.py"
     entry.write_text(
         'label = "left" + "right"\n'
+        "pool = [1, True, 'tail', None]\n"
         "value = factory(label)\n"
         "del value, label\n"
         "raise failure() from cause\n"
@@ -115,8 +116,13 @@ def test_binding_matches_stack_consumers_to_sealed_graph_ports(tmp_path):
         for n in nodes
         if "source_expression" in n
     }
+    display = next(
+        n for n in nodes if n.get("op") == "aggregate" and n.get("kind") == "list"
+    )
+    items = display["items"]
     for record, field, changed, error in (
         (leaf, "value", "changed", "folded constant"),
+        (display, "items", [items[1], items[0], *items[2:]], "ordered display items"),
         (rows["assign"][-1], "name", "label", "expression store"),
         (rows["unbind"][0], "name", "label", "ordered targets"),
         (rows["raise"][-1], "oparg", 1, "raise terminator"),
@@ -8637,3 +8643,163 @@ def test_open_module_store_and_delete_use_actual_operands_and_mappings(tmp_path)
         assert actual[0][:3] == ["descriptor", ("call", True), ("store", True)]
     assert run("reenter", False)[0][-2:] == [("delete", True, True), "NameError"]
     assert run("rejected_store", False)[0][-1] == "LookupError"
+
+
+def test_open_sequence_displays_keep_allocation_order_and_tuple_identity(tmp_path):
+    from types import SimpleNamespace
+
+    from scar.contract import read_member
+    from scar.frontend import build
+    from scar.middle import plan
+
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    source = pkg / "__init__.py"
+    source.write_text(
+        "from . import child as gone\ndel gone\n"
+        "empty = []\nfixed = (1, True, 'member!')\nfirst = [1, True, 'member!']\n"
+        "second = [1, True, 'member!']\npair = (argument, tap())\nsmall = [tap(), argument]\n"
+        "large = (" + ", ".join(["argument"] * 32) + ")\nboundary = 0 or 1\n"
+    )
+    code = compile(source.read_bytes(), str(source), "exec")
+    (pkg / "child.py").write_text("pass\n")
+    entry = tmp_path / "main.py"
+    entry.write_text("import pkg\n")
+    graph, out = tmp_path / "graph", tmp_path / "plan"
+    build(entry, graph)
+    source.unlink()
+    assert plan(graph, out)["status"] == "INCOMPLETE"
+    report = json.loads((out / "plan.json").read_bytes())
+    [issue] = report["issues"]
+    assert (issue["location"]["line"], issue["code"]) == (
+        10,
+        "python.global_store_after_callback",
+    )
+    ref = next(
+        r
+        for r in report["protocol_analysis"]["prefix_fragments"]
+        if r["symbol"] == "py:pkg:<init>"
+    )
+    stores = {
+        s["value"]["name"]: s["value"]
+        for s in read_member(out, ref["fragment"])["body"]
+        if s.get("value", {}).get("op") == "module_global_store"
+    }
+    assert list(stores) == [
+        "empty",
+        "fixed",
+        "first",
+        "second",
+        "pair",
+        "small",
+        "large",
+    ]
+    for store in stores.values():
+        receipt = [
+            i
+            for i in store["source_expression"]["instructions"]
+            if i["opcode"] != "PUSH_NULL"
+        ]
+        assert [s["offset"] for s in store["evaluation"]] == [
+            ins["offset"] for ins in receipt[:-1]
+        ]
+        assert store["target"]["instruction"] == receipt[-1]
+    [pool] = stores["fixed"]["evaluation"]
+    constant = code.co_consts[pool["operand"]]
+    assert pool["op"] == "source_object_constant" and type(constant) is tuple
+    for name in ("first", "second"):
+        alloc, items, fill = stores[name]["evaluation"]
+        assert (
+            alloc["op"] == "source_object_build_sequence"
+            and alloc["opcode"] == "BUILD_LIST"
+            and alloc["items"] == []
+        )
+        assert (
+            items["op"] == "source_object_constant"
+            and items["operand"] == pool["operand"]
+        )
+        assert (
+            fill["op"] == "source_object_list_update"
+            and fill["opcode"] == "LIST_EXTEND"
+            and fill["may_raise"]
+        )
+        assert (
+            fill["target"] == stores[name]["value"] == {"from_offset": alloc["offset"]}
+        )
+        assert fill["value"] == {"from_offset": items["offset"]}
+    for name, opcode in (("pair", "BUILD_TUPLE"), ("small", "BUILD_LIST")):
+        steps = stores[name]["evaluation"]
+        items = steps[-1]["items"]
+        assert steps[-1]["opcode"] == opcode and [
+            k["from_offset"] for k in items
+        ] == sorted(k["from_offset"] for k in items)
+        assert steps[-1]["may_raise"] and stores[name]["value"] == {
+            "from_offset": steps[-1]["offset"]
+        }
+    large = stores["large"]["evaluation"]
+    assert (
+        large[0]["opcode"] == "BUILD_LIST"
+        and large[-1]["intrinsic"] == "INTRINSIC_LIST_TO_TUPLE"
+    )
+    appends = [s for s in large if s.get("opcode") == "LIST_APPEND"]
+    assert len(appends) == 32 and all(
+        a["target"] == large[-1]["source_list"] == {"from_offset": large[0]["offset"]}
+        for a in appends
+    )
+
+    arg = object()
+    for fail in (False, True):
+        calls = []
+
+        def tap():
+            calls.append(True)
+            if fail:
+                raise LookupError("operand")
+            return arg
+
+        env = dict(
+            argument=arg,
+            tap=tap,
+            __builtins__={"__import__": lambda *a: SimpleNamespace(child=0)},
+        )
+        if fail:
+            with pytest.raises(LookupError, match="operand"):
+                exec(code, env)
+            assert "pair" not in env and "small" not in env and calls == [True]
+        else:
+            exec(code, env)
+            assert (
+                env["pair"] == (arg, arg)
+                and env["small"] == [arg, arg]
+                and len(env["large"]) == 32
+            )
+        assert env["fixed"] is constant and env["first"] is not env["second"]
+        assert all(
+            a is b is c for a, b, c in zip(constant, env["first"], env["second"])
+        )
+
+    index = json.loads((graph / "graph.json").read_bytes())
+    unit = next(u for u in index["units"] if u["path"] == "pkg/__init__.py")
+    fn = read_member(graph, unit["graph"])
+    first = next(
+        n
+        for f in fn["functions"]
+        for n in f["nodes"]
+        if n["op"] == "assign" and n["location"]["line"] == 5
+    )
+    fill = next(
+        i
+        for i in first["source_expression"]["instructions"]
+        if i["opcode"] == "LIST_EXTEND"
+    )
+    fill["opcode"] = "LIST_APPEND"
+    unit["graph"] = member(graph, "units", fn)
+    altered = graph / "altered.json"
+    write_json(altered, index)
+    out = tmp_path / "altered"
+    assert plan(altered, out)["status"] == "INCOMPLETE"
+    [issue] = json.loads((out / "plan.json").read_bytes())["issues"]
+    assert (issue["code"], issue["location"]["line"]) == (
+        "python.source_expression_operands",
+        5,
+    )

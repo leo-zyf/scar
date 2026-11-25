@@ -938,6 +938,73 @@ def test_module_assign_and_delete_use_the_actual_named_slots(tmp_path):
     ]
 
 
+def test_module_display_ports_bind_typed_pool_items_and_dynamic_order(tmp_path):
+    import dis
+
+    from scar.contract import digest, json_bytes, read_member
+    from scar.frontend import build
+
+    path = tmp_path / "display.py"
+    text = (
+        "empty=[]\nunit=()\npacked=[True,1,1.0,'1',None]\npooled=(True,1,1.0,'1',None)\n"
+        "dynamic=[value, build(arg)]\npair=(value, build(arg))\n"
+        "large=("
+        + ",".join(["value"] * 31)
+        + ")\nexpanded=[*values]\nnested=[['inner']]\n"
+    )
+    path.write_text(text)
+    code = compile(text, str(path), "exec", dont_inherit=True)
+    out = tmp_path / "graph"
+    build(path, out)
+    fn = next(
+        f
+        for f in read_member(
+            out, json.loads((out / "graph.json").read_bytes())["units"][0]["graph"]
+        )["functions"]
+        if f["signature"]["name"] == "__main__"
+    )
+    native = {i.offset: i for i in dis.get_instructions(code)}
+    witnesses = [n for n in fn["nodes"] if "source_expression" in n]
+    if not any(i.positions.col_offset is not None for i in native.values()):
+        assert not witnesses
+        return
+    assert [n["location"]["line"] for n in witnesses] == list(range(1, 8))
+    for n in witnesses:
+        aggregate = fn["nodes"][n["value"]["port"]]
+        assert aggregate["op"] == "aggregate"
+        rows = n["source_expression"]["instructions"]
+        assert [r["opcode"] for r in rows] == [
+            i.opname
+            for i in native.values()
+            if i.positions.lineno == n["location"]["line"]
+            and i.offset <= rows[-1]["offset"]
+        ]
+        for row in rows:
+            if "items_sha256" in row:
+                items = [fn["nodes"][p["port"]] for p in aggregate["items"]]
+                actual = code.co_consts[row["index"]]
+                assert type(actual) is tuple and row["item_count"] == len(items) == len(
+                    actual
+                )
+                shape = [["literal", i["type"]["class"], i["value"]] for i in items]
+                assert shape == [["literal", type(v).__name__, v] for v in actual]
+                assert (
+                    row["items_sha256"] == digest(json_bytes(shape))
+                    and "names" not in row
+                )
+    assert [r["opcode"] for r in witnesses[2]["source_expression"]["instructions"]] == [
+        "BUILD_LIST",
+        "LOAD_CONST",
+        "LIST_EXTEND",
+        "STORE_NAME",
+    ]
+    large = witnesses[-1]["source_expression"]["instructions"]
+    assert (
+        sum(r["opcode"] == "LIST_APPEND" for r in large) == 31
+        and large[-2]["intrinsic"] == "INTRINSIC_LIST_TO_TUPLE"
+    )
+
+
 def test_module_name_loads_follow_actual_callee_and_argument_ports(tmp_path):
     import dis
     import sys

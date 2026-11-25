@@ -47,6 +47,8 @@ MODULE_REGISTRY_OPERATIONS = frozenset(
         "source_object_convert",
         "source_object_format",
         "source_object_build_string",
+        "source_object_build_sequence",
+        "source_object_list_update",
         "source_object_call",
         "source_object_compare",
         "source_object_discard",
@@ -402,6 +404,30 @@ def json_bytes(value):
     return text.encode("ascii") + b"\n"
 
 
+def _python_literal_projection(node):
+    if not isinstance(node, dict) or node.get("op") != "literal":
+        return None
+    kind = node.get("type")
+    if not isinstance(kind, dict) or kind.get("kind") != "python_object":
+        return None
+    if (
+        kind.get("class") not in ("str", "int", "float", "bool", "NoneType")
+        or "value" not in node
+    ):
+        return None
+    return ["literal", kind["class"], node["value"]]
+
+
+def python_literal_sequence_sha256(items):
+    """Bind one constant-pool tuple to its ordered, typed graph literals."""
+    if not isinstance(items, list):
+        return None
+    projected = [_python_literal_projection(item) for item in items]
+    if any(item is None for item in projected):
+        return None
+    return digest(json_bytes(projected))
+
+
 def python_constant_rhs_sha256(node):
     """Identify a closed scalar expression by its ordered graph operands."""
 
@@ -410,15 +436,7 @@ def python_constant_rhs_sha256(node):
             return None
         op = expr.get("op")
         if op == "literal":
-            kind = expr.get("type")
-            if not isinstance(kind, dict) or kind.get("kind") != "python_object":
-                return None
-            if (
-                kind.get("class") not in {"str", "int", "float", "bool", "NoneType"}
-                or "value" not in expr
-            ):
-                return None
-            return [op, kind["class"], expr["value"]]
+            return _python_literal_projection(expr)
         if op not in {"binary", "unary"} or not isinstance(expr.get("operator"), str):
             return None
         ports = ("left", "right") if op == "binary" else ("value",)

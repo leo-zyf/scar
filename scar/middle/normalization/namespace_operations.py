@@ -7,6 +7,7 @@ from scar.contract import (
     digest,
     json_bytes,
     python_constant_rhs_sha256,
+    python_literal_sequence_sha256,
     walk_operations,
 )
 from .values import literal, source_site
@@ -532,6 +533,99 @@ class _SourceExpressionRegion:
             operand=ins["index"] if ins["opcode"] == "LOAD_CONST" else ins["oparg"],
         )
 
+    def tuple_constant(self, node, items):
+        ins = self.take("LOAD_CONST", source=node)
+        fingerprint = python_literal_sequence_sha256(items)
+        if (
+            not fingerprint
+            or ins.get("type") != "tuple"
+            or ins.get("item_count") != len(items)
+            or ins.get("items_sha256") != fingerprint
+        ):
+            raise ValueError(
+                "constant tuple slot disagrees with ordered display elements"
+            )
+        return self.emit(
+            ins,
+            "source_object_constant",
+            node,
+            source="current_frame_co_consts",
+            operand=ins["index"],
+        )
+
+    def build_sequence(self, node, opcode, values):
+        ins = self.take(opcode, source=node)
+        if ins["oparg"] != len(values):
+            raise ValueError("sequence build arity disagrees with source display")
+        return self.emit(
+            ins,
+            "source_object_build_sequence",
+            node,
+            opcode=opcode,
+            items=values,
+            may_raise=True,
+            allocation="source_build_after_evaluation_of_owned_elements",
+        )
+
+    def list_update(self, node, opcode, target, value):
+        ins = self.take(opcode, source=node)
+        if ins["oparg"] != 1:
+            raise ValueError("list update does not target its display's retained list")
+        self.emit(
+            ins,
+            "source_object_list_update",
+            node,
+            opcode=opcode,
+            target=target,
+            value=value,
+            may_raise=True,
+            mutation="update_same_list_before_next_source_instruction",
+        )
+
+    def sequence(self, node):
+        kind, items = node["kind"], node.get("items")
+        if kind not in {"list", "tuple"} or not isinstance(items, list):
+            raise ValueError("expected an ordered list or tuple display")
+        first = self.instructions[self.index]
+        at_display = _matches_position(first, node, self.code["source_key"])
+        if kind == "tuple" and at_display and first["opcode"] == "LOAD_CONST":
+            return self.tuple_constant(node, items)
+        if at_display and first["opcode"] == "BUILD_LIST" and first["oparg"] == 0:
+            target = self.build_sequence(node, "BUILD_LIST", [])
+            # Constant-only lists extend an already allocated distinct list
+            # with the actual elements of an exact tuple in the active code.
+            if (
+                items
+                and self.next_opcode() == "LOAD_CONST"
+                and self.instructions[self.index].get("type") == "tuple"
+            ):
+                immutable = self.tuple_constant(node, items)
+                self.list_update(node, "LIST_EXTEND", target, immutable)
+            else:
+                for item in items:
+                    self.list_update(node, "LIST_APPEND", target, self.value(item))
+            if kind == "list":
+                return target
+            ins = self.take("CALL_INTRINSIC_1", source=node)
+            if (
+                ins.get("intrinsic") != "INTRINSIC_LIST_TO_TUPLE"
+                or ins.get("oparg") != 6
+            ):
+                raise ValueError("tuple display has no source list-to-tuple conversion")
+            return self.emit(
+                ins,
+                "source_object_build_sequence",
+                node,
+                opcode="CALL_INTRINSIC_1",
+                intrinsic=ins["intrinsic"],
+                source_list=target,
+                may_raise=True,
+            )
+        values = [self.value(item) for item in items]
+        return self.build_sequence(
+            node, "BUILD_LIST" if kind == "list" else "BUILD_TUPLE", values
+        )
+
     def operand(self, node, *, callee=False):
         if not isinstance(node, dict):
             raise ValueError("missing source expression operand")
@@ -563,6 +657,8 @@ class _SourceExpressionRegion:
             return self.call(node), None
         if op == "literal":
             return self.constant(node), None
+        if op == "aggregate":
+            return self.sequence(node), None
         if op == "format_field":
             return self.field(node), None
         if op == "format_string":
