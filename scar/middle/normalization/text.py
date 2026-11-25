@@ -25,6 +25,56 @@ SCALAR_FORMAT = dict(
     float="shortest_binary64",
 )
 _CONVERSION = {-1: "none", ord("s"): "str", ord("r"): "repr", ord("a"): "ascii"}
+
+
+def member(frame, node, base, name):
+    if base.kind == "text" and name in {"lower", "replace"}:
+        return Value("literal_text_method", (base, name))
+    return None
+
+
+def invoke(frame, node, target, args, kwargs):
+    """Evaluate closed builtin text intrinsics, never an application callable."""
+    if target.kind != "literal_text_method":
+        return None
+    base, method = target.value
+    if kwargs or type(base.exact) is not str:
+        frame.fail(
+            node, "text_intrinsic", "text intrinsic needs exact builtin operands"
+        )
+    if method == "lower" and not args:
+        if (
+            not base.exact.isascii()
+            and _profile(frame).get("unicode_version") != unicodedata.unidata_version
+        ):
+            frame.fail(
+                node,
+                "text_case_profile",
+                "Unicode case conversion needs matching source tables",
+            )
+        result = str.lower(base.exact)
+    elif (
+        method == "replace"
+        and len(args) in {2, 3}
+        and all(value.kind == "text" and type(value.exact) is str for value in args[:2])
+        and (len(args) == 2 or args[2].kind == "i64" and type(args[2].exact) is int)
+    ):
+        result = str.replace(base.exact, *(value.exact for value in args))
+    else:
+        frame.fail(
+            node, "text_intrinsic", "unsupported builtin text intrinsic operands"
+        )
+    frame.project.decisions.append(
+        dict(
+            code="exact_text_intrinsic",
+            operation=method,
+            proof="exact builtin text operands; captured call arguments retain their effects",
+            location=node.get("location"),
+        )
+    )
+    return literal(result)
+
+
 _GRAMMAR = re.compile(
     r"(?:(?P<fill>.)?(?P<align>[<>=^]))?(?P<sign>[+\- ])?(?P<negative_zero>z)?"
     r"(?P<alternate>#)?(?P<zero>0)?(?P<width>\d*)(?P<grouping>[,_])?"

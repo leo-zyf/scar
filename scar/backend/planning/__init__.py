@@ -5,6 +5,8 @@ from pathlib import Path
 from scar.contract import (
     IR,
     EXECUTION_ANNOTATIONS,
+    MAPPING_PROFILE,
+    MAPPING_TYPES,
     PHYSICAL,
     array_rank_domain,
     copy_member,
@@ -12,6 +14,7 @@ from scar.contract import (
     document,
     file_receipt,
     json_bytes,
+    mapping_value_type,
     member,
     open_product,
     read_image_product,
@@ -51,6 +54,24 @@ _ARRAY_OPERATORS = {
 }
 _ARRAY_OPERATORS["array_update"] = _ARRAY_OPERATORS["array_binary"]
 
+_MAPPING_OPERATIONS = {
+    "mapping_make",
+    "mapping_put",
+    "mapping_merge",
+    "mapping_get",
+    "mapping_size",
+    "mapping_identity",
+    "mapping_items",
+    "mapping_iterator",
+    "mapping_next",
+    "mapping_current",
+    "structured_pack",
+    "structured_is_mapping",
+    "structured_as_mapping",
+    "structured_truth",
+    "structured_compare",
+}
+
 
 def _array_ports(node):
     """Immediate element-bearing operands/results; axis counts are shape metadata."""
@@ -70,7 +91,7 @@ def _observed_operators(module):
     # Collect tagged operations and the type-only dependencies of older
     # packages in one traversal of the sealed IR.
     observed, elements, array_nodes, process_requests = {}, set(), [], []
-    fourier_nodes = []
+    fourier_nodes, mapping_nodes = [], []
     defined = {fn["name"] for fn in module.get("functions", ())}
     external = [
         decl for decl in module.get("externs", ()) if decl["name"] not in defined
@@ -111,6 +132,12 @@ def _observed_operators(module):
             if op == "array_fft" or family == "fourier":
                 observed.setdefault("fourier", set()).add(op)
                 fourier_nodes.append(node)
+            if isinstance(op, str) and (
+                family == "builtin_scalar_mapping"
+                or op.startswith(("mapping_", "structured_"))
+            ):
+                observed.setdefault("builtin_scalar_mapping", set()).add(op)
+                mapping_nodes.append(node)
             if op in {"array_text_read", "array_source_open"}:
                 observed.setdefault(
                     (
@@ -132,9 +159,103 @@ def _observed_operators(module):
             observed.setdefault("ndarray", set())
             element = node.get("element")
             elements.add(element if isinstance(element, str) else "unspecified")
+        if isinstance(node.get("kind"), str) and node["kind"] in MAPPING_TYPES:
+            observed.setdefault("builtin_scalar_mapping", set())
+            mapping_nodes.append(node)
         if mpi.dependency(node):
             observed.setdefault("mpi", set())
-    return observed, elements, array_nodes, process_requests, fourier_nodes
+    return (
+        observed,
+        elements,
+        array_nodes,
+        process_requests,
+        fourier_nodes,
+        mapping_nodes,
+    )
+
+
+def _mapping_binding(requirement, seen, nodes, module):
+    if (
+        not isinstance(requirement, dict)
+        or requirement.keys() != {"profile", "operations"}
+        or requirement.get("profile") != MAPPING_PROFILE
+    ):
+        raise ValueError("unsupported mapping profile")
+    requested = requirement["operations"]
+    if (
+        not isinstance(requested, list)
+        or any(not isinstance(op, str) for op in requested)
+        or not seen <= set(requested) <= _MAPPING_OPERATIONS
+    ):
+        raise ValueError("unregistered mapping operation")
+    fresh_writes = set()
+    for node in nodes:
+        if "op" not in node:
+            mapping_value_type(node)
+            continue
+        op = node["op"]
+        if (
+            node.get("profile") != MAPPING_PROFILE
+            or type(node.get("semantics_version")) is not int
+            or node["semantics_version"] != 1
+            or node.get("operator_family") != "builtin_scalar_mapping"
+        ):
+            raise ValueError("mapping operation requires the sealed builtin profile")
+        if op == "structured_compare":
+            ports = [node.get(k, {}).get("type") for k in ("left", "right")]
+            structured = {"kind": "structured_value", "profile": MAPPING_PROFILE}
+            if node.get("operator") not in ("eq", "ne") or ports not in (
+                [structured, "text"],
+                ["text", structured],
+            ):
+                raise ValueError(
+                    "only equality between a tagged value and text is qualified"
+                )
+        if op == "mapping_get" and node.get("text_profile") not in module.get(
+            "text_profiles", {}
+        ):
+            raise ValueError(
+                "mapping lookup requires its Unicode key diagnostic profile"
+            )
+        if op in ("mapping_put", "mapping_merge"):
+            proof = node.get("acyclicity")
+            if (
+                isinstance(proof, dict)
+                and type(proof.get("semantics_version")) is int
+                and proof
+                == {"semantics_version": 1, "rule": "unpublished_fresh_builder"}
+            ):
+                fresh_writes.add(id(node))
+                continue
+            value = node.get("value") or {}
+            tag = value.get("tag")
+            if (
+                op != "mapping_put"
+                or not isinstance(proof, dict)
+                or type(proof.get("semantics_version")) is not int
+                or proof
+                != {"semantics_version": 1, "rule": "nonmapping_scalar", "tag": tag}
+                or tag not in ("unit", "bool", "i64", "f64", "text")
+                or value.get("op") != "structured_pack"
+                or value.get("value", {}).get("type") != tag
+            ):
+                raise ValueError(
+                    "mapping writes require a verified acyclicity certificate"
+                )
+    if fresh_writes:
+        for function in module.get("functions", ()):
+            fresh_writes.difference_update(runtime.private_mapping_writes(function))
+            if not fresh_writes:
+                break
+        if fresh_writes:
+            raise ValueError(
+                "mapping construction destination is not an unpublished fresh builder"
+            )
+    return {
+        "provider": "cxx20-ordered-text-mapping",
+        "profile": MAPPING_PROFILE,
+        "operations": sorted(seen),
+    }
 
 
 def _ndarray_binding(requirement, observed, elements, nodes):
@@ -362,12 +483,19 @@ def _qualify(module, image_context=None):
     if not isinstance(requested, dict):
         raise ValueError("operator requirements must be a family-indexed table")
     requested = dict(requested)
-    observed, array_elements, array_nodes, process_requests, fourier_nodes = (
-        _observed_operators(module)
-    )
+    (
+        observed,
+        array_elements,
+        array_nodes,
+        process_requests,
+        fourier_nodes,
+        mapping_nodes,
+    ) = _observed_operators(module)
     for family, operators in observed.items():
         if family not in requested:
             requirement = dict(operations=sorted(operators))
+            if family == "builtin_scalar_mapping":
+                requirement["profile"] = MAPPING_PROFILE
             if family == "process" and process_requests:
                 requirement["binding"] = "explicit_targets"
             if family == "ndarray":
@@ -451,6 +579,14 @@ def _qualify(module, image_context=None):
                 continue
             except ValueError as exc:
                 detail = str(exc)
+        elif family == "builtin_scalar_mapping":
+            try:
+                bindings[family] = _mapping_binding(
+                    requirement, observed.get(family, set()), mapping_nodes, module
+                )
+                continue
+            except ValueError as exc:
+                detail = str(exc)
         elif family == "ndarray":
             try:
                 bindings[family] = _ndarray_binding(
@@ -518,6 +654,7 @@ def _schedule_image(
     module.pop("math_interface_binding_sha256", None)
     module.pop("numeric_permissions_binding_sha256", None)
     module.pop("fourier_binding_sha256", None)
+    module.pop("builtin_scalar_mapping_binding_sha256", None)
     requirements, bindings, issues = _qualify(module, image_context)
     import_effects = runtime.import_effects(module, bindings)
     import_receipt = (
@@ -529,6 +666,8 @@ def _schedule_image(
         module["posix_runtime_binding_sha256"] = digest(json_bytes(binding))
     if binding := bindings.get("fourier"):
         module["fourier_binding_sha256"] = digest(json_bytes(binding))
+    if binding := bindings.get("builtin_scalar_mapping"):
+        module["builtin_scalar_mapping_binding_sha256"] = digest(json_bytes(binding))
     if "process" in bindings:
         module["image_bindings"] = bindings["process"]["images"]
         if "launches" in bindings["process"]:

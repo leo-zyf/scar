@@ -289,6 +289,146 @@ def test_python_capture_then_offline_normalization(tmp_path, monkeypatch):
     }
 
 
+def test_python_mapping_displays_and_scoped_comprehensions_offline(
+    tmp_path, monkeypatch
+):
+    from types import CodeType
+
+    from scar.contract import walk_operations
+    from scar.frontend.graph import function_graph
+    from scar.frontend.languages.python import normalize
+    from scar.frontend.state_flow import state_flow
+
+    entry = tmp_path / "entry.py"
+    entry.write_text(
+        "def collect(k, step):\n"
+        "    if isinstance(k, dict):\n"
+        "        return {k: collect(v, step) for k, v in k.items() if v and collect(v, step) for j in step(k) if j}\n"
+        "    return k\n"
+        "def display(key, value, extra):\n"
+        "    return {key(0):value(0), key(1):value(1), **extra(), key(2):{'nested':[1, None]}}\n"
+        "class Local:\n"
+        "    rows = [1]\n"
+        "    lookup = {x: rows for x in rows}\n"
+        "async def later(stream):\n"
+        "    return {x: x async for x in stream if (seen := x)}\n"
+    )
+    (facts,) = python.capture_project(entry, tmp_path).units
+    entry.unlink()
+    unit = _offline(
+        monkeypatch,
+        normalize,
+        facts,
+        (ast, "parse"),
+        (symtable, "symtable"),
+        (builtins, "compile"),
+    )
+    functions = {f["name"]: f for f in unit["functions"]}
+    collect = functions["py:entry:collect"]
+    display, nested = sorted(
+        (
+            n
+            for n in walk_operations(functions["py:entry:display"]["partial_body"])
+            if n["op"] == "mapping"
+        ),
+        key=lambda n: n["location"]["column"],
+    )
+    assert [e["kind"] for e in display["entries"]] == ["pair", "pair", "unpack", "pair"]
+    assert nested["entries"][0]["value"]["kind"] == "list"
+    if hasattr(CodeType, "co_positions"):
+        assert display["construction"]["status"] == "captured"
+        steps = display["construction"]["steps"]
+        entries = []
+        for step in steps:
+            if step["kind"] == "build_pairs":
+                entries.extend(range(step["first"], step["first"] + step["count"]))
+            elif step["kind"] != "merge_batch":
+                entries.append(step["entry"])
+        assert entries == list(range(4))
+        assert {"kind": "unpack_mapping", "entry": 2} in steps
+        # The two side-effecting pairs in a single source BUILD_MAP delay hashing
+        # until both operands of the second pair have also been evaluated.
+        if any(
+            ("BUILD_MAP", 2) in stream for stream in facts.mapping_builders.values()
+        ):
+            assert steps[0] == dict(
+                kind="build_pairs", first=0, count=2, constant_keys=False
+            )
+    else:
+        assert display["construction"]["status"] == "unresolved"
+    (comp,) = (
+        n
+        for n in walk_operations(collect["partial_body"])
+        if n["op"] == "mapping_comprehension"
+    )
+    outer, inner = comp["generators"]
+    assert outer["iterable"]["target"]["base"]["name"] == "k"
+    assert (
+        "cell" not in outer["iterable"]["target"]["base"]
+        or outer["iterable"]["target"]["base"]["cell"]["owner"] == collect["name"]
+    )
+    assert [n["name"] for n in outer["target"]["items"]] == ["k", "v"]
+    assert (
+        outer["filters"][0]["op"] == "short_circuit"
+        and inner["filters"][0]["name"] == "j"
+    )
+    assert (
+        inner["iterable"]["args"][0]["cell"]
+        == comp["key"]["cell"]
+        == outer["target"]["items"][0]["cell"]
+    )
+    assert comp["key"]["cell"]["owner"] == comp["scope"]["id"]
+    assert comp["value"]["callee"] == collect["name"]
+    assert (
+        sum(
+            n["op"] == "call" and n["callee"] == collect["name"]
+            for n in walk_operations(comp)
+        )
+        == 2
+    )
+    assert (
+        collect["partial_body"][-1]["value"].get("cell", {}).get("owner")
+        != comp["scope"]["id"]
+    )
+    (class_comp,) = (
+        n
+        for n in walk_operations(
+            functions["py:entry:Local.<class_body>"]["partial_body"]
+        )
+        if n["op"] == "mapping_comprehension"
+    )
+    assert class_comp["generators"][0]["iterable"]["name"] == "rows"
+    assert (
+        class_comp["value"]["name"] == "py:entry:rows"
+        and class_comp["value"]["scope"] == "global"
+    )
+    (async_comp,) = (
+        n
+        for n in walk_operations(functions["py:entry:later"]["partial_body"])
+        if n["op"] == "mapping_comprehension"
+    )
+    assert async_comp["generators"][0]["asynchronous"] is True
+    (named,) = async_comp["generators"][0]["filters"]
+    assert named["op"] == "assignment_expression"
+    assert named["target"]["name"] == "seen"
+    assert named["target"].get("cell", {}).get("owner") != async_comp["scope"]["id"]
+
+    graph = function_graph(collect, facts.source_hash)
+    port, row = next(
+        (p, n)
+        for p, n in enumerate(graph["nodes"])
+        if n["op"] == "mapping_comprehension"
+    )
+    target = graph["nodes"][row["generators"][0]["target"]["port"]]
+    writes = {a["node"] for a in graph["accesses"] if a["mode"] == "write"}
+    assert all(t["port"] in writes for t in target["items"])
+    assert collect["name"] in graph["calls"]
+    flow = state_flow(graph["nodes"], graph["entry"], graph["accesses"])
+    boundary = next(b for b in flow["boundary_details"] if b["node"] == port)
+    assert boundary["first_iterable"] == row["generators"][0]["iterable"]["port"]
+    assert boundary["iteration_count"] == "zero_or_more"
+
+
 def test_python_tuple_identity_tracks_compiled_objects_offline(tmp_path, monkeypatch):
     from dataclasses import replace
     import dis

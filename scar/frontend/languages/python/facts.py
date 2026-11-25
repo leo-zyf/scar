@@ -68,6 +68,7 @@ class ParsedUnit:
     source_key: str = ""
     source_origins: dict = field(default_factory=dict)
     import_value_uses: frozenset = frozenset()
+    mapping_builders: dict = field(default_factory=dict)
 
     @property
     def source_digests(self):
@@ -80,24 +81,26 @@ def tuple_position(node):
     return node.lineno, node.end_lineno, node.col_offset, node.end_col_offset
 
 
-def _tuple_sites(tree, text, path, relative, source_hash):
-    """Match actual tuple constructors to exact UTF-8 source spans."""
+def _container_sites(tree, path, relative, source_hash):
+    """Capture container construction at exact source spans in one compiler pass."""
     if sys.implementation.name != "cpython" or not hasattr(CodeType, "co_positions"):
-        return {}
-    nodes, syntax = {}, deque([tree])
+        return {}, {}
+    nodes, mappings, syntax = {}, {}, deque([tree])
     while syntax:
         node = syntax.popleft()
         syntax.extend(ast.iter_child_nodes(node))
-        if (
+        if isinstance(node, ast.Dict):
+            mappings[tuple_position(node)] = []
+        elif (
             isinstance(node, ast.Tuple)
             and isinstance(node.ctx, ast.Load)
             and not any(isinstance(e, ast.Starred) for e in node.elts)
         ):
             nodes[tuple_position(node)] = node
-    if not nodes:
-        return {}
+    if not (nodes or mappings):
+        return {}, {}
     optimize = sys.flags.optimize
-    program = compile(text, str(path), "exec", dont_inherit=True, optimize=optimize)
+    program = compile(tree, str(path), "exec", dont_inherit=True, optimize=optimize)
     unit = digest(json_bytes([relative, source_hash, ParsedUnit.compiler_id, optimize]))
     fresh, conflict = object(), object()
     origins = {}
@@ -111,11 +114,18 @@ def _tuple_sites(tree, text, path, relative, source_hash):
         code = pending.pop()
         pending.extend(c for c in reversed(code.co_consts) if isinstance(c, CodeType))
         for instruction in dis.get_instructions(code):
+            opcode = getattr(instruction, "baseopname", instruction.opname)
+            if instruction.positions in mappings and opcode in {
+                "BUILD_MAP",
+                "BUILD_CONST_KEY_MAP",
+                "MAP_ADD",
+                "DICT_UPDATE",
+            }:
+                mappings[instruction.positions].append((opcode, instruction.arg))
             node = nodes.get(instruction.positions)
             if node is None:
                 continue
             size = len(node.elts)
-            opcode = getattr(instruction, "baseopname", instruction.opname)
             if opcode == "BUILD_TUPLE" and instruction.arg == size:
                 observe(node, fresh if size else ())
             elif opcode in {"LOAD_CONST", "RETURN_CONST"}:
@@ -148,7 +158,7 @@ def _tuple_sites(tree, text, path, relative, source_hash):
                     and len(member) == len(child.elts)
                 ):
                     observe(child, member)
-    return sites
+    return sites, mappings
 
 
 @cache
@@ -207,7 +217,9 @@ def parse_unit(
     try:
         text, tree = snapshot.text, snapshot.tree
         scopes = LexicalScope.capture(symtable.symtable(text, str(path), "exec"))
-        tuple_sites = _tuple_sites(tree, text, path, relative, source_hash)
+        tuple_sites, mapping_builders = _container_sites(
+            tree, path, relative, source_hash
+        )
     except (SyntaxError, UnicodeError, LookupError) as error:
         location = dict(
             file=relative,
@@ -263,6 +275,7 @@ def parse_unit(
         source_key=relative,
         source_origins=origins,
         import_value_uses=frozenset(value_uses),
+        mapping_builders=mapping_builders,
     )
 
 

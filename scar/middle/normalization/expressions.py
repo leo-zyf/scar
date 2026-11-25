@@ -1,6 +1,6 @@
 """M2 ordered operand evaluation and control-flow joins for source operators."""
 
-from . import arrays, objects, scalars, values
+from . import arrays, mappings, objects, scalars, values
 from .values import Value, literal
 
 
@@ -12,6 +12,13 @@ def _capture(frame, item, steps):
 
 def apply_binary(frame, node, operator, lhs, rhs, steps, discard=False):
     """Bind one operation after both operands have been evaluated in source order."""
+    if lhs.kind in {"mapping_ref", "structured_value"} or rhs.kind in {
+        "mapping_ref",
+        "structured_value",
+    }:
+        if operator in {"is", "isnot"} and lhs.kind == rhs.kind == "mapping_ref":
+            return mappings.identity(frame, node, lhs, rhs)
+        return mappings.compare(frame, {**node, "operator": operator}, lhs, rhs, steps)
     if any(values.is_product(item.kind) for item in (lhs, rhs)):
         if operator in {"is", "isnot"}:
             if all(values.is_product(item.kind) for item in (lhs, rhs)):

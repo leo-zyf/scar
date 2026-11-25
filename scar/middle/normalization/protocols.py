@@ -9,6 +9,7 @@ from . import (
     exceptions,
     graphics,
     host_protocols,
+    mappings,
     objects,
     processes,
     products,
@@ -207,8 +208,9 @@ class _Region:
 
 
 class _Project:
-    def __init__(self, functions, *, entry_environment=None):
+    def __init__(self, functions, *, entry_environment=None, function_definitions=None):
         self.functions = functions
+        self.function_definitions = function_definitions or {}
         self.initializers = {
             scope["module"]: name
             for name, f in functions.items()
@@ -233,6 +235,10 @@ class _Project:
         self.prefixes = []
         self.result_kinds = {}
         self.result_facts = {}
+        self.mapping_parameters = {}
+        self.pending_signatures = {}
+        self.recursive_uses = set()
+        self.function_defaults = {}
         self.providers = {}
         self.array_ops = set()
         self.process_ops = set()
@@ -272,6 +278,62 @@ class _Project:
             family: {**requirement, "operations": sorted(requirement["operations"])}
             for family, requirement in self.required_operators.items()
         }
+
+    def structured_parameters(self, name):
+        """Infer a closed value-family constraint from a real builtin type test."""
+        if name not in self.mapping_parameters:
+            fn = self.functions[name]
+            formals = {p["name"]: i for i, p in enumerate(fn["params"])}
+            selected = set()
+            for operation in walk_operations(fn["body"]):
+                target = operation.get("target", {})
+                args = operation.get("args", ())
+                if (
+                    operation["op"] in {"call", "library_call"}
+                    and target.get("op") == "python_builtin"
+                    and target.get("name") == "isinstance"
+                    and len(args) == 2
+                    and args[1].get("op") == "python_builtin"
+                    and args[1].get("name") == "dict"
+                    and args[0].get("op") == "var"
+                    and args[0].get("scope") != "global"
+                    and args[0].get("name") in formals
+                ):
+                    selected.add(formals[args[0]["name"]])
+            self.mapping_parameters[name] = frozenset(selected)
+        return self.mapping_parameters[name]
+
+    def _check_recursive_bindings(self, function):
+        """A provisional signature cannot license folding changing global bindings."""
+        pending, seen = [function], set()
+        while pending:
+            current = pending.pop()
+            if current["name"] in seen:
+                continue
+            seen.add(current["name"])
+            for operation in walk_operations(current["body"]):
+                if any(
+                    target.get("scope") == "global" or target.get("cell")
+                    for target in values.written_targets(operation)
+                ):
+                    raise _Unclosed(
+                        function["name"],
+                        operation,
+                        "recursive_state",
+                        "recursive normalization requires closed local bindings",
+                    )
+                if operation["op"] == "call":
+                    callee = operation.get("callee")
+                    if callee == function["name"]:
+                        continue
+                    if callee not in self.closed:
+                        raise _Unclosed(
+                            function["name"],
+                            operation,
+                            "recursive_effects",
+                            "recursive callee effects require a closed body",
+                        )
+                    pending.append(self.closed[callee])
 
     def import_may_write(self, body):
         """Summarize closed canonical callees without trusting unknown effects.
@@ -557,6 +619,10 @@ class _Project:
     def compile(self, name, types, *, source=None):
         fn = self.functions[name]
         if name in self.active:
+            prototype = self.pending_signatures.get(name)
+            if prototype is not None and prototype["argument_kinds"] == types:
+                self.recursive_uses.add(name)
+                return prototype
             raise _Unclosed(
                 name,
                 fn,
@@ -650,6 +716,16 @@ class _Project:
             self.array_state.contents = {}
         try:
             frame = _Frame(self, fn, types)
+            if kind == "function" and self.structured_parameters(name):
+                self.pending_signatures[name] = dict(
+                    name=name,
+                    params=frame.params,
+                    result=values.wire("structured_value"),
+                    argument_kinds=types,
+                    recursive_prototype=True,
+                )
+                self.result_kinds[name] = "structured_value"
+                self.result_facts[name] = {}
             try:
                 result = frame.lower()
             except _Unclosed:
@@ -659,10 +735,18 @@ class _Project:
                     self.imports.restore(registry_prefix)
                 self.prefixes.append(frame.prefix_fragment())
                 raise
+            if name in self.recursive_uses:
+                self._check_recursive_bindings(result)
+                result["recursive_contract"] = dict(
+                    semantics_version=1,
+                    result="closed_builtin_structured_value",
+                    bindings="no_recursive_global_or_cell_writes",
+                )
             self.types[name] = types
             self.closed[name] = result
             return result
         finally:
+            self.pending_signatures.pop(name, None)
             if saved_contents is not None:
                 self.array_state.contents = saved_contents
             self.active.pop()
@@ -701,7 +785,12 @@ class _Frame:
                 )
             name = formal["name"]
             self.params.append(dict(name=name, type=values.wire(kind)))
-            self.env[name] = _Value(kind, None).at(name)
+            facts = (
+                {"mapping_origin": {"owner": self.name, "parameter": name}}
+                if kind == "structured_value"
+                else {}
+            )
+            self.env[name] = _Value(kind, None, facts).at(name)
             self.locals[name] = kind
 
     def fail(self, node, field, message, *, source_evidence=None):
@@ -800,6 +889,9 @@ class _Frame:
                     "len",
                     "tuple",
                     "sorted",
+                    "dict",
+                    "isinstance",
+                    "bool",
                 }:
                     result = _Value("builtin", name)
                 else:
@@ -908,7 +1000,20 @@ class _Frame:
                 self.store(item, element, steps)
             return
         if target.get("op") == "index":
-            arrays.index(self, target, steps, rhs=value)
+            base = self.evaluate(target["base"], steps)
+            if values.runtime(base.kind):
+                base = self.effect(base.value, base.kind, steps, facts=base.facts)
+            if base.kind in {"mapping_ref", "structured_value"}:
+                indices = target.get("indices", [])
+                if len(indices) != 1:
+                    self.fail(
+                        target, "mapping_key", "mapping access needs one text key"
+                    )
+                mappings.put(
+                    self, target, base, self.evaluate(indices[0], steps), value, steps
+                )
+            else:
+                arrays.index(self, target, steps, rhs=value, evaluated_base=base)
             return
         if target.get("op") == "member":
             if values.runtime(value.kind) and value.value["op"] != "literal":
@@ -1619,6 +1724,12 @@ class _Frame:
 
     def _evaluate(self, node, steps, discard=False, *, truth_context=False):
         op = node["op"]
+        if op == "mapping":
+            result = mappings.literal(self, node, steps)
+            return self.truth(result, node) if truth_context else result
+        if op == "mapping_comprehension":
+            result = self.mapping_comprehension(node, steps)
+            return self.truth(result, node) if truth_context else result
         if (
             op == "compare_chain"
             and len(node.get("operators", ())) == 1
@@ -1699,7 +1810,16 @@ class _Frame:
         if op == "aggregate":
             return arrays.capture_sequence(self, node, steps)
         if op == "index":
-            return arrays.index(self, node, steps, discard=discard)
+            base = self.evaluate(node["base"], steps)
+            if values.runtime(base.kind):
+                base = self.effect(base.value, base.kind, steps, facts=base.facts)
+            if base.kind in {"mapping_ref", "structured_value"}:
+                if len(node.get("indices", [])) != 1:
+                    self.fail(node, "mapping_key", "mapping access needs one text key")
+                return mappings.get(
+                    self, node, base, self.evaluate(node["indices"][0], steps), steps
+                )
+            return arrays.index(self, node, steps, discard=discard, evaluated_base=base)
         if op == "process_stream":
             base = self.evaluate(node["base"], steps)
             result = processes.member(self, node, base, node["field"], steps)
@@ -1712,6 +1832,12 @@ class _Frame:
             return result
         if op == "member":
             base = self.evaluate(node["base"], steps)
+            text_member = text.member(self, node, base, node["field"])
+            if text_member is not None:
+                return text_member
+            mapping_member = mappings.member(self, node, base, node["field"], steps)
+            if mapping_member is not None:
+                return mapping_member
             if base.kind in {"python_complex", "numpy_c128"} and node["field"] in {
                 "real",
                 "imag",
@@ -1823,6 +1949,33 @@ class _Frame:
             if key is None or key in kwargs:
                 self.fail(node, "keyword_binding", "dynamic or repeated keyword")
             kwargs[key] = argument(item["value"])
+        if target.kind == "builtin" and target.value == "isinstance":
+            if (
+                kwargs
+                or len(args) != 2
+                or args[1].kind != "builtin"
+                or args[1].value != "dict"
+            ):
+                self.fail(
+                    node,
+                    "mapping_isinstance",
+                    "isinstance requires the closed builtin dict type",
+                )
+            return mappings.is_mapping(self, node, args[0])
+        mapping_call = mappings.invoke(self, node, target, args, kwargs, steps, discard)
+        if mapping_call is not None:
+            return mapping_call
+        text_call = text.invoke(self, node, target, args, kwargs)
+        if text_call is not None:
+            return text_call
+        if target.kind == "builtin" and target.value == "bool":
+            if kwargs or len(args) > 1:
+                self.fail(
+                    node,
+                    "boolean_conversion",
+                    "bool accepts zero or one positional value",
+                )
+            return self.truth(args[0], node) if args else _literal(False)
         sequence_call = sequences.invoke(
             self, node, target, args, kwargs, steps, discard
         )
@@ -1851,6 +2004,8 @@ class _Frame:
         if target.kind == "builtin" and target.value in {"min", "max"}:
             return scalars.extreme(self, node, target.value, args, kwargs, steps)
         if target.kind == "builtin" and target.value == "len":
+            if not kwargs and len(args) == 1 and args[0].kind == "mapping_ref":
+                return mappings.size(self, node, args[0])
             if not kwargs and len(args) == 1 and values.is_sequence(args[0].kind):
                 return sequences.size(args[0])
             if kwargs or len(args) != 1 or not products.is_sequence(args[0]):
@@ -2007,6 +2162,12 @@ class _Frame:
                 and param in kwargs
             ):
                 bound.append(kwargs.pop(param))
+            elif (
+                i >= len(args)
+                and param not in kwargs
+                and param in self.project.function_defaults.get(name, {})
+            ):
+                bound.append(self.project.function_defaults[name][param])
             else:
                 self.fail(
                     node,
@@ -2015,6 +2176,16 @@ class _Frame:
                 )
         if kwargs:
             self.fail(node, "argument_binding", f"unconsumed keywords for {name}")
+        for index in self.project.structured_parameters(name):
+            if name in self.project.active:
+                required = {"owner": name, "parameter": formals[index]["name"]}
+                if bound[index].facts.get("mapping_descendant_of") != required:
+                    self.fail(
+                        node,
+                        "recursive_progress",
+                        "recursive structured arguments must descend through the same input mapping",
+                    )
+            bound[index] = mappings.pack(self, node, bound[index])
         operands = [self.scalar(v, node) for v in bound]
         function = self.project.compile(name, tuple(v.kind for v in bound), source=node)
         parameter_types = [param["type"] for param in function["params"]]
@@ -2035,6 +2206,8 @@ class _Frame:
             None if function.get("noreturn") else values.scalar_evidence(result)
         )
         self.project.actual_calls.add((self.name, name))
+        if function.get("recursive_prototype"):
+            self.project.external_array_writes[name] = True
         if name not in self.project.external_array_writes:
             self.project.external_array_writes[name] = arrays.may_write_external(
                 function, self.project.closed
@@ -2070,6 +2243,8 @@ class _Frame:
             self.return_facts = {}
 
     def truth(self, value, node):
+        if value.kind in {"mapping_ref", "structured_value"}:
+            return mappings.truth(self, node, value)
         if values.is_sequence(value.kind):
             return _Value(
                 "bool",
@@ -2214,8 +2389,119 @@ class _Frame:
             self.merge(exits)
         return bool(exits)
 
-    def range_loop(self, node, steps):
-        domain = self.evaluate(node["range"], steps)
+    def mapping_comprehension(self, node, steps):
+        """Lower one lexical comprehension region, retaining structured loops."""
+        identity = node.get("scope", {}).get("id")
+        if not isinstance(identity, str):
+            self.fail(
+                node, "mapping_scope", "comprehension requires a captured lexical scope"
+            )
+        prefix = "@comprehension/" + identity + "/"
+
+        def rename(value):
+            if isinstance(value, list):
+                return [rename(item) for item in value]
+            if not isinstance(value, dict):
+                return value
+            result = {key: rename(item) for key, item in value.items()}
+            if (
+                result.get("op") == "var"
+                and result.get("cell", {}).get("owner") == identity
+            ):
+                result["name"] = prefix + result["name"]
+                result.pop("cell", None)
+                result.pop("scope", None)
+            return result
+
+        try:
+            return mappings.comprehension(
+                self, rename(node), steps, self._mapping_generators
+            )
+        finally:
+            for name in tuple(self.env):
+                if name.startswith(prefix):
+                    self.env.pop(name)
+
+    def _mapping_generators(self, node, steps, make_result, put_entry):
+        generators = node.get("generators", [])
+        if not generators or any(g.get("asynchronous") for g in generators):
+            self.fail(
+                node,
+                "mapping_iteration",
+                "mapping comprehension requires synchronous generators",
+            )
+        outer = self.evaluate(generators[0]["iterable"], steps)
+        result = make_result(steps)
+
+        def generate(level, out):
+            generator = generators[level]
+            domain = outer if level == 0 else self.evaluate(generator["iterable"], out)
+            source_loop = dict(
+                op="for",
+                protocol="iterator",
+                target=generator["target"],
+                body=[],
+                **values.source_site(node),
+            )
+            start = self.snapshot()
+            loop, item, _, _, _, setup = self.range_loop(
+                source_loop, out, domain=domain
+            )
+            if setup:
+                self.fail(
+                    node,
+                    "mapping_iteration",
+                    "comprehension iterator requires an explicit next-value contract",
+                )
+            self.dynamic += 1
+            self.enter_control("loop", node)
+            try:
+                self.store(generator["target"], item, loop["body"])
+
+                def filtered(position, body):
+                    filters = generator.get("filters", [])
+                    if position == len(filters):
+                        if level + 1 < len(generators):
+                            generate(level + 1, body)
+                        else:
+                            put_entry(result, self, body)
+                        return
+                    predicate = self.evaluate(
+                        filters[position], body, truth_context=True
+                    )
+                    if predicate.exact is False:
+                        return
+                    if predicate.exact is True:
+                        filtered(position + 1, body)
+                        return
+                    before = self.snapshot()
+                    accepted = []
+                    filtered(position + 1, accepted)
+                    self.merge([before, self.snapshot()])
+                    body.append(
+                        dict(
+                            op="if",
+                            condition=predicate.value,
+                            then=accepted,
+                            **{"else": []},
+                        )
+                    )
+
+                filtered(0, loop["body"])
+                after = self.snapshot()
+            finally:
+                self.leave_control()
+                self.dynamic -= 1
+            out.append(loop)
+            self.merge([start, after])
+
+        generate(0, steps)
+        return result
+
+    def range_loop(self, node, steps, *, domain=None):
+        domain = self.evaluate(node["range"], steps) if domain is None else domain
+        if domain.kind == "mapping_items_ref" and node.get("protocol") == "iterator":
+            return mappings.iteration(self, node, domain, steps)
         if (
             values.is_sequence(domain.kind)
             and node.get("protocol") == "iterator"
@@ -2332,7 +2618,7 @@ class _Frame:
                     writes.setdefault(
                         (dest.get("scope") == "global", dest["name"]), []
                     ).append(op)
-        if iv is not None:
+        if iv is not None and node["target"].get("op") == "var":
             target = node["target"]
             index = (target.get("scope") == "global", target["name"])
             writes.setdefault(index, [])
@@ -2576,12 +2862,10 @@ class _Frame:
                 )
             elif op == "python_define":
                 if not objects.plain_definition(node):
-                    self.fail(
-                        node,
-                        "function_creation",
-                        "definition requires default, annotation, type parameter or decorator evaluation",
-                    )
-                self.store(node["target"], _Value("function", node["symbol"]), steps)
+                    defined = objects.bind_function_definition(self, node, steps)
+                else:
+                    defined = _Value("function", node["symbol"])
+                self.store(node["target"], defined, steps)
             elif op == "raise":
                 exceptions.throw(self, node, steps)
                 return stop()
@@ -2597,6 +2881,8 @@ class _Frame:
                     if "value" in node
                     else _literal(None)
                 )
+                if self.project.structured_parameters(self.name):
+                    value = mappings.pack(self, node, value)
                 steps.append(dict(op="return", value=self.scalar(value, node)))
                 self.record_return(value)
                 return stop()
@@ -2675,8 +2961,11 @@ class _Frame:
         body = []
         falls = self.sequence(self.fn["body"], body)
         if falls and not self.initializing:
-            body.append(dict(op="return", value=_literal(None).value))
-            self.record_return(_literal(None))
+            value = _literal(None)
+            if self.project.structured_parameters(self.name):
+                value = mappings.pack(self, self.fn, value)
+            body.append(dict(op="return", value=value.value))
+            self.record_return(value)
         if self.returns and all(values.is_sequence(kind) for kind in self.returns):
             first = next(iter(self.returns))
             for kind in self.returns:
@@ -2722,7 +3011,9 @@ def normalize_protocols(module):
     if not functions:
         return module, [], []
     project = _Project(
-        functions, entry_environment=module.get("python_entry_environment")
+        functions,
+        entry_environment=module.get("python_entry_environment"),
+        function_definitions=module.get("python_definitions"),
     )
     project.execution_images = module.get("execution_images", [])
     project.text_profiles = module.get("text_profiles", {})
@@ -2914,6 +3205,7 @@ def normalize_protocols(module):
         declarations.pop(symbol, None)
     module.pop("python_class_candidates", None)
     module.pop("python_candidate_only", None)
+    module.pop("python_definitions", None)
     for name, fn in project.closed.items():
         # Keep independent native declarations for the downstream ABI comparison.
         # Only graph-level Python object placeholders acquire the inferred contract.

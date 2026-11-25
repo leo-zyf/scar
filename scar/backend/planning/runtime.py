@@ -1,5 +1,6 @@
 """B1 qualification of source-declared external execution interfaces."""
 
+from collections import Counter
 import os
 from pathlib import Path
 import platform
@@ -11,11 +12,82 @@ from tempfile import TemporaryDirectory
 
 from scar.contract import (
     EXECUTION_ANNOTATIONS,
+    control_regions,
     digest,
     json_bytes,
     validate_python_entry_environment,
     walk_operations,
 )
+
+
+def private_mapping_writes(function):
+    """Verify the local unpublished-builder certificate across structured regions."""
+    body = function.get("body", ())
+    operations = list(walk_operations(body, exclude_fields=EXECUTION_ANNOTATIONS))
+    writes = {"mapping_merge", "mapping_put"}
+    if not any(n["op"] in writes for n in operations) or any(
+        n["op"] == "goto" for n in operations
+    ):
+        return set()
+    binders = Counter(p["name"] for p in function.get("params", ()))
+    binders.update(
+        n.get("name")
+        for n in operations
+        if n["op"] in {"decl", "buffer", "runtime_array", "each"}
+    )
+    binders.update(n.get("index") for n in operations if n["op"] == "map")
+    scopes = [body]
+    for node in operations:
+        for owner, field, _ in control_regions(node):
+            scopes.append(owner[field])
+    verified = set()
+    for scope in scopes:
+        fresh = {
+            id(stmt): stmt["name"]
+            for stmt in scope
+            if stmt["op"] == "decl"
+            and binders[stmt["name"]] == 1
+            and stmt.get("storage", "auto") == "auto"
+            and (stmt.get("init") or {}).get("op") == "mapping_make"
+            and stmt.get("type") == stmt["init"].get("type")
+        }
+        if not fresh:
+            continue
+        active = set()
+        for stmt in scope:
+            if active:
+                nodes = list(
+                    walk_operations(stmt, exclude_fields=EXECUTION_ANNOTATIONS)
+                )
+                references = Counter(
+                    n.get("name")
+                    for n in nodes
+                    if n["op"] == "var" and n.get("scope") != "global"
+                )
+                destinations = []
+                for n in nodes:
+                    base = n.get("base")
+                    if (
+                        n["op"] in writes
+                        and isinstance(base, dict)
+                        and base.get("op") == "var"
+                        and base.get("scope") != "global"
+                        and base.get("name") in active
+                    ):
+                        destinations.append((base["name"], id(n)))
+                        references[base["name"]] -= 1
+                # A use elsewhere in this whole region can publish the builder, including
+                # on a previous loop iteration. Pure destination uses permit loop backedges.
+                active.difference_update(
+                    k for k, count in references.items() if count > 0
+                )
+                verified.update(
+                    site for destination, site in destinations if destination in active
+                )
+            if id(stmt) in fresh:
+                active.add(fresh[id(stmt)])
+    return verified
+
 
 _EXECUTION = set(
     "system popen fork vfork execl execle execlp execv execve execvp execvpe "

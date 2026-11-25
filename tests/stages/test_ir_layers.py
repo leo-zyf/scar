@@ -4991,3 +4991,278 @@ def test_import_state_snapshots_share_guards_and_keep_epochs_monotone():
         state.exceptional_prefix(before, before, may_write=False)["registry"]
         == before["registry"]
     )
+
+
+def test_mapping_domain_keeps_tags_shared_handles_and_live_iteration():
+    from scar.contract import walk_operations
+    from scar.middle.normalization import mappings, values
+
+    class Project:
+        text_profiles = {"unicode": {}}
+
+        def __init__(self):
+            self.operations = set()
+
+        def require_operator(self, family, opcode, **contract):
+            assert family == "builtin_scalar_mapping"
+            assert contract == {"profile": "builtin-scalar-map-v1"}
+            self.operations.add(opcode)
+
+    class Frame:
+        def __init__(self):
+            self.project, self.scope = Project(), {"text_profile": "unicode"}
+            self.environment, self.events, self.ordinal = {}, [], 0
+
+        def fail(self, node, field, message):
+            raise ValueError(field + ": " + message)
+
+        def effect(self, operation, kind, steps, discard=False, *, facts=None):
+            self.events.append(operation["op"])
+            if discard:
+                steps.append(dict(op="expr", value=operation))
+                return values.literal(None)
+            self.ordinal += 1
+            name = f"temporary{self.ordinal}"
+            steps.append(
+                dict(op="decl", name=name, type=values.wire(kind), init=operation)
+            )
+            return values.Value(kind, None, facts or {}).at(name)
+
+        def evaluate(self, node, steps):
+            if node["op"] == "probe":
+                self.events.append(node["name"])
+                return values.literal(node["value"])
+            if node["op"] == "var":
+                return self.environment[node["name"]]
+            if node["op"] == "mapping":
+                return mappings.literal(self, node, steps)
+            assert node["op"] == "literal"
+            return values.literal(node["value"])
+
+    def source(entries):
+        return dict(
+            op="mapping",
+            entries=entries,
+            construction=dict(
+                status="captured",
+                steps=[
+                    dict(
+                        kind="build_pairs",
+                        first=0,
+                        count=len(entries),
+                        constant_keys=False,
+                    )
+                ],
+            ),
+        )
+
+    frame, steps = Frame(), []
+    child = mappings.literal(frame, source([]), steps)
+    frame.environment["shared"] = child
+    members = [None, True, 7, -0.0, "text"]
+    entries = [
+        dict(
+            kind="pair",
+            key=dict(op="probe", name=f"key{i}", value=f"k{i}"),
+            value=dict(op="probe", name=f"value{i}", value=value),
+        )
+        for i, value in enumerate(members)
+    ]
+    entries.extend(
+        dict(
+            kind="pair",
+            key=dict(op="literal", value=name),
+            value=dict(op="var", name="shared"),
+        )
+        for name in ("left", "right")
+    )
+    entries.append(
+        dict(
+            kind="pair",
+            key=dict(op="literal", value="k0"),
+            value=dict(op="literal", value=False),
+        )
+    )
+    outer = mappings.literal(frame, source(entries), steps)
+    operations = list(walk_operations(steps))
+    packs = [op for op in operations if op["op"] == "structured_pack"]
+    assert {op["tag"] for op in packs} == {
+        "unit",
+        "bool",
+        "i64",
+        "f64",
+        "text",
+        "mapping_ref",
+    }
+    assert sum(op["op"] == "mapping_make" for op in operations) == 2
+    assert len(
+        next(op for op in operations if op["op"] == "mapping_make" and op["entries"])[
+            "entries"
+        ]
+    ) == len(entries)
+    assert all(op["value"] == child.value for op in packs if op["tag"] == "mapping_ref")
+    assert [event for event in frame.events if event.startswith(("key", "value"))] == [
+        name for i in range(len(members)) for name in (f"key{i}", f"value{i}")
+    ]
+    assert frame.events.index("value4") < len(frame.events) - 1
+    assert outer.kind == "mapping_ref" and outer.exact is values._UNKNOWN
+    alias = outer.at("alias")
+    first = mappings.get(frame, {}, alias, values.literal("k2"), steps)
+    mappings.put(frame, {}, alias, values.literal("k2"), values.literal(9), steps)
+    second = mappings.get(frame, {}, alias, values.literal("k2"), steps)
+    assert first.kind == second.kind == "structured_value"
+    assert (
+        first.value != second.value and first.exact is second.exact is values._UNKNOWN
+    )
+    method = mappings.member(frame, {}, alias, "items", steps)
+    view = mappings.invoke(frame, {}, method, [], {}, steps)
+    loop, item, _, _, _, _ = mappings.iteration(frame, {}, view, steps)
+    assert loop["condition"]["op"] == "mapping_next"
+    assert loop["condition"]["may_raise"] and loop["step"] is None
+    assert item.value["op"] == "mapping_current"
+    assert values.product_members(item.kind) == ("text", "structured_value")
+    assert item.value["base"] == loop["condition"]["base"]
+    origin = dict(owner="walk", parameter="data")
+    formal = values.Value("structured_value", None, {"mapping_origin": origin}).at(
+        "data"
+    )
+    checked = mappings.as_mapping(frame, {}, formal, steps, access="items")
+    assert mappings.pack(frame, {}, checked).facts == {"mapping_origin": origin}
+    method = mappings.member(frame, {}, checked, "items", steps)
+    rooted_view = mappings.invoke(frame, {}, method, [], {}, steps)
+    _, descendant, _, _, _, _ = mappings.iteration(frame, {}, rooted_view, steps)
+    assert descendant.facts["product_members"] == [
+        {},
+        {"mapping_descendant_of": origin},
+    ]
+    nested_view = values.Value(
+        "mapping_items_ref", rooted_view.value, {"mapping_descendant_of": origin}
+    )
+    _, nested, _, _, _, _ = mappings.iteration(frame, {}, nested_view, steps)
+    assert nested.facts == descendant.facts
+    for kind in (
+        "mapping_ref",
+        "structured_value",
+        "mapping_items_ref",
+        "mapping_iterator_ref",
+    ):
+        assert values.runtime(kind) and values.from_wire(values.wire(kind)) == kind
+    assert mappings.pack(frame, {}, first) is first
+    assert (
+        mappings.compare(
+            frame, {"operator": "eq"}, first, values.literal("x"), steps
+        ).kind
+        == "bool"
+    )
+    with pytest.raises(ValueError, match="mapping_value"):
+        mappings.pack(frame, {}, values.Value("numpy_f64", values.literal(1.0).value))
+    with pytest.raises(ValueError, match="mapping_key"):
+        mappings.get(frame, {}, alias, values.literal(1), steps)
+    with pytest.raises(ValueError, match="mapping_acyclicity"):
+        mappings.put(frame, {}, alias, values.literal("cycle"), alias, steps)
+    with pytest.raises(ValueError, match="mapping_compare"):
+        mappings.compare(frame, {"operator": "eq"}, alias, alias, steps)
+    with pytest.raises(ValueError, match="mapping_insertion_schedule"):
+        mappings.literal(frame, dict(op="mapping", entries=[]), steps)
+
+
+def test_function_defaults_capture_once_and_keep_managed_identity():
+    from types import SimpleNamespace
+
+    from scar.middle.normalization import objects, values
+
+    parameters = [
+        dict(
+            name="data", binding="posonly", default_from=dict(field="defaults", index=0)
+        ),
+        dict(
+            name="receiver",
+            binding="positional",
+            default_from=dict(field="defaults", index=1),
+        ),
+        dict(name="required", binding="keywordonly", required=True),
+        dict(
+            name="mode",
+            binding="keywordonly",
+            default_from=dict(field="keyword_defaults", index=1),
+        ),
+    ]
+    function = dict(
+        name="defined",
+        params=parameters,
+        body=[],
+        python_scope=dict(kind="function", module="module"),
+        call_protocol=dict(kind="regular"),
+    )
+    source_values = {
+        "mapping": values.Value(
+            "mapping_ref", dict(op="var", name="source_map"), {"mapping_builder": True}
+        ),
+        "object": values.Value(
+            values.object_kind("Thing"), dict(op="var", name="source_object")
+        ),
+        "mode": values.literal("stdout"),
+    }
+
+    class Frame:
+        initializing, dynamic, module = True, 0, "module"
+
+        def __init__(self):
+            self.project = SimpleNamespace(
+                functions={},
+                function_definitions={
+                    "defined": {
+                        key: value for key, value in function.items() if key != "body"
+                    }
+                },
+                function_defaults={},
+                globals={},
+            )
+            self.evaluated = []
+
+        def evaluate(self, node, steps):
+            self.evaluated.append(node["name"])
+            return source_values[node["name"]]
+
+        def fail(self, node, field, message):
+            raise ValueError(field + ": " + message)
+
+    frame, steps = Frame(), []
+    definition = dict(
+        op="python_define",
+        symbol="defined",
+        target=dict(op="var", name="defined", scope="global"),
+        defaults=[dict(name="mapping"), dict(name="object")],
+        keyword_defaults=[None, dict(name="mode")],
+    )
+    result = objects.bind_function_definition(frame, definition, steps)
+    assert result == values.Value("function", "defined")
+    assert frame.evaluated == ["mapping", "object", "mode"]
+    captured = frame.project.function_defaults["defined"]
+    assert set(captured) == {"data", "receiver", "mode"}
+    assert captured["data"].kind == "mapping_ref"
+    assert captured["receiver"].kind == values.object_kind("Thing")
+    assert captured["data"].facts == {}  # Publication ends the private builder proof.
+    assert captured["mode"].exact == "stdout"
+    assert all(value.value["scope"] == "global" for value in captured.values())
+    assert [step["value"] for step in steps] == [
+        source_values[name].value for name in frame.evaluated
+    ]
+    assert frame.project.globals == {
+        value.value["name"]: value.kind for value in captured.values()
+    }
+    source_values["mapping"] = values.Value(
+        "mapping_ref", dict(op="var", name="new_map")
+    )
+    assert captured["data"].value["name"] == steps[0]["target"]["name"]
+    with pytest.raises(ValueError, match="function_redefinition"):
+        objects.bind_function_definition(frame, definition, steps)
+    assert frame.evaluated == ["mapping", "object", "mode"] and len(steps) == 3
+    for unsupported in ("annotations", "decorators", "type_params"):
+        with pytest.raises(ValueError, match="function_creation"):
+            objects.bind_function_definition(
+                frame, {**definition, unsupported: [{}]}, []
+            )
+    frame.dynamic = 1
+    with pytest.raises(ValueError, match="function_creation"):
+        objects.bind_function_definition(frame, definition, [])

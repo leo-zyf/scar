@@ -16,7 +16,7 @@ def state_flow(nodes, entry, accesses):
     for port, row in enumerate(nodes):
         op = row["op"]
         if (
-            op == "with_context"
+            op in {"with_context", "mapping_comprehension"}
             or op == "for"
             and (
                 "iterator" in row
@@ -25,7 +25,7 @@ def state_flow(nodes, entry, accesses):
         ):
             boundaries.append((port, "conservative_iterator_protocol"))
             protocol_regions.add(port)
-            if op == "with_context":
+            if op in {"with_context", "mapping_comprehension"}:
                 opaque.add(port)
         elif op in {"map", "each"} and port not in bound_loops:
             # An older F3 shard can bind a same-named extent to the inner
@@ -459,7 +459,22 @@ def state_flow(nodes, entry, accesses):
     return dict(
         status=boundaries[0][1] if boundaries else "structured",
         boundaries=list(dict.fromkeys(p for p, _ in boundaries)),
-        boundary_details=[dict(node=p, reason=reason) for p, reason in boundaries],
+        boundary_details=[
+            {
+                "node": p,
+                "reason": reason,
+                **(
+                    dict(
+                        first_iterable=nodes[p]["generators"][0]["iterable"]["port"],
+                        first_iterable_evaluation="once_when_reached",
+                        iteration_count="zero_or_more",
+                    )
+                    if nodes[p]["op"] == "mapping_comprehension"
+                    else {}
+                ),
+            }
+            for p, reason in boundaries
+        ],
         control_scope="normal_completion",
         access_granularity="statement_may_access",
         coverage=dict(

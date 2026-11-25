@@ -61,6 +61,8 @@ def _provider_sources(records):
 
 
 _SITE_OPERATIONS = {
+    "mapping",
+    "mapping_comprehension",
     "map",
     "for",
     "assign",
@@ -783,6 +785,7 @@ def bind(graph, folder):
 
     signatures = defaultdict(list)
     functions, globals_, externs, state_evidence = {}, {}, {}, {}
+    python_definitions = {}
     for unit in graph["units"]:
         payload = read_member(folder, unit["graph"])
         for decl in payload["externs"]:
@@ -803,6 +806,24 @@ def bind(graph, folder):
                 issue("conflicting_global", name, str(error))
         for fn in payload["functions"]:
             name = fn["signature"]["name"]
+            signature = fn["signature"]
+            if signature.get("calling_convention") == "python" and fn.get(
+                "source_defined"
+            ):
+                # Creating a function and invoking its body are distinct events.
+                # Defaults still execute when the body has no reachable call.
+                python_definitions[name] = {
+                    key: signature[key]
+                    for key in (
+                        "name",
+                        "params",
+                        "python_scope",
+                        "call_protocol",
+                        "owner_class",
+                        "location",
+                    )
+                    if key in signature
+                }
             if name not in covered:
                 continue
             if "result" in fn["signature"] and "params" in fn["signature"]:
@@ -837,6 +858,16 @@ def bind(graph, folder):
                         accesses=fn.get("accesses", []),
                         state_flow=fn.get("state_flow"),
                     )
+    defined_symbols = {
+        node["symbol"]
+        for node in _operations(list(functions.values()))
+        if node["op"] == "python_define"
+    }
+    python_definitions = {
+        name: descriptor
+        for name, descriptor in python_definitions.items()
+        if name in defined_symbols
+    }
     referenced_globals = {
         n["name"]
         for n in _operations(
@@ -934,6 +965,11 @@ def bind(graph, folder):
                     edges=[e for e in activation_edges if e["owner"] in covered],
                 ),
                 functions=list(functions.values()),
+                **(
+                    {"python_definitions": python_definitions}
+                    if python_definitions
+                    else {}
+                ),
                 globals=list(globals_.values()),
                 externs=list(externs.values()),
                 records=[r for name, r in records.items() if name in used_records],

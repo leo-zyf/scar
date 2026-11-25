@@ -1,6 +1,14 @@
 """Lower identity-bearing aggregate values and native class lifetimes to C++."""
 
-from scar.contract import digest, json_bytes, product_items, sequence_element
+from scar.contract import (
+    MAPPING_PROFILE,
+    MAPPING_TYPES,
+    digest,
+    json_bytes,
+    mapping_value_type,
+    product_items,
+    sequence_element,
+)
 
 from .model import (
     Decl,
@@ -23,10 +31,167 @@ from .model import (
 )
 
 
+def is_mapping_type(spec):
+    return (
+        isinstance(spec, dict)
+        and isinstance(spec.get("kind"), str)
+        and spec["kind"] in MAPPING_TYPES
+    )
+
+
+def mapping_reference(spec, lower):
+    binding = lower.operator_backends.get("builtin_scalar_mapping", {})
+    if (binding.get("profile"), binding.get("provider")) != (
+        MAPPING_PROFILE,
+        "cxx20-ordered-text-mapping",
+    ):
+        raise ValueError("mapping requires its scheduled C++20 provider")
+    lower.use_sdk("mapping.hpp")
+    return named("scar::" + mapping_value_type(spec))
+
+
+_MAP = {"kind": "mapping_ref", "profile": MAPPING_PROFILE}
+_TAGGED = {"kind": "structured_value", "profile": MAPPING_PROFILE}
+_VIEW = {"kind": "mapping_items_ref", "profile": MAPPING_PROFILE}
+_CURSOR = {"kind": "mapping_iterator_ref", "profile": MAPPING_PROFILE}
+_ITEM = {"kind": "product_ref", "items": ["text", _TAGGED]}
+# Result type, ordered wire operands, required effect set, may_raise.
+_MAPPING_FORMS = {
+    "mapping_make": (_MAP, (), {"MEM", "STATE"}, True),
+    "mapping_get": (_TAGGED, (("base", _MAP), ("key", "text")), {"STATE"}, True),
+    "mapping_put": (
+        "unit",
+        (("base", _MAP), ("key", "text"), ("value", _TAGGED)),
+        {"MEM", "STATE"},
+        True,
+    ),
+    "mapping_merge": (
+        "unit",
+        (("base", _MAP), ("source", _MAP)),
+        {"MEM", "STATE"},
+        True,
+    ),
+    "mapping_items": (_VIEW, (("base", _MAP),), {"MEM", "STATE"}, True),
+    "mapping_iterator": (_CURSOR, (("value", _VIEW),), {"MEM", "STATE"}, True),
+    "mapping_next": ("bool", (("base", _CURSOR),), {"MEM", "STATE"}, True),
+    "mapping_current": (_ITEM, (("base", _CURSOR),), {"STATE"}, False),
+    "mapping_size": ("i64", (("base", _MAP),), {"STATE"}, False),
+    "mapping_identity": ("bool", (("left", _MAP), ("right", _MAP)), {"STATE"}, False),
+    "structured_pack": (_TAGGED, (), {"VAL", "STATE"}, True),
+    "structured_is_mapping": ("bool", (("value", _TAGGED),), {"STATE"}, False),
+    "structured_as_mapping": (_MAP, (("value", _TAGGED),), {"STATE"}, True),
+    "structured_truth": ("bool", (("value", _TAGGED),), {"STATE"}, False),
+    "structured_compare": ("bool", (), {"VAL", "STATE"}, False),
+}
+
+
+def mapping_expression(node, lower):
+    op = node["op"]
+    selected = lower.operator_backends.get("builtin_scalar_mapping", {})
+    if (
+        op not in _MAPPING_FORMS
+        or op not in selected.get("operations", ())
+        or node.get("operator_family") != "builtin_scalar_mapping"
+        or node.get("profile") != MAPPING_PROFILE
+        or type(node.get("semantics_version")) is not int
+        or node["semantics_version"] != 1
+    ):
+        raise ValueError("unqualified mapping operation")
+    result, ports, effects, raises = _MAPPING_FORMS[op]
+    if (
+        node.get("type") != result
+        or set(node.get("effects", ())) != effects
+        or node.get("may_raise") is not raises
+    ):
+        raise ValueError("invalid mapping result, effects or exception contract")
+
+    def snapshot(value, wire):
+        if not isinstance(value, dict) or value.get("type") != wire:
+            raise ValueError("invalid typed mapping operand")
+        return cast(lower.type_name(wire), lower.expression(value))
+
+    args = tuple(snapshot(node.get(key), wire) for key, wire in ports)
+    target = "scar::" + op
+    if op == "mapping_make":
+        mapping_reference(_MAP, lower)
+        entries = node.get("entries")
+        if not isinstance(entries, list) or any(
+            not isinstance(p, dict) or p.keys() != {"key", "value"} for p in entries
+        ):
+            raise ValueError("mapping constructor requires ordered key/value entries")
+        pairs = tuple(
+            Expr(
+                "braced",
+                args=(snapshot(p["key"], "text"), snapshot(p["value"], _TAGGED)),
+            )
+            for p in entries
+        )
+        return call(target, Expr("braced", args=pairs))
+    if op == "structured_pack":
+        tag = node.get("tag")
+        if tag not in ("unit", "bool", "i64", "f64", "text", "mapping_ref"):
+            raise ValueError("unsupported mapping value tag")
+        return cast(
+            mapping_reference(_TAGGED, lower),
+            snapshot(node.get("value"), _MAP if tag == "mapping_ref" else tag),
+        )
+    if op == "structured_compare":
+        operator = node.get("operator")
+        operands = (node.get("left"), node.get("right"))
+        types = tuple(v.get("type") if isinstance(v, dict) else None for v in operands)
+        if types not in ((_TAGGED, "text"), ("text", _TAGGED)) or operator not in (
+            "eq",
+            "ne",
+        ):
+            raise ValueError("only tagged-value/text equality is supported")
+        pair = Type(
+            "template",
+            name="scar::structured_text_pair",
+            args=tuple(lower.type_name(t) for t in types),
+        )
+        instance = construct(
+            pair, *(snapshot(v, t) for v, t in zip(operands, types)), form="brace"
+        )
+        equal = call("scar::structured_text_equal", instance)
+        return equal if operator == "eq" else unary("!", equal)
+    if op == "structured_as_mapping":
+        access = node.get("access")
+        if access not in ("items", "subscript", "unpack"):
+            raise ValueError("unregistered mapping access contract")
+        return call(target, *args, name("scar::mapping_access::" + access))
+    if op == "mapping_get":
+        args += (lower.unicode_table(node.get("text_profile")),)
+    if op in ("mapping_put", "mapping_merge"):
+        proof = node.get("acyclicity") or {}
+        operand = node.get("value") or {}
+        tag = operand.get("tag")
+        if type(proof.get("semantics_version")) is not int or not (
+            proof == {"semantics_version": 1, "rule": "unpublished_fresh_builder"}
+            or op == "mapping_put"
+            and operand.get("op") == "structured_pack"
+            and tag in ("unit", "bool", "i64", "f64", "text")
+            and proof
+            == {"semantics_version": 1, "rule": "nonmapping_scalar", "tag": tag}
+        ):
+            raise ValueError("unqualified mapping write")
+    if op == "mapping_current" and node.get("requires") != [
+        "successful_mapping_next_for_this_iterator"
+    ]:
+        raise ValueError("mapping current item requires a successful advance")
+    if op == "mapping_identity":
+        if node.get("operator") not in ("is", "isnot"):
+            raise ValueError("invalid mapping identity relation")
+        same = call(target, Expr("braced", args=args))
+        return same if node["operator"] == "is" else unary("!", same)
+    return call(target, args[0] if len(args) == 1 else Expr("braced", args=args))
+
+
 def has_managed_aggregate(spec):
     if isinstance(spec, dict):
-        return spec.get("kind") in {"product_ref", "sequence_ref"} or any(
-            has_managed_aggregate(v) for v in spec.values()
+        return (
+            is_mapping_type(spec)
+            or spec.get("kind") in {"product_ref", "sequence_ref"}
+            or any(has_managed_aggregate(v) for v in spec.values())
         )
     return isinstance(spec, list) and any(has_managed_aggregate(v) for v in spec)
 

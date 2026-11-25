@@ -163,6 +163,52 @@ def _py_type(name=None):
     }
 
 
+def _mapping_construction(keys, builders):
+    """Bind observed normal-path dict construction steps to the source entry ports."""
+    steps, cursor, batches = [], 0, 0
+    for opcode, argument in builders:
+        if opcode in {"BUILD_MAP", "BUILD_CONST_KEY_MAP"}:
+            end = cursor + argument
+            if end > len(keys) or any(key is None for key in keys[cursor:end]):
+                break
+            steps.append(
+                dict(
+                    kind="build_pairs",
+                    first=cursor,
+                    count=argument,
+                    constant_keys=opcode == "BUILD_CONST_KEY_MAP",
+                )
+            )
+            cursor, batches = end, batches + 1
+        elif (
+            opcode == "MAP_ADD"
+            and argument == 1
+            and batches
+            and cursor < len(keys)
+            and keys[cursor] is not None
+        ):
+            steps.append(dict(kind="insert_pair", entry=cursor))
+            cursor += 1
+        elif opcode == "DICT_UPDATE" and argument == 1 and batches > 1:
+            steps.append(dict(kind="merge_batch"))
+            batches -= 1
+        elif (
+            opcode == "DICT_UPDATE"
+            and argument == 1
+            and batches == 1
+            and cursor < len(keys)
+            and keys[cursor] is None
+        ):
+            steps.append(dict(kind="unpack_mapping", entry=cursor))
+            cursor += 1
+        else:
+            break
+    else:
+        if batches == 1 and cursor == len(keys):
+            return dict(status="captured", steps=steps)
+    return dict(status="unresolved", field="insertion_schedule")
+
+
 def _join_facts(*facts):
     """Only retain facts shared by every incoming control path."""
     if not facts:
@@ -363,6 +409,7 @@ class _ModuleGraph:
         self.runtime = parsed.runtime_facts
         self.text_profile = next(iter(parsed.text_profiles), None)
         self.tuple_sites = parsed.tuple_sites
+        self.mapping_builders = parsed.mapping_builders
         self.source_lines = parsed.source_text.splitlines()
         self.diagnostic_file = str(parsed.path)
 
@@ -1265,6 +1312,58 @@ class _Scope:
                     for key in ("lower", "upper", "step")
                 },
             ), {"class": "slice"}
+        if isinstance(node, ast.Dict):
+            construction = _mapping_construction(
+                node.keys, self.unit.mapping_builders.get(tuple_position(node), ())
+            )
+            # In a batched display hashing can run after several key/value pairs.
+            boundaries = {
+                (
+                    step["first"] + step["count"]
+                    if step["kind"] == "build_pairs"
+                    else step["entry"] + 1
+                )
+                for step in construction.get("steps", ())
+                if step["kind"] != "merge_batch"
+            }
+            entries = []
+            for index, (key, value) in enumerate(zip(node.keys, node.values)):
+                if index in boundaries or construction["status"] == "unresolved":
+                    self.invalidate_shared()
+                if key is None:
+                    entries.append(dict(kind="unpack", mapping=self.expr(value)[0]))
+                else:
+                    entries.append(
+                        dict(
+                            kind="pair",
+                            key=self.expr(key)[0],
+                            value=self.expr(value)[0],
+                        )
+                    )
+            self.invalidate_shared()
+            return R(
+                node,
+                "mapping",
+                entries=entries,
+                construction=construction,
+                type=_py_type("dict"),
+                effects=["MEM", "CTRL", "STATE"],
+                may_raise=True,
+            ), {"class": "dict"}
+        if isinstance(node, ast.DictComp):
+            return self.mapping_comprehension(node)
+        if isinstance(node, ast.NamedExpr):
+            value, fact = self.expr(node.value)
+            owner = self.assignment_scope()
+            return (
+                R(
+                    node,
+                    "assignment_expression",
+                    value=value,
+                    target=owner.destination(node.target, fact),
+                ),
+                fact,
+            )
         if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
             items = [self.expr(v) for v in node.elts]
             f = {"class": kind.lower()}
@@ -1355,11 +1454,59 @@ class _Scope:
             return self.record(
                 node, "unpack", items=[self.destination(n, {}) for n in node.elts]
             )
+        if isinstance(node, ast.Starred):
+            return self.record(node, "starred", value=self.destination(node.value, {}))
         target = self.expr(node, read_target=read_target)[0]
         if isinstance(node, (ast.Subscript, ast.Attribute)):
             # Attribute/subscript writes may modify any alias of the receiver.
             self.invalidate_shared()
         return target
+
+    def assignment_scope(self):
+        return self
+
+    def mapping_comprehension(self, node):
+        first = self.expr(node.generators[0].iter)[0]
+        owner = self.assignment_scope()
+        before = owner.env.copy()
+        # An iterator/filter can call arbitrary code. A named expression binds
+        # in the enclosing frame, including values from previous iterations.
+        owner.widen([node])
+        inner = _ComprehensionScope(self, node)
+        generators = []
+        for index, clause in enumerate(node.generators):
+            iterable = inner.expr(clause.iter)[0] if index else first
+            inner.invalidate_shared()
+            target = inner.destination(clause.target, {})
+            filters = []
+            for condition in clause.ifs:
+                filters.append(inner.expr(condition)[0])
+                inner.invalidate_shared()  # Truth testing can dispatch to user code.
+            generators.append(
+                dict(
+                    iterable=iterable,
+                    target=target,
+                    filters=filters,
+                    asynchronous=bool(clause.is_async),
+                )
+            )
+        key = inner.expr(node.key)[0]
+        value = inner.expr(node.value)[0]
+        inner.invalidate_shared()
+        owner.merge(before, owner.env)
+        return self.record(
+            node,
+            "mapping_comprehension",
+            scope=dict(
+                owner=self.symbol, id=inner.scope_id, bindings=sorted(inner.locals)
+            ),
+            generators=generators,
+            key=key,
+            value=value,
+            type=_py_type("dict"),
+            effects=["MEM", "CTRL", "STATE"],
+            may_raise=True,
+        ), {"class": "dict"}
 
     def branch(self, body, env):
         previous = self.env
@@ -1953,3 +2100,88 @@ class _Scope:
                 )
             ]
         return [self.unhandled(node)]
+
+
+class _ComprehensionScope(_Scope):
+    """Iteration bindings have their own activation; captured names keep their owner."""
+
+    def __init__(self, parent, node):
+        super().__init__(
+            parent.unit, parent.symbol, parent.qualified, None, parent=parent
+        )
+        self.calls = parent.calls
+        self.scope_id = (
+            "comprehension:"
+            + digest(
+                json_bytes(
+                    [
+                        self.unit.source_hash,
+                        self.unit.path,
+                        self.symbol,
+                        tuple_position(node),
+                    ]
+                )
+            )[:32]
+        )
+        self.locals = frozenset(
+            name
+            for clause in node.generators
+            for name in self.target_names(clause.target)
+        )
+
+    @classmethod
+    def target_names(cls, node):
+        if isinstance(node, ast.Name):
+            yield node.id
+        elif isinstance(node, (ast.Tuple, ast.List)):
+            for item in node.elts:
+                yield from cls.target_names(item)
+        elif isinstance(node, ast.Starred):
+            yield from cls.target_names(node.value)
+
+    def enclosing(self):
+        scope = self.parent
+        while scope.class_scope:
+            scope = scope.parent
+        return scope
+
+    def variable(self, name):
+        if name in self.locals:
+            return dict(
+                op="var",
+                name=name,
+                cell=dict(
+                    owner=self.scope_id, name=name, identity="lexical_activation"
+                ),
+            )
+        if (
+            name == "__class__"
+            and self.parent.class_scope
+            and name in self.parent.cells
+        ):
+            return dict(
+                op="var",
+                name=name,
+                cell=dict(
+                    owner=self.parent.symbol, name=name, identity="lexical_activation"
+                ),
+            )
+        return self.enclosing().variable(name)
+
+    def fact(self, name):
+        if name in self.locals:
+            return self.env.get(name, {"maybe_unbound": True})
+        if (
+            name == "__class__"
+            and self.parent.class_scope
+            and name in self.parent.cells
+        ):
+            return {"state": self.variable(name)["cell"], "maybe_unbound": True}
+        return self.enclosing().fact(name)
+
+    def invalidate_shared(self):
+        self.parent.invalidate_shared()
+        super().invalidate_shared()
+
+    def assignment_scope(self):
+        return self.parent.assignment_scope()

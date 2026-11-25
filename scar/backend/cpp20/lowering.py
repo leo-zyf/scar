@@ -42,6 +42,9 @@ from .objects import (
     ProductModel,
     has_aggregate_signature,
     has_managed_aggregate,
+    is_mapping_type,
+    mapping_expression,
+    mapping_reference,
     sequence_reference,
     sequence_expression,
 )
@@ -309,6 +312,15 @@ class Lowerer:
         self.qualified_parameters = _qualified_parameters(module, physical)
         self.regions = physical.get("regions", {})
         self.operator_backends = physical.get("operator_backends", {})
+        mapping = self.operator_backends.get("builtin_scalar_mapping")
+        if (
+            mapping is not None or "builtin_scalar_mapping_binding_sha256" in module
+        ) and (
+            not isinstance(mapping, dict)
+            or module.get("builtin_scalar_mapping_binding_sha256")
+            != digest(json_bytes(mapping))
+        ):
+            raise ValueError("mapping provider differs from the scheduled module")
         fourier = self.operator_backends.get("fourier")
         if (fourier is not None or "fourier_binding_sha256" in module) and (
             fourier is None
@@ -414,6 +426,8 @@ class Lowerer:
                 raise ValueError(f"unsupported scalar {spec!r}")
             return named(_SCALARS[spec])
         kind = spec["kind"]
+        if is_mapping_type(spec):
+            return mapping_reference(spec, self)
         if kind == "product_ref":
             return self.products.reference(spec, self)
         if kind == "sequence_ref":
@@ -1387,6 +1401,8 @@ class Lowerer:
             return self.products.expression(expr, self)
         if op.startswith("sequence_"):
             return sequence_expression(expr, self)
+        if op.startswith(("mapping_", "structured_")):
+            return mapping_expression(expr, self)
         if op == "literal":
             return self.literal(expr["type"], expr["value"])
         if op == "text_print":

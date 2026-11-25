@@ -1656,8 +1656,12 @@ def construct(frame, node, target, args, keywords, steps, discard):
     )
 
 
-def index(frame, node, steps, rhs=None, discard=False):
-    base = frame.evaluate(node["base"], steps)
+def index(frame, node, steps, rhs=None, discard=False, *, evaluated_base=None):
+    base = (
+        frame.evaluate(node["base"], steps)
+        if evaluated_base is None
+        else evaluated_base
+    )
     if is_sequence(base.kind):
         base = frame.effect(base.value, base.kind, steps, facts=base.facts)
     axes = []

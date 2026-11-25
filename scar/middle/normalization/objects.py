@@ -3,7 +3,7 @@
 from dataclasses import dataclass, field
 
 from scar.contract import walk_operations
-from . import enumerations, values
+from . import enumerations, products, values
 from .values import Value, literal
 
 
@@ -12,6 +12,104 @@ def plain_definition(node):
         node.get(key)
         for key in ("defaults", "decorators", "annotations", "type_params")
     ) and not any(value is not None for value in node.get("keyword_defaults", ()))
+
+
+def bind_function_definition(frame, node, steps):
+    """Capture module defaults once, independently of body invocation."""
+    symbol = node["symbol"]
+    definition = frame.project.functions.get(
+        symbol
+    ) or frame.project.function_definitions.get(symbol, {})
+    if (
+        not frame.initializing
+        or frame.dynamic
+        or definition.get("python_scope", {}).get("kind") != "function"
+        or definition.get("python_scope", {}).get("module") != frame.module
+        or definition.get("owner_class")
+        or node.get("target", {}).get("cell")
+        or any(node.get(key) for key in ("decorators", "annotations", "type_params"))
+    ):
+        frame.fail(
+            node,
+            "function_creation",
+            "a function definition requires one module activation without incoming closure cells, decorators, annotations or type parameters",
+        )
+    if symbol in frame.project.function_defaults:
+        frame.fail(
+            node,
+            "function_redefinition",
+            "another function instance requires an activation-specific default store",
+        )
+    expressions = {
+        "defaults": node.get("defaults", []),
+        "keyword_defaults": node.get("keyword_defaults", []),
+    }
+    bindings = {}
+    for param in definition.get("params", []):
+        source = param.get("default_from")
+        if source is None:
+            continue
+        if (
+            not isinstance(source, dict)
+            or set(source) != {"field", "index"}
+            or source["field"] not in expressions
+            or type(source["index"]) is not int
+            or not 0 <= source["index"] < len(expressions[source["field"]])
+            or expressions[source["field"]][source["index"]] is None
+            or (
+                param.get("binding")
+                not in (
+                    {"posonly", "positional"}
+                    if source["field"] == "defaults"
+                    else {"keywordonly"}
+                )
+            )
+        ):
+            frame.fail(node, "function_default_binding", "invalid default source port")
+        key = source["field"], source["index"]
+        if key in bindings:
+            frame.fail(
+                node, "function_default_binding", "a default port is bound twice"
+            )
+        bindings[key] = param["name"]
+    expected = {
+        (field, index)
+        for field, items in expressions.items()
+        for index, expression in enumerate(items)
+        if expression is not None
+    }
+    if set(bindings) != expected:
+        frame.fail(
+            node, "function_default_binding", "default source ports are incomplete"
+        )
+    captured = {}
+    # These lists are already in the compiler-captured source evaluation order.
+    for field, items in expressions.items():
+        for index, expression in enumerate(items):
+            if expression is None:
+                continue
+            value = frame.evaluate(expression, steps)
+            if not values.runtime(value.kind):
+                frame.fail(
+                    node,
+                    "function_default_value",
+                    "a default needs a persistent runtime value",
+                )
+            slot = f"@function-default/{symbol}/{field}/{index}"
+            if slot in frame.project.globals:
+                frame.fail(
+                    node,
+                    "function_redefinition",
+                    "default storage is already initialized",
+                )
+            frame.project.globals[slot] = value.kind
+            stored = Value(value.kind, None, products.returned_facts(value)).at(
+                slot, scope="global"
+            )
+            steps.append(dict(op="assign", target=stored.value, value=value.value))
+            captured[bindings[field, index]] = stored
+    frame.project.function_defaults[symbol] = captured
+    return Value("function", symbol)
 
 
 def _site(name, location):

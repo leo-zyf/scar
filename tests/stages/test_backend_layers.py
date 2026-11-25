@@ -2948,3 +2948,281 @@ def test_registry_diagnostic_preserves_observation_scope_and_actual_reads(tmp_pa
     corrupt["entry_environment"]["analysis"]["application_initial_cache"] = "proven"
     with pytest.raises(ValueError, match="application premises"):
         runtime.import_effects(dict(functions=[], source_imports=corrupt), {})
+
+
+def test_ordered_mapping_views_and_fresh_construction_cross_native_layers(tmp_path):
+    from scar.backend.planning import _qualify
+    from scar.contract import MAPPING_PROFILE, digest, json_bytes
+
+    m, s, view, iterator = [
+        dict(kind=k, profile=MAPPING_PROFILE)
+        for k in (
+            "mapping_ref",
+            "structured_value",
+            "mapping_items_ref",
+            "mapping_iterator_ref",
+        )
+    ]
+    pair = dict(kind="product_ref", items=["text", s])
+    profile = dict(
+        interpreter="fixture",
+        unicode_version="fixture",
+        nonprintable=[[0, 31], [127, 160]],
+    )
+    profile_id = digest(json_bytes(profile))
+
+    def op(name, result, **ports):
+        effects = ["STATE"]
+        if name in (
+            "mapping_make",
+            "mapping_put",
+            "mapping_merge",
+            "mapping_items",
+            "mapping_iterator",
+            "mapping_next",
+        ):
+            effects = ["MEM", "STATE"]
+        elif name in ("structured_pack", "structured_compare"):
+            effects = ["VAL", "STATE"]
+        raises = name not in (
+            "mapping_current",
+            "mapping_size",
+            "structured_truth",
+            "structured_compare",
+            "structured_is_mapping",
+            "mapping_identity",
+        )
+        return dict(
+            op=name,
+            type=result,
+            profile=MAPPING_PROFILE,
+            operator_family="builtin_scalar_mapping",
+            semantics_version=1,
+            effects=effects,
+            may_raise=raises,
+            **ports,
+        )
+
+    def lit(value, t="text"):
+        return dict(op="literal", type=t, value=value)
+
+    def var(name, t):
+        return dict(op="var", name=name, type=t)
+
+    def decl(name, init):
+        return dict(op="decl", name=name, type=init["type"], init=init)
+
+    def expr(value):
+        return dict(op="expr", value=value)
+
+    def pack(v):
+        return op(
+            "structured_pack",
+            s,
+            tag="mapping_ref" if v["type"] == m else v["type"],
+            value=v,
+        )
+
+    def make(*entries):
+        return op(
+            "mapping_make",
+            m,
+            entries=[dict(key=lit(k), value=pack(v)) for k, v in entries],
+        )
+
+    def put(base, key, value):
+        return expr(
+            op(
+                "mapping_put",
+                "unit",
+                base=base,
+                key=lit(key),
+                value=pack(value),
+                acyclicity=dict(
+                    semantics_version=1, rule="nonmapping_scalar", tag=value["type"]
+                ),
+            )
+        )
+
+    def get(base, key):
+        return op("mapping_get", s, base=base, key=lit(key), text_profile=profile_id)
+
+    def advance(base):
+        return op("mapping_next", "bool", base=base)
+
+    def current(base):
+        return op(
+            "mapping_current",
+            pair,
+            base=base,
+            requires=["successful_mapping_next_for_this_iterator"],
+        )
+
+    def field(base, index):
+        return dict(
+            op="product_get",
+            base=base,
+            type=pair["items"][index],
+            index=index,
+            effects=["STATE"],
+        )
+
+    def equals(left, right):
+        if left["type"] == s:
+            return op(
+                "structured_compare", "bool", operator="eq", left=left, right=right
+            )
+        return dict(op="binary", operator="eq", left=left, right=right, type="bool")
+
+    def check(condition):
+        return dict(
+            op="if",
+            condition=dict(op="unary", operator="not", value=condition),
+            then=[dict(op="return", value=lit(1, "i32"))],
+            **{"else": []},
+        )
+
+    def catches(name, arg, value, category):
+        return dict(
+            name=name,
+            params=[dict(name=arg["name"], type=arg["type"])],
+            result="bool",
+            body=[
+                dict(
+                    op="try",
+                    body=[expr(value)],
+                    handlers=[
+                        dict(
+                            categories=[category],
+                            binding=None,
+                            body=[dict(op="return", value=lit(True, "bool"))],
+                        )
+                    ],
+                    **{"else": [], "finally": []},
+                ),
+                dict(op="return", value=lit(False, "bool")),
+            ],
+        )
+
+    def caught(name, arg):
+        return dict(op="call", callee=name, args=[arg], type="bool")
+
+    d, child = var("d", m), var("child", m)
+    cursor = var("cursor", iterator)
+    fresh = dict(semantics_version=1, rule="unpublished_fresh_builder")
+    body = [
+        decl("child", make()),
+        decl(
+            "d",
+            make(("b", lit("first")), ("a", lit("second")), ("b", lit("overwritten"))),
+        ),
+        dict(
+            op="if",
+            condition=lit(True, "bool"),
+            then=[
+                expr(
+                    op(
+                        "mapping_merge",
+                        "unit",
+                        base=d,
+                        source=make(("nested", child)),
+                        acyclicity=fresh,
+                    )
+                )
+            ],
+            **{"else": []},
+        ),
+        decl(
+            "alias",
+            op("structured_as_mapping", m, value=get(d, "nested"), access="subscript"),
+        ),
+        put(var("alias", m), "leaf", lit("same")),
+        check(
+            op(
+                "mapping_identity",
+                "bool",
+                left=child,
+                right=var("alias", m),
+                operator="is",
+            )
+        ),
+        check(equals(get(child, "leaf"), lit("same"))),
+        decl("view", op("mapping_items", view, base=d)),
+        put(d, "late", lit("before iteration")),
+        decl("cursor", op("mapping_iterator", iterator, value=var("view", view))),
+        check(advance(cursor)),
+        decl("held", current(cursor)),
+        put(d, "b", lit("changed")),
+        check(equals(field(var("held", pair), 0), lit("b"))),
+        check(equals(field(var("held", pair), 1), lit("overwritten"))),
+        put(d, "a", lit("new second")),
+        check(advance(cursor)),
+        check(equals(field(current(cursor), 0), lit("a"))),
+        check(equals(field(current(cursor), 1), lit("new second"))),
+        put(d, "insert", lit(9007199254740993, "i64")),
+        check(caught("changed_size", cursor)),
+        check(caught("missing_key", d)),
+        check(op("structured_truth", "bool", value=get(d, "insert"))),
+        check(op("structured_is_mapping", "bool", value=get(d, "nested"))),
+        check(equals(op("mapping_size", "i64", base=d), lit(5, "i64"))),
+        dict(op="return", value=lit(0, "i32")),
+    ]
+    functions = [
+        dict(name="main", params=[], result="i32", body=body),
+        catches("changed_size", cursor, advance(cursor), "runtime_error"),
+        catches("missing_key", d, get(d, "\n\u00a0"), "key_error"),
+    ]
+    module = dict(entry="main", externs=[], text_profiles={profile_id: profile})
+    forged = op(
+        "mapping_put", "unit", base=d, key=lit("self"), value=pack(d), acyclicity=fresh
+    )
+    for unsafe_body in (
+        [decl("d", make()), expr(forged)],
+        [
+            decl("d", make()),
+            decl("alias", d),
+            expr(op("mapping_merge", "unit", base=d, source=make(), acyclicity=fresh)),
+        ],
+    ):
+        _, _, issues = _qualify(
+            dict(module, functions=[dict(name="main", body=unsafe_body)])
+        )
+        assert (
+            issues[0]["code"] == "missing_operator_binding"
+            and "unpublished fresh builder" in issues[0]["detail"]
+        )
+    source = tmp_path / "exec-ir.json"
+    write_json(
+        source,
+        document(
+            IR,
+            status="READY",
+            module=module,
+            functions=[member(tmp_path, "functions", fn) for fn in functions],
+        ),
+    )
+    for stage, filename in [
+        ("B1", "exec-ir.json"),
+        ("B2a", "scheduled-ir.json"),
+        ("B2b", "target-ir.json"),
+        ("B3", "cpp20.json"),
+    ]:
+        subprocess.run(
+            [
+                sys.executable,
+                "-B",
+                "-c",
+                _RUN_LAYER,
+                stage,
+                tmp_path / filename,
+                tmp_path,
+                *(["1"] if stage == "B2a" else []),
+            ],
+            env=dict(
+                os.environ, PYTHONPATH=str(Path(scar.__file__).resolve().parents[1])
+            ),
+            check=True,
+            timeout=90,
+        )
+    subprocess.run([tmp_path / "project/bin/scar_entry"], check=True)
+    assert (tmp_path / "project/include/scar/mapping.hpp").is_file()

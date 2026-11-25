@@ -8,6 +8,9 @@ import struct
 
 from scar.contract import (
     array_rank_domain,
+    MAPPING_PROFILE,
+    MAPPING_TYPES,
+    mapping_value_type,
     product_items,
     sequence_element as _sequence_element,
 )
@@ -42,6 +45,14 @@ _OBJECT_PREFIX = "object_ref:"
 _PRODUCT_PREFIX = "product_ref:"
 _SEQUENCE_PREFIX = "sequence_ref:"
 _SEQUENCE_VAR_PREFIX = "sequence_var:"
+
+
+def is_mapping(kind):
+    return kind == "mapping_ref"
+
+
+def is_structured(kind):
+    return kind == "structured_value"
 
 
 def is_sequence(kind):
@@ -189,6 +200,8 @@ def choice(kinds):
 
 
 def wire(kind):
+    if kind in MAPPING_TYPES:
+        return dict(kind=kind, profile=MAPPING_PROFILE)
     if (variable := sequence_variable_id(kind)) is not None:
         return dict(kind="sequence_ref", element=dict(kind="m2_typevar", id=variable))
     if is_sequence(kind):
@@ -223,6 +236,8 @@ def wire(kind):
 def from_wire(spec):
     if not isinstance(spec, dict):
         return spec
+    if spec.get("kind") in MAPPING_TYPES:
+        return mapping_value_type(spec)
     if spec.get("kind") == "product_ref":
         return product_kind([from_wire(member) for member in product_items(spec)])
     if spec.get("kind") == "sequence_ref":
@@ -239,6 +254,7 @@ def from_wire(spec):
 def runtime(kind):
     return (
         kind in SCALARS
+        or kind in MAPPING_TYPES
         or kind.startswith("handle:process:")
         or is_array(kind)
         or is_product(kind)

@@ -456,6 +456,8 @@ def _lower_image(path, revision, scheduled, destination):
     publish(runtime, support)
     headers = []
     lowerer.used_sdk_headers.add("exceptions.hpp")
+    if "mapping.hpp" in lowerer.used_sdk_headers:
+        lowerer.used_sdk_headers.add("text.hpp")
     if "format.hpp" in lowerer.used_sdk_headers:
         lowerer.used_sdk_headers.add("array.hpp")
     if "array_io.hpp" in lowerer.used_sdk_headers:
@@ -468,6 +470,7 @@ def _lower_image(path, revision, scheduled, destination):
         if name not in {
             "array.hpp",
             "array_io.hpp",
+            "mapping.hpp",
             "fourier.hpp",
             "host.hpp",
             "exceptions.hpp",

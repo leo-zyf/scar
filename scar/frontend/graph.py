@@ -23,6 +23,7 @@ _CONTROL = {
 }
 
 _WRITE_PORT = {
+    "assignment_expression": "target",
     "assign": "target",
     "assign_many": "targets",
     "for": "target",
@@ -279,6 +280,16 @@ def function_graph(function, revision):
             field = value[key]
             if key == "args" and op in _CALLS:
                 row[key] = arguments(value, scope, number)
+            elif op == "mapping_comprehension" and key == "generators":
+                row[key] = [
+                    {
+                        port: encode(
+                            operand, scope, "write" if port == "target" else "read"
+                        )
+                        for port, operand in clause.items()
+                    }
+                    for clause in field
+                ]
             elif op == "with_context" and key == "resources":
                 row[key] = [
                     {
@@ -326,6 +337,8 @@ def function_graph(function, revision):
                 if (
                     op == "unpack"
                     and key == "items"
+                    or op == "starred"
+                    and key == "value"
                     or op == "select"
                     and key in {"then", "else"}
                     or op == "binary"

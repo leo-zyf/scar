@@ -332,6 +332,7 @@ def _print_image(path, product, directory, runtime, jobs, image=None):
         if header["output"] not in {
             "include/scar/array.hpp",
             "include/scar/array_io.hpp",
+            "include/scar/mapping.hpp",
             "include/scar/fourier.hpp",
             "include/scar/host.hpp",
             "include/scar/exceptions.hpp",

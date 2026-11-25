@@ -25,7 +25,7 @@ class BlockOtherStages:
 phase = sys.argv[1]
 forbidden = {'scar.' + name for name in ('frontend', 'middle', 'backend') if name != phase}
 if phase != "frontend":
-    forbidden.update(("numpy", "matplotlib"))
+    forbidden.update(("numpy", "scipy", "matplotlib"))
 sys.meta_path.insert(0, BlockOtherStages())
 from scar.cli import main
 raise SystemExit(main(sys.argv[2:]))
@@ -60,6 +60,64 @@ def _payloads(graph, document):
         json.loads((graph / unit["graph"]["path"]).read_bytes())
         for unit in document["units"]
     ]
+
+
+def test_structured_mapping_recursion_and_defaults_survive_source_removal(tmp_path):
+    entry = tmp_path / "entry.py"
+    entry.write_text("""def clean(data):
+    if isinstance(data, dict):
+        return {key: clean(value) for key, value in data.items()
+                if value != "" and clean(value) != ""}
+    return data
+
+def retain(data={"current": "before"}):
+    previous = data["current"]
+    data["current"] = "after"
+    return previous
+
+def never_called(default={"created": "once"}):
+    return default
+
+key = "outer binding"
+result = clean({"outer": {"keep": "ready", "drop": ""}, "flag": True})
+print(key == "outer binding", result["outer"]["keep"] == "ready")
+print(result["flag"] != "", not bool("false".lower().replace("false", "")))
+print(retain() == "before", retain() == "after")
+""")
+    expected = subprocess.run(
+        [sys.executable, "-B", entry], capture_output=True, timeout=30
+    )
+    assert expected.returncode == 0 and not expected.stderr
+    assert expected.stdout == b"True True\nTrue True\nTrue True\n"
+    graph, plan, delivery = (tmp_path / name for name in ("graph", "plan", "delivery"))
+    _stage(tmp_path, "frontend", "build", "--entry", entry, "--out", graph)
+    entry.unlink()
+    planned = _stage(tmp_path, "middle", "plan", "--graph", graph, "--out", plan)
+    assert planned["status"] == "READY"
+    shutil.rmtree(graph)
+    compiled = _stage(tmp_path, "backend", "compile", "--ir", plan, "--out", delivery)
+    shutil.rmtree(plan)
+    actual = subprocess.run([compiled["executable"]], capture_output=True, timeout=30)
+    assert (actual.returncode, actual.stdout, actual.stderr) == (
+        expected.returncode,
+        expected.stdout,
+        expected.stderr,
+    )
+
+    # Recursion must consume a proven descendant, not its unchanged input.
+    entry.write_text(
+        "def again(data):\n"
+        "    if isinstance(data, dict):\n"
+        "        return again(data)\n"
+        "    return data\n"
+        'result = again({"key": "value"})\n'
+    )
+    graph, plan = (tmp_path / name for name in ("cyclic-graph", "cyclic-plan"))
+    _stage(tmp_path, "frontend", "build", "--entry", entry, "--out", graph)
+    entry.unlink()
+    _stage(tmp_path, "middle", "plan", "--graph", graph, "--out", plan, returncode=2)
+    rejected = json.loads((plan / "plan.json").read_bytes())
+    assert rejected["issues"][0]["code"] == "python.recursive_progress"
 
 
 @pytest.mark.parametrize("controller", [False, True])

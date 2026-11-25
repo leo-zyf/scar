@@ -462,6 +462,9 @@ def product_items(spec):
         if not isinstance(value, dict):
             return False
         kind = value.get("kind")
+        if kind in MAPPING_TYPES:
+            mapping_value_type(value)
+            return True
         if kind == "product_ref":
             product_items(value)
             return True
@@ -489,6 +492,30 @@ def product_items(spec):
     ):
         raise ValueError("product requires fixed ordered managed value types")
     return tuple(spec["items"])
+
+
+MAPPING_PROFILE = "builtin-scalar-map-v1"
+MAPPING_TYPES = frozenset(
+    {"mapping_ref", "structured_value", "mapping_items_ref", "mapping_iterator_ref"}
+)
+
+
+def mapping_value_type(spec):
+    """A tagged scalar/map value is distinct from an identity-bearing mapping.
+
+    This profile has text keys and preserves unit, bool, i64, f64 and text
+    alternatives alongside shared nested mappings. It grants no custom-key,
+    cyclic-object or scalar-identity protocol.
+    """
+    if (
+        not isinstance(spec, dict)
+        or set(spec) != {"kind", "profile"}
+        or not isinstance(spec.get("kind"), str)
+        or spec["kind"] not in MAPPING_TYPES
+        or spec.get("profile") != MAPPING_PROFILE
+    ):
+        raise ValueError("invalid structured mapping value type")
+    return spec["kind"]
 
 
 def sequence_element(spec):
