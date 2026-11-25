@@ -5193,6 +5193,46 @@ def test_import_effect_summaries_keep_named_ports_and_unknown_callbacks():
     assert effect["producer_sites"][0]["opcode"] == producer["op"]
 
 
+@pytest.mark.parametrize(
+    ("updates", "bounded"),
+    [
+        ("if count % 2:\n    count += 1", True),
+        (f"if count % 2:\n    count = {10**640}", False),
+        ("for i in range(3):\n    count = count * count", False),
+    ],
+)
+def test_decimal_global_uses_ranges_from_every_initializer_store(
+    tmp_path, updates, bounded
+):
+    from scar.contract import walk_operations
+    from scar.frontend import build
+    from scar.middle.binding import bind
+    from scar.middle.normalization.protocols import normalize_protocols
+
+    (tmp_path / "settings.py").write_text(
+        "def truncate(value):\n    return int(value)\ncount = truncate(1e300)\n"
+        + updates
+        + "\ndef show():\n    return str(count)\n"
+    )
+    entry = tmp_path / "entry.py"
+    entry.write_text("import settings\nprint(settings.show())\n")
+    graph = tmp_path / "graph"
+    build(entry, graph)
+    module, issues, _ = bind(json.loads((graph / "graph.json").read_bytes()), graph)
+    assert not issues
+    normalized, _, issues = normalize_protocols(module)
+    if bounded:
+        assert not issues
+        (display,) = [
+            op
+            for op in walk_operations(normalized["functions"])
+            if op.get("operation") == "decimal"
+        ]
+        assert display["maximum_digits"] == 309
+    else:
+        assert [issue["code"] for issue in issues] == ["python.integer_text_limit"]
+
+
 def test_exact_text_methods_preserve_binding_unicode_and_fresh_containers():
     from types import SimpleNamespace
     import unicodedata

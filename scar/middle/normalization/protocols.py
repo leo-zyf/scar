@@ -108,7 +108,7 @@ def _join(paths, sequence_domain=None):
 
 
 def _global_bindings(functions):
-    """Prove single module bindings without loop/reentrant or alias writes."""
+    """Identify single bindings and the complete writer set for module slots."""
     writes, repeated = {}, set()
     for function in functions.values():
         pending = [(function["body"], function["python_scope"]["kind"] != "module")]
@@ -130,13 +130,19 @@ def _global_bindings(functions):
             for target in values.written_targets(node):
                 if target.get("op") == "var" and target.get("scope") == "global":
                     name = target["name"]
-                    writes[name] = writes.get(name, 0) + 1
+                    writes.setdefault(name, []).append((function["name"], id(target)))
                     if multiple:
                         repeated.add(name)
             pending.extend((child, multiple) for child in node.values())
-    return set(writes), {
-        name for name, count in writes.items() if count == 1 and name not in repeated
+    single = {name for name, sites in writes.items() if len(sites) == 1} - repeated
+    multiple = {
+        name: (sites[0][0], dict.fromkeys(target for _, target in sites))
+        for name, sites in writes.items()
+        if len(sites) > 1
+        and name not in repeated
+        and all(owner == sites[0][0] for owner, _ in sites)
     }
+    return set(writes), single, multiple
 
 
 class _Unclosed(Exception):
@@ -267,7 +273,9 @@ class _Project:
         self.source_imports = host_protocols.ImportOccurrences(
             functions, entry_environment=entry_environment
         )
-        self.shadow, self.single_bind_globals = _global_bindings(functions)
+        self.shadow, self.single_bind_globals, self.global_writers = _global_bindings(
+            functions
+        )
         self.sequences = sequences.Domains(functions, self.single_bind_globals)
 
     def require_operator(self, family, operation, **contract):
@@ -920,6 +928,12 @@ class _Frame:
                 facts = products.returned_facts(value)
             elif "stream_origin" in value.facts:
                 facts = {"stream_origin": value.facts["stream_origin"]}
+        elif value.kind == "integer" and name in self.project.global_writers:
+            owner, writers = self.project.global_writers[name]
+            # A completed compilation supplies all writes in this initializer's
+            # code. Retain only an interval true of every possible assignment.
+            if owner in self.project.closed and all(writers.values()):
+                facts = values.join_integer_ranges(writers.values())
         return _Value(value.kind, value.value, facts)
 
     def ref(self, node):
@@ -1180,6 +1194,17 @@ class _Frame:
         scope[name] = variable
         if global_:
             self.project.imports.binding_written(name)
+            if value.kind == "integer" and name in self.project.global_writers:
+                _, writers = self.project.global_writers[name]
+                site = id(target)
+                if site in writers:
+                    previous_write = writers[site]
+                    incoming = (
+                        (value,) if previous_write is None else (previous_write, value)
+                    )
+                    writers[site] = _Value(
+                        "integer", None, values.join_integer_ranges(incoming)
+                    )
         steps.append(dict(op="assign", target=variable.value, value=value.value))
 
     @property
