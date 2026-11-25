@@ -4,6 +4,7 @@ from pathlib import Path
 
 from scar.contract import (
     IR,
+    EXECUTION_ANNOTATIONS,
     PHYSICAL,
     array_rank_domain,
     copy_member,
@@ -18,6 +19,7 @@ from scar.contract import (
     validate_images,
     write_json,
     walk_operations,
+    walk_records,
 )
 from scar.host import array_sdk
 from . import fourier, mpi, runtime, toolchain
@@ -77,71 +79,61 @@ def _observed_operators(module):
         module.get(key, ()) for key in ("functions", "globals", "records", "entry_abi")
     ]
     pending.append(external)
-    while pending:
-        node = pending.pop()
-        if isinstance(node, dict):
-            op = node.get("op")
-            if op is not None:
-                family = node.get("operator_family")
-                if family is not None:
-                    if (
-                        not isinstance(family, str)
-                        or not family
-                        or not isinstance(op, str)
-                    ):
-                        raise ValueError("invalid operator family or operation tag")
-                    observed.setdefault(family, set()).add(op)
-                if (
-                    op in _ARRAY_OPERATIONS
-                    or family == "ndarray"
-                    or (
-                        isinstance(op, str)
-                        and op.startswith("array_")
-                        and family is None
-                        and op
-                        not in {"array_source_open", "array_text_read", "array_fft"}
-                        and any(
-                            isinstance(t, dict) and t.get("kind") == "ndarray"
-                            for t in _array_ports(node)
-                        )
+    for node in walk_records(pending, exclude_fields=EXECUTION_ANNOTATIONS):
+        op = node.get("op")
+        if op is not None:
+            family = node.get("operator_family")
+            if family is not None:
+                if not isinstance(family, str) or not family or not isinstance(op, str):
+                    raise ValueError("invalid operator family or operation tag")
+                observed.setdefault(family, set()).add(op)
+            if (
+                op in _ARRAY_OPERATIONS
+                or family == "ndarray"
+                or (
+                    isinstance(op, str)
+                    and op.startswith("array_")
+                    and family is None
+                    and op not in {"array_source_open", "array_text_read", "array_fft"}
+                    and any(
+                        isinstance(t, dict) and t.get("kind") == "ndarray"
+                        for t in _array_ports(node)
                     )
-                ):
-                    observed.setdefault("ndarray", set()).add(op)
-                    array_nodes.append(node)
-                    if op in {"array_binary", "array_update"}:
-                        for role in ("left", "right"):
-                            ty = node.get(role, {}).get("type")
-                            if ty in ("f64", "c128"):
-                                elements.add(ty)
-                if op == "array_fft" or family == "fourier":
-                    observed.setdefault("fourier", set()).add(op)
-                    fourier_nodes.append(node)
-                if op in {"array_text_read", "array_source_open"}:
-                    observed.setdefault(
-                        (
-                            "text_array_io"
-                            if op == "array_text_read"
-                            else "text_array_source"
-                        ),
-                        set(),
-                    ).add(op)
-                if (
-                    op in ("process_spawn", "process_request")
-                    or op == "host_call"
-                    and node.get("interface") in {"process.stdout", "process.wait"}
-                ):
-                    observed.setdefault("process", set()).add(op)
-                if op == "process_request":
-                    process_requests.append(node)
-            if node.get("kind") == "ndarray":
-                observed.setdefault("ndarray", set())
-                element = node.get("element")
-                elements.add(element if isinstance(element, str) else "unspecified")
-            if mpi.dependency(node):
-                observed.setdefault("mpi", set())
-            pending.extend(node.values())
-        elif isinstance(node, (tuple, list)):
-            pending.extend(node)
+                )
+            ):
+                observed.setdefault("ndarray", set()).add(op)
+                array_nodes.append(node)
+                if op in {"array_binary", "array_update"}:
+                    for role in ("left", "right"):
+                        ty = node.get(role, {}).get("type")
+                        if ty in ("f64", "c128"):
+                            elements.add(ty)
+            if op == "array_fft" or family == "fourier":
+                observed.setdefault("fourier", set()).add(op)
+                fourier_nodes.append(node)
+            if op in {"array_text_read", "array_source_open"}:
+                observed.setdefault(
+                    (
+                        "text_array_io"
+                        if op == "array_text_read"
+                        else "text_array_source"
+                    ),
+                    set(),
+                ).add(op)
+            if (
+                op in ("process_spawn", "process_request")
+                or op == "host_call"
+                and node.get("interface") in {"process.stdout", "process.wait"}
+            ):
+                observed.setdefault("process", set()).add(op)
+            if op == "process_request":
+                process_requests.append(node)
+        if node.get("kind") == "ndarray":
+            observed.setdefault("ndarray", set())
+            element = node.get("element")
+            elements.add(element if isinstance(element, str) else "unspecified")
+        if mpi.dependency(node):
+            observed.setdefault("mpi", set())
     return observed, elements, array_nodes, process_requests, fourier_nodes
 
 
@@ -479,6 +471,11 @@ def _qualify(module, image_context=None):
                 requirement=family,
                 target="cpu-cxx20",
                 detail=detail,
+                **(
+                    {"registry_checks": runtime.registry_checks(module)}
+                    if family == "module_registry"
+                    else {}
+                ),
             )
         )
     native, runtime_issues = runtime.qualify(module, probe=not issues)

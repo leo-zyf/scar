@@ -58,6 +58,10 @@ def _plan_image(graph, folder, revision, out, *, optimize_graph, shape, trip_cou
         logical_optimization=optimize_graph,
     )
     import_analysis = {}
+    if "python_entry_environment" in module:
+        import_analysis["python_entry_environment"] = member(
+            out, "analysis", module["python_entry_environment"]
+        )
     if "source_imports" in module:
         _, _, product = open_product(ir_path, "exec-ir.json", IR)
         import_analysis["source_imports"] = product["module"]["source_imports"]

@@ -100,6 +100,114 @@ print(json.dumps(dict(path=str(path))))
     assert sealed["status"] == "READY"
 
 
+def test_entry_environment_stays_observed_and_import_reads_keep_each_binding(tmp_path):
+    import shutil
+
+    from scar.contract import read_member, walk_operations
+    from scar.frontend import build
+
+    source = tmp_path / "entry.py"
+    source.write_text(
+        "import os\nalias = os\nimport time\n"
+        "print(os.getcwd())\nprint(alias.path.exists('.'))\n"
+    )
+    request = tmp_path / "request.json"
+    write_json(
+        request,
+        dict(
+            source_root=".",
+            root_image="driver",
+            images=[
+                dict(
+                    id="driver",
+                    entry="__main__",
+                    output="driver",
+                    source=source.name,
+                    entry_environment=dict(
+                        kind="standalone_script",
+                        interpreter=sys.executable,
+                        flags=["-B"],
+                    ),
+                )
+            ],
+        ),
+    )
+    folder = tmp_path / "graph"
+    build(request, folder)
+    graph = json.loads((folder / "graph.json").read_bytes())
+    capture = graph["source_facts"]["python_entry_environment"]
+    graph["current_image"] = "driver"
+    source.unlink()
+    bound = _layer(
+        "binding",
+        """from pathlib import Path
+from scar.middle.binding import bind
+module,issues,count=bind(data['graph'],Path(data['folder']))
+assert not issues
+assert module['python_entry_environment']['analysis']['confidence']=='observed'
+bad=json.loads(json.dumps(data['graph']))
+bad['source_facts']['python_entry_environment']['analysis']['application_initial_cache']='proven'
+try: bind(bad,Path(data['folder']))
+except ValueError: pass
+else: raise AssertionError('compiler cache granted application initial state')
+print(json.dumps(module))
+""",
+        dict(graph=graph, folder=str(folder)),
+    )
+    assert bound["python_entry_environment"]["analysis"] == capture["analysis"]
+    shutil.rmtree(folder)
+    normalized = _layer(
+        "normalization",
+        """from scar.middle.normalization import normalize
+module,issues=normalize(data)
+assert not issues
+print(json.dumps(module))
+""",
+        bound,
+    )
+    imports = normalized["source_imports"]
+    assert imports["entry_environment"] == bound["python_entry_environment"]
+    assert (
+        imports["entry_environment"]["analysis"]["deployment_equivalence"] == "unproven"
+    )
+    guards = [
+        node
+        for function in normalized["functions"]
+        for node in walk_operations(function)
+        if node["op"] == "module_import_preserves" and node["module"] == "time"
+    ]
+    assert len(guards) == 1
+    requirement = guards[0]["checks"]["__main__"]["namespace"]
+    assert {read["member"] for read in requirement["binding_reads"]} == {"os", "alias"}
+    assert requirement["value_state_projection"] == "unproven"
+    assert (
+        requirement["requires"] == "same_namespace_bindings_and_reachable_value_state"
+    )
+    # A launch declaration plus a compiler-process observation still grants no
+    # native import-effect supplier. This must remain an actionable B1 refusal.
+    plan = tmp_path / "plan"
+    _layer(
+        "execution",
+        """from pathlib import Path
+from scar.middle.execution import prepare,seal
+module,_=prepare(product(data['module'],'M3'))
+seal(module,Path(data['out']),status='READY',graph_sha256='captured',contract={},logical_optimization=False)
+print(json.dumps({}))
+""",
+        dict(module=normalized, out=str(plan)),
+    )
+    ir = json.loads((plan / "exec-ir.json").read_bytes())
+    assert read_member(plan, ir["module"]["source_imports"]) == imports
+    from scar.backend.planning import schedule_ir
+
+    schedule_ir(plan, tmp_path / "schedule", policy="serial")
+    physical = json.loads((tmp_path / "schedule/physical-plan.json").read_bytes())
+    assert physical["status"] == "INCOMPLETE"
+    assert any(
+        issue["requirement"] == "module_registry" for issue in physical["issues"]
+    )
+
+
 def test_external_source_modules_keep_lookup_order_and_offline_stage_products(tmp_path):
     from base64 import urlsafe_b64encode
     from hashlib import sha256
@@ -523,7 +631,7 @@ start=frame.snapshot();steps=[]
 protected=dict(op='try',body=[imported],handlers=[dict(op='exception_handler',test=dict(op='python_builtin',name='ImportError'),name=None,binding=None,body=[dict(op='raise',has_exception=False,has_cause=False)],cleanup=[])],**{'else':[],'finally':[]})
 assert frame.sequence([protected],steps)
 assert not frame.dynamic and not frame.control_regions
-assert project.registry['package']['state']==project.registry['package.child']['state']=='ready'
+assert project.imports.registry_entry('package')['state']==project.imports.registry_entry('package.child')['state']=='ready'
 calls=[n['callee'] for n in walk_operations(project.closed['package_init']) if n['op']=='call']
 assert calls==['child_init'],calls
 assert [n['callee'] for n in walk_operations(steps) if n['op']=='call']==['package_init']
@@ -533,14 +641,14 @@ assert project.names['py:package:captured'].facts['exact']==7
 exceptional=frame.exceptional_snapshot(start,after,[imported])
 assert exceptional[2]['registry']['package']['state']=='unresolved'
 assert 'initializing' in exceptional[2]['registry']['package']['possible_states']
-frame.merge([after,exceptional]);assert project.registry['package']['state']=='unresolved'
+frame.merge([after,exceptional]);assert project.imports.registry_entry('package')['state']=='unresolved'
 joined=frame.snapshot()
 projected=frame.project_final_state(after,joined,joined)
 assert projected[2]['registry']['package']['state']=='ready'
 frame.restore(joined);project.unknown_registry('entry',{'site':'finally/callback'})
 projected=frame.project_final_state(after,joined,frame.snapshot())
 assert projected[2]['namespace_writes']['package']['state']=='unresolved'
-frame.restore(after);assert project.registry['package']['state']=='ready'
+frame.restore(after);assert project.imports.registry_entry('package')['state']=='ready'
 clone=frame.copy_state(after);clone[2]['registry'].pop('package')
 assert after[2]['registry']['package']['state']=='ready'
 frame.restore(after)
@@ -558,17 +666,17 @@ try:
     else: raise AssertionError('loop import acquired an unconditional proof')
 finally: frame.leave_control();frame.dynamic=0
 frame.restore(after)
-before=project.import_state()
+before=project.imports.snapshot()
 comparison=dict(op='module_import_preserves',type='bool',operator_family='module_registry',occurrence='foreign/import',direct_registry_keys=['foreign'],conditional_registry_keys=[],checks={})
 project.unknown_registry('entry',{'site':'foreign/import'})
 guarded=[]
 project.scoped_import('entry',{'site':'foreign/import'},comparison,guarded,before=before)
-assert project.registry['package']['state']=='unresolved'
+assert project.imports.registry_entry('package')['state']=='unresolved'
 assert project.registry_entry('package',{'site':'consumer'})['state']=='ready'
 assert guarded[0]['op']=='if'
 assert guarded[0]['else'][0]['value']['op']=='module_import_continuation_required'
 assert comparison['checks']['package']['registry']['requires']=='same_module_instance_and_complete'
-project.binding_written('py:package:fresh')
+project.imports.binding_written('py:package:fresh')
 project.observe_import('package','namespace',{'site':'fresh-read'},'fresh')
 assert 'namespace' not in comparison['checks']['package']
 project.observe_import('package','namespace',{'site':'prior-read'},'captured')
@@ -2189,7 +2297,7 @@ for imports in data:
     entry=dict(name='entry',params=[],body=imports,python_scope=dict(kind='module',module='test',initializer='entry',provider_sources=sources))
     project=_Project({'entry':entry})
     project.active.append('entry')
-    project.registry['held']=dict(state='ready',initializer='held:init',owner='entry')
+    project.imports.bind_registry('held',dict(state='ready',initializer='held:init',owner='entry'))
     frame=_Frame(project,entry,())
     steps=[]
     issue=None
@@ -4759,4 +4867,62 @@ print(json.dumps(dict(complete=module, partial=opened, upstream_partial=upstream
     assert any(
         row["symbol"] == "writer"
         for row in partial["artifact_analysis"]["constant_materializations"]
+    )
+
+
+def test_import_state_snapshots_share_guards_and_keep_epochs_monotone():
+    from scar.middle.normalization.import_state import ImportState, namespace_slot
+
+    state = ImportState(("driver", "package"), main_namespace="driver")
+    assert state.registry_key("driver") == "__main__"
+    assert state.namespace_owner("__main__") == "driver"
+    proof = dict(state="ready", initializer="package:init")
+    state.bind_registry("package", proof)
+    state.bind_registry("__main__", dict(state="initializing", initializer="entry"))
+    slot = namespace_slot("package", "value")
+    state.binding_written(slot)
+    marker, operation = dict(op="block", body=[]), dict(op="module_import_preserves")
+    state.bind_windows(
+        "package", [(marker, operation, proof, state.snapshot()["binding_epoch"])]
+    )
+    before = state.snapshot()
+    copied = state.copy_snapshot(before)
+    copied["registry"].clear()
+    copied["import_windows"]["package"].clear()
+    assert state.registry_entry("package") == proof
+    assert state.windows("package")[0][0] is marker
+    state.binding_written(slot)
+    later_epoch = state.binding_version(slot)
+    state.restore(before)
+    assert state.binding_version(slot) < later_epoch
+    state.binding_written(slot)
+    assert state.binding_version(slot) > later_epoch
+
+    # The state tables fork independently; the deferred source guard stays one
+    # operation rather than being copied into competing producers.
+    marker["op"] = "if"
+    assert state.windows("package")[0][0]["op"] == "if"
+    merged = state.join_snapshots([before, state.copy_snapshot(before)])
+    assert len(merged["import_windows"]["package"]) == 1
+    assert merged["import_windows"]["package"][0][1] is operation
+    changed = state.invalidate("entry", dict(site="opaque"))
+    after = state.snapshot()
+    assert state.registry_entry("package")["state"] == "unresolved"
+    assert state.namespace_change("__main__") is changed
+    assert state.windows("package") == ()
+    assert before["registry"]["package"] == proof
+    normal = state.join_snapshots([before, after])
+    assert normal["registry"]["package"]["state"] == "unresolved"
+    assert not normal["import_windows"]
+    exceptional = state.exceptional_prefix(before, before, may_write=True)
+    assert set(exceptional["registry"]["package"]["possible_states"]) == {
+        "absent",
+        "initializing",
+        "ready",
+        "unresolved",
+    }
+    assert not exceptional["import_windows"]
+    assert (
+        state.exceptional_prefix(before, before, may_write=False)["registry"]
+        == before["registry"]
     )

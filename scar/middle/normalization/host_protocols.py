@@ -7,6 +7,7 @@ from scar.contract import (
     json_bytes,
     python_provider_id,
     validate_source_literal,
+    validate_python_entry_environment,
 )
 from . import enumerations, scalars, sequences, text
 from .values import Value, argument_evidence, literal, sequence_kind, source_site, wire
@@ -390,7 +391,10 @@ _IMPORTLIB_PROFILE = "cpython-importlib-registry-v1"
 class ImportOccurrences:
     """One source IMPORT_NAME, its individual bindings and its effect producers."""
 
-    def __init__(self, functions):
+    def __init__(self, functions, *, entry_environment=None):
+        if entry_environment is not None:
+            validate_python_entry_environment(entry_environment)
+        self.entry_environment = entry_environment
         self.rows = {}
         self.nodes = {}
         self.last = {}
@@ -515,6 +519,11 @@ class ImportOccurrences:
             semantics_version=1,
             scope="source_import_occurrences",
             occurrences=list(self.rows.values()),
+            **(
+                {"entry_environment": self.entry_environment}
+                if self.entry_environment is not None
+                else {}
+            ),
         )
 
 
@@ -858,7 +867,7 @@ def _importlib_namespace(frame, node, source, steps):
             "importlib requires a sealed CPython standard-library source and matching unit provenance",
         )
     family, operation = "module_registry", "module_namespace_initialize"
-    previous = frame.project.registry.get("importlib", {})
+    previous = frame.project.imports.registry_entry("importlib")
     known = (
         previous.get("state") == "ready"
         and previous.get("source_provider_id") == stored["provider_id"]
@@ -926,7 +935,7 @@ def _importlib_namespace(frame, node, source, steps):
             **source_site(node),
         )
     )
-    frame.project.registry["importlib"] = proof
+    frame.project.imports.bind_registry("importlib", proof)
     return proof
 
 
@@ -963,7 +972,7 @@ def _import_module(frame, node, target, args, keywords):
             )
         parent = anchor.rsplit(".", level - 1)[0] if level > 1 else anchor
         module = ".".join((parent, suffix)) if suffix else parent
-    proof = frame.project.registry.get("importlib", {})
+    proof = frame.project.imports.registry_entry("importlib")
     if proof.get("state") != "ready" or proof != target.facts.get("namespace_instance"):
         frame.fail(
             node,
@@ -1026,7 +1035,7 @@ def import_provider(frame, node, steps):
             "namespace_instance": (
                 _importlib_namespace(frame, node, source, steps)
                 if primary
-                else frame.project.registry.get("importlib", {})
+                else frame.project.imports.registry_entry("importlib")
             ),
         }
     if module == "os.path":

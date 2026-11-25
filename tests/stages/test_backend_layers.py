@@ -2763,3 +2763,188 @@ def test_native_ortho_fourier_binding_survives_sdk_relocation(tmp_path, monkeypa
         "sealed/math:101: RuntimeWarning: invalid value encountered in fft",
         "  transform(data)",
     ]
+
+
+def test_registry_diagnostic_preserves_observation_scope_and_actual_reads(tmp_path):
+    from copy import deepcopy
+
+    from scar.backend.planning import runtime, schedule_ir
+    from scar.contract import digest, json_bytes, read_member
+
+    environment = dict(
+        semantics_version=1,
+        entries=[dict(image="driver", declaration=dict(kind="standalone_script"))],
+        analysis=dict(
+            scope="analysis_process_snapshot",
+            confidence="observed",
+            deployment_equivalence="unproven",
+            application_initial_cache="unproven",
+            audit_hooks="unknown",
+            interpreter=dict(
+                implementation="cpython",
+                version="3.12",
+                executable="/capture/python",
+                prefix="/capture",
+                base_prefix="/capture",
+                image=dict(path="/capture/python", size=42, sha256="a" * 64),
+            ),
+            flags={},
+            search_path=[],
+            meta_path=[],
+            import_callable=dict(
+                kind="builtin_import", type="builtin_function_or_method"
+            ),
+            selected_module_cache=dict(held="present_module", missing="absent"),
+        ),
+    )
+    occurrence = dict(
+        id="source/import",
+        owner="main",
+        site="import-site",
+        activation="visited",
+        effect_coverage="PARTIAL",
+        obligations=["unresolved_initialization"],
+        producer_sites=[],
+    )
+    ledger = dict(
+        semantics_version=1,
+        scope="source_import_occurrences",
+        occurrences=[occurrence],
+        entry_environment=environment,
+    )
+    reads = [
+        dict(
+            member=f"member{i}",
+            analysis_binding_epoch=i,
+            consumer="reader",
+            site=f"read/{i}",
+            location=dict(file="reader.py", line=i + 1),
+        )
+        for i in range(9)
+    ]
+    checks = dict(
+        held=dict(
+            before=dict(state="ready"),
+            registry=dict(
+                requires="same_module_instance_and_complete", first_consumer="entry"
+            ),
+            namespace=dict(
+                requires="same_namespace_bindings_and_reachable_value_state",
+                first_consumer="reader",
+                first_member="member0",
+                binding_reads=reads,
+                value_state_projection="unproven",
+            ),
+        )
+    )
+    guard = dict(
+        op="module_import_preserves",
+        type="bool",
+        operator_family="module_registry",
+        occurrence=occurrence["id"],
+        site=occurrence["site"],
+        location=dict(file="driver.py", line=9),
+        module="dep",
+        checks=checks,
+    )
+    from scar.backend.planning import _qualify
+
+    historical = dict(
+        functions=[
+            dict(
+                name="main",
+                body=[],
+                source_evidence=guard,
+                state_contract=dict(
+                    discarded_type=dict(kind="ndarray", element="unsupported", rank=1)
+                ),
+            )
+        ]
+    )
+    assert _qualify(historical) == ({}, {}, [])
+    duplicate = dict(op="if", condition=guard, then=[], **{"else": []})
+    fn = dict(
+        name="main",
+        params=[],
+        result="i32",
+        body=[
+            dict(
+                op="if",
+                condition=guard,
+                then=[duplicate],
+                **{"else": []},
+                source_evidence=dict(guard, occurrence="not-executed"),
+            )
+        ],
+    )
+    source, out = tmp_path / "sealed", tmp_path / "scheduled"
+    write_json(
+        source / "exec-ir.json",
+        document(
+            IR,
+            status="READY",
+            module=dict(
+                entry="main", source_imports=member(source, "analysis", ledger)
+            ),
+            functions=[member(source, "functions", fn)],
+        ),
+    )
+    schedule = schedule_ir(source, out, policy="serial")
+    physical = json.loads((out / "physical-plan.json").read_bytes())
+    assert (
+        physical["status"]
+        == json.loads(schedule.read_bytes())["status"]
+        == "INCOMPLETE"
+    )
+    (issue,) = physical["issues"]
+    assert (issue["code"], issue["requirement"]) == (
+        "missing_operator_binding",
+        "module_registry",
+    )
+    summary = issue["registry_checks"]
+    assert (
+        summary["guard_count"],
+        summary["occurrence_count"],
+        summary["guard_variant_count"],
+    ) == (2, 1, 1)
+    (row,) = summary["occurrences"]
+    assert (row["owner"], row["occurrence"], row["site"], row["location"]) == (
+        "main",
+        occurrence["id"],
+        guard["site"],
+        guard["location"],
+    )
+    assert row["guard_copies"] == 2 and row["checks_sha256"] == digest(
+        json_bytes(checks)
+    )
+    registry, namespace = sorted(row["checks"], key=lambda c: c["domain"], reverse=True)
+    assert registry["requires"] == "same_module_instance_and_complete"
+    assert namespace["requires"] == "same_namespace_bindings_and_reachable_value_state"
+    assert namespace["value_state_projection"] == "unproven"
+    limit = summary["limits"]["binding_reads_per_check"]
+    assert (
+        namespace["binding_reads"] == reads[:limit]
+        and row["omitted_binding_reads"] == len(reads) - limit
+    )
+    audit = physical["source_import_effects"]
+    assert read_member(out, audit["ledger"]) == ledger
+    observation = audit["entry_environment"]
+    assert observation["entry_environment_sha256"] == digest(json_bytes(environment))
+    assert (
+        observation["scope"] == "analysis_process_snapshot"
+        and observation["confidence"] == "observed"
+    )
+    assert (
+        observation["application_initial_cache"]
+        == observation["deployment_equivalence"]
+        == "unproven"
+    )
+    assert (
+        observation["audit_hooks"] == "unknown"
+        and observation["selected_module_cache_count"] == 2
+    )
+    assert audit["occurrences"][0]["complete_effect_equivalence"] == "unproven"
+    corrupt = deepcopy(ledger)
+    corrupt["entry_environment"]["analysis"]["application_initial_cache"] = "proven"
+    with pytest.raises(ValueError, match="application premises"):
+        runtime.import_effects(dict(functions=[], source_imports=corrupt), {})

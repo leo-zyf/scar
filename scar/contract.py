@@ -19,6 +19,118 @@ WORKFLOW = "scar.workflow-graph"
 VERSION = 1
 
 
+def validate_python_entry_declaration(declaration):
+    """Validate a requested launch mode, without granting its startup premises."""
+    if (
+        not isinstance(declaration, dict)
+        or set(declaration) - {"kind", "interpreter", "flags"}
+        or not isinstance(declaration.get("kind"), str)
+        or declaration.get("kind")
+        not in {"standalone_script", "embedded", "unspecified"}
+    ):
+        raise ValueError("invalid Python entry environment declaration")
+    if "interpreter" in declaration and (
+        not isinstance(declaration["interpreter"], str)
+        or not Path(declaration["interpreter"]).is_absolute()
+        or "\0" in declaration["interpreter"]
+    ):
+        raise ValueError("Python entry interpreter needs an absolute path")
+    flags = declaration.get("flags", [])
+    if not isinstance(flags, list) or any(
+        not isinstance(flag, str) or not flag or "\0" in flag for flag in flags
+    ):
+        raise ValueError("Python entry flags must be argument strings")
+
+
+def validate_python_entry_environment(record):
+    """Check observed compiler startup facts without treating them as app state."""
+    if (
+        not isinstance(record, dict)
+        or type(record.get("semantics_version")) is not int
+        or record["semantics_version"] != 1
+        or not isinstance(record.get("entries"), list)
+        or not record["entries"]
+        or not isinstance(record.get("analysis"), dict)
+    ):
+        raise ValueError("invalid Python entry environment facts")
+    identities = set()
+    for entry in record["entries"]:
+        if not isinstance(entry, dict) or set(entry) != {"image", "declaration"}:
+            raise ValueError("invalid Python entry environment binding")
+        identity = entry["image"]
+        if identity is not None and (not isinstance(identity, str) or not identity):
+            raise ValueError("invalid Python entry image identity")
+        if identity in identities:
+            raise ValueError("duplicate Python entry environment binding")
+        identities.add(identity)
+        validate_python_entry_declaration(entry["declaration"])
+    analysis = record["analysis"]
+    if (
+        analysis.get("scope") != "analysis_process_snapshot"
+        or analysis.get("confidence") != "observed"
+        or analysis.get("audit_hooks") != "unknown"
+        or analysis.get("deployment_equivalence") != "unproven"
+        or analysis.get("application_initial_cache") != "unproven"
+    ):
+        raise ValueError("Python startup observation cannot grant application premises")
+    interpreter = analysis.get("interpreter")
+    if not isinstance(interpreter, dict) or any(
+        not isinstance(interpreter.get(field), str) or not interpreter[field]
+        for field in (
+            "executable",
+            "implementation",
+            "version",
+            "prefix",
+            "base_prefix",
+        )
+    ):
+        raise ValueError("Python startup needs its observed interpreter identity")
+    image = interpreter.get("image")
+    if (
+        not Path(interpreter["executable"]).is_absolute()
+        or not isinstance(image, dict)
+        or not isinstance(image.get("path"), str)
+        or not Path(image["path"]).is_absolute()
+        or not isinstance(image.get("sha256"), str)
+        or re.fullmatch("[0-9a-f]{64}", image["sha256"]) is None
+        or type(image.get("size")) is not int
+        or image["size"] < 1
+    ):
+        raise ValueError("Python startup interpreter image receipt is malformed")
+    for field in ("search_path", "meta_path"):
+        if not isinstance(analysis.get(field), list) or any(
+            not isinstance(item, str) for item in analysis[field]
+        ):
+            raise ValueError(f"invalid observed Python {field}")
+    flags = analysis.get("flags")
+    if not isinstance(flags, dict) or any(
+        not isinstance(key, str) or type(value) not in {bool, int, type(None)}
+        for key, value in flags.items()
+    ):
+        raise ValueError("invalid observed Python process flags")
+    dispatch = analysis.get("import_callable")
+    if (
+        not isinstance(dispatch, dict)
+        or not isinstance(dispatch.get("kind"), str)
+        or dispatch.get("kind") not in {"builtin_import", "other", "missing"}
+        or (
+            dispatch.get("type") is not None
+            if dispatch.get("kind") == "missing"
+            else not isinstance(dispatch.get("type"), str) or not dispatch["type"]
+        )
+    ):
+        raise ValueError("invalid observed Python import callable")
+    cache = analysis.get("selected_module_cache")
+    if not isinstance(cache, dict) or any(
+        not isinstance(name, str)
+        or not name
+        or not isinstance(state, str)
+        or state not in {"present_module", "present_none", "present_other", "absent"}
+        for name, state in cache.items()
+    ):
+        raise ValueError("invalid selected Python module-cache observations")
+
+
 def validate_numeric_contract(function):
     """Validate portable permissions against sealed source policy evidence."""
     contract = function.get("numeric_contract")
@@ -1376,17 +1488,39 @@ def control_regions(statement):
             yield statement, field, None
 
 
-def walk_operations(value):
-    """Iterate neutral operation records without interpreting their semantics."""
+EXECUTION_ANNOTATIONS = frozenset(
+    {
+        "source_evidence",
+        "source_provider",
+        "source_runtime",
+        "python_scope",
+        "source_numeric_contract",
+        "numeric_contract",
+        "state_contract",
+        "iteration_layout",
+        "checks",
+        "artifact_effect",
+    }
+)
+
+
+def walk_records(value, *, exclude_fields=()):
+    """Visit wire records, with explicit exclusions for non-executable evidence."""
     pending = [value]
     while pending:
         item = pending.pop()
-        if isinstance(item, list):
+        if isinstance(item, (tuple, list)):
             pending.extend(item)
         elif isinstance(item, dict):
-            if "op" in item:
-                yield item
-            pending.extend(item.values())
+            yield item
+            pending.extend(v for k, v in item.items() if k not in exclude_fields)
+
+
+def walk_operations(value, *, exclude_fields=()):
+    """Iterate neutral operation records without interpreting their semantics."""
+    for item in walk_records(value, exclude_fields=exclude_fields):
+        if "op" in item:
+            yield item
 
 
 def publish(path, data):

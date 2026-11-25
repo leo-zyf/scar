@@ -491,6 +491,101 @@ def test_script_images_share_syntax_and_preserve_import_bindings(tmp_path, monke
     assert parsed == Counter({path: 1 for path in expected})
 
 
+def test_entry_environment_separates_launch_declarations_from_analysis_cache(
+    tmp_path, monkeypatch
+):
+    from hashlib import sha256
+    import sys
+    from types import ModuleType
+
+    import pytest
+
+    from scar.frontend import build
+    from scar.frontend.capture import capture_project
+    from scar.frontend.input import read_request
+
+    entry = tmp_path / "entry.py"
+    active, blocked, foreign, cold = (
+        "scar_startup_loaded",
+        "scar_startup_blocked",
+        "scar_startup_other",
+        "scar_startup_cold",
+    )
+    entry.write_text(f"import {active}, {blocked}, {foreign}, {cold}\n")
+    (tmp_path / f"{cold}.py").write_text("raise AssertionError('executed target')\n")
+    monkeypatch.setitem(sys.modules, active, ModuleType(active))
+    monkeypatch.setitem(sys.modules, blocked, None)
+    monkeypatch.setitem(sys.modules, foreign, object())
+    monkeypatch.delitem(sys.modules, cold, raising=False)
+    assert read_request(entry).python_entries == (
+        {"image": None, "declaration": {"kind": "unspecified"}},
+    )
+    executable = Path(sys.executable)
+    standalone = dict(
+        kind="standalone_script", interpreter=str(executable), flags=["-I"]
+    )
+    images = [
+        dict(id=name, output=name, entry="__main__", source="entry.py", **fields)
+        for name, fields in (
+            ("script", {"entry_environment": standalone}),
+            ("plugin", {"entry_environment": {"kind": "embedded"}}),
+            ("undeclared", {}),
+        )
+    ]
+    manifest, out = tmp_path / "request.json", tmp_path / "graph"
+    manifest.write_text(json.dumps(dict(images=images, root_image="script")))
+    build(manifest, out)
+    graph = json.loads((out / "graph.json").read_bytes())
+    environment = graph["source_facts"]["python_entry_environment"]
+    assert environment["entries"] == [
+        {"image": "script", "declaration": standalone},
+        {"image": "plugin", "declaration": {"kind": "embedded"}},
+        {"image": "undeclared", "declaration": {"kind": "unspecified"}},
+    ]
+    assert all(
+        "python_entry_environment" not in u["source_facts"] for u in graph["units"]
+    )
+    analysis = environment["analysis"]
+    assert (analysis["scope"], analysis["confidence"]) == (
+        "analysis_process_snapshot",
+        "observed",
+    )
+    assert analysis["flags"]["isolated"] == sys.flags.isolated
+    assert analysis["import_callable"] == {
+        "kind": "builtin_import",
+        "type": "builtins.builtin_function_or_method",
+    }
+    assert analysis["interpreter"]["image"] == dict(
+        path=str(executable.resolve()),
+        size=executable.stat().st_size,
+        sha256=sha256(executable.read_bytes()).hexdigest(),
+    )
+    assert analysis["selected_module_cache"] == {
+        active: "present_module",
+        blocked: "present_none",
+        foreign: "present_other",
+        cold: "absent",
+    }
+    assert (
+        analysis["deployment_equivalence"],
+        analysis["application_initial_cache"],
+        analysis["audit_hooks"],
+    ) == ("unproven", "unproven", "unknown")
+    # A second environment may link the same executable and resolve different packages.
+    alternate = tmp_path / "other-python"
+    alternate.symlink_to(executable)
+    manifest.write_text(
+        json.dumps(
+            dict(
+                source="entry.py",
+                entry_environment={**standalone, "interpreter": str(alternate)},
+            )
+        )
+    )
+    with pytest.raises(ValueError, match="differs from the analysis interpreter"):
+        capture_project(read_request(manifest))
+
+
 def test_python_import_precedence_and_runtime_facts(tmp_path, monkeypatch):
     import codecs
     from importlib.machinery import BuiltinImporter, FrozenImporter

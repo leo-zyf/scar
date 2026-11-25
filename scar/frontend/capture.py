@@ -1,8 +1,12 @@
 """Discover F1 tasks and join captured project catalogs before unit processing."""
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from scar.contract import json_bytes, validate_images
+
+if TYPE_CHECKING:
+    from .languages.python.environment import ImportEnvironment
 
 
 @dataclass(frozen=True)
@@ -14,6 +18,7 @@ class CapturedProject:
     source_hashes: dict
     build: dict | None
     build_bindings: list
+    python_environment: "ImportEnvironment | None" = None
 
 
 def capture_project(request):
@@ -22,6 +27,11 @@ def capture_project(request):
     An observed link binds an artifact to an image. It does not prove that a
     runtime build operation, its diagnostics or its filesystem effects can go.
     """
+    python_environment = None
+    if request.python_entries:
+        from .languages.python.environment import capture_import_environment
+
+        python_environment = capture_import_environment(request.python_entries)
     sources = dict(request.source_hashes)
     profiles, parsed_units, indices = [], [], {}
 
@@ -128,5 +138,12 @@ def capture_project(request):
     if images is not None:
         validate_images(images, root_image, unit_count=len(profiles))
     return CapturedProject(
-        profiles, parsed_units, images, root_image, sources, build, bindings
+        profiles,
+        parsed_units,
+        images,
+        root_image,
+        sources,
+        build,
+        bindings,
+        python_environment,
     )

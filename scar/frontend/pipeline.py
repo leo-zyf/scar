@@ -12,6 +12,7 @@ from scar.contract import (
     json_bytes,
     member,
     read_member,
+    validate_python_entry_environment,
     validate_state_flow,
     write_json,
 )
@@ -202,6 +203,16 @@ def build(manifest, out, *, jobs=1):
         diagnostic_sites=len(diagnostics),
         resources=len(resource_records),
     )
+    source_facts = {}
+    if captured.python_environment is not None:
+        environment = captured.python_environment.for_providers(
+            name
+            for unit in units
+            if unit["language"] == "python"
+            for name in unit["source_facts"]["providers"]
+        )
+        validate_python_entry_environment(environment)
+        source_facts["python_entry_environment"] = environment
     graph = document(
         GRAPH,
         entry=request.entry,
@@ -216,6 +227,7 @@ def build(manifest, out, *, jobs=1):
         ],
         contract={"arithmetic": "preserve", "externally_visible_effects": "preserve"},
         coverage=dict(totals=totals, diagnostic_categories=dict(counts.most_common())),
+        **({"source_facts": source_facts} if source_facts else {}),
         artifact_flow=member(
             out,
             "artifacts",

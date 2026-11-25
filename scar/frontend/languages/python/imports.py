@@ -21,6 +21,7 @@ import tokenize
 
 from scar.contract import python_provider_id
 from scar.source_contracts import python_source_boundary
+from .environment import interpreter_image
 
 
 def _digest_file(path, algorithm="sha256"):
@@ -34,19 +35,19 @@ def _digest_file(path, algorithm="sha256"):
 @cache
 def _interpreter_digest(compiler_id):
     """Fingerprint the interpreter image supplying built-in and frozen code."""
-    images = [Path(sys.executable).resolve(strict=True)]
+    image_hashes = [interpreter_image()["sha256"]]
     if sysconfig.get_config_var("Py_ENABLE_SHARED"):
         directory = sysconfig.get_config_var("LIBDIR")
         library = sysconfig.get_config_var("INSTSONAME") or sysconfig.get_config_var(
             "LDLIBRARY"
         )
         if directory and library and (image := Path(directory, library)).is_file():
-            images.append(image)
+            image_hashes.append(_digest_file(image))
     parts = [
         compiler_id,
         sys.version,
         sys.platform,
-        *map(_digest_file, images),
+        *image_hashes,
     ]
     return sha256("\0".join(parts).encode()).hexdigest()
 

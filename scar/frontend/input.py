@@ -4,7 +4,12 @@ from dataclasses import dataclass
 import json
 from pathlib import Path
 
-from scar.contract import digest, json_bytes, validate_images
+from scar.contract import (
+    digest,
+    json_bytes,
+    validate_images,
+    validate_python_entry_declaration,
+)
 
 
 @dataclass(frozen=True)
@@ -21,6 +26,7 @@ class SourceRequest:
     images: list[dict] | None = None
     root_image: str | None = None
     build_trace: dict | None = None
+    python_entries: tuple = ()
 
 
 def _capture_bytes(manifest, receipt, label):
@@ -139,6 +145,31 @@ def _image_profiles(spec):
     return tuple(table), membership, root
 
 
+def _python_entries(spec, profiles, images):
+    if images is None:
+        candidates = [(None, spec, profiles)]
+    else:
+        if "entry_environment" in spec:
+            raise ValueError("declare entry_environment on the individual Python image")
+        candidates = [
+            (image["id"], source, [profiles[i] for i in image.get("units", ())])
+            for image, source in zip(images, spec["images"])
+        ]
+    entries = []
+    for image, source, units in candidates:
+        python = any(unit["language"].lower() == "python" for unit in units) or (
+            "source" in source and Path(source["source"]).suffix.lower() == ".py"
+        )
+        if not python:
+            if "entry_environment" in source:
+                raise ValueError("entry_environment requires a Python source or unit")
+            continue
+        declaration = source.get("entry_environment", {"kind": "unspecified"})
+        validate_python_entry_declaration(declaration)
+        entries.append(dict(image=image, declaration=declaration))
+    return tuple(entries)
+
+
 def read_request(path: Path) -> SourceRequest:
     manifest = Path(path).resolve(strict=True)
     project_entry = manifest if manifest.suffix.lower() == ".py" else None
@@ -151,6 +182,13 @@ def read_request(path: Path) -> SourceRequest:
         spec = json.loads(manifest.read_bytes())
         root = (manifest.parent / spec.get("source_root", ".")).resolve(strict=True)
         if "source" in spec and "units" not in spec and "images" not in spec:
+            if (
+                spec.get("entry", "__main__") == "__main__"
+                and Path(spec["source"]).suffix.lower() == ".py"
+                and not any(k in spec for k in ("abi", "observe", "entry_abi"))
+            ):
+                spec.setdefault("entry", "__main__")
+                project_entry = root / spec["source"]
             spec["units"] = [
                 dict(path=spec["source"], language="python", abi=spec.get("abi", {}))
             ]
@@ -248,4 +286,5 @@ def read_request(path: Path) -> SourceRequest:
         images,
         spec.get("root_image"),
         build_trace,
+        _python_entries(spec, profiles, images),
     )

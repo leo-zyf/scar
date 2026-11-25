@@ -13,7 +13,32 @@ from scar.contract import (
     validate_text_profiles,
     validate_numeric_contract,
     validate_source_literal,
+    validate_python_entry_environment,
 )
+
+
+def _entry_environment(graph):
+    """Bind launch observations to an image without opening its interpreter."""
+    facts = graph.get("source_facts", {})
+    if not isinstance(facts, dict):
+        raise ValueError("program source facts must be a record")
+    record = facts.get("python_entry_environment")
+    if record is None:
+        return None
+    validate_python_entry_environment(record)
+    images = {image["id"] for image in graph.get("images", ())}
+    allowed = images if images else {None}
+    if any(entry["image"] not in allowed for entry in record["entries"]):
+        raise ValueError("Python entry environment names an undeclared image")
+    selected = graph.get("current_image") if images else None
+    entries = [entry for entry in record["entries"] if entry["image"] == selected]
+    if not entries:
+        return None
+    return dict(
+        record,
+        entries=entries,
+        capture_sha256=digest(json_bytes(record)),
+    )
 
 
 def _provider_sources(records):
@@ -529,6 +554,10 @@ def _build_bindings(graph, build, captured):
 def bind(graph, folder):
     from scar.contract import validate_artifact_flow
 
+    entry_environment = _entry_environment(graph)
+    environment_id = (
+        digest(json_bytes(entry_environment)) if entry_environment is not None else None
+    )
     image_context = {}
     if "images" in graph:
         # Unit indices belong to the full graph, already checked before projection.
@@ -788,6 +817,8 @@ def bind(graph, folder):
                 if protocol:
                     body["execution_kind"] = "python_protocol"
                     scope = body.get("python_scope", {})
+                    if environment_id is not None:
+                        scope["entry_environment_id"] = environment_id
                     if scope.get("kind") == "module" and (
                         providers := unit.get("source_facts", {}).get("providers")
                     ):
@@ -892,6 +923,11 @@ def bind(graph, folder):
             dict(
                 entry=graph["entry"],
                 **({"entry_abi": graph["entry_abi"]} if graph.get("entry_abi") else {}),
+                **(
+                    {"python_entry_environment": entry_environment}
+                    if entry_environment is not None
+                    else {}
+                ),
                 **image_context,
                 activation_graph=dict(
                     roots=sorted(roots),

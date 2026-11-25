@@ -9,7 +9,13 @@ import stat
 import subprocess
 from tempfile import TemporaryDirectory
 
-from scar.contract import digest, json_bytes, walk_operations
+from scar.contract import (
+    EXECUTION_ANNOTATIONS,
+    digest,
+    json_bytes,
+    validate_python_entry_environment,
+    walk_operations,
+)
 
 _EXECUTION = set(
     "system popen fork vfork execl execle execlp execv execve execvp execvpe "
@@ -35,6 +41,154 @@ _CONTRACT = dict(
     return_value="implementation_status_not_direct_exit_code",
 )
 
+_GUARDS, _CHECKS, _BINDING_READS = 16, 4, 4
+_CHECK_FIELDS = (
+    "requires",
+    "first_consumer",
+    "site",
+    "location",
+    "first_member",
+    "lexical_namespace",
+)
+_READ_FIELDS = ("member", "analysis_binding_epoch", "consumer", "site", "location")
+
+
+def _fields(record, fields):
+    return {key: record[key] for key in fields if key in record}
+
+
+def _import_operations(module):
+    # Read operands, never historical operations quoted by annotations.
+    for fn in module.get("functions", ()):
+        for operation in walk_operations(
+            [fn.get("body", []), fn.get("initializers", [])],
+            exclude_fields=EXECUTION_ANNOTATIONS,
+        ):
+            yield fn["name"], operation
+
+
+def _guard_details(checks):
+    rows = []
+    check_count = read_count = shown_reads = 0
+    for key, domains in checks.items():
+        for domain, check in domains.items():
+            if domain == "before" or not isinstance(check, dict):
+                continue
+            check_count += 1
+            reads = check.get("binding_reads", [])
+            read_count += len(reads)
+            if len(rows) >= _CHECKS:
+                continue
+            shown = reads[:_BINDING_READS]
+            shown_reads += len(shown)
+            row = dict(
+                module=key,
+                domain=domain,
+                **_fields(check, _CHECK_FIELDS),
+                before_state=domains.get("before", {}).get("state"),
+            )
+            if domain == "namespace" or reads:
+                row.update(
+                    binding_reads=[_fields(read, _READ_FIELDS) for read in shown],
+                    binding_read_count=len(reads),
+                    omitted_binding_reads=len(reads) - len(shown),
+                )
+            if domain == "namespace":
+                row["value_state_projection"] = check.get(
+                    "value_state_projection", "unproven"
+                )
+            rows.append(row)
+    return dict(
+        checks=rows,
+        check_count=check_count,
+        omitted_checks=check_count - len(rows),
+        binding_read_count=read_count,
+        omitted_binding_reads=read_count - shown_reads,
+    )
+
+
+def registry_checks(module):
+    """Bound the diagnostic projection; the exact comparisons remain in execution IR."""
+    occurrences, variants, rows = set(), set(), {}
+    guard_count = 0
+    for owner, op in _import_operations(module):
+        if op["op"] != "module_import_preserves":
+            continue
+        guard_count += 1
+        identity = (owner, op.get("occurrence"))
+        occurrences.add(identity)
+        checks = op.get("checks", {})
+        revision = digest(json_bytes(checks))
+        key = (
+            *identity,
+            op.get("module"),
+            op.get("site"),
+            digest(json_bytes(op.get("location"))),
+            revision,
+        )
+        if key in variants:
+            if key in rows:
+                rows[key]["guard_copies"] += 1
+            continue
+        variants.add(key)
+        if len(rows) < _GUARDS:
+            rows[key] = dict(
+                owner=owner,
+                occurrence=op.get("occurrence"),
+                module=op.get("module"),
+                site=op.get("site"),
+                location=op.get("location"),
+                guard_copies=1,
+                checks_sha256=revision,
+                **_guard_details(checks),
+            )
+    reported = len({key[:2] for key in rows})
+    return dict(
+        scope="executable module_import_preserves operands in function bodies and initializers",
+        binding_reads_scope="explicit binding_reads; first_member and the full domain requirement are retained separately",
+        limits=dict(
+            guard_variants=_GUARDS,
+            checks_per_guard=_CHECKS,
+            binding_reads_per_check=_BINDING_READS,
+        ),
+        guard_count=guard_count,
+        guard_variant_count=len(variants),
+        omitted_guard_variants=len(variants) - len(rows),
+        occurrence_count=len(occurrences),
+        reported_occurrences=reported,
+        omitted_occurrences=len(occurrences) - reported,
+        occurrences=list(rows.values()),
+    )
+
+
+def _entry_observation(record):
+    validate_python_entry_environment(record)
+    analysis = record["analysis"]
+    interpreter = analysis["interpreter"]
+    return dict(
+        entry_environment_sha256=digest(json_bytes(record)),
+        entries=[
+            dict(image=row["image"], kind=row["declaration"]["kind"])
+            for row in record["entries"]
+        ],
+        **{
+            k: analysis[k]
+            for k in (
+                "scope",
+                "confidence",
+                "deployment_equivalence",
+                "application_initial_cache",
+                "audit_hooks",
+            )
+        },
+        interpreter=dict(
+            implementation=interpreter["implementation"],
+            version=interpreter["version"],
+            image_sha256=interpreter["image"]["sha256"],
+        ),
+        selected_module_cache_count=len(analysis["selected_module_cache"]),
+    )
+
 
 def import_effects(module, bindings):
     """Keep source occurrence coverage separate from native interface supply."""
@@ -49,13 +203,13 @@ def import_effects(module, bindings):
         raise ValueError("invalid source import occurrence product")
     operations = {
         (
-            fn["name"],
+            owner,
             node.get("site"),
             node["op"],
             node.get("source_import_occurrence"),
         ): node
-        for fn in module["functions"]
-        for node in walk_operations(fn["body"])
+        for owner, node in _import_operations(module)
+        if "source_import_occurrence" in node
     }
     rows, identities = [], set()
     counts = dict(visited=0, unvisited=0, proven_inactive=0)
@@ -71,7 +225,11 @@ def import_effects(module, bindings):
             key = (ref["owner"], ref.get("site"), ref["opcode"], identity)
             operation = operations.get(key)
             family = ref.get("operator_family")
-            supplied = operation is not None and family in bindings
+            supplied = (
+                operation is not None
+                and family == operation.get("operator_family")
+                and family in bindings
+            )
             producers.append(
                 dict(
                     **ref,
@@ -100,6 +258,11 @@ def import_effects(module, bindings):
         semantics_version=1,
         scope="source_import_occurrences",
         ledger_sha256=digest(json_bytes(ledger)),
+        **(
+            {"entry_environment": _entry_observation(ledger["entry_environment"])}
+            if "entry_environment" in ledger
+            else {}
+        ),
         coverage="INCOMPLETE" if counts["visited"] else "NO_VISITED_IMPORTS",
         activation_counts=counts,
         occurrences=rows,
