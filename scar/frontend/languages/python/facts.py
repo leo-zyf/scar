@@ -77,6 +77,7 @@ class ParsedUnit:
     mapping_builders: dict = field(default_factory=dict)
     constant_stores: dict = field(default_factory=dict)
     source_code: dict = field(default_factory=dict)
+    name_loads: dict = field(default_factory=dict)
 
     @property
     def source_digests(self):
@@ -141,10 +142,40 @@ def _constant_store_sites(program, instructions, assignments):
     return {span: receipt for span, receipt in sites.items() if receipt is not None}
 
 
+def _name_load_sites(program, instructions, names):
+    """Pair a module-frame read with its unique lexical name and instruction."""
+    sites = {}
+    for ins in instructions:
+        opcode = getattr(ins, "baseopname", ins.opname)
+        span = ins.positions
+        if opcode not in {"LOAD_NAME", "LOAD_GLOBAL"} or span not in names:
+            continue
+        # Since CPython 3.11 the low LOAD_GLOBAL argument bit is a call flag.
+        index = ins.arg >> 1 if opcode == "LOAD_GLOBAL" else ins.arg
+        if (
+            span in sites
+            or not 0 <= index < len(program.co_names)
+            or program.co_names[index] != ins.argval
+            or ins.argval != names[span]
+        ):
+            sites[span] = None
+        else:
+            sites[span] = dict(
+                semantics_version=1,
+                opcode=opcode,
+                name=ins.argval,
+                index=index,
+                oparg=ins.arg,
+                offset=ins.offset,
+                position=list(span),
+            )
+    return {span: receipt for span, receipt in sites.items() if receipt is not None}
+
+
 def _compiler_sites(tree, path, relative, source_hash):
     """Capture positioned construction and binding facts from one compilation."""
     if sys.implementation.name != "cpython" or not hasattr(CodeType, "co_positions"):
-        return {}, {}, {}, {}
+        return {}, {}, {}, {}, {}
     nodes, mappings, syntax = {}, {}, deque([tree])
     while syntax:
         node = syntax.popleft()
@@ -157,24 +188,30 @@ def _compiler_sites(tree, path, relative, source_hash):
             and not any(isinstance(e, ast.Starred) for e in node.elts)
         ):
             nodes[tuple_position(node)] = node
-    assignments = [
-        node
-        for node in scope_nodes(tree.body)
-        if isinstance(node, ast.Assign)
-        and len(node.targets) == 1
-        and isinstance(node.targets[0], ast.Name)
-        and isinstance(node.value, ast.Constant)
-        and type(node.value.value) is str
-    ]
-    if not (nodes or mappings or assignments):
-        return {}, {}, {}, {}
+    assignments, names = [], {}
+    for node in scope_nodes(tree.body):
+        if (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and isinstance(node.value, ast.Constant)
+            and type(node.value.value) is str
+        ):
+            assignments.append(node)
+        elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+            names[tuple_position(node)] = node.id
+        elif isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name):
+            names[tuple_position(node.target)] = node.target.id
+    if not (nodes or mappings or assignments or names):
+        return {}, {}, {}, {}, {}
     optimize = sys.flags.optimize
     program = compile(tree, str(path), "exec", dont_inherit=True, optimize=optimize)
     unit = digest(json_bytes([relative, source_hash, ParsedUnit.compiler_id, optimize]))
-    instructions = list(dis.get_instructions(program)) if assignments else None
+    instructions = list(dis.get_instructions(program)) if assignments or names else None
     stores = (
         _constant_store_sites(program, instructions, assignments) if assignments else {}
     )
+    loads = _name_load_sites(program, instructions, names) if names else {}
     source_code = (
         dict(
             kind="module",
@@ -184,7 +221,7 @@ def _compiler_sites(tree, path, relative, source_hash):
             compiler=ParsedUnit.compiler_id,
             optimize=optimize,
         )
-        if stores
+        if stores or loads
         else {}
     )
     fresh, conflict = object(), object()
@@ -247,7 +284,7 @@ def _compiler_sites(tree, path, relative, source_hash):
                     and len(member) == len(child.elts)
                 ):
                     observe(child, member)
-    return sites, mappings, stores, source_code
+    return sites, mappings, stores, source_code, loads
 
 
 @cache
@@ -306,8 +343,8 @@ def parse_unit(
     try:
         text, tree = snapshot.text, snapshot.tree
         scopes = LexicalScope.capture(symtable.symtable(text, str(path), "exec"))
-        tuple_sites, mapping_builders, constant_stores, source_code = _compiler_sites(
-            tree, path, relative, source_hash
+        tuple_sites, mapping_builders, constant_stores, source_code, name_loads = (
+            _compiler_sites(tree, path, relative, source_hash)
         )
     except (SyntaxError, UnicodeError, LookupError) as error:
         location = dict(
@@ -367,6 +404,7 @@ def parse_unit(
         mapping_builders=mapping_builders,
         constant_stores=constant_stores,
         source_code=source_code,
+        name_loads=name_loads,
     )
 
 

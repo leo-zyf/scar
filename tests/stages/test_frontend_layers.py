@@ -749,6 +749,91 @@ def test_module_constant_stores_bind_source_bytecode_and_graph(tmp_path, monkeyp
     assert sorted(receipts, key=lambda r: r["store"]["offset"]) == rows
 
 
+def test_module_name_loads_follow_actual_callee_and_argument_ports(tmp_path):
+    import dis
+    import sys
+    from collections import Counter
+
+    from scar.contract import read_member
+    from scar.frontend import build
+    from scar.frontend.languages.python.environment import code_digest
+
+    entry = tmp_path / "lookups.py"
+    source = (
+        "global action, arg\n"
+        "result = action(convert(é), arg, len(é))\n"
+        "value += arg\n"
+        "if False:\n    omitted\n"
+        "try:\n    action\nfinally:\n    repeated\n"
+        "def inner(): return action(arg)\n"
+    )
+    entry.write_text(source)
+    code = compile(source, str(entry), "exec", dont_inherit=True)
+    out = tmp_path / "graph"
+    build(entry, out)
+    graph = json.loads((out / "graph.json").read_bytes())
+    unit = read_member(out, graph["units"][0]["graph"])
+    root = next(f for f in unit["functions"] if f["signature"]["name"] == "__main__")
+    nodes = root["nodes"]
+    loads = [n["source_name_load"] for n in nodes if "source_name_load" in n]
+    if sys.implementation.name != "cpython" or not any(
+        c is not None for _, _, c, _ in getattr(code, "co_positions", lambda: ())()
+    ):
+        assert not loads
+        return
+    assert root["signature"]["python_scope"]["source_code"][
+        "code_sha256"
+    ] == code_digest(code)
+    instructions = [
+        i
+        for i in dis.get_instructions(code)
+        if i.opname in {"LOAD_NAME", "LOAD_GLOBAL"}
+    ]
+    counts = Counter(i.positions for i in instructions)
+    expected = {i.offset: i for i in instructions if counts[i.positions] == 1}
+    assert {r["offset"] for r in loads} == set(expected)
+    for r in loads:
+        ins = expected[r["offset"]]
+        assert (r["opcode"], r["oparg"], r["name"], r["position"]) == (
+            ins.opname,
+            ins.arg,
+            ins.argval,
+            list(ins.positions),
+        )
+        assert code.co_names[r["index"]] == ins.argval and r[
+            "code_sha256"
+        ] == code_digest(code)
+    outer = nodes[next(n for n in nodes if n["op"] == "assign")["value"]["port"]]
+    target = nodes[outer["target"]["port"]]
+    convert, argument, length = [nodes[port["port"]] for port in outer["args"]]
+    ports = [
+        target,
+        nodes[convert["target"]["port"]],
+        nodes[convert["args"][0]["port"]],
+        argument,
+        nodes[length["target"]["port"]],
+        nodes[length["args"][0]["port"]],
+    ]
+    assert [n["source_name_load"]["name"] for n in ports] == [
+        "action",
+        "convert",
+        "é",
+        "arg",
+        "len",
+        "é",
+    ]
+    assert [n["source_name_load"]["offset"] for n in ports] == sorted(
+        i.offset for i in instructions if i.positions.lineno == 2
+    )
+    assert ports[4]["op"] == "python_builtin"
+    assert all(
+        "source_name_load" not in n
+        for f in unit["functions"]
+        if f is not root
+        for n in f["nodes"]
+    )
+
+
 def test_scalar_annotation_contract_uses_captured_compiler_semantics(
     tmp_path, monkeypatch
 ):

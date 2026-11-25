@@ -426,6 +426,7 @@ class _ModuleGraph:
         self.mapping_builders = parsed.mapping_builders
         self.constant_stores = parsed.constant_stores
         self.source_code = parsed.source_code
+        self.name_loads = parsed.name_loads
         self.source_lines = parsed.source_text.splitlines()
         self.diagnostic_file = str(parsed.path)
 
@@ -673,6 +674,18 @@ class _Scope:
                 "scope": "global",
             }
         return {"op": "var", "name": name}
+
+    def source_name_load(self, node):
+        if self.symbol == self.unit.root_symbol and (
+            load := self.unit.name_loads.get(tuple_position(node))
+        ):
+            return {
+                "source_name_load": {
+                    **load,
+                    "code_sha256": self.unit.source_code["code_sha256"],
+                }
+            }
+        return {}
 
     def fact(self, name):
         if name in self.env:
@@ -945,6 +958,7 @@ class _Scope:
             }
             return {
                 **record,
+                **self.source_name_load(node),
                 "location": self.unit.location(node),
                 "type": _py_type(f.get("class")),
                 **({"binding_facts": evidence} if evidence else {}),
@@ -1489,7 +1503,11 @@ class _Scope:
     def destination(self, node, fact, *, read_target=False):
         if isinstance(node, ast.Name):
             self.env[node.id] = fact
-            return {**self.variable(node.id), "location": self.unit.location(node)}
+            return {
+                **self.variable(node.id),
+                "location": self.unit.location(node),
+                **(self.source_name_load(node) if read_target else {}),
+            }
         if isinstance(node, (ast.List, ast.Tuple)):
             return self.record(
                 node, "unpack", items=[self.destination(n, {}) for n in node.elts]
