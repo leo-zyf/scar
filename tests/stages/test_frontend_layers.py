@@ -779,11 +779,12 @@ def test_compiled_module_fold_and_raise_use_complete_source_operands(tmp_path):
     fn = next(f for f in unit["functions"] if f["signature"]["name"] == "__main__")
     rows = {i.offset: i for i in dis.get_instructions(code)}
     stores = [n for n in fn["nodes"] if "source_constant_store" in n]
-    raises = [n for n in fn["nodes"] if "source_expression" in n]
+    expressions = [n for n in fn["nodes"] if "source_expression" in n]
+    raises = [n for n in expressions if n["op"] == "raise"]
     if sys.implementation.name != "cpython" or not any(
         i.positions.col_offset is not None for i in rows.values()
     ):
-        assert not stores and not raises
+        assert not stores and not expressions
         return
     assert [n["source_constant_store"]["store"]["name"] for n in stores] == [
         "message",
@@ -815,6 +816,19 @@ def test_compiled_module_fold_and_raise_use_complete_source_operands(tmp_path):
             rows[store["offset"]].argval == store["name"]
             and store["opcode"] == "STORE_NAME"
         )
+    runtime = [n for n in expressions if n["op"] != "raise"]
+    assert [(n["op"], n["location"]["line"]) for n in runtime] == [
+        ("assign", 4),
+        ("assign", 6),
+    ]
+    for n, expected in zip(runtime, ("add", "div"), strict=True):
+        (operation,) = (
+            i
+            for i in n["source_expression"]["instructions"]
+            if i["opcode"] == "BINARY_OP"
+        )
+        assert operation["operator"] == expected
+        assert rows[operation["offset"]].arg == operation["oparg"]
     assert [n["location"]["line"] for n in raises] == [10, 12, 16]
     for n in raises:
         receipt = n["source_expression"]
