@@ -10124,26 +10124,50 @@ def test_conditional_callee_reads_bound_slots_and_returns_through_original_call(
         "def transform(item):\n"
         "    result = api.apply(item, 'v')\n"
         "    return result\n"
+        "def label():\n    return 'v'\n"
         "callback()\n"
     )
     entry = tmp_path / "run.py"
-    entry.write_text("import lib\nlib.transform(get_item())\n")
+    entry.write_text("import lib\nlib.transform(get_item())\nlib.label()\n")
     graph, output = tmp_path / "graph", tmp_path / "plan"
     build(entry, graph)
     source.unlink()
     entry.unlink()
     plan(graph / "graph.json", output)
     report = json.loads((output / "plan.json").read_bytes())
-    [fragment] = report["protocol_analysis"]["conditional_function_fragments"]
+    fragments = {
+        f["symbol"]: f
+        for f in report["protocol_analysis"]["conditional_function_fragments"]
+    }
+    fragment = fragments["py:lib:transform"]
+    label = fragments["py:lib:label"]
+    assert label["completion"] == "conditional_source_body"
+    label_body = read_member(output, label["function"])
+    label_result = label_body["body"][0]["steps"]
+    slot = (
+        label_result[0].get("operand")
+        if len(label_result) == 2
+        else label_result[0]["value"]["index"]
+    )
+    assert label_body["constants"][str(slot)] == dict(kind="str", value="v")
     assert fragment["completion"] == "conditional_source_body"
     assert fragment["entry"]["parameters"] == [
         dict(name="item", binding="positional", slot=0)
     ]
-    assign, exit_ = read_member(output, fragment["function"])["body"]
+    function = read_member(output, fragment["function"])
+    assign, exit_ = function["body"]
     load, attribute, argument, constant, call, store = assign["steps"]
     assert load["lookup_order"] == ["frame.globals", "frame.builtins"]
     assert attribute["base"] == {"from_offset": load["offset"]}
     assert argument["op"] == "frame_local_load" and argument["slot"] == 0
+    assert (
+        function["constants"][str(constant["operand"])]
+        == label_body["constants"][str(slot)]
+    )
+    assert (
+        fragment["entry"]["code"]["code_sha256"]
+        != label["entry"]["code"]["code_sha256"]
+    )
     assert call["target"] == {"from_offset": attribute["offset"]}
     assert call["args"] == [{"from_offset": a["offset"]} for a in (argument, constant)]
     assert store["op"] == "frame_local_store" and store["slot"] == 1

@@ -127,13 +127,16 @@ def object_operand(module, publications, node, code):
 class SourceExpressionRegion:
     """Consume the graph operands and the sealed instructions in lockstep."""
 
-    def __init__(self, scope, receipt, *, publications=None, definitions=None):
+    def __init__(
+        self, scope, receipt, *, publications=None, definitions=None, constants=None
+    ):
         code = scope["source_code"]
         if receipt["code_sha256"] != code["code_sha256"]:
             raise ValueError("source expression belongs to another code object")
         self.scope = scope
         self.publications = {} if publications is None else publications
         self.definitions = definitions
+        self.constants = constants
         self.code = code
         self.instructions = receipt["instructions"]
         self.index = 0
@@ -264,6 +267,16 @@ class SourceExpressionRegion:
             and (self.minor < 14 or kind != "int" or node["value"] != ins["oparg"])
         ):
             raise ValueError("literal disagrees with source constant")
+        if self.constants is not None and "index" in ins:
+            self.record_constant(ins["index"], dict(kind=kind, value=node["value"]))
+
+    def record_constant(self, index, value):
+        # A slot identifies an object within its actual code object. Equal values
+        # in different slots or functions do not establish an identity relation.
+        key = str(index)
+        old = self.constants.setdefault(key, value)
+        if old is not value and json_bytes(old) != json_bytes(value):
+            raise ValueError("one code constant slot has conflicting typed values")
 
     def return_value(self, node):
         if self.next_opcode() == "RETURN_CONST":
@@ -295,6 +308,17 @@ class SourceExpressionRegion:
         ):
             raise ValueError(
                 "constant tuple slot disagrees with ordered display elements"
+            )
+        if self.constants is not None:
+            self.record_constant(
+                ins["index"],
+                dict(
+                    kind="tuple",
+                    items=[
+                        dict(kind=item["type"]["class"], value=item["value"])
+                        for item in items
+                    ],
+                ),
             )
         return self.emit(
             ins,
@@ -544,6 +568,14 @@ class SourceExpressionRegion:
             ins = self.take("KW_NAMES" if self.minor == 12 else "LOAD_CONST")
             if ins.get("type") != "tuple" or ins.get("names") != names:
                 raise ValueError("keyword order disagrees with the code constant tuple")
+            if self.constants is not None:
+                self.record_constant(
+                    ins["index"],
+                    dict(
+                        kind="tuple",
+                        items=[dict(kind="str", value=name) for name in names],
+                    ),
+                )
             kwref = self.emit(
                 ins,
                 "source_object_constant",
@@ -798,10 +830,11 @@ def conditional_function_body(definition, descriptor):
     child = scope.get("definition_code", {})
     body_id = descriptor.get("source_body", {})
     regions = []
+    constants = {}
     result = dict(
         symbol=symbol,
         completion="conditional_source_prefix",
-        function=dict(symbol=symbol, body=regions),
+        function=dict(symbol=symbol, body=regions, constants=constants),
     )
 
     def stop(node, reason):
@@ -861,7 +894,9 @@ def conditional_function_body(definition, descriptor):
         if not receipt:
             return stop(node, "instruction_region_for_current_function_statement")
         try:
-            region = SourceExpressionRegion(scope, receipt)
+            # Publish only the pool entries owned by a fully decoded statement.
+            used = {}
+            region = SourceExpressionRegion(scope, receipt, constants=used)
             if node["op"] == "expr" and expr["op"] in {
                 "call",
                 "python_invoke",
@@ -885,8 +920,16 @@ def conditional_function_body(definition, descriptor):
                 region.return_value(node)
             else:
                 return stop(node, "source_function_statement_or_control_transfer")
+            for index, value in used.items():
+                if index in constants and json_bytes(constants[index]) != json_bytes(
+                    value
+                ):
+                    raise ValueError(
+                        "function statements disagree on one code constant"
+                    )
         except (ValueError, IndexError, KeyError, TypeError) as error:
             return stop(node, str(error))
+        constants.update(used)
         regions.append(
             dict(op="source_object_region", steps=region.steps, **source_site(node))
         )
