@@ -112,6 +112,102 @@ _SITE_OPERATIONS = {
 }
 
 
+def _source_position(location):
+    return [
+        location["line"],
+        location["end_line"],
+        location["column"] - 1,
+        location["end_column"] - 1,
+    ]
+
+
+def _bind_call_expression(node, scope):
+    """Bind positioned instruction evidence; M2 verifies semantic evaluation order."""
+    proof, code = node["source_expression"], scope.get("source_code") or {}
+    loc = node["location"]
+    position = _source_position(loc)
+    if not (
+        isinstance(proof, dict)
+        and type(proof.get("semantics_version")) is int
+        and proof["semantics_version"] == 1
+        and code.get("kind") == "module"
+        and isinstance(node.get("target"), dict)
+        and isinstance(node.get("args"), list)
+        and isinstance(node.get("keywords"), list)
+        and proof.get("code_sha256") == code.get("code_sha256")
+        and loc.get("file") == code.get("source_key")
+        and proof.get("position") == position
+        and isinstance(proof.get("instructions"), list)
+        and proof["instructions"]
+    ):
+        raise ValueError("source call region disagrees with its module and call port")
+    first = position[0], position[2]
+    last = position[1], position[3]
+    previous = -1
+    for instruction in proof["instructions"]:
+        if not isinstance(instruction, dict):
+            raise ValueError("invalid source instruction in call region")
+        offset, opcode = instruction.get("offset"), instruction.get("opcode")
+        span = instruction.get("position")
+        if not (
+            type(offset) is int
+            and offset > previous
+            and isinstance(opcode, str)
+            and opcode
+            and isinstance(span, list)
+            and len(span) == 4
+            and all(type(v) is int and v >= 0 for v in span)
+            and first <= (span[0], span[2]) <= (span[1], span[3]) <= last
+            and all(
+                type(instruction[k]) is int and instruction[k] >= 0
+                for k in ("oparg", "index")
+                if k in instruction
+            )
+        ):
+            raise ValueError("invalid source instruction position or operand")
+        previous = offset
+        if opcode in {"LOAD_NAME", "LOAD_ATTR", "LOAD_GLOBAL"}:
+            arg = instruction.get("oparg")
+            if not (
+                type(arg) is int
+                and isinstance(instruction.get("name"), str)
+                and instruction.get("index")
+                == (arg if opcode == "LOAD_NAME" else arg >> 1)
+            ):
+                raise ValueError("source call name operand disagrees with its index")
+        elif opcode in {"LOAD_CONST", "KW_NAMES", "LOAD_SMALL_INT"}:
+            immediate = opcode == "LOAD_SMALL_INT"
+            arg = instruction.get("oparg")
+            index_matches = (
+                "index" not in instruction
+                if immediate
+                else instruction.get("index") == arg
+            )
+            if type(arg) is not int or not index_matches:
+                raise ValueError("source call literal operand disagrees with its index")
+            if instruction.get("type") == "tuple":
+                names = instruction.get("names")
+                if (
+                    immediate
+                    or not isinstance(names, list)
+                    or not all(isinstance(n, str) for n in names)
+                ):
+                    raise ValueError("invalid source keyword tuple")
+            else:
+                fingerprint = instruction.get("value_sha256")
+                if (
+                    opcode == "KW_NAMES"
+                    or instruction.get("type")
+                    not in {"int", "float", "str", "bool", "NoneType"}
+                    or not isinstance(fingerprint, str)
+                    or len(fingerprint) != 64
+                    or any(c not in "0123456789abcdef" for c in fingerprint)
+                ):
+                    raise ValueError("missing literal identity in source call")
+    if proof["instructions"][-1]["opcode"] != "POP_TOP":
+        raise ValueError("source call region has no final result discard")
+
+
 def _bind_import_store(node, scope):
     """Check an optional bytecode witness against the reconstructed graph ports."""
     proof = node["source_import_store"]
@@ -145,8 +241,7 @@ def _bind_import_store(node, scope):
         and code.get("kind") == "module"
         and proof.get("code_sha256") == code["code_sha256"]
         and loc.get("file") == code["source_key"]
-        and position
-        == [loc["line"], loc["end_line"], loc["column"] - 1, loc["end_column"] - 1]
+        and position == _source_position(loc)
         and request.get("form") == "import"
         and request.get("module") == imported.get("name") == module
         and request.get("level") == 0
@@ -190,6 +285,10 @@ def _definition(graph):
             result = read(nodes[port])
             if result["op"] == "python_import" and "source_import_store" in result:
                 _bind_import_store(result, graph["signature"].get("python_scope", {}))
+            if "source_expression" in result:
+                _bind_call_expression(
+                    result, graph["signature"].get("python_scope", {})
+                )
             if result["op"] in _SITE_OPERATIONS or "source_name_load" in result:
                 result["site"] = f"{graph['id']}/{port}"
             active.remove(port)

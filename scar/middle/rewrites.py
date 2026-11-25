@@ -1,8 +1,13 @@
 """M3 rewrites canonical products using local equivalence and legality proofs."""
 
 from copy import deepcopy
-from scar.contract import control_regions, semantic_form as semantics
+from scar.contract import (
+    control_regions,
+    external_math_declaration,
+    semantic_form as semantics,
+)
 from .contracts import is_complete, publish_program, require_program
+from .math_operands import analyze as analyze_math_operands
 
 
 def rewrite(module):
@@ -11,6 +16,13 @@ def rewrite(module):
     result, changes = dict(module), []
     if is_complete(module):
         result["functions"] = []
+        definitions = {fn["name"] for fn in module["functions"]}
+        math = {
+            d["name"]: abi
+            for d in module["externs"]
+            if d["name"] not in definitions
+            and (abi := external_math_declaration(d)) is not None
+        }
         for source in module["functions"]:
             function = dict(source)
             # optimize rebuilds the body before changing it. Its ownership
@@ -18,6 +30,7 @@ def rewrite(module):
             if "state_contract" in source:
                 function["state_contract"] = deepcopy(source["state_contract"])
             changes.extend(optimize(function))
+            changes.extend(analyze_math_operands(function, math, _introduced_scalar))
             result["functions"].append(function)
     return publish_program(result, "M3", complete=is_complete(module)), changes
 

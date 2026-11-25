@@ -159,7 +159,7 @@ def global_fromlist(frame, body, index):
     return occurrence, bindings
 
 
-def _matches_instruction(instruction, operand, source_key):
+def _matches_position(instruction, operand, source_key):
     location = operand.get("location")
     position = instruction.get("position")
     fields = ("line", "end_line", "column", "end_column")
@@ -172,8 +172,12 @@ def _matches_instruction(instruction, operand, source_key):
     ):
         return False
     line, end_line, column, end_column = (location[k] for k in fields)
+    return position == [line, end_line, column - 1, end_column - 1]
+
+
+def _matches_instruction(instruction, operand, source_key):
     return (
-        position == [line, end_line, column - 1, end_column - 1]
+        _matches_position(instruction, operand, source_key)
         and type(instruction.get("index")) is int
         and instruction["index"] >= 0
         and type(instruction.get("offset")) is int
@@ -435,6 +439,252 @@ def _object_operand(frame, node, code):
     return None
 
 
+class _SourceCallRegion:
+    """Consume the graph operands and the sealed instructions in lockstep."""
+
+    def __init__(self, frame, code, receipt):
+        self.frame = frame
+        self.code = code
+        self.instructions = receipt["instructions"]
+        self.index = 0
+        self.steps = []
+        version = re.match(r"cpython 3\.(12|13|14)\.", code["compiler"])
+        if version is None:
+            raise ValueError("unsupported source call stack convention")
+        self.minor = int(version[1])
+
+    def next_opcode(self):
+        if self.index < len(self.instructions):
+            return self.instructions[self.index]["opcode"]
+
+    def take(self, *opcodes, source=None):
+        if self.next_opcode() not in opcodes:
+            raise ValueError(
+                f"expected {' or '.join(opcodes)} at instruction {self.index}"
+            )
+        instruction = self.instructions[self.index]
+        if source is not None and not _matches_position(
+            instruction, source, self.code["source_key"]
+        ):
+            raise ValueError(
+                f"source position disagrees with {instruction['opcode']} operand"
+            )
+        self.index += 1
+        return instruction
+
+    def emit(self, instruction, op, node, **fields):
+        offset = instruction["offset"]
+        self.steps.append(dict(op=op, offset=offset, **source_site(node), **fields))
+        return {"from_offset": offset}
+
+    def name(self, node, callee):
+        instruction = self.take("LOAD_NAME", "LOAD_GLOBAL")
+        load = _object_operand(self.frame, node, self.code)
+        if load is None or any(
+            instruction.get(key) != load["instruction"].get(key)
+            for key in ("opcode", "oparg", "offset", "name", "index", "position")
+        ):
+            raise ValueError("name operand disagrees with source lookup")
+        pair = instruction["opcode"] == "LOAD_GLOBAL" and instruction["oparg"] & 1
+        if pair and not callee:
+            raise ValueError("unexpected callable stack slot in name lookup")
+        self.steps.append(dict(load, offset=instruction["offset"]))
+        return {"from_offset": instruction["offset"]}, (
+            "callable_with_implicit_NULL" if pair else None
+        )
+
+    def constant(self, node):
+        ins = self.take("LOAD_CONST", "LOAD_SMALL_INT", source=node)
+        typ = node.get("type")
+        kind = typ.get("class") if isinstance(typ, dict) else None
+        if (
+            kind not in {"str", "int", "float", "bool", "NoneType"}
+            or kind != ins.get("type")
+            or "value" not in node
+            or digest(json_bytes(node["value"])) != ins.get("value_sha256")
+            or ins["opcode"] == "LOAD_SMALL_INT"
+            and (self.minor < 14 or kind != "int" or node["value"] != ins["oparg"])
+        ):
+            raise ValueError("literal disagrees with source constant")
+        return self.emit(
+            ins,
+            "source_object_constant",
+            node,
+            source=(
+                "current_frame_co_consts"
+                if ins["opcode"] == "LOAD_CONST"
+                else "source_small_integer"
+            ),
+            operand=ins["index"] if ins["opcode"] == "LOAD_CONST" else ins["oparg"],
+        )
+
+    def operand(self, node, *, callee=False):
+        if not isinstance(node, dict):
+            raise ValueError("missing source expression operand")
+        op = node.get("op")
+        if op in {"var", "python_builtin"}:
+            return self.name(node, callee)
+        if op == "member":
+            base = self.value(node.get("base"))
+            ins = self.take("LOAD_ATTR", source=node)
+            method = bool(ins["oparg"] & 1)
+            if ins["name"] != node.get("field") or method and not callee:
+                raise ValueError(
+                    "attribute name or call operand disagrees with source lookup"
+                )
+            value = self.emit(
+                ins,
+                "source_object_attribute",
+                node,
+                base=base,
+                name_index=ins["index"],
+                name=ins["name"],
+                result=(
+                    "callable_and_receiver_or_NULL" if method else "attribute_object"
+                ),
+                lookup="source_LOAD_ATTR_including_descriptor_and_receiver_stack_convention",
+            )
+            return value, "source_method_pair" if method else None
+        if op in {"call", "python_invoke", "library_call"}:
+            return self.call(node), None
+        if op == "literal":
+            return self.constant(node), None
+        if op == "format_field":
+            return self.field(node), None
+        if op == "format_string":
+            if not all(
+                isinstance(child, dict)
+                and (
+                    child.get("op") == "format_field"
+                    or child.get("op") == "literal"
+                    and child.get("type") == {"kind": "python_object", "class": "str"}
+                )
+                for child in node["items"]
+            ):
+                raise ValueError(
+                    "joined string requires string constants and formatted fields"
+                )
+            items = [self.value(child) for child in node["items"]]
+            if len(items) == 1:
+                return items[0], None
+            ins = self.take("BUILD_STRING", source=node)
+            if ins["oparg"] != len(items):
+                raise ValueError(
+                    "formatted string item count disagrees with BUILD_STRING"
+                )
+            return (
+                self.emit(ins, "source_object_build_string", node, items=items),
+                None,
+            )
+        raise ValueError(f"unsupported source operand {op}")
+
+    def value(self, node):
+        return self.operand(node)[0]
+
+    def field(self, node):
+        value = self.value(node.get("value"))
+        conversion = {-1: 0, ord("s"): 1, ord("r"): 2, ord("a"): 3}.get(
+            node.get("conversion")
+        )
+        if conversion is None:
+            raise ValueError("unidentified format conversion")
+        if conversion and self.minor >= 13:
+            ins = self.take("CONVERT_VALUE", source=node)
+            if ins["oparg"] != conversion:
+                raise ValueError("format conversion disagrees with source operand")
+            value = self.emit(
+                ins, "source_object_convert", node, value=value, conversion=conversion
+            )
+        spec = self.value(node["format"]) if node.get("format") is not None else None
+        if self.minor == 12:
+            ins = self.take("FORMAT_VALUE", source=node)
+            if ins["oparg"] != conversion | (4 if spec is not None else 0):
+                raise ValueError("FORMAT_VALUE flags disagree with the source field")
+        else:
+            ins = self.take(
+                "FORMAT_SIMPLE" if spec is None else "FORMAT_WITH_SPEC", source=node
+            )
+            conversion = 0
+        return self.emit(
+            ins,
+            "source_object_format",
+            node,
+            value=value,
+            spec=spec,
+            conversion=conversion,
+            dispatch="source_format_opcode_with_actual_value_and_specification",
+        )
+
+    def call(self, node):
+        positional, keywords = node.get("args"), node.get("keywords", [])
+        if not isinstance(positional, list) or not isinstance(keywords, list):
+            raise ValueError("missing ordered call operands")
+        explicit_null = self.minor == 12 and self.next_opcode() == "PUSH_NULL"
+        if explicit_null:
+            self.take("PUSH_NULL")
+        target, pair = self.operand(node.get("target"), callee=True)
+        if self.minor >= 13 and not pair:
+            self.take("PUSH_NULL")
+        elif self.minor == 12 and bool(pair) == explicit_null:
+            raise ValueError(
+                "source call requires one callable and receiver or NULL pair"
+            )
+        args = [self.value(arg) for arg in positional]
+        names, values = [], []
+        for kw in keywords:
+            if (
+                not isinstance(kw, dict)
+                or not isinstance(kw.get("name"), str)
+                or kw["name"] in names
+            ):
+                raise ValueError("call requires unique explicit keyword names")
+            names.append(kw["name"])
+            values.append(self.value(kw.get("value")))
+        kwref = None
+        if names:
+            ins = self.take("KW_NAMES" if self.minor == 12 else "LOAD_CONST")
+            if ins.get("type") != "tuple" or ins.get("names") != names:
+                raise ValueError("keyword order disagrees with the code constant tuple")
+            kwref = self.emit(
+                ins,
+                "source_object_constant",
+                node,
+                source="current_frame_co_consts",
+                operand=ins["index"],
+            )
+        ins = self.take(
+            "CALL_KW" if names and self.minor >= 13 else "CALL", source=node
+        )
+        if ins["oparg"] != len(args) + len(names):
+            raise ValueError("argument count disagrees with source call")
+        return self.emit(
+            ins,
+            "source_object_call",
+            node,
+            target=target,
+            target_layout=pair or "callable_with_explicit_NULL",
+            args=args,
+            keyword_names=kwref,
+            keyword_values=values,
+            dispatch="consume_source_call_slots_including_method_receiver_at_most_once",
+        )
+
+    def discard(self, node):
+        value = self.call(node)
+        ins = self.take("POP_TOP", source=node)
+        self.emit(ins, "source_object_discard", node, value=value)
+        if self.index != len(self.instructions):
+            raise ValueError("unexpected instruction after call result release")
+        return dict(
+            op="source_object_region",
+            type="unit",
+            steps=self.steps,
+            ownership="consume_each_input_at_its_source_opcode_and_unwind_remaining_stack_on_failure",
+            tracing="preserve_all_source_instruction_events_including_call_stack_setup",
+            **source_site(node),
+        )
+
+
 def _object_truth(frame, node, code):
     if node["op"] == "short_circuit":
         terms, operator = node["operands"], node["operator"]
@@ -470,7 +720,21 @@ def open_object_expression(frame, node, steps, *, truth_context, discard):
     """Only a truth value or completed discard may leave this source evaluation stack."""
     if not (truth_context or discard) or not (code := _open_module_code(frame)):
         return None
-    if truth_context:
+    receipt = (
+        node.get("source_expression")
+        if discard
+        and not truth_context
+        and node.get("op") in {"call", "python_invoke", "library_call"}
+        else None
+    )
+    if receipt is not None:
+        try:
+            if receipt["code_sha256"] != code["code_sha256"]:
+                raise ValueError("source expression belongs to another code object")
+            expression = _SourceCallRegion(frame, code, receipt).discard(node)
+        except (ValueError, IndexError, KeyError, TypeError) as error:
+            frame.fail(node, "source_expression_operands", str(error))
+    elif truth_context:
         expression = _object_truth(frame, node, code)
     else:
         value = _object_operand(frame, node, code)
@@ -501,6 +765,7 @@ def open_object_expression(frame, node, steps, *, truth_context, discard):
         reads=("frame.code", "frame.locals"),
         source_code=code,
         expression=expression,
+        **({"source_expression": receipt} if receipt is not None else {}),
         code_match="qualify_current_frame_code_and_expression_instruction_order_stack_operands_spans_and_jumps_before_first_operand",
         on_code_mismatch="resume_source_equivalent_execution_before_first_operand",
         lifetime="transfer_actual_result_to_parent_and_release_consumed_stack_references_at_each_source_opcode",

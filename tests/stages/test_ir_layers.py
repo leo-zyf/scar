@@ -50,7 +50,7 @@ def test_binding_checks_import_result_against_its_source_publication(tmp_path):
     from scar.middle.binding import bind
 
     source = tmp_path / "entry.py"
-    source.write_text("import math as library\n")
+    source.write_text("import math as library\nlibrary.sin(1)\n")
     folder = tmp_path / "graph"
     build(source, folder)
     graph = json.loads((folder / "graph.json").read_bytes())
@@ -64,6 +64,19 @@ def test_binding_checks_import_result_against_its_source_publication(tmp_path):
     )
     source.unlink()
     bind(graph, folder)
+    expression = next(
+        node["source_expression"]
+        for fn in fragment["functions"]
+        for node in fn["nodes"]
+        if "source_expression" in node
+    )
+    first, last = expression["instructions"][0], expression["instructions"][-1]
+    offset = first["offset"]
+    first["offset"] = last["offset"]
+    unit["graph"] = member(folder, "units", fragment)
+    with pytest.raises(ValueError, match="source instruction position"):
+        bind(graph, folder)
+    first["offset"] = offset
     declaration["source_import_store"]["store"]["name"] = "math"
     unit["graph"] = member(folder, "units", fragment)
     with pytest.raises(ValueError, match="source import operands"):
@@ -6813,6 +6826,130 @@ def test_counted_loop_only_drops_remainders_with_a_stable_induction_domain():
     assert not reduced(shadow)
 
 
+def test_math_operand_sharing_preserves_effectful_calls_and_control():
+    from scar.middle.contracts import publish_program
+    from scar.middle.rewrites import rewrite
+
+    arg = dict(
+        op="cast",
+        mode="static",
+        type="f64",
+        value=dict(
+            op="binary",
+            operator="band",
+            left=dict(op="var", name="x"),
+            right=dict(op="literal", type="u32", value=31),
+        ),
+    )
+
+    def call(symbol, site, operand=arg):
+        return dict(
+            op="expr",
+            value=dict(
+                op="call",
+                callee=symbol,
+                site=site,
+                args=[deepcopy(operand)],
+                parameter_types=["f64"],
+            ),
+        )
+
+    original = [call("cos", "first"), call("sin", "second")]
+
+    def module(body, domain="u32"):
+        fn = dict(
+            name="run",
+            params=[dict(name="x", type=domain)],
+            result="void",
+            body=body,
+            state_contract=dict(
+                private_scalars=["x"], scalars={"x": dict(type=domain)}, escaped=[]
+            ),
+        )
+        return publish_program(
+            dict(
+                entry="run",
+                functions=[fn],
+                globals=[],
+                records=[],
+                externs=[
+                    dict(
+                        name=n,
+                        provider="libm",
+                        params=[dict(name="v", type="f64")],
+                        result="f64",
+                    )
+                    for n in ("cos", "sin")
+                ],
+            ),
+            "M2",
+            complete=True,
+        )
+
+    result, changes = rewrite(module(deepcopy(original)))
+    fn = result["functions"][0]
+    decl, first, second = fn["body"]
+    assert decl["init"] == arg and decl["type"] == "f64"
+    assert [v["value"]["callee"] for v in (first, second)] == ["cos", "sin"]
+    assert (
+        first["value"]["args"]
+        == second["value"]["args"]
+        == [dict(op="var", name=decl["name"], type="f64")]
+    )
+    assert [c["rule"] for c in changes] == ["share_exact_math_operand"]
+    assert (
+        fn["math_operand_analysis"]["result_policy"]
+        == "preserve_each_call_at_original_control_point"
+    )
+    x = dict(op="var", name="x")
+    step = dict(op="expr", value=dict(op="unary", operator="postinc", value=x))
+    for body, domain in [
+        ([original[0], step, original[1]], "u32"),
+        (
+            [
+                dict(
+                    op="if",
+                    condition=dict(op="literal", type="bool", value=True),
+                    then=[original[0]],
+                    **{"else": [original[1]]},
+                )
+            ],
+            "u32",
+        ),
+        (
+            [
+                call("cos", "c", dict(op="cast", mode="static", type="f64", value=x)),
+                call("sin", "d", dict(op="cast", mode="static", type="f64", value=x)),
+            ],
+            "u64",
+        ),
+        (
+            [
+                call("cos", "c", dict(op="binary", operator="mul", left=x, right=x)),
+                call("sin", "d", dict(op="binary", operator="mul", left=x, right=x)),
+            ],
+            "f64",
+        ),
+    ]:
+        blocked, changes = rewrite(module(body, domain))
+        assert not changes and blocked["functions"][0]["body"] == body
+    escaped = module(deepcopy(original))
+    escaped["functions"][0]["state_contract"]["escaped"] = ["x"]
+    assert not rewrite(escaped)[1]
+    loop = dict(
+        op="while",
+        site="loop",
+        condition=dict(op="literal", type="bool", value=False),
+        body=[*deepcopy(original), step],
+    )
+    fn = rewrite(module([loop]))[0]["functions"][0]
+    assert fn["body"][0]["op"] == "while" and fn["body"][0]["body"][0]["op"] == "decl"
+    facts = fn["math_operand_analysis"]["sites"]
+    assert facts[0]["operands"][0]["loops"] == [
+        dict(site="loop", syntactically_written_reads=["x"], other_private_reads=[])
+    ]
+
+
 def test_folded_extent_preserves_axis_order_for_coordinate_traversal():
     from scar.middle.execution import annotate_iteration_layouts
     from scar.middle.rewrites import optimize
@@ -7589,3 +7726,241 @@ def test_conditional_plain_import_consumes_actual_result_at_its_source_store(
         "python.import_publication_evidence",
         5,
     )
+
+
+def test_open_source_call_preserves_descriptor_format_and_keyword_order(tmp_path):
+    from types import SimpleNamespace
+
+    from scar.contract import read_member
+    from scar.frontend import build
+    from scar.frontend.languages.python.environment import code_digest
+    from scar.middle import plan
+
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    source = pkg / "__init__.py"
+    source.write_text(
+        "from . import child as gone\ndel gone\n"
+        "receiver.dispatch(f'<{value!r:{width}}/{other!a}/{value!s}>', "
+        "UserWarning, tag=keyword(), literal='distinct token!')\n"
+        "receiver.method(receiver.member)\nboundary = 1\n"
+    )
+    (pkg / "child.py").write_text("pass\n")
+    entry = tmp_path / "main.py"
+    entry.write_text("import pkg\n")
+    code = compile(source.read_bytes(), str(source), "exec")
+    graph, out = tmp_path / "graph", tmp_path / "out"
+    build(entry, graph)
+    source.unlink()
+
+    def plan_case(path, folder):
+        assert plan(path, folder)["status"] == "INCOMPLETE"
+        report = json.loads((folder / "plan.json").read_bytes())
+        [failure] = report["issues"]
+        ref = next(
+            r
+            for r in report["protocol_analysis"]["prefix_fragments"]
+            if r["symbol"] == "py:pkg:<init>"
+        )
+        return failure, read_member(folder, ref["fragment"])["body"]
+
+    issue, body = plan_case(graph, out)
+    assert (issue["location"]["line"], issue["code"]) == (
+        5,
+        "python.global_store_after_callback",
+    )
+    regions = [s["value"] for s in body[2:]]
+    for region in regions:
+        assert region["expression"]["op"] == "source_object_region"
+        assert "source_equivalent" in region["on_code_mismatch"]
+        assert region["external_effect"] == "UNKNOWN" and region["may_raise"]
+        witness = region["source_expression"]
+        assert witness["code_sha256"] == region["source_code"]["code_sha256"]
+        assert [s["offset"] for s in region["expression"]["steps"]] == [
+            i["offset"] for i in witness["instructions"] if i["opcode"] != "PUSH_NULL"
+        ]
+
+    def run(mode, execute_region):
+        events = []
+        category = object()
+        active = code
+        token_text = (
+            "different source token" if mode == "different_code" else "distinct token!"
+        )
+        if mode == "different_code":
+            active = code.replace(
+                co_consts=tuple(
+                    token_text if v == "distinct token!" else v for v in code.co_consts
+                )
+            )
+        matches = code_digest(active) == regions[0]["source_code"]["code_sha256"]
+        assert matches == (mode != "different_code")
+        token = next(v for v in active.co_consts if v == token_text)
+
+        class Field:
+            def __repr__(self):
+                events.append("repr")
+                return "é"
+
+            def __str__(self):
+                events.append("str")
+                return "text"
+
+        class Width:
+            def __format__(self, spec):
+                events.append("spec")
+                if mode == "format_error":
+                    raise LookupError("spec")
+                return "3"
+
+        class Receiver:
+            @property
+            def dispatch(self):
+                events.append("descriptor")
+                if mode == "lookup_error":
+                    raise LookupError("descriptor")
+                target = self
+
+                def call(text, kind, **kwargs):
+                    assert target is receiver and kind is category
+                    assert (
+                        list(kwargs) == ["tag", "literal"]
+                        and kwargs["literal"] is token
+                    )
+                    events.append(("called", text, kwargs["tag"]))
+
+                return call
+
+            @property
+            def member(self):
+                events.append("member")
+                return self
+
+            def method(self, item):
+                assert self is item is receiver
+                events.append("method")
+
+        receiver = Receiver()
+
+        def keyword():
+            events.append("keyword")
+            if mode == "keyword_error":
+                raise LookupError("keyword")
+            return 9
+
+        local = {
+            "receiver": receiver,
+            "value": Field(),
+            "width": Width(),
+            "other": Field(),
+            "keyword": keyword,
+        }
+        builtins_ = {
+            "__import__": lambda *a: SimpleNamespace(child=0),
+            "UserWarning": category,
+        }
+        global_ = {"__builtins__": builtins_}
+        scopes = {
+            "frame.locals": local,
+            "frame.globals": global_,
+            "frame.builtins": builtins_,
+        }
+        converters = (lambda v: v, str, repr, ascii)
+
+        def interpret(region):
+            stack = {}
+
+            def consume(ref):
+                return stack.pop(ref["from_offset"])
+
+            for s in region["expression"]["steps"]:
+                op = s["op"]
+                if op == "module_name_load":
+                    name = s["instruction"]["name"]
+                    value = next(
+                        scopes[k][name] for k in s["lookup_order"] if name in scopes[k]
+                    )
+                elif op == "source_object_constant":
+                    value = (
+                        code.co_consts[s["operand"]]
+                        if s["source"] == "current_frame_co_consts"
+                        else s["operand"]
+                    )
+                elif op == "source_object_attribute":
+                    value = getattr(
+                        consume(s["base"]), active.co_names[s["name_index"]]
+                    )
+                elif op == "source_object_convert":
+                    value = converters[s["conversion"]](consume(s["value"]))
+                elif op == "source_object_format":
+                    spec = consume(s["spec"]) if s["spec"] is not None else ""
+                    value = format(
+                        converters[s["conversion"]](consume(s["value"])), spec
+                    )
+                elif op == "source_object_build_string":
+                    value = "".join(consume(item) for item in s["items"])
+                elif op == "source_object_call":
+                    names = consume(s["keyword_names"]) if s["keyword_names"] else ()
+                    value = consume(s["target"])(
+                        *[consume(a) for a in s["args"]],
+                        **{
+                            name: consume(v)
+                            for name, v in zip(names, s["keyword_values"], strict=True)
+                        },
+                    )
+                else:
+                    assert op == "source_object_discard"
+                    consume(s["value"])
+                    continue
+                stack[s["offset"]] = value
+                del value
+            assert not stack
+
+        try:
+            if execute_region and matches:
+                for region in regions:
+                    interpret(region)
+            else:
+                exec(active, global_, local)
+        except LookupError as e:
+            events.append(("raised", str(e)))
+        return events
+
+    for mode in (
+        "success",
+        "different_code",
+        "lookup_error",
+        "format_error",
+        "keyword_error",
+    ):
+        expected = run(mode, False)
+        assert run(mode, True) == expected
+        if mode in {"success", "different_code"}:
+            assert expected[-2:] == ["member", "method"]
+            assert (
+                expected.index("spec") < expected.index("repr")
+                if sys.version_info < (3, 13)
+                else expected.index("repr") < expected.index("spec")
+            )
+        else:
+            assert expected[-1][0] == "raised" and "method" not in expected
+
+    index = json.loads((graph / "graph.json").read_bytes())
+    unit = next(u for u in index["units"] if u["path"] == "pkg/__init__.py")
+    data = read_member(graph, unit["graph"])
+    fn = next(f for f in data["functions"] if f["signature"]["name"] == "py:pkg:<init>")
+    call = next(
+        n
+        for n in fn["nodes"]
+        if n.get("source_expression") and n["location"]["line"] == 3
+    )
+    call["keywords"][0]["name"] = "other"
+    unit["graph"] = member(graph, "units", data)
+    where = graph / "mismatch.json"
+    write_json(where, index)
+    miss, prefix = plan_case(where, tmp_path / "mismatch-plan")
+    assert (
+        miss["code"] == "python.source_expression_operands"
+        and miss["location"]["line"] == 3
+    )
+    assert len(prefix) == 2
