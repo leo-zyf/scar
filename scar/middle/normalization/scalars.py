@@ -72,6 +72,16 @@ _MATH_DOMAIN_PREFIXES = {
 }
 
 
+def _source_interpreter(frame, node):
+    captured = node.get("source_runtime", {}).get(
+        "interpreter"
+    ) or frame.project.text_profiles.get(frame.scope.get("text_profile"), {}).get(
+        "interpreter", ""
+    )
+    match = re.match(r"cpython (\d+)\.(\d+)\.", captured)
+    return captured, tuple(map(int, match.groups())) if match else ()
+
+
 def _finite_math_domain(name, operand):
     """Discharge error edges from an already-proven finite input interval."""
     bounds = _binary64_bounds(operand)
@@ -103,13 +113,7 @@ def math_call(frame, node, name, args, keywords, steps, discard=False):
         frame.fail(
             node, "math_arguments", f"{name} needs its positional scalar signature"
         )
-    captured = node.get("source_runtime", {}).get(
-        "interpreter"
-    ) or frame.project.text_profiles.get(frame.scope.get("text_profile"), {}).get(
-        "interpreter", ""
-    )
-    match = re.match(r"cpython (\d+)\.(\d+)\.", captured)
-    version = tuple(map(int, match.groups())) if match else ()
+    captured, version = _source_interpreter(frame, node)
     if not (3, 10) <= version < (3, 15):
         frame.fail(
             node,
@@ -410,13 +414,28 @@ def construct(frame, node, name, args, keywords):
     if operand.kind in {"f64", "numpy_f64", "binary64_choice"}:
         return Value("f64", operand.value, operand.facts)
     if operand.kind == "i64" and max(map(abs, operand.bounds)) > 1 << 53:
+        _, version = _source_interpreter(frame, node)
+        if not (3, 10) <= version < (3, 15):
+            frame.fail(
+                node,
+                "integer_rounding_profile",
+                "wide integer conversion needs a sealed nearest-even source profile",
+            )
         exact = operand.exact
-        if exact is not _UNKNOWN and operand.value.get("op") in {"literal", "var"}:
-            return literal(float(exact))
-        frame.fail(
-            node,
-            "integer_precision",
-            "float() of an integer outside the exact binary64 interval needs a proven rounding contract",
+        facts = (
+            _numeric_facts(float(exact))
+            if exact is not _UNKNOWN
+            else {"range": tuple(map(float, operand.bounds))}
+        )
+        return Value(
+            "f64",
+            dict(
+                op="integer_to_binary64",
+                type="f64",
+                rounding="nearest_even",
+                value=operand.value,
+            ),
+            facts,
         )
     facts = (
         _numeric_facts(float(operand.exact))
@@ -507,10 +526,15 @@ def extreme(frame, node, name, args, keywords, steps):
             )
         facts = {}
         if winner.kind == item.kind == "i64":
-            facts["range"] = (
-                min(winner.bounds[0], item.bounds[0]),
-                max(winner.bounds[1], item.bounds[1]),
-            )
+            bounds = winner.bounds, item.bounds
+        else:
+            bounds = _binary64_bounds(winner), _binary64_bounds(item)
+        if all(bound is not None for bound in bounds):
+            # Selection is monotone on finite operands. Keep the select and
+            # its original bits (including signed zero and first-winner ties);
+            # this interval describes the result, not a replacement value.
+            choose = max if name == "max" else min
+            facts["range"] = tuple(choose(bound[i] for bound in bounds) for i in (0, 1))
         winner = frame.effect(
             dict(
                 op="select",
@@ -746,6 +770,78 @@ def _integer_division(frame, node, op, lhs, rhs, steps):
     return Value("i64", result, {"range": (lo, hi)})
 
 
+def _true_division_message(frame, node, lhs, rhs):
+    captured, version = _source_interpreter(frame, node)
+    if not (3, 10) <= version < (3, 15):
+        frame.fail(
+            node,
+            "division_source_version",
+            "true division error handling needs a sealed CPython 3.10–3.14 profile",
+        )
+    # CPython floatobject.c changes this spelling in 3.14. Long true division
+    # already uses the shorter spelling. Never infer the source from our host.
+    message = (
+        "float division by zero"
+        if "f64" in (lhs.kind, rhs.kind) and version < (3, 14)
+        else "division by zero"
+    )
+    return captured, message
+
+
+def _guard_true_division(frame, node, lhs, rhs, steps):
+    from . import exceptions
+
+    if steps is None:
+        frame.fail(
+            node,
+            "division_evaluation_order",
+            "true division needs an operand evaluation and exceptional control site",
+        )
+    captured, message = _true_division_message(frame, node, lhs, rhs)
+    operands = []
+    for value in (lhs, rhs):
+        if value.value["op"] not in {"literal", "var"}:
+            value = frame.effect(value.value, value.kind, steps, facts=value.facts)
+        operands.append(value)
+    body = []
+    error = exceptions.construct(
+        frame,
+        node,
+        exceptions.builtin("ZeroDivisionError"),
+        [literal(message)],
+        {},
+        body,
+    )
+    body.append(dict(op="throw", value=error.value, **source_site(node)))
+    steps.append(
+        dict(
+            op="if",
+            condition=dict(
+                op="binary",
+                operator="eq",
+                type="bool",
+                left=operands[1].value,
+                right=literal(0 if rhs.kind == "i64" else 0.0).value,
+            ),
+            then=body,
+            **{"else": []},
+            **source_site(node),
+        )
+    )
+    frame.project.decisions.append(
+        dict(
+            code="closed_scalar_true_division",
+            symbol=frame.name,
+            source_interpreter=captured,
+            input_types=[lhs.kind, rhs.kind],
+            zero_division_message=message,
+            proof="builtin numeric operands are evaluated once before the zero test; either zero sign raises at the source operation; NaN is not zero; the normal edge retains binary64 division",
+            **source_site(node),
+        )
+    )
+    return operands
+
+
 def binary(frame, node, op, lhs, rhs, steps=None):
     """Return a typed numeric expression, or None for the nonnumeric protocol."""
     if lhs.kind not in _NUMERIC or rhs.kind not in _NUMERIC:
@@ -765,12 +861,21 @@ def binary(frame, node, op, lhs, rhs, steps=None):
     nonzero = (b is not _UNKNOWN and b != 0) or (
         right_bounds is not None and not right_bounds[0] <= 0 <= right_bounds[1]
     )
-    if symbol == "div" and not nonzero:
-        frame.fail(
-            node, "division_contract", "the divisor must be proven nonzero at this use"
-        )
     result_type = "bool" if compare else ("f64" if floating else "i64")
-    facts = _numeric_facts(evaluate(a, b)) if known else {}
+    if floating and (compare or symbol == "div" and lhs.kind == rhs.kind == "i64"):
+        if any(
+            v.kind == "i64" and max(map(abs, v.bounds)) > 1 << 53 for v in (lhs, rhs)
+        ):
+            if known and (symbol != "div" or nonzero):
+                return literal(evaluate(a, b))
+            frame.fail(
+                node,
+                "integer_precision",
+                "integer/floating comparison or true division requires exact integer conversion",
+            )
+    facts = (
+        _numeric_facts(evaluate(a, b)) if known and (symbol != "div" or nonzero) else {}
+    )
     if result_type == "i64":
         corners = [evaluate(x, y) for x in lhs.bounds for y in rhs.bounds]
         low, high = min(corners), max(corners)
@@ -781,7 +886,7 @@ def binary(frame, node, op, lhs, rhs, steps=None):
                 "integer operation needs a proven signed 64-bit result range",
             )
         facts["range"] = (low, high)
-    elif result_type == "f64" and not known:
+    elif result_type == "f64" and not known and (symbol != "div" or nonzero):
         left_bounds = _binary64_bounds(lhs)
         right_bounds = right_bounds or _binary64_bounds(rhs)
         if left_bounds is not None and right_bounds is not None:
@@ -790,17 +895,10 @@ def binary(frame, node, op, lhs, rhs, steps=None):
             corners = [evaluate(x, y) for x in left_bounds for y in right_bounds]
             if all(map(math.isfinite, corners)):
                 facts["range"] = (min(corners), max(corners))
-    if floating and (compare or symbol == "div" and lhs.kind == rhs.kind == "i64"):
-        if any(
-            v.kind == "i64" and max(map(abs, v.bounds)) > 1 << 53 for v in (lhs, rhs)
-        ):
-            if known:
-                return literal(evaluate(a, b))
-            frame.fail(
-                node,
-                "integer_precision",
-                "integer/floating comparison or true division requires exact integer conversion",
-            )
+    if symbol == "div":
+        if not nonzero:
+            lhs, rhs = _guard_true_division(frame, node, lhs, rhs, steps)
+        lhs, rhs = (construct(frame, node, "float", [v], {}) for v in (lhs, rhs))
     left, right = (
         as_float(frame, node, v) if floating else v.value for v in (lhs, rhs)
     )

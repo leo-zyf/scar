@@ -170,6 +170,95 @@ if False:
     )
 
 
+def test_published_sequences_materialize_independent_typed_arrays(tmp_path):
+    from scar.contract import read_member, walk_operations
+
+    entry = tmp_path / "entry.py"
+    entry.write_text("""import numpy as np
+values = [1.0, 2.0]
+alias = values
+alias.append(3.0)
+first = np.array(values)
+values.append(4.0)
+second = np.array(values)
+print(first.size == 3, second.size == 4, first[2] == 3.0, values is alias)
+integers = [1, 2]
+real = np.array(integers, dtype=float)
+print(real[1] == 2.0)
+complex_values = [1j, 2j]
+complex_array = np.array(complex_values, dtype=np.complex128)
+print(complex_array[1].imag == 2.0)
+flags = [True, False]
+flag_array = np.array(flags, dtype=float)
+print(flag_array[0] == 1.0, flag_array[1] == 0.0)
+stable = [1.25, 2.75]
+stable_array = np.array(stable)
+stable.append(9.0)
+print(int(stable_array[1]) == 2)
+rows = [[1.0, 2.0], [3.0, 4.0]]
+matrix = np.array(rows)
+dimensions = [2, 2]
+shaped = np.zeros(dimensions)
+print(matrix[1, 0] == 3.0, shaped.size == 4)
+display = [1, 2]
+print(str(display) == '[1, 2]')
+dynamic_dimensions = [len(display), 2]
+dynamic_shaped = np.zeros(dynamic_dimensions)
+print(dynamic_shaped.size == 4)
+mixed = ['name', 2, True, None, 1.25]
+mixed_alias = mixed
+print(mixed[0] == 'name', mixed[1] + 3 == 5, mixed[2], mixed[3])
+print(str(mixed) == "['name', 2, True, None, 1.25]", mixed is mixed_alias)
+mixed_alias.append('tail')
+print(len(mixed) == 6, mixed is mixed_alias, mixed[-1] == 'tail')
+mixed_dynamic = ['label', len(display)]
+print(mixed_dynamic[0] == 'label', mixed_dynamic[1] == 2,
+      str(mixed_dynamic) == "['label', 2]")
+def temporary():
+    local = [5.0, 6.0]
+    return np.array(local)
+print(temporary()[1] == 6.0)
+""")
+    expected = _run([sys.executable, "-B", entry], tmp_path)
+    graph, plan, delivery = (tmp_path / name for name in ("graph", "plan", "delivery"))
+    _stage(tmp_path, "frontend", "build", "--entry", entry, "--out", graph)
+    entry.unlink()
+    _stage(tmp_path, "middle", "plan", "--graph", graph, "--out", plan)
+    ir = json.loads((plan / "exec-ir.json").read_bytes())
+    operations = [
+        node
+        for ref in ir["functions"]
+        for node in walk_operations(read_member(plan, ref)["body"])
+    ]
+    materializations = [n for n in operations if n["op"] == "array_from_sequence"]
+    assert len(materializations) == 6
+    assert {n["type"]["element"] for n in materializations} == {"f64", "c128"}
+    projections = [n for n in operations if n.get("member_tag_proof")]
+    assert {n["type"] for n in projections} == {"unit", "bool", "i64", "f64", "text"}
+    assert all(n["member_tag_proof"]["tag"] == n["type"] for n in projections)
+    flow = read_member(plan, ir["module"]["resource_model"]["resource_flow"])
+    movements = [
+        node
+        for node in flow["nodes"]
+        if node["kind"] == "COPY" and node["opcode"] == "array_from_sequence"
+    ]
+    assert len(movements) == 6
+    assert all(n["value_relation"] == "converted_elements" for n in movements)
+    assert all(n["destination_storage"] == "fresh" for n in movements)
+    shutil.rmtree(graph)
+    compiled = _stage(tmp_path, "backend", "compile", "--ir", plan, "--out", delivery)
+    shutil.rmtree(plan)
+    assert _run([compiled["executable"]], tmp_path) == expected
+
+    # Default integer arrays retain their source dtype; this contract must not
+    # silently route them through the registered binary64 storage provider.
+    entry.write_text("import numpy as np\nvalues = [1, 2]\na = np.array(values)\n")
+    _stage(tmp_path, "frontend", "build", "--entry", entry, "--out", graph)
+    _stage(tmp_path, "middle", "plan", "--graph", graph, "--out", plan, returncode=2)
+    rejected = json.loads((plan / "plan.json").read_bytes())
+    assert rejected["issues"][0]["code"] == "python.array_dtype"
+
+
 def test_literal_text_sequence_provenance_keeps_reads_mutations_and_bounds(tmp_path):
     entry = tmp_path / "entry.py"
     entry.write_text("""items = "first::second".split("::")
@@ -3969,3 +4058,184 @@ def test_cpp20_global_and_lexical_bindings(tmp_path):
     assert exported.value == 10
     bindings.main.argtypes, bindings.main.restype = [], c_int
     assert bindings.main() == 0 and exported.value == 13
+
+
+def test_builtin_true_division_keeps_order_zero_errors_and_source_profiles(tmp_path):
+    from types import SimpleNamespace
+
+    from scar.contract import read_member, walk_operations
+    from scar.middle.normalization import scalars, values
+
+    entry = tmp_path / "division.py"
+    entry.write_text("""def tap(label, value):
+    print(label, end='|')
+    return value
+
+def divide(a, b):
+    try:
+        print(tap('left', a) / tap('right', b))
+    except ZeroDivisionError as error:
+        print(str(error))
+
+def discard(a, b):
+    try:
+        tap('drop-left', a) / tap('drop-right', b)
+        print('normal')
+    except ZeroDivisionError as error:
+        print(str(error))
+
+def selected(flag, a, b):
+    if flag:
+        print(tap('branch-left', a) / tap('branch-right', b))
+    else:
+        print('unselected')
+
+large = 1e308
+infinity = large * large
+missing = infinity - infinity
+divide(7.0, 2.0)
+divide(7.0, 0.0)
+divide(7.0, -0.0)
+divide(missing, 0.0)
+divide(7.0, missing)
+discard(7.0, 0.0)
+discard(7.0, 2.0)
+selected(False, 7.0, 0.0)
+selected(True, 7.0, 2.0)
+for index in range(3):
+    try:
+        print(8 / (index - 1))
+    except ZeroDivisionError as error:
+        print(str(error))
+try:
+    1.0 / 0.0
+except ZeroDivisionError as error:
+    print(str(error))
+try:
+    1 / 0
+except ZeroDivisionError as error:
+    print(str(error))
+print(tap('nested-left', 7.0) / (tap('nested-right', 3.0) - 1.0))
+""")
+    expected = _run([sys.executable, "-B", entry], tmp_path)
+    assert expected.count(b"left|right|") == 5
+    assert b"unselected\n" in expected and expected.count(b"branch-left|") == 1
+    graph, plan, delivery = (tmp_path / name for name in ("graph", "plan", "delivery"))
+    _stage(tmp_path, "frontend", "build", "--entry", entry, "--out", graph)
+    entry.unlink()
+    report = _stage(tmp_path, "middle", "plan", "--graph", graph, "--out", plan)
+    assert report["status"] == "READY"
+    planned = json.loads((plan / "plan.json").read_bytes())
+    checks = [
+        record
+        for record in planned["normalizations"]
+        if record["code"] == "closed_scalar_true_division"
+    ]
+    assert checks and all(
+        record["source_interpreter"].startswith("cpython ") for record in checks
+    )
+    ir = json.loads((plan / "exec-ir.json").read_bytes())
+    operations = [
+        operation
+        for ref in ir["functions"]
+        for operation in walk_operations(read_member(plan, ref))
+    ]
+    assert any(operation["op"] == "throw" for operation in operations)
+    assert any(
+        operation.get("category") == "zero_division_error" for operation in operations
+    )
+    shutil.rmtree(graph)
+    compiled = _stage(tmp_path, "backend", "compile", "--ir", plan, "--out", delivery)
+    shutil.rmtree(plan)
+    assert _run([compiled["executable"]], tmp_path) == expected
+
+    def fail(node, field, detail):
+        raise ValueError(field)
+
+    frame = SimpleNamespace(
+        project=SimpleNamespace(text_profiles={}), scope={}, fail=fail
+    )
+    nonzero_steps = []
+    value = values.Value("f64", dict(op="var", name="value", type="f64"))
+    ratio = scalars.binary(frame, {}, "div", value, values.literal(2.0), nonzero_steps)
+    assert ratio.kind == "f64" and ratio.value["op"] == "binary"
+    assert nonzero_steps == []  # No profile lookup or test on a proven normal edge.
+    for interpreter, floating_message in (
+        ("cpython 3.10.0", "float division by zero"),
+        ("cpython 3.13.0", "float division by zero"),
+        ("cpython 3.14.0", "division by zero"),
+    ):
+        node = dict(source_runtime=dict(interpreter=interpreter))
+        assert scalars._true_division_message(
+            frame, node, values.literal(1.0), values.literal(0.0)
+        ) == (interpreter, floating_message)
+        assert scalars._true_division_message(
+            frame, node, values.literal(1), values.literal(0)
+        ) == (interpreter, "division by zero")
+    for interpreter in ("", "pypy 3.12.0", "cpython 3.15.0"):
+        with pytest.raises(ValueError, match="division_source_version"):
+            scalars._true_division_message(
+                frame,
+                dict(source_runtime=dict(interpreter=interpreter)),
+                values.literal(1.0),
+                values.literal(0.0),
+            )
+
+    entry.write_text(
+        "def ratio(a, b):\n    return a / b\nprint(ratio(9007199254740993, 1))\n"
+    )
+    wide_graph, wide_plan = tmp_path / "wide-graph", tmp_path / "wide-plan"
+    _stage(tmp_path, "frontend", "build", "--entry", entry, "--out", wide_graph)
+    entry.unlink()
+    _stage(
+        tmp_path,
+        "middle",
+        "plan",
+        "--graph",
+        wide_graph,
+        "--out",
+        wide_plan,
+        returncode=2,
+    )
+    rejected = json.loads((wide_plan / "plan.json").read_bytes())
+    assert rejected["issues"][0]["code"] == "python.integer_precision"
+
+
+def test_wide_integer_binary64_conversion_rounds_once_at_the_consumer(tmp_path):
+    from scar.contract import read_member, walk_operations
+
+    entry = tmp_path / "rounding.py"
+    # Both tie directions, a carry, both endpoints, and exact small integers.
+    operands = [
+        "9007199254740993",
+        "9007199254740995",
+        "-9007199254740995",
+        "18014398509481983",
+        "9223372036854775807",
+        "(-9223372036854775807 - 1)",
+        "7",
+    ]
+    entry.write_text(
+        "def observe(n):\n    print(float(n), 1.0 / n)\n"
+        + "".join(f"observe({operand})\n" for operand in operands)
+    )
+    expected = _run([sys.executable, "-B", entry], tmp_path)
+    graph, plan, delivery = (tmp_path / name for name in ("graph", "plan", "delivery"))
+    _stage(tmp_path, "frontend", "build", "--entry", entry, "--out", graph)
+    entry.unlink()
+    _stage(tmp_path, "middle", "plan", "--graph", graph, "--out", plan)
+    ir = json.loads((plan / "exec-ir.json").read_bytes())
+    conversions = [
+        operation
+        for ref in ir["functions"]
+        for operation in walk_operations(read_member(plan, ref))
+        if operation["op"] == "integer_to_binary64"
+    ]
+    assert conversions and all(
+        op["rounding"] == "nearest_even" and op["value"]["type"] == "i64"
+        for op in conversions
+    )
+    shutil.rmtree(graph)
+    compiled = _stage(tmp_path, "backend", "compile", "--ir", plan, "--out", delivery)
+    shutil.rmtree(plan)
+    assert _run([compiled["executable"]], tmp_path) == expected

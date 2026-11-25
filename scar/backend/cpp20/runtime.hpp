@@ -82,6 +82,26 @@ inline void write_stdout(std::string_view bytes, bool line_buffered) {
     flush_stdout();
 }
 
+// Round the unsigned magnitude before conversion. Every floating operation
+// below is exact, including at INT64_MIN and the positive carry into bit 63.
+inline double integer_to_binary64(std::int64_t value) {
+  static_assert(std::numeric_limits<double>::is_iec559 &&
+                std::numeric_limits<double>::digits == 53);
+  const auto bits = static_cast<std::uint64_t>(value);
+  const auto magnitude = value < 0 ? std::uint64_t{0} - bits : bits;
+  if (magnitude <= (std::uint64_t{1} << 53))
+    return static_cast<double>(value);
+  const int shift = static_cast<int>(std::bit_width(magnitude)) - 53;
+  const auto unit = std::uint64_t{1} << shift;
+  auto significand = magnitude >> shift;
+  const auto remainder = magnitude & (unit - 1);
+  if (remainder > unit / 2 ||
+      (remainder == unit / 2 && (significand & 1U) != 0))
+    ++significand;
+  const double result = std::ldexp(static_cast<double>(significand), shift);
+  return value < 0 ? -result : result;
+}
+
 // Format the shortest round-tripping decimal with the declared binary64
 // profile.
 inline std::string shortest_binary64(double value) {

@@ -11,6 +11,7 @@ from .values import (
     literal,
     is_array,
     is_product,
+    is_sequence,
     runtime,
     protocols,
     wire,
@@ -389,8 +390,15 @@ def _container(frame, node, value, steps, *, ascii_only=False):
     from .products import elements
 
     items = elements(frame, node, value, steps)
-    opening, closing = ("[", "]") if value.kind == "list" else ("(", ")")
-    if value.kind != "list" and len(items) == 1:
+    if items is None:
+        frame.fail(
+            node,
+            "sequence_display",
+            "container display needs current finite member contracts",
+        )
+    is_list = value.kind == "list" or is_sequence(value.kind)
+    opening, closing = ("[", "]") if is_list else ("(", ")")
+    if not is_list and len(items) == 1:
         closing = ",)"
     parts = [literal(opening)]
     for i, item in enumerate(items):
@@ -452,7 +460,7 @@ def render(frame, node, value, conversion, source_spec, steps, discard=False):
                 "nonempty array presentation requires a rank-specific format contract",
             )
         value = array_text(frame, node, value, steps)
-    elif source in {"list", "tuple"} or is_product(source):
+    elif source in {"list", "tuple"} or is_product(source) or is_sequence(source):
         if conversion == "none" and not spec["empty"]:
             frame.fail(
                 node,

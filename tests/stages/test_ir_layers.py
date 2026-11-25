@@ -2158,7 +2158,8 @@ consumers=fn('entry',[],[np_import,sp_import,assign('data',nested),assign('alias
     dict(op='expr',value=call(dict(op='python_builtin',name='print'),display)),
     dict(op='expr',value=dict(op='process_launch',target=dict(op='member',base=var('sp',True),field='Popen'),args=[argv],keywords=[]))],True)
 consumer_project=_Project({'entry':consumers})
-assert {id(inner),id(nested),id(display),id(argv)} <= consumer_project.sequences.static_lists
+assert {id(display),id(argv)} <= consumer_project.sequences.static_lists
+assert not {id(inner),id(nested)} & consumer_project.sequences.static_lists
 mutating=deepcopy(consumers)
 mutating['body'].append(dict(op='expr',value=call(dict(op='member',base=var('alias',True),field='append'),lit(3))))
 mutating_project=_Project({'entry':mutating})
@@ -2178,8 +2179,11 @@ selected=fn('entry',[],[assign('configuration',configuration),
     dict(op='if',condition=var('configuration',True),then=[],**{'else':[]})],True)
 selected_module=dict(entry='entry',functions=[selected],globals=[],externs=[],records=[],declarations={})
 proven,_,issues=normalize_protocols(selected_module)
-assert not issues and not any(n['op']=='sequence_make' for n in walk_operations(proven['functions'][0]['body']))
-assert any(n['op']=='assign' and n['target'].get('name')=='py:test:selected' and n['value'].get('value')==4 for n in walk_operations(proven['functions'][0]['body']))
+assert not issues
+selected_ops=list(walk_operations(proven['functions'][0]['body']))
+assert any(n['op']=='sequence_make' for n in selected_ops)
+assert any(n['op']=='sequence_get' and n.get('may_raise') is True for n in selected_ops)
+assert any(n['op']=='assign' and n['target'].get('name')=='py:test:selected' and n['value'].get('op')=='var' for n in selected_ops)
 assert any(n['op']=='binary' and n['operator']=='div' for n in walk_operations(proven['functions'][0]['body']))
 for consumer in (
     lambda:call(dict(op='member',base=var('inner',True),field='append'),lit(3)),
@@ -2203,7 +2207,7 @@ project_import=dict(op='python_import',provider='project',module='settings',requ
     import_resolution=dict(status='project',module='settings'),bound_value=dict(**{'class':'module'},module='settings'))
 imported=fn('entry',[],[project_import,assign('local',dict(op='member',base=var('settings',True),field='configuration')),
     assign('ratio',dict(op='binary',operator='div',left=lit(1.0),right=selector(var('local',True))))],True)
-assert id(configuration) in _Project({'entry':imported,'settings':settings}).sequences.static_lists
+assert id(configuration) not in _Project({'entry':imported,'settings':settings}).sequences.static_lists
 imported['body'].append(dict(op='expr',value=call(dict(op='member',base=var('local',True),field='append'),lit(9))))
 assert id(configuration) not in _Project({'entry':imported,'settings':settings}).sequences.static_lists
 stored=aggregate([lit(8.0),lit(9.0)],'slice-rhs')
@@ -2550,7 +2554,8 @@ assert values.product_members(kind)==(array,'numpy_f64')
 assert closed['result']==dict(kind='product_ref',items=[values.wire(array),'f64'])
 assert any(op['op']=='product_make' for op in walk_operations(closed['body']))
 assert project.result_facts['pack']['product_members']==[{},{}]
-assert arrays.may_write_external(project.compile('mutate',(kind,)),project.closed)
+from scar.middle.normalization.effects import call_writes
+assert call_writes(project.compile('mutate',(kind,)),project.closed)['arrays'] is None
 
 frame=_Frame(project,caller,())
 facts=project.array_state.create((2,),[1.,2.])
@@ -5016,6 +5021,90 @@ def test_import_state_snapshots_share_guards_and_keep_epochs_monotone():
     assert state.registry_entry("package") is latest
 
 
+def test_call_writes_follow_actual_ports_and_open_callbacks():
+    from scar.middle.normalization import effects, values
+    from scar.middle.normalization.protocols import _Frame, _Project
+
+    def var(name):
+        return dict(op="var", name=name)
+
+    def fn(name, params, body):
+        return dict(
+            name=name,
+            params=[dict(name=p, binding="positional") for p in params],
+            body=body,
+            python_scope=dict(kind="function", module="m"),
+            call_protocol=dict(kind="regular"),
+        )
+
+    # Two nested calls may touch the second actual via a local view and append
+    # to the third actual. Neither touches the first argument's allocation.
+    leaf = fn(
+        "leaf",
+        ["a", "s"],
+        [
+            dict(op="array_store", base=var("a")),
+            dict(op="sequence_append", base=var("s")),
+        ],
+    )
+    outer = fn(
+        "outer",
+        ["first", "second", "list"],
+        [
+            dict(op="decl", name="row", init=dict(op="array_view", base=var("second"))),
+            dict(op="call", callee="leaf", args=[var("row"), var("list")]),
+        ],
+    )
+    table = {"leaf": leaf, "outer": outer}
+    assert effects.call_writes(outer, table) == {"arrays": {1}, "sequences": {2}}
+    first = values.array_kind(1)
+    kinds = (first, first, values.sequence_kind("f64"))
+    caller = fn("caller", [], [])
+    project = _Project(
+        {"caller": caller, "outer": fn("outer", ["first", "second", "list"], [])}
+    )
+    # Use a sealed signature and the actual M2 call handler, so the check
+    # includes caller-side argument substitution and subsequent cached calls.
+    outer["params"] = [
+        dict(p, type=values.wire(k)) for p, k in zip(outer["params"], kinds)
+    ]
+    outer["result"] = "unit"
+    project.closed.update(table)
+    project.types["outer"] = kinds
+    project.result_kinds["outer"] = "unit"
+    project.result_facts["outer"] = {}
+    frame = _Frame(project, caller, ())
+    bound = [
+        values.Value(first, None, project.array_state.create((1,), [i])).at(name)
+        for i, name in enumerate(("x", "y"))
+    ]
+    seq = values.Value(kinds[2], None, project.sequences.register(True)).at("s")
+    frame.invoke_project({}, "outer", [*bound, seq], {}, [], True)
+    assert (
+        project.array_state.region(bound[0]) is not None
+        and project.array_state.region(bound[1]) is None
+    )
+    assert not project.sequences.safe(seq)
+    # Deferred effects can become visible on an already compiled body. No
+    # earlier readonly/parameter-only decision may survive as a cached proof.
+    for annotation in (
+        {"external_effect": "UNKNOWN"},
+        {"writes": ["UNKNOWN"]},
+        {"effects": ["OPAQUE"]},
+        {"pending_import_effect": True},
+    ):
+        leaf["body"].append(dict(op="external_action", **annotation))
+        assert effects.call_writes(outer, table) == {"arrays": None, "sequences": None}
+        frame.invoke_project({}, "outer", [*bound, seq], {}, [], True)
+        assert project.array_state.region(bound[0]) is None
+        leaf["body"].pop()
+    leaf["body"] = [
+        dict(op="decl", name="tmp", init=dict(op="array_create")),
+        dict(op="array_store", base=var("tmp")),
+    ]
+    assert effects.call_writes(outer, table) == {"arrays": set(), "sequences": set()}
+
+
 def test_captured_effects_retain_conditional_state_checks_without_reexecution():
     from scar.middle.normalization.protocols import _Project, _Frame
 
@@ -5346,6 +5435,98 @@ def test_mapping_domain_keeps_tags_shared_handles_and_live_iteration():
         mappings.literal(frame, dict(op="mapping", entries=[]), steps)
 
 
+def test_empty_counted_regions_keep_iterator_effects_and_skip_back_edge_facts():
+    result = _layer(
+        "normalization",
+        """from scar.middle.normalization import arrays,sequences,values
+from scar.middle.normalization.protocols import _Project,_Frame,_Unclosed
+from scar.contract import walk_operations
+def var(name): return dict(op='var',name=name)
+def lit(value): return dict(op='literal',value=value)
+def call(target,*args): return dict(op='python_invoke',target=target,args=list(args),keywords=[])
+def assign(name,value): return dict(op='assign',target=var(name),value=value)
+def fixture():
+    fn=dict(name='caller',params=[],python_scope=dict(kind='function',module='test'),body=[])
+    project=_Project({'caller':fn})
+    frame=_Frame(project,fn,())
+    facts=project.array_state.create((1,),[3.])
+    frame.env['array']=values.Value(values.array_kind(1),None,facts).at('array')
+    steps=[]
+    frame.env['items']=sequences.capture(frame,{},[values.literal(4)],steps).at('items')
+    frame.env['target']=values.literal(7).at('target')
+    frame.env['seen']=values.literal(-1).at('seen')
+    return project,frame,steps
+def stores():
+    return [dict(op='assign',target=dict(op='index',base=var('array'),indices=[lit(0)]),value=lit(9.)),
+            dict(op='expr',value=call(dict(op='member',base=var('items'),field='append'),lit(5)))]
+def loop(domain,body,otherwise=()):
+    return dict(op='for',protocol='iterator',range=domain,target=var('target'),body=body,**{'else':list(otherwise)})
+for arguments in [(0,),(3,3),(0,4,-1)]:
+    project,frame,steps=fixture()
+    args=[lit(value) for value in arguments]
+    args[0]=dict(op='assignment_expression',target=var('seen'),value=args[0])
+    domain=call(dict(op='python_builtin',name='range'),*args)
+    body=stores()+[dict(op='expr',value=call(var('unreachable_callback')),site='dead-body')]
+    source=loop(domain,body,[assign('else_ran',lit(True))])
+    assert frame.loop(source,steps)
+    assert frame.env['seen'].exact==arguments[0] and frame.env['target'].exact==7
+    assert frame.env['else_ran'].exact is True
+    assert project.array_state.region(frame.env['array'])==((1,),(3.,))
+    assert project.sequences.contents[frame.env['items'].facts['sequence_state']][0].exact==4
+    output=next(n for n in steps if n['op']=='for')
+    assert not output['body']
+    assert ('caller','dead-body') in project.skipped_sites
+    assert next(i for i,n in enumerate(steps) if n['op']=='assign' and n['target']['name']=='seen') < steps.index(output)
+    assert steps.index(output) < next(i for i,n in enumerate(steps) if n['op']=='assign' and n['target']['name']=='else_ran')
+
+# A zero-trip body does not bind a fresh target, but its else suite still writes.
+project,frame,steps=fixture()
+del frame.env['target']
+assert frame.loop(loop(call(dict(op='python_builtin',name='range'),lit(0)),stores(),stores()),steps)
+assert 'target' not in frame.env and not project.array_state.contents
+assert not project.sequences.contents
+assert any(n['op']=='array_store' for n in steps)
+
+# An iterator error is not hidden by discarding its unreachable body.
+project,frame,steps=fixture()
+try: frame.loop(loop(call(dict(op='python_builtin',name='range'),lit(0),lit(0),lit(0)),stores()),steps)
+except _Unclosed as error: assert error.issue['code']=='python.range_step'
+else: raise AssertionError('invalid iterator was skipped')
+
+# Potentially nonempty ranges still invalidate repeated writes.
+project,frame,steps=fixture()
+frame.env['stop']=values.Value('i64',None,dict(range=(-1,1))).at('stop')
+assert frame.loop(loop(call(dict(op='python_builtin',name='range'),var('stop')),stores()),steps)
+assert not project.array_state.contents and not project.sequences.contents
+
+# Empty comprehensions evaluate the outer iterator and allocate the result,
+# without binding the induction variable or touching filters/inner iterators.
+project,frame,steps=fixture()
+outer_stop=dict(op='index',base=dict(op='aggregate',kind='tuple',identity=dict(kind='fresh'),
+    items=[call(dict(op='python_builtin',name='print'),lit('iterator')),lit(0)]),indices=[lit(1)])
+source=dict(op='sequence_comprehension',kind='list',scope=dict(id='comp'),
+    generators=[dict(target=var('index'),iterable=call(dict(op='python_builtin',name='range'),outer_stop),
+                     filters=[call(var('unreachable_filter'))]),
+                dict(target=var('inner'),iterable=call(var('unreachable_iterator')),filters=[])],
+    element=call(var('unreachable_element')),site='empty-comprehension')
+result=frame.comprehension(source,steps)
+assert 'index' not in frame.env and 'inner' not in frame.env
+assert project.array_state.region(frame.env['array'])==((1,),(3.,))
+assert project.sequences.contents[frame.env['items'].facts['sequence_state']][0].exact==4
+assert project.sequences.contents[result.facts['sequence_state']]==()
+operations=list(walk_operations(steps))
+assert sum(n['op']=='text_print' for n in operations)==1
+assert next(i for i,n in enumerate(steps) if any(op['op']=='text_print' for op in walk_operations(n))) < next(i for i,n in enumerate(steps) if any(op['op']=='sequence_make' and op.get('site')=='empty-comprehension' for op in walk_operations(n)))
+assert not next(n for n in steps if n['op']=='for')['body']
+# A later real append supplies the element constraint, never a virtual body run.
+sequences.invoke(frame,{},values.Value('sequence_method',(result,'append')),[values.literal(2)],{},steps,True)
+assert project.sequences.element(result.kind)=='i64'
+print(json.dumps(True))
+""",
+    )
+    assert result
+
+
 def test_function_defaults_capture_once_and_keep_managed_identity():
     from types import SimpleNamespace
 
@@ -5520,5 +5701,113 @@ def test_sequence_literal_initializers_follow_aliases_and_invalidation():
     bounded = capture([values.literal(i) for i in range(65)])
     assert bounded.facts["sequence_state"] not in domain.contents
     dynamic = capture([values.Value("text", None).at("runtime_text")])
-    assert dynamic.facts["sequence_state"] not in domain.contents
+    metadata = domain.contents[dynamic.facts["sequence_state"]]
+    assert len(metadata) == 1 and metadata[0].kind == "text"
+    assert metadata[0].value is None and metadata[0].facts == {}
+    assert get(dynamic, 0).exact is values._UNKNOWN
     assert sum(operation["op"] == "sequence_make" for operation in steps) == 7
+
+
+def test_finite_scalar_selections_propagate_ranges_without_replacing_winners():
+    import math
+    import operator
+    import struct
+    from types import SimpleNamespace
+
+    from scar.middle.normalization import scalars, values
+
+    steps, decisions = [], []
+
+    def effect(operation, kind, body, discard=False, *, facts=None):
+        name = f"selected{len(body)}"
+        body.append(dict(op="decl", name=name, init=operation))
+        return values.Value(kind, None, facts or {}).at(name)
+
+    def fail(node, field, detail):
+        raise ValueError(field)
+
+    frame = SimpleNamespace(
+        name="entry",
+        project=SimpleNamespace(decisions=decisions),
+        effect=effect,
+        fail=fail,
+    )
+
+    def variable(name, kind, bounds=None):
+        return values.Value(
+            kind,
+            dict(op="var", name=name, type=values.wire(kind)),
+            {} if bounds is None else {"range": bounds},
+        )
+
+    def select(name, args):
+        return scalars.extreme(frame, {}, name, args, {}, steps)
+
+    inputs = [
+        variable("a", "f64", (-10.0, 10.0)),
+        variable("b", "numpy_f64", (2.0, 4.0)),
+        variable("c", "f64", (-2.0, 6.0)),
+    ]
+    high, low = select("max", inputs), select("min", inputs)
+    assert high.kind == low.kind == "binary64_choice"
+    assert high.facts == {"range": (2.0, 10.0)}
+    assert low.facts == {"range": (-10.0, 4.0)}
+    assert scalars.construct(frame, {}, "int", [high], {}).facts == {"range": (2, 10)}
+    difference = scalars.binary(
+        frame,
+        {},
+        "sub",
+        scalars.construct(frame, {}, "float", [high], {}),
+        scalars.construct(frame, {}, "float", [low], {}),
+    )
+    assert difference.facts == {"range": (-2.0, 20.0)}
+    assert scalars.construct(frame, {}, "int", [difference], {}).facts == {
+        "range": (-2, 20)
+    }
+    assert all(step["init"]["op"] == "select" for step in steps)
+    assert all(step["init"]["condition"]["operator"] in {"gt", "lt"} for step in steps)
+
+    integers = [variable("i", "i64", (-100, 100)), variable("j", "i64", (3, 4))]
+    assert select("min", integers).facts == {"range": (-100, 4)}
+    assert select("max", integers).facts == {"range": (3, 100)}
+
+    # A finite clamp endpoint cannot make an unbounded, NaN or infinite second
+    # argument finite; first-winner unordered comparisons remain real selects.
+    for unknown in (
+        variable("unbounded", "f64"),
+        variable("maybe_array_scalar", "binary64_choice"),
+        values.literal(math.nan),
+        values.literal(math.inf),
+    ):
+        result = select("max", [values.literal(0.0), unknown])
+        assert result.facts == {}
+        with pytest.raises(ValueError, match="integer_conversion_range"):
+            scalars.construct(frame, {}, "int", [result], {})
+
+    start = len(steps)
+    zeros = [
+        variable("left", "f64", (-0.0, 0.0)),
+        variable("right", "numpy_f64", (-0.0, 0.0)),
+    ]
+    first = select("max", zeros)
+    assert first.kind == "binary64_choice" and first.exact is values._UNKNOWN
+
+    def evaluate(node, environment):
+        if node["op"] == "var":
+            return environment[node["name"]]
+        if node["op"] == "binary":
+            return {"gt": operator.gt, "lt": operator.lt}[node["operator"]](
+                evaluate(node["left"], environment),
+                evaluate(node["right"], environment),
+            )
+        assert node["op"] == "select"
+        side = "then" if evaluate(node["condition"], environment) else "else"
+        return evaluate(node[side], environment)
+
+    for left, right in ((0.0, -0.0), (-0.0, 0.0)):
+        environment = dict(left=left, right=right)
+        for step in steps[start:]:
+            environment[step["name"]] = evaluate(step["init"], environment)
+        assert struct.pack("!d", environment[first.value["name"]]) == struct.pack(
+            "!d", max(left, right)
+        )

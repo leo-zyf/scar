@@ -7,7 +7,7 @@ They are private to one project normalization and must disappear before sealing.
 from copy import deepcopy
 
 from scar.contract import walk_operations
-from . import values
+from . import mappings, values
 from .values import Value, literal
 
 
@@ -271,6 +271,11 @@ class Domains:
                 if target.get("op", "var") in {"var", "decl"}:
                     for source in contained(function, rhs):
                         link(source, _slot(function, target))
+                    # A published module binding exposes the actual mutable
+                    # list through its namespace, including to opaque callbacks.
+                    # Syntactic read-only consumers cannot erase that identity.
+                    if target.get("scope") == "global":
+                        runtime.add(_slot(function, target))
                     scan(function, rhs, "alias")
                 else:
                     scan(function, target)
@@ -552,7 +557,12 @@ class Domains:
     def safe(self, value):
         return self.states.get(value.facts.get("sequence_state"), False)
 
-    def invalidate(self):
+    def invalidate(self, source=None):
+        token = source.facts.get("sequence_state") if source is not None else None
+        if token in self.states:
+            self.contents.pop(token, None)
+            self.states[token] = False
+            return
         self.invalidate_contents()
         for token in self.states:
             self.states[token] = False
@@ -599,7 +609,14 @@ def produced(
 def capture(frame, node, items, steps):
     domain = frame.project.sequences
     kind = domain.new(frame, node)
-    for item in items:
+    scalar_tags = {"unit", "bool", "i64", "f64", "text"}
+    tagged = len({item.kind for item in items}) > 1 and all(
+        item.kind in scalar_tags for item in items
+    )
+    stored_items = (
+        [mappings.pack(frame, node, item) for item in items] if tagged else items
+    )
+    for item in stored_items:
         if not values.runtime(item.kind):
             frame.fail(
                 node,
@@ -610,25 +627,22 @@ def capture(frame, node, items, steps):
     operation = dict(
         op="sequence_make",
         type=values.wire(kind),
-        items=[item.value for item in items],
+        items=[item.value for item in stored_items],
         effects=["MEM", "STATE"],
         may_raise=True,
         **values.source_site(node),
     )
     facts = domain.register(all(text_order_atom(item) for item in items))
-    primitive = {
-        "unit": type(None),
-        "bool": bool,
-        "i64": int,
-        "f64": float,
-        "text": str,
-    }
+    primitive = {"unit", "bool", "i64", "f64", "text"}
     if len(items) <= 64 and all(
-        item.kind in primitive and type(item.exact) is primitive[item.kind]
+        item.kind in primitive
+        or values.is_sequence(item.kind)
+        and item.facts.get("sequence_state") in domain.states
         for item in items
     ):
         domain.contents[facts["sequence_state"]] = tuple(
-            Value(item.kind, None, deepcopy(item.facts)) for item in items
+            Value(domain.resolve_kind(item.kind), None, deepcopy(item.facts))
+            for item in items
         )
     return frame.effect(
         operation,
@@ -636,6 +650,19 @@ def capture(frame, node, items, steps):
         steps,
         facts=facts,
     )
+
+
+def elements(frame, node, value, steps):
+    """Read a proven current finite member set without erasing list identity."""
+    contents = frame.project.sequences.contents.get(value.facts.get("sequence_state"))
+    if contents is None:
+        return None
+    base = frame.effect(value.value, value.kind, steps, facts=value.facts)
+    result = []
+    for index in range(len(contents)):
+        item = get(frame, node, base, literal(index))
+        result.append(frame.effect(item.value, item.kind, steps, facts=item.facts))
+    return tuple(result)
 
 
 def member(frame, node, base, name):
@@ -710,7 +737,16 @@ def invoke(frame, node, target, args, keywords, steps, discard):
         if keywords or len(args) != 1:
             frame.fail(node, "sequence_append", "append requires exactly one element")
         base = target.value[0]
-        _checked(frame, node, lambda: domain.constrain(base.kind, args[0].kind))
+        try:
+            element = domain.element(base.kind)
+        except ValueError:
+            element = None
+        value = (
+            mappings.pack(frame, node, args[0])
+            if element == "structured_value"
+            else args[0]
+        )
+        _checked(frame, node, lambda: domain.constrain(base.kind, value.kind))
         token = base.facts.get("sequence_state")
         domain.forget_contents(base)
         if token not in domain.states:
@@ -722,7 +758,7 @@ def invoke(frame, node, target, args, keywords, steps, discard):
                 op="sequence_append",
                 type="unit",
                 base=base.value,
-                value=frame.scalar(args[0], node),
+                value=frame.scalar(value, node),
                 effects=["MEM", "STATE"],
                 may_raise=True,
                 reads=["sequence.state"],
@@ -797,13 +833,30 @@ def get(frame, node, base, index):
     )
     contents = domain.contents.get(base.facts.get("sequence_state"))
     position = index.exact
+    projection = {}
     if (
         contents is not None
         and type(position) is int
         and -len(contents) <= position < len(contents)
-        and contents[position].kind == element
     ):
-        facts.update(deepcopy(contents[position].facts))
+        member = contents[position]
+        if element == "structured_value" and member.kind in {
+            "unit",
+            "bool",
+            "i64",
+            "f64",
+            "text",
+        }:
+            element = member.kind
+            projection["member_tag_proof"] = dict(
+                semantics_version=1,
+                rule="current_reaching_sequence_member",
+                index_value=position,
+                member_count=len(contents),
+                tag=element,
+            )
+        if member.kind == element:
+            facts.update(deepcopy(member.facts))
     return Value(
         element,
         dict(
@@ -815,6 +868,7 @@ def get(frame, node, base, index):
             effects=["STATE"],
             may_raise=True,
             reads=["sequence.state"],
+            **projection,
             **values.source_site(node),
         ),
         facts,

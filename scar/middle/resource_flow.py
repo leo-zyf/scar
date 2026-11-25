@@ -205,6 +205,7 @@ def analyze(module, *, partial=False):
                             "equal_bytes": "same_as",
                             "broadcast": "broadcast_of",
                             "tree_copy": "tree_copy_of",
+                            "converted_elements": "conversion_of",
                         }[relation],
                         materialization=mats[0],
                     )
@@ -510,6 +511,7 @@ def analyze(module, *, partial=False):
             if op in {
                 "array_create",
                 "array_literal",
+                "array_from_sequence",
                 "array_reshape",
                 "array_broadcast_copy",
             }:
@@ -568,6 +570,7 @@ def analyze(module, *, partial=False):
             if region["dtype"] is not None and op in {
                 "array_create",
                 "array_literal",
+                "array_from_sequence",
                 "array_copy",
                 "array_broadcast_copy",
                 "array_unary",
@@ -575,7 +578,31 @@ def analyze(module, *, partial=False):
                 "array_iota",
             }:
                 region["_origin"] = dict(owner=owner, path=path)
-            if op in {"array_copy", "array_broadcast_copy"}:
+            if op == "array_from_sequence":
+                source_type = value.get("value", {}).get("type", {})
+                projection(
+                    owner,
+                    value,
+                    path,
+                    scope,
+                    [*path, "value"],
+                    path,
+                    dict(
+                        dtype=source_type.get("element"),
+                        shape=[None],
+                        offset_bytes=None,
+                        strides_bytes=None,
+                        representation="logical_sequence_elements",
+                    ),
+                    region,
+                    domain="host_memory",
+                    relation="converted_elements",
+                    byte_count=dict(kind="result_nbytes", owner=owner, path=path),
+                    conditions=[
+                        "source_sequence_elements_read_before_independent_result"
+                    ],
+                )
+            elif op in {"array_copy", "array_broadcast_copy"}:
                 projection(
                     owner,
                     value,

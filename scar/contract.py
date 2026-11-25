@@ -673,7 +673,7 @@ def validate_resource_flow(flow, resources=None):
             or node["source"] == node["target"]
             or node.get("blocking") is not True
             or node.get("value_relation")
-            not in {"equal_bytes", "broadcast", "tree_copy"}
+            not in {"equal_bytes", "broadcast", "tree_copy", "converted_elements"}
             or node.get("destination_storage")
             not in {"fresh", "existing", "may_create", "fresh_tree"}
             or not isinstance(node.get("opcode"), str)
@@ -767,7 +767,8 @@ def validate_resource_flow(flow, resources=None):
         if not (
             logical.get("kind") == "operand_version"
             and port(logical)
-            or logical.get("kind") in {"same_as", "broadcast_of", "tree_copy_of"}
+            or logical.get("kind")
+            in {"same_as", "broadcast_of", "tree_copy_of", "conversion_of"}
             and logical.get("materialization") in materializations
             and logical["materialization"] != ref
         ):
@@ -820,6 +821,7 @@ def validate_resource_flow(flow, resources=None):
             "equal_bytes": "same_as",
             "broadcast": "broadcast_of",
             "tree_copy": "tree_copy_of",
+            "converted_elements": "conversion_of",
         }[node["value_relation"]]
         if target["logical_value"] != dict(
             kind=relation, materialization=node["source"]

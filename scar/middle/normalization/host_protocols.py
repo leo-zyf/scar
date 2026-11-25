@@ -545,7 +545,9 @@ class ImportOccurrences:
 
     def begin(self, row, node, steps):
         if row["id"] not in self.initialization_points:
-            marker = dict(op="block", body=[], **source_site(node))
+            marker = dict(
+                op="block", body=[], pending_import_effect=True, **source_site(node)
+            )
             self.initialization_points[row["id"]] = (marker, node)
             steps.append(marker)
 

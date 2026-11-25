@@ -3,7 +3,8 @@
 import re
 
 from scar.contract import digest, json_bytes
-from .values import Value, literal, source_site, wire
+from . import sequences
+from .values import Value, is_sequence, literal, source_site, wire
 
 PROCESS = "handle:process"
 STREAM = "handle:text_stream"
@@ -245,6 +246,15 @@ def invoke(frame, node, target, args, keywords, steps, discard):
     if command is None:
         frame.fail(node, "process_arguments", "process launch needs an argument vector")
     shell = options.pop("shell", literal(False))
+    if is_sequence(command.kind):
+        members = sequences.elements(frame, node, command, steps)
+        if members is None:
+            frame.fail(
+                node,
+                "process_arguments",
+                "process arguments need a current finite vector of text values",
+            )
+        command = Value("tuple", members)
     request = _command(frame, node, command, shell)
     stdin = options.pop("stdin", literal(None))
     stdout = options.pop("stdout", literal(None))

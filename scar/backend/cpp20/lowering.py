@@ -71,6 +71,7 @@ _ARRAY_EFFECTS = {
     "array_create": {"MEM", "VAL"},
     "array_iota": {"MEM", "VAL"},
     "array_literal": {"MEM", "VAL"},
+    "array_from_sequence": {"MEM", "STATE", "XFER"},
     "array_unary": {"MEM", "VAL"},
     "array_copy": {"MEM", "STATE", "XFER"},
     "array_view": {"STATE", "MEM"},
@@ -1045,7 +1046,11 @@ class Lowerer:
             )
         ):
             raise ValueError(f"unsupported ndarray operation or effects for {op}")
-        port = node.get("base") or node.get("left") or node.get("value") or node
+        port = (
+            node
+            if op == "array_from_sequence"
+            else node.get("base") or node.get("left") or node.get("value") or node
+        )
         port_type = port.get("type")
         element = port_type.get("element") if isinstance(port_type, dict) else port_type
         uses = self.operator_backends.get("ndarray", {}).get("operations_by_element")
@@ -1200,6 +1205,29 @@ class Lowerer:
         self.type_name(ty)
         elem = self.type_name(ty["element"])
         target = template("scar::" + op, elem)
+        if op == "array_from_sequence":
+            source = node.get("value", {})
+            source_type = source.get("type")
+            if (
+                rank != 1
+                or not isinstance(source_type, dict)
+                or source_type.get("kind") != "sequence_ref"
+                or not isinstance(source_type.get("element"), str)
+                or source_type.get("element") not in {"bool", "i64", "f64", "c128"}
+                or source_type.get("element") == "c128"
+                and ty["element"] != "c128"
+                or type(node.get("semantics_version")) is not int
+                or node.get("semantics_version") != 1
+                or node.get("conversion") != "numpy_numeric_sequence"
+                or node.get("ownership") != "fresh_independent_storage"
+                or node.get("source_read") != "current_elements_in_index_order"
+                or node.get("reads") != ["sequence.state"]
+                or node.get("writes") != ["new.array_storage"]
+                or node.get("may_raise") is not True
+            ):
+                raise ValueError("array_from_sequence contract mismatch")
+            self.type_name(source_type)
+            return call(target, self.expression(source))
         if op == "array_iota":
             count = node.get("count")
             limit = node.get("max_count")
@@ -1431,6 +1459,15 @@ class Lowerer:
             return self.process_spawn(expr)
         if op == "array_text_read":
             return self.text_array_read(expr)
+        if op == "integer_to_binary64":
+            value = expr["value"]
+            if (
+                expr.get("type") != "f64"
+                or value.get("type") != "i64"
+                or expr.get("rounding") != "nearest_even"
+            ):
+                raise ValueError("invalid integer to binary64 conversion contract")
+            return call("scar::integer_to_binary64", E(value))
         if op == "scalar_power":
             values = (expr["base"], expr["exponent"])
             if (

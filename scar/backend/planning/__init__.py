@@ -32,6 +32,7 @@ _ARRAY_OPERATIONS = {
     "array_create",
     "array_iota",
     "array_literal",
+    "array_from_sequence",
     "array_copy",
     "array_unary",
     "array_view",
@@ -81,6 +82,8 @@ def _array_ports(node):
         yield result
     for role in ("base", "left", "right", "value"):
         if isinstance(node.get(role), dict):
+            if node["op"] == "array_from_sequence" and role == "value":
+                continue
             yield node[role].get("type")
     if node["op"] == "array_literal":
         for item in node.get("values", ()):
@@ -343,6 +346,36 @@ def _ndarray_binding(requirement, observed, elements, nodes):
     qualified = {element: set() for element in declared}
     for node in nodes:
         op = node["op"]
+        if op == "array_from_sequence":
+            source = node.get("value", {}).get("type")
+            result = node.get("type")
+            if (
+                not isinstance(source, dict)
+                or source.get("kind") != "sequence_ref"
+                or not isinstance(source.get("element"), str)
+                or source.get("element") not in {"bool", "i64", "f64", "c128"}
+                or not isinstance(result, dict)
+                or result.get("rank") != 1
+                or result.get("element") not in {"f64", "c128"}
+                or source.get("element") == "c128"
+                and result.get("element") != "c128"
+                or type(node.get("semantics_version")) is not int
+                or node.get("semantics_version") != 1
+                or node.get("conversion") != "numpy_numeric_sequence"
+                or node.get("ownership") != "fresh_independent_storage"
+                or node.get("source_read") != "current_elements_in_index_order"
+                or set(node.get("effects", ())) != {"MEM", "STATE", "XFER"}
+                or node.get("reads") != ["sequence.state"]
+                or node.get("writes") != ["new.array_storage"]
+                or node.get("may_raise") is not True
+            ):
+                raise QualificationFailure(
+                    "semantic_contract",
+                    "ndarray.sequence_materialization",
+                    "array_from_sequence requires a closed numeric list and fresh rank-one array storage",
+                    operation=op,
+                    site=node.get("site"),
+                )
         # Associate each use with its own ports. One image can have both
         # complex arithmetic and real-only operations on independent arrays.
         kinds = set()

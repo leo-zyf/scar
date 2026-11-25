@@ -315,6 +315,15 @@ public:
     return from_row_major(shape(layout), values);
   }
 
+  template <class U>
+  static ndarray from_sequence(const std::shared_ptr<std::vector<U>> &source) {
+    const auto size = source->size();
+    auto result = allocate({size}, size);
+    if (size)
+      xt::noalias(*result.region_->storage) = xt::cast<T>(xt::adapt(*source));
+    return result;
+  }
+
   static ndarray from_row_major(std::vector<std::size_t> dims,
                                 std::span<const T> values) {
     auto size = count(dims);
@@ -457,6 +466,11 @@ template <class T> struct array_elements {
 };
 template <class T> ndarray<T> array_literal(array_elements<T> input) {
   return ndarray<T>::literal(input.shape, input.values);
+}
+
+template <class T, class U>
+ndarray<T> array_from_sequence(const std::shared_ptr<std::vector<U>> &source) {
+  return ndarray<T>::from_sequence(source);
 }
 
 template <class T> struct array_operand {

@@ -8,6 +8,7 @@ from scar.contract import walk_operations
 from scar.source_contracts import python_source_boundary
 
 from . import exceptions, fourier, products, scalars, sequences, text
+from .effects import FRESH_ARRAYS
 from .scalars import as_float as _as_float
 from .values import (
     Value,
@@ -202,60 +203,6 @@ class LiteralState:
         self.contents = {key: val for key, val in self.contents.items() if key <= first}
 
 
-def may_write_external(function, functions, active=()):
-    """Distinguish writes to fresh local arrays from caller-visible writes."""
-    name = function["name"]
-    if name in active:
-        return True
-    assignments = {}
-    operations = list(walk_operations(function["body"]))
-    for node in operations:
-        if node["op"] == "decl" and "init" in node:
-            assignments.setdefault(node["name"], []).append(node["init"])
-        elif node["op"] == "assign" and node["target"].get("op") == "var":
-            target = node["target"]
-            if target.get("scope") != "global":
-                assignments.setdefault(target["name"], []).append(node["value"])
-    fresh = set()
-    parameters = {p["name"] for p in function["params"]}
-
-    def private(expr):
-        op = expr["op"]
-        if op in {
-            "array_create",
-            "array_iota",
-            "array_literal",
-            "array_copy",
-            "array_broadcast_copy",
-            "array_unary",
-            "array_binary",
-        }:
-            return True
-        if op in {"array_view", "array_reshape"}:
-            return private(expr["base"] if op == "array_view" else expr["value"])
-        return op == "var" and expr.get("scope") != "global" and expr["name"] in fresh
-
-    while True:
-        proven = {
-            slot
-            for slot, sources in assignments.items()
-            if slot not in parameters and all(private(source) for source in sources)
-        }
-        if proven <= fresh:
-            break
-        fresh.update(proven)
-    for node in operations:
-        if node["op"] in {"array_store", "array_update"}:
-            target = node["base"] if node["op"] == "array_store" else node["left"]
-            if not private(target):
-                return True
-        if node["op"] == "call":
-            callee = functions.get(node.get("callee"))
-            if callee is None or may_write_external(callee, functions, (*active, name)):
-                return True
-    return False
-
-
 def persist_method(frame, target, method, steps):
     """Only a stored module binding requires a receiver beyond its initializer."""
     source = method.value
@@ -362,6 +309,10 @@ def _reshape(frame, node, source, args, options, steps, discard):
         if len(args) == 1 and products.is_sequence(args[0])
         else args
     )
+    if dims is None:
+        frame.fail(
+            node, "array_shape", "reshape needs a current finite dimension sequence"
+        )
     if any(value.kind != "i64" for value in dims):
         frame.fail(node, "array_shape", "reshape dimensions need index-width integers")
     shape = tuple(
@@ -563,16 +514,7 @@ def _output(frame, node, kind, steps, *, facts=None, discard=False, **fields):
     frame.project.array_ops.add(node)
     if (
         is_array(kind)
-        and node
-        in {
-            "array_create",
-            "array_iota",
-            "array_literal",
-            "array_copy",
-            "array_broadcast_copy",
-            "array_unary",
-            "array_binary",
-        }
+        and node in FRESH_ARRAYS
         and "array_allocation" not in (facts or {})
     ):
         facts = frame.project.array_state.create(
@@ -1037,13 +979,13 @@ def _capture_values(frame, node, kind, source, steps):
 
 
 def _tree(frame, node, item, steps):
-    if is_sequence(item.kind):
+    elements = products.elements(frame, node, item, steps)
+    if is_sequence(item.kind) and elements is None:
         frame.fail(
             node,
             "array_sequence_input",
-            "a mutable runtime sequence needs a sequence-to-array contract",
+            "nested mutable sequences require current member and rectangularity proofs",
         )
-    elements = products.elements(frame, node, item, steps)
     if elements is None:
         return (), [item]
     branches = [_tree(frame, node, part, steps) for part in elements]
@@ -1058,7 +1000,84 @@ def _tree(frame, node, item, steps):
 
 
 def _literal_array(frame, node, source, steps, *, force, element=None, discard=False):
+    if is_sequence(source.kind):
+        member = sequences._checked(
+            frame, node, lambda: frame.project.sequences.element(source.kind)
+        )
+        physical = wire(member)
+        if is_sequence(member) or member == "structured_value":
+            # A finite reaching member graph can prove a rectangular shape;
+            # the projections still read the original live lists in order.
+            shape, items = _tree(frame, node, source, steps)
+            return _array_elements(
+                frame,
+                node,
+                shape,
+                items,
+                steps,
+                force=force,
+                element=element,
+                discard=discard,
+            )
+        if not isinstance(physical, str) or physical not in {
+            "bool",
+            "i64",
+            "f64",
+            "c128",
+        }:
+            frame.fail(
+                node,
+                "array_sequence_input",
+                "one-dimensional array materialization needs a closed numeric sequence element",
+            )
+        if not force and physical in {"bool", "i64"}:
+            frame.fail(
+                node,
+                "array_dtype",
+                "default integer and Boolean arrays require their own array storage types",
+            )
+        element = element or ("c128" if physical == "c128" else "f64")
+        if physical == "c128" and element != "c128":
+            frame.fail(
+                node,
+                "array_dtype",
+                "complex-to-real array conversion requires its warning and conversion contract",
+            )
+        contents = frame.project.sequences.contents.get(
+            source.facts.get("sequence_state")
+        )
+        shape = (len(contents),) if contents is not None else (None,)
+        items = (
+            [item.exact for item in contents]
+            if contents is not None
+            and element == "f64"
+            and all(type(item.exact) in {bool, int, float} for item in contents)
+            else None
+        )
+        return _output(
+            frame,
+            "array_from_sequence",
+            array_kind(1, element),
+            steps,
+            discard=discard,
+            facts=frame.project.array_state.create(shape, items),
+            value=frame.scalar(source, node),
+            semantics_version=1,
+            conversion="numpy_numeric_sequence",
+            ownership="fresh_independent_storage",
+            source_read="current_elements_in_index_order",
+            effects=["MEM", "STATE", "XFER"],
+            reads=["sequence.state"],
+            writes=["new.array_storage"],
+            may_raise=True,
+        )
     shape, items = _tree(frame, node, source, steps)
+    return _array_elements(
+        frame, node, shape, items, steps, force=force, element=element, discard=discard
+    )
+
+
+def _array_elements(frame, node, shape, items, steps, *, force, element, discard):
     if (
         not force
         and items
@@ -1614,6 +1633,12 @@ def construct(frame, node, target, args, keywords, steps, discard):
             if products.is_sequence(source)
             else (source,)
         )
+        if dims is None:
+            frame.fail(
+                node,
+                "array_shape",
+                "array construction needs a current finite dimension sequence",
+            )
         if any(
             v.kind != "i64" or v.exact is not _UNKNOWN and v.exact < 0 for v in dims
         ):

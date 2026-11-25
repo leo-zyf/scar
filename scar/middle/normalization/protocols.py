@@ -5,6 +5,7 @@ import math
 from scar.contract import json_bytes, python_provider_id, walk_operations
 from . import (
     arrays,
+    effects,
     expressions,
     exceptions,
     graphics,
@@ -254,7 +255,6 @@ class _Project:
         self.required_operators = {}
         self.execution_images = []
         self.array_state = arrays.LiteralState()
-        self.external_array_writes = {}
         self.objects = objects.ObjectModel()
         self.graphics = graphics.Graphics()
         self.decisions = []
@@ -350,24 +350,13 @@ class _Project:
         actual producer after a later namespace consumer is analyzed.
         """
         pending, seen = [body], set()
-        domains = {
-            "module.registry",
-            "module.namespace",
-            "import.external_effects",
-            "process.import_hooks",
-            "audit_hook.external_effects",
-        }
         while pending:
             for operation in walk_operations(pending.pop()):
                 writes = operation.get("writes", ())
-                if (
-                    writes == "UNKNOWN"
-                    or set(writes).intersection(domains)
-                    or set(operation.get("effects", ())).intersection(
-                        {"UNKNOWN", "OPAQUE"}
-                    )
-                    or operation.get("external_effect") == "UNKNOWN"
-                ):
+                if effects.has_open_effect(operation) or {
+                    "module.registry",
+                    "module.namespace",
+                }.intersection(writes):
                     return True
                 opcode = operation["op"]
                 if opcode == "call":
@@ -385,14 +374,6 @@ class _Project:
                     if name not in seen:
                         seen.add(name)
                         pending.append(function["body"])
-                elif opcode in {
-                    "python_import",
-                    "indirect_call",
-                    "library_call",
-                    "python_invoke",
-                    "object_dispatch",
-                }:
-                    return True
         return False
 
     def global_read(self, name, value, node=None):
@@ -414,7 +395,7 @@ class _Project:
     ):
         # Compare around the original action without executing it again. A later
         # consumer adds only the state ports it actually requires.
-        marker = dict(op="block", body=[])
+        marker = dict(op="block", body=[], pending_import_effect=True)
         pending = False
         baseline = self.imports.snapshot() if before is None else before
         epoch = baseline["binding_epoch"]
@@ -613,6 +594,8 @@ class _Project:
             id(marker) for marker in self.import_markers if marker["op"] == "block"
         }
         unused.update(self.source_imports.empty_markers())
+        for marker, _ in self.source_imports.initialization_points.values():
+            marker.pop("pending_import_effect", None)
         if unused:
             # Prefix reports and completed bodies may have copied a statement
             # list. They share the original marker objects.
@@ -772,9 +755,18 @@ class _Project:
                     **values.source_site(source or fn),
                 ),
             )
-        saved_contents = self.array_state.contents if kind == "function" else None
-        if saved_contents is not None:
-            self.array_state.contents = {}
+        saved_contents = None
+        if kind == "function":
+            saved_contents = (
+                self.array_state.contents,
+                self.sequences.contents,
+                self.sequences.states,
+            )
+            (
+                self.array_state.contents,
+                self.sequences.contents,
+                self.sequences.states,
+            ) = ({}, {}, {})
         try:
             frame = _Frame(self, fn, types)
             if kind == "function" and self.structured_parameters(name):
@@ -809,7 +801,11 @@ class _Project:
         finally:
             self.pending_signatures.pop(name, None)
             if saved_contents is not None:
-                self.array_state.contents = saved_contents
+                (
+                    self.array_state.contents,
+                    self.sequences.contents,
+                    self.sequences.states,
+                ) = saved_contents
             self.active.pop()
 
 
@@ -884,16 +880,7 @@ class _Frame:
         writes = node.get("writes", ())
         before_effect = None
         if (
-            node.get("external_effect") == "UNKNOWN"
-            or writes == "UNKNOWN"
-            or any(
-                port in writes
-                for port in (
-                    "import.external_effects",
-                    "audit_hook.external_effects",
-                    "process.import_hooks",
-                )
-            )
+            effects.has_open_effect(node)
             or "module.registry" in writes
             and node.get("source_protocol") != "python.import"
         ):
@@ -2295,15 +2282,17 @@ class _Frame:
             None if function.get("noreturn") else values.scalar_evidence(result)
         )
         self.project.actual_calls.add((self.name, name))
-        if function.get("recursive_prototype"):
-            self.project.external_array_writes[name] = True
-        if name not in self.project.external_array_writes:
-            self.project.external_array_writes[name] = arrays.may_write_external(
-                function, self.project.closed
+        for domain, ports in effects.call_writes(function, self.project.closed).items():
+            state = (
+                self.project.array_state
+                if domain == "arrays"
+                else self.project.sequences
             )
-        if self.project.external_array_writes[name]:
-            self.project.array_state.invalidate()
-        self.project.sequences.invalidate()
+            if ports is None:
+                state.invalidate()
+            else:
+                for i in ports:
+                    state.invalidate(bound[i])
         call = dict(
             op="call",
             callee=name,
@@ -2572,7 +2561,7 @@ class _Frame:
             )
             source_loop["body"] = [dict(op="expr", value=term) for term in repeated]
             start = self.snapshot()
-            loop, item, count, _, _, setup = (
+            loop, item, count, empty, _, setup = (
                 outer_iteration
                 if level == 0
                 else self.range_loop(source_loop, out, domain=domain)
@@ -2583,6 +2572,13 @@ class _Frame:
                     "comprehension_iteration",
                     "comprehension iterator requires an explicit next-value contract",
                 )
+            if empty:
+                self.skip_expression(
+                    source_loop["body"],
+                    dict(rule="empty_loop", guard_site=node.get("site")),
+                )
+                out.append(loop)
+                return
             allocation_mark = self.project.array_state.enter_loop(self, source_loop)
             self.widen_loop(source_loop, item, count)
             self.dynamic += 1
@@ -2843,14 +2839,22 @@ class _Frame:
 
     def loop(self, node, steps):
         counted = node["op"] == "for"
-        allocation_mark = self.project.array_state.enter_loop(self, node)
-        start = self.snapshot()
         if counted:
             loop, iv, count, empty, nonempty, test_setup = self.range_loop(node, steps)
+            if empty and not test_setup:
+                # Iterator evaluation is complete, but no target binding or
+                # body/back-edge effect occurs. The else suite still executes.
+                self.skip_expression(
+                    node["body"], dict(rule="empty_loop", guard_site=node.get("site"))
+                )
+                steps.append(loop)
+                return self.sequence(node.get("else", []), steps)
         else:
             iv, count = None, None
             loop = dict(op="while", body=[])
             test_setup = []
+        allocation_mark = self.project.array_state.enter_loop(self, node)
+        start = self.snapshot()
         self.widen_loop(node, iv, count)
         header = self.snapshot()
         flag = self.temporary() if node.get("else") else None
@@ -3203,16 +3207,20 @@ def normalize_protocols(module):
                 "frontend_obligation",
                 obligation["detail"],
             )
+    except _Unclosed as error:
+        issue = error.issue
+    # Deferred region ownership uses object identity. Resolve those regions
+    # before freezing types, which copies the canonical operations.
+    project.finish_imports()
+    if issue is None:
         try:
             project.sequences.freeze(project)
         except ValueError as error:
-            raise _Unclosed(
+            issue = _Unclosed(
                 entry, functions[entry], "sequence_element_type", str(error)
-            ) from error
-    except _Unclosed as error:
-        issue = error.issue
+            ).issue
+    if issue is not None:
         project.sequences.freeze(project, partial=True)
-    project.finish_imports()
     obligation_analysis, _ = obligations.resolve(
         module.get("protocol_obligations", ()),
         functions=functions,

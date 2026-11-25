@@ -2,12 +2,16 @@
 
 from copy import deepcopy
 
-from . import values
+from . import sequences, values
 from .values import Value
 
 
 def is_sequence(value):
-    return value.kind in {"tuple", "list"} or values.is_product(value.kind)
+    return (
+        value.kind in {"tuple", "list"}
+        or values.is_product(value.kind)
+        or values.is_sequence(value.kind)
+    )
 
 
 def get(frame, node, value, index, steps):
@@ -35,6 +39,8 @@ def get(frame, node, value, index, steps):
 
 
 def elements(frame, node, value, steps):
+    if values.is_sequence(value.kind):
+        return sequences.elements(frame, node, value, steps)
     if value.kind in {"tuple", "list"}:
         return value.value
     if values.is_product(value.kind):

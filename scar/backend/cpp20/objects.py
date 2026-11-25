@@ -263,16 +263,40 @@ def sequence_expression(node, lower):
                 )
         else:
             operand = node["index"]
+            projection = node.get("member_tag_proof")
+            projected = (
+                element == _TAGGED
+                and isinstance(projection, dict)
+                and set(projection)
+                == {"semantics_version", "rule", "index_value", "member_count", "tag"}
+                and type(projection.get("semantics_version")) is int
+                and projection["semantics_version"] == 1
+                and projection.get("rule") == "current_reaching_sequence_member"
+                and type(projection.get("index_value")) is int
+                and type(projection.get("member_count")) is int
+                and -projection["member_count"]
+                <= projection["index_value"]
+                < projection["member_count"]
+                and result in ("unit", "bool", "i64", "f64", "text")
+                and projection.get("tag") == result
+            )
             if (
                 result != element
+                and not projected
                 or operand.get("type") != "i64"
                 or node.get("source_index_profile") != "python_list_v1"
+                or projection is not None
+                and not projected
             ):
                 raise ValueError("unsupported sequence index contract")
         # Braced parameters capture the owner before evaluating the other operand.
         held = cast(owner, lower.expression(base))
         value = cast(lower.type_name(operand["type"]), lower.expression(operand))
-        return call(target, Expr("braced", args=(held, value)))
+        retrieved = call(target, Expr("braced", args=(held, value)))
+        if op == "sequence_get" and projected:
+            lower.headers.add("variant")
+            return call(template("std::get", lower.type_name(result)), retrieved)
+        return retrieved
     if op == "sequence_size":
         if result != "i64":
             raise ValueError("sequence size requires an i64 result")

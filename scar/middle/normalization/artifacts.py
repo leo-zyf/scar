@@ -86,6 +86,7 @@ _FILE_FREE_OPERATIONS = {
     "array_create",
     "array_iota",
     "array_literal",
+    "array_from_sequence",
     "array_copy",
     "array_broadcast_copy",
     "array_unary",
