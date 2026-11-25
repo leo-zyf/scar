@@ -3639,6 +3639,40 @@ class _Frame:
         )
 
 
+def _nested_loader_sites(project, symbol):
+    """Find conditional imports referenced by this body and its ordinary callees."""
+    pending, seen, dependencies = [symbol], set(), {}
+    while pending:
+        owner = pending.pop()
+        if owner in seen:
+            continue
+        seen.add(owner)
+        for operation in walk_operations(project.closed[owner]["body"]):
+            if operation["op"] == "call" and operation.get("callee") in project.closed:
+                pending.append(operation["callee"])
+            if operation["op"] == "module_import_publish":
+                site = operation.get("site")
+                if (owner, site) in project.loader_activations:
+                    dependencies[owner, site] = {"owner": owner, "site": site}
+    return list(dependencies.values())
+
+
+def _conditional_loader_fragments(project):
+    """Retain exactly the trial bodies reachable from final caller-owned imports."""
+    pending = list(reversed(project.loader_activations))
+    result = {}
+    while pending:
+        key = pending.pop()
+        if key in result:
+            continue
+        body = project.loader_refinements[key]
+        result[key] = body
+        pending.extend(
+            (edge["owner"], edge["site"]) for edge in reversed(body["nested_imports"])
+        )
+    return list(result.values())
+
+
 def _compile_protocol_entry(module, functions):
     """Refine an image's source-import return edges to a fixed point."""
     source_index = None
@@ -3702,6 +3736,9 @@ def _compile_protocol_entry(module, functions):
                     rejected_assumption=evidence,
                     completion="conditional_source_body",
                     qualification="requires_actual_activation_frame_and_all_specialized_entry_facts",
+                    nested_imports=_nested_loader_sites(
+                        project, evidence["initializer"]
+                    ),
                     function=body,
                 )
                 source_index = project.source_index
@@ -3820,7 +3857,7 @@ def normalize_protocols(module):
         status="INCOMPLETE" if issue else "READY",
         source_obligation_groups=obligation_analysis["groups"],
         **(
-            {"conditional_loader_fragments": list(project.loader_activations.values())}
+            {"conditional_loader_fragments": _conditional_loader_fragments(project)}
             if project.loader_activations
             else {}
         ),

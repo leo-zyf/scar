@@ -9407,6 +9407,39 @@ def test_initializer_return_does_not_prove_caller_import_binding(tmp_path, monke
     assert evidence["producer_role"] == "module_body"
 
 
+def test_nested_loader_evidence_keeps_conditional_children_out_of_the_active_ledger(
+    tmp_path,
+):
+    from scar.contract import read_member
+    from scar.frontend import build
+    from scar.middle import plan
+
+    inner = tmp_path / "inner"
+    inner.mkdir()
+    (inner / "__init__.py").write_text(
+        "from . import child as unused\ndel unused\non_import_body()\n"
+    )
+    (inner / "child.py").write_text("pass\n")
+    (tmp_path / "outer.py").write_text("import inner\n")
+    entry = tmp_path / "main.py"
+    entry.write_text("import outer\n")
+    graph, out = tmp_path / "graph", tmp_path / "plan"
+    build(entry, graph)
+    plan(graph, out)
+    report = json.loads((out / "plan.json").read_bytes())
+    outer, child = report["protocol_analysis"]["conditional_loader_fragments"]
+    assert outer["owner"] == "__main__"
+    assert outer["symbol"] == child["owner"] == "py:outer:<init>"
+    assert outer["nested_imports"] == [{"owner": child["owner"], "site": child["site"]}]
+    assert child["symbol"] == "py:inner:<init>" and not child["nested_imports"]
+    ledger = read_member(out, report["source_imports"])["occurrences"]
+    rows = {(row["owner"], row["site"]): row for row in ledger}
+    for candidate, active in ((outer, True), (child, False)):
+        row = rows[candidate["owner"], candidate["site"]]
+        assert (row["activation"] == "visited") is active
+        assert bool(row["producer_sites"]) is active
+
+
 def test_plain_and_projected_alias_store_actual_objects_in_source_order(
     tmp_path, monkeypatch
 ):
