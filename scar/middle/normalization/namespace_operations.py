@@ -189,10 +189,12 @@ def _matches_instruction(instruction, operand, source_key):
     )
 
 
-def _open_module_code(frame):
+def _module_code(frame, *, source_code=None):
     code = frame.scope.get("source_code")
     if (
-        not frame.project.imports.open_namespace
+        (source_code is None and not frame.project.imports.open_namespace)
+        or source_code is not None
+        and source_code != code
         or not frame.initializing
         or frame.scope.get("graph_backed") is not True
         or frame.name != frame.scope.get("initializer")
@@ -213,21 +215,56 @@ def _open_module_code(frame):
     return code
 
 
-def publish_plain_import(frame, node, occurrence, steps):
-    """Consume M1's IMPORT_NAME/store pair as one source occurrence."""
+def _project_import_members(port, result):
+    """Connect the verified IMPORT_FROM, SWAP and POP_TOP operations to live references."""
+    stack = [result]
+    steps = []
+    for instruction in port["projection"]:
+        opcode = instruction["opcode"]
+        step = dict(instruction=instruction)
+        if opcode == "IMPORT_FROM":
+            step["receiver"] = stack[-1]
+            step["result"] = {"from_offset": instruction["offset"]}
+            stack.append(step["result"])
+        elif opcode == "SWAP":
+            stack[-2], stack[-1] = stack[-1], stack[-2]
+        elif opcode == "POP_TOP":
+            step["release"] = stack.pop()
+        else:
+            raise ValueError("unrecognized import projection instruction")
+        steps.append(step)
+    receiver, member = stack
+    return member, dict(
+        input=result,
+        steps=steps,
+        lookup="source_IMPORT_FROM_on_actual_receiver_including_circular_import_fallback",
+        after_store=dict(instruction=port["release"], release=receiver),
+        unwind="on_failure_unwind_live_source_stack_at_failing_opcode_and_preserve_prior_effects",
+    )
+
+
+def publish_plain_import(frame, node, occurrence, steps, *, source_code=None):
+    """Consume the actual importer result through its verified projection and store."""
     request = occurrence["request"]
     name = request["module"]
-    port = node.get("source_import_store")
     target = node.get("binding", {})
     slot = target.get("name")
+    alias = node.get("alias")
+    if not isinstance(name, str) or not all(p.isidentifier() for p in name.split(".")):
+        return False
+    bound_name = alias or name.partition(".")[0]
+    projected = alias is not None and "." in name
+    field = "source_import_projection" if projected else "source_import_store"
+    port = node.get(field)
     if (
-        not (code := _open_module_code(frame))
-        or not isinstance(name, str)
-        or not name.isidentifier()
-        or node.get("alias") is not None
+        not (code := _module_code(frame, source_code=source_code))
+        or request.get("form") != "import"
+        or request.get("level") != 0
+        or request.get("fromlist") != []
         or node.get("member") != name
         or target.get("cell")
         or not node.get("site")
+        or slot != f"py:{frame.module}:{bound_name}"
         or len(occurrence["bindings"]) != 1
         or occurrence["bindings"][0]["site"] != node["site"]
         or occurrence["bindings"][0]["name"] != slot
@@ -235,10 +272,12 @@ def publish_plain_import(frame, node, occurrence, steps):
         or port.get("code_sha256") != code["code_sha256"]
     ):
         return False
-    # The graph binder checks the code, instruction offsets, operands and
-    # spans before admitting this source port. The STORE consumes the owned
-    # IMPORT_NAME result even when the importer replaced sys.modules itself.
+    # M1 verifies the source instructions, their order, names and stack contract.
     store = port["store"]
+    imported = {"result": "import_result"}
+    value, projection = (
+        _project_import_members(port, imported) if projected else (imported, None)
+    )
     level = port["level"]
     level_operand = (
         {"opcode": "LOAD_SMALL_INT", "oparg": level["oparg"]}
@@ -248,11 +287,11 @@ def publish_plain_import(frame, node, occurrence, steps):
     mapping = "frame.locals" if store["opcode"] == "STORE_NAME" else "frame.globals"
     binding = dict(
         slot=slot,
-        name=name,
+        name=bound_name,
         namespace=mapping,
         opcode=store["opcode"],
         key={"table": "co_names", "index": store["index"]},
-        value={"result": "import_result"},
+        value=value,
         **source_site(node),
     )
     namespace_effect(
@@ -264,7 +303,8 @@ def publish_plain_import(frame, node, occurrence, steps):
         occurrence=occurrence["id"],
         request=request,
         source_code=code,
-        source_import_store=port,
+        **{field: port},
+        **({"projection": projection} if projected else {}),
         reads=("frame.code", "frame.locals"),
         writes=(mapping,),
         import_call=dict(
@@ -291,7 +331,7 @@ def publish_plain_import(frame, node, occurrence, steps):
         callbacks="preserve_source_opcode_tracing_and_exception_state",
     )
     frame.project.imports.publications[slot] = dict(
-        occurrence=occurrence["id"], slot=slot, name=name, **source_site(node)
+        occurrence=occurrence["id"], slot=slot, name=bound_name, **source_site(node)
     )
     return True
 
@@ -303,7 +343,7 @@ def store_open_module_constant(frame, node, steps):
         not isinstance(port, dict)
         or type(port.get("semantics_version")) is not int
         or port["semantics_version"] != 1
-        or not (code := _open_module_code(frame))
+        or not (code := _module_code(frame))
         or port.get("code") != code
     ):
         return False
@@ -1038,7 +1078,7 @@ class _SourceExpressionRegion:
 
 def open_object_statement(frame, node, steps):
     """Consume a complete source evaluation stack at its actual store, delete or raise."""
-    code = _open_module_code(frame)
+    code = _module_code(frame)
     field = (
         "source_definition" if node["op"] == "python_define" else "source_expression"
     )
@@ -1120,7 +1160,7 @@ def _register_expression(frame, expression):
 
 def open_object_expression(frame, node, steps, *, truth_context, discard):
     """Only a truth value or completed discard may leave this source evaluation stack."""
-    if not (truth_context or discard) or not (code := _open_module_code(frame)):
+    if not (truth_context or discard) or not (code := _module_code(frame)):
         return None
     conditional = truth_context and node.get("op") == "if"
     receipt = (
@@ -1248,7 +1288,7 @@ def namespace_effect(frame, node, steps, opcode, *, result="unit", **operands):
 
 def open_exception_handler(frame, node, index, count):
     """Build the conditional entry and cleanup operations for one verified arm."""
-    code = _open_module_code(frame)
+    code = _module_code(frame)
     if not code or node.get("test") is None:
         return None
     receipt = node.get("source_exception_handler")

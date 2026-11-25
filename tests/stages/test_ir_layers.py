@@ -9380,3 +9380,145 @@ def test_initializer_return_does_not_prove_caller_import_binding(tmp_path, monke
     assert evidence["open_namespace"]["site"] == state["site"]
     assert evidence["comparison_windows"] == []
     assert evidence["producer_role"] == "module_body"
+
+
+def test_plain_and_projected_alias_store_actual_objects_in_source_order(
+    tmp_path, monkeypatch
+):
+    from types import ModuleType
+
+    from scar.frontend import build
+    from scar.middle.binding import bind
+    from scar.middle.normalization.namespace_operations import publish_plain_import
+    from scar.middle.normalization.protocols import _Frame, _Project
+
+    source = tmp_path / "main.py"
+    source.write_text(
+        "import tree as first\nimport tree.branch\nimport tree.branch.leaf as named\n"
+    )
+    code = compile(source.read_bytes(), str(source), "exec")
+    branch = tmp_path / "tree" / "branch"
+    branch.mkdir(parents=True)
+    for f in (
+        branch.parent / "__init__.py",
+        branch / "__init__.py",
+        branch / "leaf.py",
+    ):
+        f.write_text("label = 'candidate'\n")
+    graph = tmp_path / "graph"
+    build(source, graph)
+    source.unlink()
+    bound, issues, _ = bind(json.loads((graph / "graph.json").read_bytes()), graph)
+    assert not issues
+    functions = {f["name"]: f for f in bound["functions"]}
+    project = _Project(functions)
+    entry = functions[bound["entry"]]
+    frame = _Frame(project, entry, ())
+    steps = []
+    for node in entry["body"]:
+        if node["op"] == "python_import":
+            row = project.source_imports.get(frame.name, node)
+            assert not publish_plain_import(frame, node, row, steps, source_code={})
+            if "source_import_projection" in node:
+                legacy = {
+                    k: v for k, v in node.items() if k != "source_import_projection"
+                }
+                assert not publish_plain_import(frame, legacy, row, steps)
+            assert row["producer_sites"] == []
+            assert publish_plain_import(
+                frame, node, row, steps, source_code=frame.scope["source_code"]
+            )
+            assert [p["role"] for p in row["producer_sites"]] == ["source_import"]
+    plain, dotted, aliased = [s["value"] for s in steps]
+    for op, name in ((plain, "first"), (dotted, "tree"), (aliased, "named")):
+        assert op["op"] == "module_import_publish" and op["binding"]["name"] == name
+        assert op["may_raise"] and op["external_effect"] == "UNKNOWN"
+    imported = {"result": "import_result"}
+    assert plain["binding"]["value"] == dotted["binding"]["value"] == imported
+    project_member, swap, release, project_leaf = aliased["projection"]["steps"]
+    assert [
+        s["instruction"]["opcode"]
+        for s in (project_member, swap, release, project_leaf)
+    ] == ["IMPORT_FROM", "SWAP", "POP_TOP", "IMPORT_FROM"]
+    assert project_member["receiver"] == release["release"] == imported
+    assert project_leaf["receiver"] == project_member["result"]
+    assert aliased["binding"]["value"] == project_leaf["result"]
+    cleanup = aliased["projection"]["after_store"]
+    assert cleanup["release"] == project_leaf["receiver"]
+    assert (
+        cleanup["instruction"]["offset"]
+        > aliased["source_import_projection"]["store"]["offset"]
+    )
+    assert [s["instruction"]["name"] for s in (project_member, project_leaf)] == [
+        "branch",
+        "leaf",
+    ]
+    assert (
+        project.imports.publications[aliased["binding"]["slot"]]["occurrence"]
+        == aliased["occurrence"]
+    )
+
+    final, previous = object(), object()
+    monkeypatch.setitem(sys.modules, "offered.branch.leaf", final)
+    monkeypatch.setitem(sys.modules, "tree.branch.leaf", previous)
+    for mode in ("success", "fallback", "lookup_error", "store_error", "reenter"):
+        events = []
+
+        class Part(ModuleType):
+            def __getattr__(self, key):
+                events.append(("lookup", key))
+                if key == "branch":
+                    return Part("offered.branch")
+                if mode == "fallback":
+                    raise AttributeError(key)
+                if mode == "lookup_error":
+                    raise LookupError("lookup")
+                assert key == "leaf"
+                return final
+
+            def __del__(self):
+                events.append(("release", self.__name__))
+                if self.__name__ == "offered.branch" and mode == "reenter":
+                    events.append(("stored_on_release", local["named"] is final))
+                    local["named"] = previous
+
+        class Locals(dict):
+            def __setitem__(self, key, value):
+                if key == "named" and value is final:
+                    events.append(("store", key))
+                    if mode == "store_error":
+                        super().__setitem__(key, value)
+                        raise LookupError("store")
+                super().__setitem__(key, value)
+
+        first, top = object(), object()
+
+        def importer(name, gl, loc, fromlist, level):
+            events.append(("import", name))
+            assert gl is glob and loc is local and fromlist is None and level == 0
+            if name in {"tree", "tree.branch"}:
+                return first if name == "tree" else top
+            return Part("offered")
+
+        local = Locals(named=previous)
+        glob = {"__builtins__": {"__import__": importer}}
+        if mode.endswith("_error"):
+            with pytest.raises(LookupError, match=mode.split("_")[0]):
+                exec(code, glob, local)
+        else:
+            exec(code, glob, local)
+        assert local["first"] is first and local["tree"] is top
+        assert local["named"] is (
+            previous if mode in {"lookup_error", "reenter"} else final
+        )
+        assert events == [
+            ("import", "tree"),
+            ("import", "tree.branch"),
+            ("import", "tree.branch.leaf"),
+            ("lookup", "branch"),
+            ("release", "offered"),
+            ("lookup", "leaf"),
+            *([] if mode == "lookup_error" else [("store", "named")]),
+            ("release", "offered.branch"),
+            *([("stored_on_release", True)] if mode == "reenter" else []),
+        ]
