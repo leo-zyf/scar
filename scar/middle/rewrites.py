@@ -310,8 +310,13 @@ def _bounded_coordinates(fn, changes):
                 and left.get("scope") != "global"
                 and left["name"] in bounds
             ):
-                domain = bounds[left["name"]]
-                if term(result["right"], env) == domain:
+                extent, direct = bounds[left["name"]]
+                if direct and result.get("type", "i64") != "i64":
+                    return result
+                divisor = (
+                    semantics(result["right"]) if direct else term(result["right"], env)
+                )
+                if divisor == extent:
                     changes.append(
                         dict(
                             rule="bounded_integer_coordinate",
@@ -326,6 +331,53 @@ def _bounded_coordinates(fn, changes):
                         else dict(op="literal", type="i64", value=0)
                     )
         return result
+
+    def counted_domain(loop):
+        # The condition is re-evaluated on every iteration. A private signed
+        # unit induction from zero cannot overflow before reaching its bound.
+        init = loop.get("init", ())
+        if len(init) != 1 or init[0].get("op") != "decl":
+            return None
+        decl = init[0]
+        index = decl["name"]
+        condition, step = loop.get("condition") or {}, loop.get("step") or {}
+        if (
+            index not in private
+            or decl["type"] != "i64"
+            or term(decl.get("init") or {}, {}) != ("literal", "i64", 0)
+            or condition.get("operator") != "lt"
+            or condition.get("op") != "binary"
+            or semantics(condition["left"]) != {"op": "var", "name": index}
+            or step.get("op") != "unary"
+            or step.get("operator") not in {"preinc", "postinc"}
+            or semantics(step["value"]) != semantics(condition["left"])
+        ):
+            return None
+        bound = condition["right"]
+        # Use an atom so integer conversions of the operands cannot change
+        # the comparison domain. Exclude mutation or escape of either operand.
+        if (
+            bound.get("op") == "var"
+            and bound.get("scope") != "global"
+            and bound["name"] in private
+            and scalar_type(bound["name"]) == "i64"
+        ):
+            protected = {index, bound["name"]}
+        elif bound.get("op") == "literal" and bound.get("type") == "i64":
+            protected = {index}
+        else:
+            return None
+        if writes(loop["body"]) & protected or any(
+            n["op"]
+            not in {"assign", "index", "var", "literal", "binary", "cast", "unary"}
+            or n["op"] == "unary"
+            and n["operator"] not in {"pos", "neg", "not", "bnot"}
+            or n.get("state_writes")
+            or set(n.get("effects", ())) & {"STATE", "OPAQUE"}
+            for n in _nodes(loop["body"])
+        ):
+            return None
+        return index, semantics(bound)
 
     def sequence(body, env, bounds):
         for statement in body:
@@ -359,7 +411,10 @@ def _bounded_coordinates(fn, changes):
                         for n in _nodes(statement["body"])
                     )
                     if extent is not None and pure:
-                        domains[statement["index"]] = extent
+                        domains[statement["index"]] = (extent, False)
+                elif op == "for" and (counted := counted_domain(statement)):
+                    index, extent = counted
+                    domains[index] = (extent, True)
                 sequence(statement["body"], inner, domains)
                 invalidate_effects(statement, env)
             elif op == "block":
