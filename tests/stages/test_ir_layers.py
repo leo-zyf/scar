@@ -6138,3 +6138,63 @@ def test_private_pointwise_snapshots_require_real_non_escape_and_injective_indic
             c["rule"] == "pointwise_materialization_forwarding"
             for c in rewrite(bad)["changes"]
         ), mutation
+
+
+def test_counted_loop_only_drops_remainders_with_a_stable_induction_domain():
+    from scar.middle.rewrites import optimize
+
+    def var(name):
+        return {"op": "var", "name": name}
+
+    def constant(n):
+        return {"op": "literal", "type": "i64", "value": n}
+
+    coordinate = dict(op="binary", operator="mod", left=var("i"), right=var("n"))
+    loop = dict(
+        op="for",
+        init=[dict(op="decl", name="i", type="i64", init=constant(0))],
+        condition=dict(op="binary", operator="lt", left=var("i"), right=var("n")),
+        step=dict(op="unary", operator="preinc", value=var("i")),
+        body=[dict(op="assign", target=var("sum"), value=coordinate)],
+    )
+    function = _canonical_function(
+        dict(
+            name="reduce",
+            params=[dict(name="n", type="i64")],
+            result="i64",
+            body=[
+                dict(op="decl", name="sum", type="i64", init=constant(0)),
+                loop,
+                dict(op="return", value=var("sum")),
+            ],
+        )
+    )
+
+    def reduced(fn):
+        changes = optimize(fn)
+        return any(change["rule"] == "bounded_integer_coordinate" for change in changes)
+
+    assert reduced(deepcopy(function))
+    for protected in ("i", "n"):
+        mutated = deepcopy(function)
+        mutated["body"][1]["body"].insert(
+            0, dict(op="assign", target=var(protected), value=constant(-1))
+        )
+        assert not reduced(mutated)
+        escaped = deepcopy(function)
+        escaped["state_contract"]["private_scalars"].remove(protected)
+        assert not reduced(escaped)
+    negative = deepcopy(function)
+    negative["body"][1]["init"][0]["init"] = constant(-1)
+    assert not reduced(negative)
+    backward = deepcopy(function)
+    backward["body"][1]["step"]["operator"] = "predec"
+    assert not reduced(backward)
+    narrowed = deepcopy(function)
+    narrowed["body"][1]["body"][0]["value"]["type"] = "i32"
+    assert not reduced(narrowed)
+    shadow = deepcopy(function)
+    shadow["body"][1]["body"].insert(
+        0, dict(op="decl", name="n", type="i64", init=constant(1))
+    )
+    assert not reduced(shadow)
