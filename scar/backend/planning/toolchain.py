@@ -14,9 +14,9 @@ from scar.contract import (
     json_bytes,
     validate_access_contract,
     validate_numeric_contract,
-    walk_operations,
 )
 from scar.host import cpu_availability
+from .runtime import ImageLinkage
 
 
 def _file(path):
@@ -610,7 +610,7 @@ def _ipo_feature(cache):
     return cache[key]
 
 
-def compilation(module, *, cache=None):
+def compilation(module, *, cache=None, linkage=None):
     """Keep a complete image visible across target translation-unit boundaries.
 
     Compiler optimization is delegated to the qualified toolchain. This policy
@@ -618,8 +618,8 @@ def compilation(module, *, cache=None):
     """
     functions = {function["name"] for function in module["functions"]}
     calls = sum(
-        node["op"] == "call" and node.get("callee") in functions
-        for node in walk_operations([fn["body"] for fn in module["functions"]])
+        field == "body" and node["op"] == "call" and node.get("callee") in functions
+        for _, field, node in (linkage or ImageLinkage(module)).sites
     )
     budget = cpu_availability().worker_budget
     requested = os.environ.get("CMAKE_BUILD_PARALLEL_LEVEL")

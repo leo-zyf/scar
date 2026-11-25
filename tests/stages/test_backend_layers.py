@@ -56,7 +56,8 @@ else:
 
 
 def test_native_execution_calls_require_bindings_without_blocking_local_names():
-    from scar.backend.planning import _qualify
+    from scar.backend.planning import _qualify, toolchain
+    from scar.backend.planning.mpi.sdk import _interfaces
 
     historical = dict(
         functions=[dict(name="MPI_Finalize", body=[])],
@@ -90,6 +91,59 @@ def test_native_execution_calls_require_bindings_without_blocking_local_names():
         dict(op="indirect_call", targets=["system"], args=[])
     )
     assert _qualify(module)[2][0]["code"] == "missing_execution_boundary_binding"
+
+    # Program/proof separation must also hold inside an actual function.
+    ghost = dict(op="call", callee="system", args=[], site="quoted")
+    module["functions"][0]["body"] = [dict(op="return", source_evidence=ghost)]
+    assert _qualify(module)[2] == []
+    module["functions"][0]["initializers"] = [ghost]
+    assert _qualify(module)[2][0]["site"] == "quoted"
+
+    mpi = dict(name="MPI_Finalize", result="i32", params=[], provider="mpi")
+    direct = dict(
+        op="call",
+        callee="MPI_Finalize",
+        operator_family="mpi",
+        mpi_interface="MPI_Finalize",
+    )
+    indirect = dict(op="indirect_call", targets=["MPI_Finalize"])
+    reference = dict(op="function_ref", name="MPI_Finalize")
+    module = dict(
+        externs=[mpi],
+        functions=[
+            dict(
+                name="main",
+                body=[
+                    dict(
+                        op="return",
+                        source_evidence=[
+                            direct,
+                            indirect,
+                            reference,
+                            dict(op="call", callee="main"),
+                        ],
+                    )
+                ],
+            )
+        ],
+    )
+    expected, uses, _ = _interfaces(module)
+    assert (
+        expected["operations"]
+        == uses["called_or_possible"]
+        == uses["address_taken"]
+        == []
+    )
+    assert toolchain.compilation(module)["evidence"]["direct_internal_calls"] == 0
+    module["functions"][0]["initializers"] = [direct]
+    module["globals"] = [dict(init=reference)]
+    module["records"] = [dict(fields=[dict(default=indirect)])]
+    expected, uses, _ = _interfaces(module)
+    assert expected["operations"] == ["call", "indirect_call"]
+    assert uses["called_or_possible"] == uses["address_taken"] == ["MPI_Finalize"]
+    direct["mpi_interface"] = "MPI_Init"
+    with pytest.raises(ValueError, match="annotation disagrees"):
+        _interfaces(module)
 
 
 def test_system_runtime_binding_preserves_wait_status_and_keeps_descendants_open(

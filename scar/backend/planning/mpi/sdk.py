@@ -6,8 +6,8 @@ import shlex
 import subprocess
 from tempfile import TemporaryDirectory
 
-from scar.contract import digest, walk_operations
-from ..runtime import QualificationFailure, qualification_check
+from scar.contract import digest
+from ..runtime import ImageLinkage, QualificationFailure, qualification_check
 
 _IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 _INTERFACE = re.compile(r"P?MPI_[A-Za-z0-9_]+\Z")
@@ -84,7 +84,7 @@ def _prototype(decl, params, records):
     return f"{constructor}<{', '.join(types)}>"
 
 
-def _interfaces(module):
+def _interfaces(module, linkage=None):
     defined = {f["name"] for f in module.get("functions", ())}
     externs = {
         e["name"]: e
@@ -113,9 +113,7 @@ def _interfaces(module):
     for name, decl in sorted(externs.items()):
         prototype = _prototype(decl, (p["type"] for p in decl["params"]), records)
         specs.append(f"SCAR_FUNCTION({_identifier(name, _INTERFACE)}, {prototype})")
-    for node in walk_operations(
-        [module.get(k, []) for k in ("functions", "globals", "records")]
-    ):
+    for _, _, node in (linkage or ImageLinkage(module)).sites:
         op, family = node["op"], node.get("operator_family")
         if op == "function_ref" and node.get("name") in externs:
             addresses.add(node["name"])
@@ -294,13 +292,13 @@ def _probe(specs):
         )
 
 
-def qualify(module, requested, *, explicit):
+def qualify(module, requested, *, explicit, linkage=None):
     with qualification_check(
         "semantic_contract",
         "mpi.c_abi_interfaces",
         fields=["externs", "records", "functions"],
     ):
-        expected, uses, specs = _interfaces(module)
+        expected, uses, specs = _interfaces(module, linkage)
     if explicit and (
         not isinstance(requested, dict)
         or requested.keys() != expected.keys()

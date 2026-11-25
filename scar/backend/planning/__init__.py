@@ -704,7 +704,8 @@ def _process_binding(requirement, observed, module, context):
     )
 
 
-def _qualify(module, image_context=None):
+def _qualify(module, image_context=None, *, linkage=None):
+    linkage = linkage or runtime.ImageLinkage(module)
     requested = module.get("operator_requirements", {})
     if not isinstance(requested, dict):
         raise ValueError("operator requirements must be a family-indexed table")
@@ -795,12 +796,13 @@ def _qualify(module, image_context=None):
                 if family == "mpi":
                     resolve_worker = (image_context or {}).get("qualify_mpi")
                     requested[family], bindings[family] = (
-                        resolve_worker(image_context["current_image"], module)
+                        resolve_worker(image_context["current_image"], module, linkage)
                         if resolve_worker
                         else mpi.qualify(
                             module,
                             requirement,
                             explicit=family in module.get("operator_requirements", {}),
+                            linkage=linkage,
                         )
                     )
                 elif family == "process":
@@ -867,7 +869,7 @@ def _qualify(module, image_context=None):
                     **({"registry_checks": checks} if checks is not None else {}),
                 )
             )
-    native, runtime_issues = runtime.qualify(module, probe=not issues)
+    native, runtime_issues = runtime.qualify(module, probe=not issues, linkage=linkage)
     issues.extend(runtime_issues)
     if native:
         bindings["posix_runtime"] = native
@@ -949,7 +951,8 @@ def _schedule_image(
     module.pop("fourier_binding_sha256", None)
     module.pop("integer_binding_sha256", None)
     module.pop("builtin_scalar_mapping_binding_sha256", None)
-    requirements, bindings, issues = _qualify(module, image_context)
+    linkage = runtime.ImageLinkage(module)
+    requirements, bindings, issues = _qualify(module, image_context, linkage=linkage)
     import_effects = runtime.import_effects(module, bindings)
     if not issues and (missing := runtime.import_effect_issue(import_effects)):
         issues.append(missing)
@@ -993,7 +996,9 @@ def _schedule_image(
         if access:
             module["parameter_access_binding_sha256"] = digest(json_bytes(access))
         compilation = toolchain.compilation(
-            module, cache=(image_context or {}).get("compiler_features")
+            module,
+            cache=(image_context or {}).get("compiler_features"),
+            linkage=linkage,
         )
         module["compilation_binding_sha256"] = digest(json_bytes(compilation))
         mpi = bindings.get("mpi", {})
@@ -1202,7 +1207,7 @@ def schedule_ir(source, destination, *, policy="auto", workers=None):
     child_inputs = {image["id"]: child for image, child in inputs}
     qualified, launcher_cache, compiler_features = {}, {}, {}
 
-    def qualify_mpi(image_id, module=None):
+    def qualify_mpi(image_id, module=None, linkage=None):
         # A controller may precede its worker in the input manifest. Qualify
         # the worker itself, reusing the result for its own schedule.
         if image_id not in qualified:
@@ -1212,7 +1217,7 @@ def schedule_ir(source, destination, *, policy="auto", workers=None):
             claims = module.get("operator_requirements", {})
             try:
                 result = mpi.qualify(
-                    module, claims.get("mpi"), explicit="mpi" in claims
+                    module, claims.get("mpi"), explicit="mpi" in claims, linkage=linkage
                 )
                 qualified[image_id] = result, None
             except ValueError as exc:

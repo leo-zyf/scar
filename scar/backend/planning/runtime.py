@@ -2,6 +2,7 @@
 
 from collections import Counter
 from contextlib import contextmanager
+from functools import cached_property
 import os
 from pathlib import Path
 import platform
@@ -20,6 +21,40 @@ from scar.contract import (
     validate_python_entry_environment,
     walk_operations,
 )
+
+
+class ImageLinkage:
+    """Calls, address uses and ABI annotations in one sealed image."""
+
+    def __init__(self, module):
+        self.module = module
+
+    @cached_property
+    def sites(self):
+        # Layouts can supply target-evaluated axis/guard operands. Source
+        # evidence can quote arbitrary historical operations, including calls.
+        excluded = EXECUTION_ANNOTATIONS - {"iteration_layout", "checks"}
+        roots = (
+            (fn["name"], field, fn[field])
+            for fn in self.module.get("functions", ())
+            for field in ("initializers", "body")
+            if field in fn
+        )
+        data = (
+            (None, field, row)
+            for field in ("globals", "records")
+            for row in self.module.get(field, ())
+        )
+        return tuple(
+            (owner, field, node)
+            for rows in (roots, data)
+            for owner, field, root in rows
+            for node in walk_operations(root, exclude_fields=excluded)
+            if node["op"] in {"call", "indirect_call", "function_ref"}
+            or node.get("operator_family") == "mpi"
+            or "mpi_interface" in node
+            or "mpi_interfaces" in node
+        )
 
 
 class QualificationFailure(ValueError):
@@ -752,10 +787,9 @@ def _system_site(module, owner, node, declaration):
     )
 
 
-def qualify(module, *, probe=True):
+def qualify(module, *, probe=True, linkage=None):
     """Return qualified runtime sites and unresolved process/loading boundaries."""
-    owners = [(f["name"], f) for f in module.get("functions", ())]
-    definitions = {name for name, _ in owners}
+    definitions = {f["name"] for f in module.get("functions", ())}
     external = {
         d["name"]: d
         for d in module.get("externs", ())
@@ -769,60 +803,54 @@ def qualify(module, *, probe=True):
     if not external:
         return None, []
     sites, issues = {}, []
-    initializers = (
-        (None, row)
-        for collection in ("globals", "records")
-        for row in module.get(collection, ())
-    )
-    for owner, row in [*owners, *initializers]:
-        for node in walk_operations(row):
-            targets = (
-                [node.get("callee")]
-                if node["op"] == "call"
-                else node.get("targets", ()) if node["op"] == "indirect_call" else ()
-            )
-            for name in targets:
-                if name not in external:
-                    continue
-                try:
-                    with qualification_check(
-                        "semantic_contract",
-                        "posix.system_call_abi",
-                        symbol=name,
-                        site=node.get("site"),
-                        fields=[
-                            "runtime_boundary",
-                            "artifact_effect",
-                            "args",
-                            "externs",
-                        ],
-                    ):
-                        if name != "system" or node["op"] != "call":
-                            raise QualificationFailure(
-                                "external_effects",
-                                "posix.execution_interface",
-                                "external execution or dynamic loading requires a bound implementation for this call",
-                                symbol=name,
-                                operation=node["op"],
-                                site=node.get("site"),
-                            )
-                        binding = _system_site(module, owner, node, external[name])
-                        if node["site"] in sites:
-                            raise ValueError("ambiguous runtime call site")
-                        sites[node["site"]] = binding
-                except QualificationFailure as exc:
-                    issues.append(
-                        dict(
-                            stage="B1",
-                            code="missing_execution_boundary_binding",
+    for owner, _, node in (linkage or ImageLinkage(module)).sites:
+        targets = (
+            [node.get("callee")]
+            if node["op"] == "call"
+            else node.get("targets", ()) if node["op"] == "indirect_call" else ()
+        )
+        for name in targets:
+            if name not in external:
+                continue
+            try:
+                with qualification_check(
+                    "semantic_contract",
+                    "posix.system_call_abi",
+                    symbol=name,
+                    site=node.get("site"),
+                    fields=[
+                        "runtime_boundary",
+                        "artifact_effect",
+                        "args",
+                        "externs",
+                    ],
+                ):
+                    if name != "system" or node["op"] != "call":
+                        raise QualificationFailure(
+                            "external_effects",
+                            "posix.execution_interface",
+                            "external execution or dynamic loading requires a bound implementation for this call",
                             symbol=name,
-                            provider=external[name].get("provider"),
+                            operation=node["op"],
                             site=node.get("site"),
-                            location=node.get("location"),
-                            detail=str(exc),
-                            qualification=exc.qualification,
                         )
+                    binding = _system_site(module, owner, node, external[name])
+                    if node["site"] in sites:
+                        raise ValueError("ambiguous runtime call site")
+                    sites[node["site"]] = binding
+            except QualificationFailure as exc:
+                issues.append(
+                    dict(
+                        stage="B1",
+                        code="missing_execution_boundary_binding",
+                        symbol=name,
+                        provider=external[name].get("provider"),
+                        site=node.get("site"),
+                        location=node.get("location"),
+                        detail=str(exc),
+                        qualification=exc.qualification,
                     )
+                )
     if not sites or issues or not probe:
         return None, issues
     try:
