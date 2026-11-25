@@ -1730,6 +1730,40 @@ def walk_operations(value, *, exclude_fields=()):
             yield item
 
 
+def source_function_publication(store, parent_code_sha256):
+    """Resolve a child-code constant, function creation and store in the same frame."""
+    if store.get("op") != "module_global_store":
+        return None
+    proof = store.get("source_definition") or {}
+    source = proof.get("instructions", ())
+    steps = store.get("evaluation", ())
+    if (
+        not parent_code_sha256
+        or proof.get("code_sha256") != parent_code_sha256
+        or len(source) != 3
+        or len(steps) != 2
+    ):
+        return None
+    load, make = steps
+    target = store["target"]["instruction"]
+    child = proof["child"]
+    if (
+        source[0]["opcode"] == "LOAD_CONST"
+        and source[1]["opcode"] == "MAKE_FUNCTION"
+        and target == source[2]
+        and target["opcode"] in {"STORE_NAME", "STORE_GLOBAL"}
+        and load["op"] == "source_object_constant"
+        and load.get("expected_code") == child
+        and load["offset"] == source[0]["offset"]
+        and make["offset"] == source[1]["offset"]
+        and make["op"] == "source_object_make_function"
+        and make["code"] == {"from_offset": load["offset"]}
+        and store["value"] == {"from_offset": make["offset"]}
+    ):
+        return make, target, child
+    return None
+
+
 def source_call_operands(operation):
     """Yield imported-name reads feeding actual calls in this operation's port domain."""
 

@@ -10,6 +10,7 @@ from scar.contract import (
     json_bytes,
     python_constant_rhs_sha256,
     source_call_operands,
+    source_function_publication,
     walk_operations,
 )
 from . import source_frames
@@ -933,25 +934,10 @@ def _published_functions(project, fragments):
         for store in walk_operations(
             fragment["function"]["body"], exclude_fields=EXECUTION_ANNOTATIONS
         ):
-            proof = store.get("source_definition")
-            if (
-                store["op"] != "module_global_store"
-                or not proof
-                or proof["code_sha256"] != code["code_sha256"]
-                or len(store.get("evaluation", ())) != 2
-            ):
+            publication = source_function_publication(store, code["code_sha256"])
+            if publication is None:
                 continue
-            load, make = store["evaluation"]
-            target = store["target"]["instruction"]
-            if not (
-                load["op"] == "source_object_constant"
-                and load["expected_code"] == proof["child"]
-                and make["op"] == "source_object_make_function"
-                and make["code"] == {"from_offset": load["offset"]}
-                and store["value"] == {"from_offset": make["offset"]}
-                and target == proof["instructions"][-1]
-            ):
-                continue
+            make, target, definition = publication
             symbol = make["symbol"]
             child = dict(
                 initializer=owner,
@@ -959,10 +945,10 @@ def _published_functions(project, fragments):
                 make_offset=make["offset"],
                 store_offset=target["offset"],
                 symbol=symbol,
-                code=proof["child"],
+                code=definition,
             )
             body = project.function_definitions.get(symbol, {}).get("source_body", {})
-            if body.get("code_sha256") == proof["child"]["code_sha256"]:
+            if body.get("code_sha256") == definition["code_sha256"]:
                 child["source_body"] = body
             key = owner, target["name"]
             group = exports.setdefault(key, [])
