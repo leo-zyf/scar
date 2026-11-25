@@ -19,6 +19,9 @@ class ImportState:
         self._registry = {}
         self._namespace_writes = {}
         self._binding_versions = {}
+        self.open_namespace = None
+        # Evidence of a completed source store, never the value now in the slot.
+        self.publications = {}
         self._windows = {}
         self._epoch = 0
 
@@ -138,6 +141,8 @@ class ImportState:
                 registry=self._registry,
                 namespace_writes=self._namespace_writes,
                 binding_versions=self._binding_versions,
+                open_namespace=self.open_namespace,
+                publications=self.publications,
                 import_windows=self._windows,
             )
         )
@@ -147,6 +152,8 @@ class ImportState:
         self._registry = state["registry"]
         self._namespace_writes = state["namespace_writes"]
         self._binding_versions = state["binding_versions"]
+        self.open_namespace = state["open_namespace"]
+        self.publications = state["publications"]
         self._windows = state["import_windows"]
         # Restoring an older branch must never reuse an epoch already issued
         # on another analyzed path.
@@ -169,6 +176,8 @@ class ImportState:
             registry=state["registry"].copy(),
             namespace_writes=state["namespace_writes"].copy(),
             binding_versions=state.get("binding_versions", {}).copy(),
+            open_namespace=state.get("open_namespace"),
+            publications=state.get("publications", {}).copy(),
             import_windows={
                 name: list(windows) for name, windows in state["import_windows"].items()
             },
@@ -191,12 +200,27 @@ class ImportState:
 
     @staticmethod
     def join_snapshots(states):
+        openings = [state.get("open_namespace") for state in states]
+        publications = states[0].get("publications", {})
         result = dict(
             binding_epoch=max(state.get("binding_epoch", 0) for state in states),
             registry={},
             namespace_writes={},
             binding_versions={},
             import_windows={},
+            open_namespace=(
+                openings[0]
+                if all(source == openings[0] for source in openings)
+                else {"reason": "open_namespace_on_incoming_path"}
+            ),
+            publications={
+                slot: publication
+                for slot, publication in publications.items()
+                if all(
+                    state.get("publications", {}).get(slot) == publication
+                    for state in states[1:]
+                )
+            },
         )
         for name in set().union(*(state["registry"] for state in states)):
             incoming = [
@@ -295,6 +319,13 @@ class ImportState:
     @staticmethod
     def project_final(path, before, after):
         result = ImportState.copy_snapshot(path)
+        # The cleanup is analyzed once from joined predecessor states. A
+        # conditional callback can open a previously closed path or replace a
+        # path-specific publication, even when both joins look identical.
+        result["open_namespace"] = after.get("open_namespace") or path.get(
+            "open_namespace"
+        )
+        result["publications"] = after.get("publications", {}).copy()
         for domain in (
             "registry",
             "namespace_writes",

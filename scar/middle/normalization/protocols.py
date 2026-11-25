@@ -274,8 +274,6 @@ class _Project:
         self.source_imports = host_protocols.ImportOccurrences(
             functions, entry_environment=entry_environment
         )
-        self.open_python_namespace = None
-        self.fromlist_publications = {}
         self.shadow, self.single_bind_globals, self.global_writers = _global_bindings(
             functions
         )
@@ -955,20 +953,24 @@ class _Frame:
 
     def ref(self, node):
         name = node["name"]
-        if node["op"] == "python_builtin" and self.project.open_python_namespace:
+        if node["op"] == "python_builtin" and self.project.imports.open_namespace:
             self.fail(
                 node,
                 "builtin_after_callback",
                 f"lookup of {name!r} needs the current globals and builtins after a Python callback",
-                source_evidence=self.project.open_python_namespace,
+                source_evidence=self.project.imports.open_namespace,
             )
         if node.get("cell"):
             self.fail(node, "cell", "a lexical cell needs a closed activation lifetime")
         if node.get("scope") == "global":
-            result = self.project.names.get(name)
+            result = (
+                None
+                if self.project.imports.open_namespace
+                else self.project.names.get(name)
+            )
             if result is not None:
                 result = self.global_value(name, result)
-            elif publication := self.project.fromlist_publications.get(name):
+            elif publication := self.project.imports.publications.get(name):
                 self.fail(
                     node,
                     "global_binding_after_import",
@@ -976,7 +978,7 @@ class _Frame:
                     source_evidence=dict(
                         slot=name,
                         prior_publication=publication,
-                        last_change=self.project.open_python_namespace,
+                        last_change=self.project.imports.open_namespace,
                         required="lookup_actual_current_binding_and_qualify_its_representation_or_propagate_failure",
                     ),
                 )
@@ -1137,12 +1139,12 @@ class _Frame:
             )
         name = target["name"]
         global_ = target.get("scope") == "global"
-        if global_ and self.project.open_python_namespace:
+        if global_ and self.project.imports.open_namespace:
             self.fail(
                 target,
                 "global_store_after_callback",
                 f"replacing {name} must preserve the current binding and its release effects",
-                source_evidence=self.project.open_python_namespace,
+                source_evidence=self.project.imports.open_namespace,
             )
         if global_ and not self.initializing:
             self.fail(target, "global_write", "a function writes a module namespace")
@@ -1747,6 +1749,24 @@ class _Frame:
             )
         occurrence["activation"] = "visited"
         mod = node["module"]
+        if (
+            self.initializing
+            and self.project.imports.open_namespace
+            and req.get("form") == "import"
+        ):
+            if namespace_operations.publish_plain_import(self, node, occurrence, steps):
+                return
+            self.fail(
+                node,
+                "import_publication_evidence",
+                f"import of {mod} needs an identified source IMPORT_NAME result and matching module store",
+                source_evidence=dict(
+                    occurrence=occurrence["id"],
+                    request=occurrence["request"],
+                    bindings=occurrence["bindings"],
+                    last_change=self.project.imports.open_namespace,
+                ),
+            )
         if self.dynamic and not self.protected_normal_context():
             self.fail(
                 node,
@@ -1772,13 +1792,13 @@ class _Frame:
                 f"absolute request for {req['module']} points to a different module {mod}",
             )
         origin = self.import_origin(node)
-        if self.project.open_python_namespace:
+        if self.project.imports.open_namespace:
             self.fail(
                 node,
                 "import_callable_after_callback",
                 f"import of {mod} needs the current __import__ callable, registry and returned bindings",
                 source_evidence=dict(
-                    request=req, last_change=self.project.open_python_namespace
+                    request=req, last_change=self.project.imports.open_namespace
                 ),
             )
         if origin is not None:
@@ -1984,7 +2004,7 @@ class _Frame:
 
     def _evaluate(self, node, steps, discard=False, *, truth_context=False):
         op = node["op"]
-        if self.project.open_python_namespace:
+        if self.project.imports.open_namespace:
             result = namespace_operations.open_object_expression(
                 self, node, steps, truth_context=truth_context, discard=discard
             )
@@ -2648,17 +2668,29 @@ class _Frame:
     def exceptional_snapshot(self, start, after, body):
         result = self.copy_state(start)
         after = self.snapshot() if after is None else after
+        may_write = self.project.import_may_write(body)
         imports = self.project.imports.exceptional_prefix(
-            start[2],
-            after[2],
-            may_write=self.project.import_may_write(body),
+            start[2], after[2], may_write=may_write
         )
-        return result[0], result[1], imports
+        if (
+            may_write
+            and not imports["open_namespace"]
+            and any(
+                operation.get("frame_globals", {}).get("identity")
+                == "current_activation_globals"
+                for operation in walk_operations(body)
+            )
+        ):
+            # Both endpoints may exclude a throwing arm after an open effect.
+            imports["open_namespace"] = {
+                "reason": "open_namespace_on_exceptional_prefix"
+            }
+        return result[0], {} if imports["open_namespace"] else result[1], imports
 
     def project_final_state(self, path, before, after):
         result = self.copy_state(path)
         imports = self.project.imports.project_final(path[2], before[2], after[2])
-        return result[0], result[1], imports
+        return result[0], {} if imports["open_namespace"] else result[1], imports
 
     def conditional(self, node, steps):
         check = self.evaluate(node["condition"], steps, truth_context=True)
@@ -3332,13 +3364,13 @@ class _Frame:
                         callbacks="preserve_source_opcode_tracing_reentry_and_unraisable_finalizer_errors",
                     )
                     for binding in bindings:
-                        self.project.fromlist_publications[binding["slot"]] = dict(
+                        self.project.imports.publications[binding["slot"]] = dict(
                             occurrence=occurrence["id"], **binding
                         )
                     next_statement = index + len(bindings)
             elif (
                 op == "unbind"
-                and self.project.open_python_namespace
+                and self.project.imports.open_namespace
                 and namespace_operations.global_delete_slots(self, node)
             ):
                 namespace_operations.namespace_effect(

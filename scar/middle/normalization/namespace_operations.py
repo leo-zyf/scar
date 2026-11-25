@@ -70,7 +70,7 @@ def global_fromlist(frame, body, index):
         or end > len(body)
     ):
         return None
-    if not frame.project.open_python_namespace and (
+    if not frame.project.imports.open_namespace and (
         frame.dynamic
         or frame.region is not frame.root_region
         or module != frame.module
@@ -152,7 +152,7 @@ def global_fromlist(frame, body, index):
                 **source_site(node),
             )
         )
-    if not frame.project.open_python_namespace and set(
+    if not frame.project.imports.open_namespace and set(
         global_delete_slots(frame, body[end])
     ) != {b["slot"] for b in bindings}:
         return None
@@ -184,7 +184,7 @@ def _matches_instruction(instruction, operand, source_key):
 def _open_module_code(frame):
     code = frame.scope.get("source_code")
     if (
-        not frame.project.open_python_namespace
+        not frame.project.imports.open_namespace
         or not frame.initializing
         or frame.scope.get("graph_backed") is not True
         or frame.name != frame.scope.get("initializer")
@@ -203,6 +203,86 @@ def _open_module_code(frame):
     ):
         return None
     return code
+
+
+def publish_plain_import(frame, node, occurrence, steps):
+    """Consume M1's IMPORT_NAME/store pair as one source occurrence."""
+    request = occurrence["request"]
+    name = request["module"]
+    port = node.get("source_import_store")
+    target = node.get("binding", {})
+    slot = target.get("name")
+    if (
+        not (code := _open_module_code(frame))
+        or not isinstance(name, str)
+        or not name.isidentifier()
+        or node.get("alias") is not None
+        or node.get("member") != name
+        or target.get("cell")
+        or not node.get("site")
+        or len(occurrence["bindings"]) != 1
+        or occurrence["bindings"][0]["site"] != node["site"]
+        or occurrence["bindings"][0]["name"] != slot
+        or not isinstance(port, dict)
+        or port.get("code_sha256") != code["code_sha256"]
+    ):
+        return False
+    # The graph binder checks the code, instruction offsets, operands and
+    # spans before admitting this source port. The STORE consumes the owned
+    # IMPORT_NAME result even when the importer replaced sys.modules itself.
+    store = port["store"]
+    level = port["level"]
+    level_operand = (
+        {"opcode": "LOAD_SMALL_INT", "oparg": level["oparg"]}
+        if level["opcode"] == "LOAD_SMALL_INT"
+        else {"table": "co_consts", "index": level["index"]}
+    )
+    mapping = "frame.locals" if store["opcode"] == "STORE_NAME" else "frame.globals"
+    binding = dict(
+        slot=slot,
+        name=name,
+        namespace=mapping,
+        opcode=store["opcode"],
+        key={"table": "co_names", "index": store["index"]},
+        value={"result": "import_result"},
+        **source_site(node),
+    )
+    namespace_effect(
+        frame,
+        node,
+        steps,
+        "module_import_publish",
+        source_protocol="python.import",
+        occurrence=occurrence["id"],
+        request=request,
+        source_code=code,
+        source_import_store=port,
+        reads=("frame.code", "frame.locals"),
+        writes=(mapping,),
+        import_call=dict(
+            opcode="IMPORT_NAME",
+            importer={"mapping": "frame.builtins", "key": "__import__"},
+            arguments=[
+                {"table": "co_names", "index": port["import_name"]["index"]},
+                {"frame": "globals"},
+                {"frame": "locals"},
+                {"table": "co_consts", "index": port["fromlist"]["index"]},
+                level_operand,
+            ],
+            result="import_result",
+            registry="actual_importer_controls_cache_initialization_hooks_and_audit",
+        ),
+        binding=binding,
+        code_match="require_current_activation_code_and_instruction_operands_match_before_first_source_import_operand",
+        on_code_mismatch="resume_source_equivalent_execution_before_first_source_import_operand",
+        unwind="on_import_failure_skip_store_on_store_failure_preserve_completed_effects_and_unwind_source_stack",
+        release="preserve_source_stack_ownership_replaced_binding_release_reentry_and_unraisable_finalizer_errors",
+        callbacks="preserve_source_opcode_tracing_and_exception_state",
+    )
+    frame.project.imports.publications[slot] = dict(
+        occurrence=occurrence["id"], slot=slot, name=name, **source_site(node)
+    )
+    return True
 
 
 def store_open_module_constant(frame, node, steps):
@@ -305,7 +385,7 @@ def _object_operand(frame, node, code):
         scopes = ["frame.globals", "frame.builtins"]
         if load["opcode"] == "LOAD_NAME":
             scopes.insert(0, "frame.locals")
-        previous = frame.project.fromlist_publications.get(slot)
+        previous = frame.project.imports.publications.get(slot)
         return dict(
             op="module_name_load",
             instruction=load,
@@ -468,14 +548,14 @@ def namespace_effect(
         **operands,
     )
     require_registry_operator(frame.project, opcode)
-    if opcode == "module_fromlist_publish":
+    if opcode in {"module_fromlist_publish", "module_import_publish"}:
         row = frame.project.source_imports.get(frame.name, node)
         frame.project.source_imports.producer(row, action, "source_import")
     value = frame.effect(action, result, steps, discard=result == "unit")
     # Import callbacks and releasing arbitrary objects can reenter Python and
     # replace bindings, including names that never appeared in the source.
     frame.project.names.clear()
-    frame.project.open_python_namespace = dict(
+    frame.project.imports.open_namespace = dict(
         owner=frame.name, operation=opcode, **source_site(node)
     )
     return value

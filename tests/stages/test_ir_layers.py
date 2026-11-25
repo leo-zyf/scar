@@ -7384,3 +7384,208 @@ def test_open_object_expression_connects_live_callees_arguments_comparisons_and_
             s.get("init", {}).get("op") != "module_object_expression"
             for s in fragment["body"]
         )
+
+
+def test_conditional_plain_import_consumes_actual_result_at_its_source_store(
+    tmp_path, monkeypatch
+):
+    from types import SimpleNamespace
+
+    from scar.contract import read_member, walk_operations
+    from scar.frontend import build
+    from scar.middle import plan
+
+    package = tmp_path / "package"
+    package.mkdir()
+    source = package / "__init__.py"
+    source.write_text(
+        "from . import child as gone\ndel gone\n"
+        "try:\n    if enabled:\n        import offered\n        seen(offered)\n"
+        "except:\n    audit(offered)\n    raise\nfinally:\n    pass\n"
+        "audit(offered)\nimport cleanup\n"
+        "done(cleanup)\nboundary = 1\ndef declaration():\n    global cleanup\n"
+    )
+    for module in (
+        package / "child.py",
+        tmp_path / "offered.py",
+        tmp_path / "cleanup.py",
+    ):
+        module.write_text("pass\n")
+    entry = tmp_path / "main.py"
+    entry.write_text("import package\n")
+    code = compile(source.read_bytes(), str(source), "exec")
+    graph, out = tmp_path / "graph", tmp_path / "out"
+    build(entry, graph)
+    source.unlink()
+
+    assert plan(graph, out)["status"] == "INCOMPLETE"
+    report = json.loads((out / "plan.json").read_bytes())
+    [issue] = report["issues"]
+    assert (issue["code"], issue["location"]["line"]) == (
+        "python.global_store_after_callback",
+        15,
+    )
+    fragment = next(
+        r
+        for r in report["protocol_analysis"]["prefix_fragments"]
+        if r["symbol"] == "py:package:<init>"
+    )
+    body = read_member(out, fragment["fragment"])["body"]
+    protected = next(s for s in body if s["op"] == "try")
+    branch = next(s for s in protected["body"] if s["op"] == "if")
+    assert not branch["else"]
+    imports = [s for s in walk_operations(body) if s["op"] == "module_import_publish"]
+    offered, cleanup = sorted(imports, key=lambda n: n["location"]["line"])
+    assert branch["then"][0]["value"] == offered and body[-2]["value"] == cleanup
+    assert len({s["source_import_occurrence"] for s in imports}) == 2
+    occurrences = {
+        r["id"]: r for r in read_member(out, report["source_imports"])["occurrences"]
+    }
+    for operation, mapping in zip(
+        (offered, cleanup), ("frame.locals", "frame.globals")
+    ):
+        [producer] = occurrences[operation["occurrence"]]["producer_sites"]
+        assert (producer["site"], producer["role"], producer["opcode"]) == (
+            operation["site"],
+            "source_import",
+            "module_import_publish",
+        )
+        binding = operation["binding"]
+        assert binding["namespace"] == mapping and mapping in operation["writes"]
+        assert binding["value"] == {"result": operation["import_call"]["result"]}
+        assert operation["occurrence"] == operation["source_import_occurrence"]
+        assert operation["external_effect"] == "UNKNOWN" and operation["may_raise"]
+        assert "source_equivalent" in operation["on_code_mismatch"]
+
+    def argument(statement):
+        return statement["value"]["expression"]["value"]["args"][0]
+
+    assert (
+        argument(branch["then"][1])["source_evidence"]["prior_publication"][
+            "occurrence"
+        ]
+        == offered["occurrence"]
+    )
+    assert "source_evidence" not in argument(protected["handlers"][0]["body"][0])
+    assert "source_evidence" not in argument(body[-3])
+    assert (
+        argument(body[-1])["source_evidence"]["prior_publication"]["occurrence"]
+        == cleanup["occurrence"]
+    )
+
+    def execute(mode, lowered):
+        trace = []
+        result, changed = object(), object()
+
+        class Locals(dict):
+            def __setitem__(self, name, value):
+                if name == "offered" and value is result and mode == "store_error":
+                    raise LookupError("store")
+                super().__setitem__(name, value)
+
+        local = Locals(enabled=mode != "skip", offered="previous")
+        global_ = {}
+
+        def observe(name, value):
+            trace.append((name, "returned" if value is result else value))
+
+        def importer(name, globals_, locals_, fromlist, level):
+            assert globals_ is global_ and locals_ is local
+            if level:
+                return SimpleNamespace(child=None)
+            trace.append(("import", name))
+            assert fromlist is None and type(level) is int and level == 0
+            monkeypatch.setitem(sys.modules, name, changed)
+            if name == "offered" and mode == "import_error":
+                raise LookupError("import")
+            return result
+
+        global_["__builtins__"] = {"__import__": importer}
+        local.update(
+            {
+                name: lambda v, n=name: observe(n, v)
+                for name in ("seen", "audit", "done")
+            }
+        )
+        if mode == "reentry":
+
+            class Previous:
+                def __del__(self):
+                    assert local["offered"] is result
+                    trace.append(("release", "previous"))
+                    local["offered"] = "replaced"
+
+            local["offered"] = Previous()
+
+        def publish(n):
+            call, store = n["import_call"], n["binding"]
+            frame = {
+                "locals": local,
+                "globals": global_,
+                "builtins": global_["__builtins__"],
+            }
+
+            def operand(spec):
+                if spec.get("opcode") == "LOAD_SMALL_INT":
+                    return spec["oparg"]
+                if "table" in spec:
+                    return getattr(code, spec["table"])[spec["index"]]
+                return frame[spec["frame"]]
+
+            dispatch = call["importer"]
+            callback = frame[dispatch["mapping"].split(".")[1]][dispatch["key"]]
+            outputs = {
+                call["result"]: callback(*(operand(a) for a in call["arguments"]))
+            }
+            frame[store["namespace"].split(".")[1]][operand(store["key"])] = outputs[
+                store["value"]["result"]
+            ]
+
+        try:
+            if lowered:
+                try:
+                    if local["enabled"]:
+                        publish(offered)
+                        local["seen"](local["offered"])
+                except BaseException:
+                    local["audit"](local["offered"])
+                    raise
+                local["audit"](local["offered"])
+                publish(cleanup)
+                local["done"](global_["cleanup"])
+            else:
+                exec(code, global_, local)
+        except LookupError as error:
+            trace.append(("raised", str(error)))
+        return trace
+
+    for mode in ("skip", "success", "import_error", "store_error", "reentry"):
+        actual = execute(mode, False)
+        assert execute(mode, True) == actual
+        assert actual.count(("import", "offered")) == int(mode != "skip")
+        assert actual.count(("import", "cleanup")) == int(not mode.endswith("_error"))
+        if mode.endswith("_error"):
+            assert actual[-1] == ("raised", mode.split("_")[0])
+        if mode == "reentry":
+            assert ("seen", "replaced") in actual
+
+    index = json.loads((graph / "graph.json").read_bytes())
+    unit = next(r for r in index["units"] if r["path"] == "package/__init__.py")
+    graph_unit = read_member(graph, unit["graph"])
+    decl = next(
+        n
+        for fn in graph_unit["functions"]
+        for n in fn["nodes"]
+        if n["op"] == "python_import" and n["module"] == "offered"
+    )
+    del decl["source_import_store"]
+    unit["graph"] = member(graph, "units", graph_unit)
+    old = graph / "old.json"
+    write_json(old, index)
+    prior = tmp_path / "prior"
+    assert plan(old, prior)["status"] == "INCOMPLETE"
+    [failure] = json.loads((prior / "plan.json").read_bytes())["issues"]
+    assert (failure["code"], failure["location"]["line"]) == (
+        "python.import_publication_evidence",
+        5,
+    )
