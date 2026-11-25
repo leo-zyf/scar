@@ -1796,7 +1796,11 @@ class _Scope:
                         bound_value=fact,
                         **(
                             {
-                                "source_import_store": {
+                                (
+                                    "source_import_projection"
+                                    if "projection" in import_store
+                                    else "source_import_store"
+                                ): {
                                     **import_store,
                                     "code_sha256": self.unit.source_code["code_sha256"],
                                 }

@@ -512,7 +512,10 @@ def bind_source_definition(node, scope, declarations):
 
 def bind_import_store(node, scope):
     """Check an optional bytecode witness against the reconstructed graph ports."""
-    proof = node["source_import_store"]
+    projected = "source_import_projection" in node
+    if projected and "source_import_store" in node:
+        raise ValueError("source import has conflicting publication paths")
+    proof = node["source_import_projection" if projected else "source_import_store"]
     request, target, loc = node["request"], node["binding"], node["location"]
     module = node["module"]
     slot = node.get("alias") or module.partition(".")[0]
@@ -546,6 +549,7 @@ def bind_import_store(node, scope):
         and position == _source_position(loc)
         and request.get("form") == "import"
         and request.get("module") == imported.get("name") == module
+        and projected == ("." in module and node.get("alias") is not None)
         and request.get("level") == 0
         and request.get("fromlist") == []
         and level_matches
@@ -568,14 +572,80 @@ def bind_import_store(node, scope):
         and level["offset"] < fromlist["offset"] < imported["offset"] < stored["offset"]
     ):
         raise ValueError("source import operands disagree with their graph ports")
+    if projected:
+        members = module.split(".")[1:]
+        if (
+            node.get("member") != module
+            or request.get("binding_index") != 0
+            or not slot.isidentifier()
+            or target.get("location") != loc
+        ):
+            raise ValueError(
+                "source import projection disagrees with its alias binding"
+            )
+        _bind_import_projection(proof, members)
+    return proof
 
 
-def loader_ports(node, site, declarations):
+def _bind_import_projection(proof, members):
+    steps, release = proof.get("projection"), proof.get("release")
+    if (
+        not isinstance(steps, list)
+        or len(steps) != 3 * len(members) - 2
+        or not isinstance(release, dict)
+        or set(release) != {"opcode", "offset"}
+        or release["opcode"] != "POP_TOP"
+        or not all(isinstance(row, dict) for row in steps)
+    ):
+        raise ValueError("invalid source import projection")
+    for i, member in enumerate(members):
+        fetched = steps[3 * i]
+        if (
+            set(fetched) != {"opcode", "offset", "index", "name"}
+            or fetched["opcode"] != "IMPORT_FROM"
+            or fetched["name"] != member
+            or type(fetched["index"]) is not int
+            or fetched["index"] < 0
+        ):
+            raise ValueError("source import projection disagrees with its member")
+        if i:
+            swap, pop = steps[3 * i - 2 : 3 * i]
+            if (
+                set(swap) != {"opcode", "offset", "oparg"}
+                or swap["opcode"] != "SWAP"
+                or type(swap["oparg"]) is not int
+                or swap["oparg"] != 2
+                or set(pop) != {"opcode", "offset"}
+                or pop["opcode"] != "POP_TOP"
+            ):
+                raise ValueError("source import projection lost its parent release")
+    ordered = [
+        proof["level"],
+        proof["fromlist"],
+        proof["import_name"],
+        *steps,
+        proof["store"],
+        release,
+    ]
+    # These wordcode instructions have no inline caches. An operand wider than
+    # one byte owns its preceding EXTENDED_ARG words.
+    for earlier, row in zip(ordered, ordered[1:]):
+        arg = row.get("index", row.get("oparg", 0))
+        width = max(1, (arg.bit_length() + 7) // 8)
+        if (
+            type(row.get("offset")) is not int
+            or row["offset"] != earlier["offset"] + 2 * width
+        ):
+            raise ValueError(
+                "source import projection has a discontinuous instruction path"
+            )
+
+
+def loader_ports(node, site, declarations, proof):
     """Connect a resolved source body to its optional activation inside IMPORT_NAME."""
     symbols = node.get("initializers", ())
     if not node.get("graph_backed") or not symbols:
         return None
-    proof = node["source_import_store"]
     candidates = []
     for symbol in symbols:
         scope = declarations.get(symbol, {}).get("python_scope", {})
@@ -612,8 +682,11 @@ def loader_ports(node, site, declarations):
         ),
         binding=dict(
             instruction=proof["store"]["offset"],
-            input="import_result",
+            input=(
+                "projected_import_member" if "projection" in proof else "import_result"
+            ),
             on_import_exception="skip",
+            **({"on_projection_exception": "skip"} if "projection" in proof else {}),
         ),
     )
 

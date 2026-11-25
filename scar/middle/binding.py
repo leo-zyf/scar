@@ -140,10 +140,14 @@ def _definition(graph, declarations=None):
                 raise ValueError(f"invalid operand port {port} in {graph['id']}")
             active.add(port)
             result = read(nodes[port])
-            if result["op"] == "python_import" and "source_import_store" in result:
-                bind_import_store(result, graph["signature"].get("python_scope", {}))
+            if result["op"] == "python_import" and (
+                "source_import_store" in result or "source_import_projection" in result
+            ):
+                proof = bind_import_store(
+                    result, graph["signature"].get("python_scope", {})
+                )
                 if dispatch := loader_ports(
-                    result, f"{graph['id']}/{port}", declarations or {}
+                    result, f"{graph['id']}/{port}", declarations or {}, proof
                 ):
                     result["loader_ports"] = dispatch
             if "source_definition" in result:

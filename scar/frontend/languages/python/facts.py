@@ -217,56 +217,85 @@ def _name_load_sites(program, instructions, names):
 
 
 def _import_store_sites(program, instructions, imports, handlers):
-    """Capture an absolute IMPORT_NAME whose returned object goes directly to its slot."""
-    occurrences = defaultdict(int)
-    sites, window = {}, deque(maxlen=4)
-    branch_entry = False
+    """Capture the compiler's complete result-to-binding path for one absolute import."""
+    regions = defaultdict(list)
+    ordinal, incoming = 0, False
     for ins in instructions:
-        opcode = getattr(ins, "baseopname", ins.opname)
-        branch_entry |= ins.is_jump_target or ins.offset in handlers
-        if opcode == "EXTENDED_ARG":
+        incoming |= ins.is_jump_target or ins.offset in handlers
+        if ins.opname == "EXTENDED_ARG":
             continue
-        window.append((ins, opcode, branch_entry))
-        branch_entry = False
-        span = ins.positions
-        if span not in imports:
+        if ins.positions in imports:
+            regions[ins.positions].append((ordinal, ins, incoming))
+        ordinal += 1
+        incoming = False
+
+    def named(ins):
+        return dict(
+            opcode=ins.opname,
+            index=ins.arg,
+            offset=ins.offset,
+            name=program.co_names[ins.arg],
+        )
+
+    sites = {}
+    for span, region in regions.items():
+        requests = [
+            i for i, (_, ins, _) in enumerate(region) if ins.opname == "IMPORT_NAME"
+        ]
+        if len(requests) != 1 or requests[0] < 2:
             continue
-        if opcode == "IMPORT_NAME":
-            occurrences[span] += 1
-        if opcode not in {"STORE_NAME", "STORE_GLOBAL"} or len(window) != 4:
-            continue
-        level, fromlist, request, store = (i for i, _, _ in window)
-        level_opcode = window[0][1]
         alias = imports[span]
+        members = alias.name.split(".")[1:] if alias.asname else []
+        # Each intermediate parent is discarded after reading its member. The
+        # final parent stays on the stack until the alias store has completed.
+        steps = []
+        for member in members:
+            if steps:
+                steps.extend([("SWAP", 2), ("POP_TOP", None)])
+            steps.append(("IMPORT_FROM", member))
+        size = 4 + len(steps) + bool(members)
+        start = requests[0] - 2
+        rows = region[start : start + size]
         if (
-            window[1][1] != "LOAD_CONST"
-            or window[2][1] != "IMPORT_NAME"
-            or any(
-                i.positions != span or index and incoming
-                for index, (i, _, incoming) in enumerate(window)
-            )
-            or program.co_consts[fromlist.arg] is not None
-            or program.co_names[request.arg] != alias.name
-            or program.co_names[store.arg]
-            != (alias.asname or alias.name.partition(".")[0])
+            len(rows) != size
+            or rows[-1][0] - rows[0][0] != size - 1
+            or any(incoming for _, _, incoming in rows[1:])
         ):
             continue
-        if level_opcode == "LOAD_CONST":
-            if (
-                type(program.co_consts[level.arg]) is not int
-                or program.co_consts[level.arg] != 0
-            ):
-                continue
+        ops = [ins for _, ins, _ in rows]
+        level, fromlist, request = ops[:3]
+        store = ops[3 + len(steps)]
+        if (
+            fromlist.opname != "LOAD_CONST"
+            or program.co_consts[fromlist.arg] is not None
+            or program.co_names[request.arg] != alias.name
+            or store.opname not in {"STORE_NAME", "STORE_GLOBAL"}
+            or program.co_names[store.arg]
+            != (alias.asname or alias.name.partition(".")[0])
+            or (members and ops[-1].opname != "POP_TOP")
+            or any(
+                ins.opname != opcode or ins.argval != arg
+                for ins, (opcode, arg) in zip(
+                    ops[3 : 3 + len(steps)], steps, strict=True
+                )
+            )
+        ):
+            continue
+        if (
+            level.opname == "LOAD_CONST"
+            and type(program.co_consts[level.arg]) is int
+            and program.co_consts[level.arg] == 0
+        ):
             source_level = {"index": level.arg}
-        elif level_opcode == "LOAD_SMALL_INT" and level.arg == 0:
+        elif level.opname == "LOAD_SMALL_INT" and level.arg == 0:
             source_level = {"oparg": level.arg}
         else:
             continue
-        sites[span] = dict(
+        proof = dict(
             semantics_version=1,
             position=list(span),
             level=dict(
-                opcode=level_opcode, offset=level.offset, value=0, **source_level
+                opcode=level.opname, offset=level.offset, value=0, **source_level
             ),
             fromlist=dict(
                 opcode="LOAD_CONST",
@@ -274,20 +303,25 @@ def _import_store_sites(program, instructions, imports, handlers):
                 offset=fromlist.offset,
                 value=None,
             ),
-            import_name=dict(
-                opcode="IMPORT_NAME",
-                index=request.arg,
-                offset=request.offset,
-                name=alias.name,
-            ),
-            store=dict(
-                opcode=opcode,
-                index=store.arg,
-                offset=store.offset,
-                name=program.co_names[store.arg],
-            ),
+            import_name=named(request),
+            store=named(store),
         )
-    return {span: site for span, site in sites.items() if occurrences[span] == 1}
+        if members:
+            proof["projection"] = [
+                (
+                    named(ins)
+                    if ins.opname == "IMPORT_FROM"
+                    else dict(
+                        opcode=ins.opname,
+                        offset=ins.offset,
+                        **({"oparg": ins.arg} if ins.opname == "SWAP" else {}),
+                    )
+                )
+                for ins in ops[3:-2]
+            ]
+            proof["release"] = dict(opcode="POP_TOP", offset=ops[-1].offset)
+        sites[span] = proof
+    return sites
 
 
 _STATEMENT_END = {

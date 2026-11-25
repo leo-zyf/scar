@@ -1193,18 +1193,30 @@ def test_module_import_store_matches_cpython_stack_and_source_span(tmp_path):
     from scar.frontend.languages.python.environment import code_digest
 
     (tmp_path / "pkg").mkdir()
-    for relative in ("pkg/__init__.py", "pkg/leaf.py", "other.py"):
+    (tmp_path / "pkg/branch").mkdir()
+    for relative in (
+        "pkg/__init__.py",
+        "pkg/leaf.py",
+        "pkg/branch/__init__.py",
+        "pkg/branch/leaf.py",
+        "other.py",
+    ):
         (tmp_path / relative).write_text("")
     entry = tmp_path / "driver.py"
     source = (
-        "global chosen\n"
+        "global chosen, deep\n"
         "if enabled:\n    import pkg.leaf\n    import other as chosen\n"
         "import pkg.leaf as projected\n"
         "import other, other as second\n"
         "from pkg import leaf\n"
         "if False:\n    import absent\n"
         "try:\n    enabled\nfinally:\n    import other\n"
-        "def nested():\n    import other\n"
+        "def nested():\n    import other\n    import pkg.leaf as hidden\n"
+        "if False: " + ", ".join(f"unused{i}" for i in range(270)) + "\n"
+        "import pkg.branch.leaf as deep\n"
+        "try:\n    enabled\nfinally:\n    import pkg.leaf as duplicated\n"
+        "if False:\n    import pkg.leaf as unreachable\n"
+        "import pkg.leaf as first, pkg.leaf as second\n"
     )
     entry.write_text(source)
     code = compile(source, str(entry), "exec", dont_inherit=True)
@@ -1217,10 +1229,11 @@ def test_module_import_store_matches_cpython_stack_and_source_span(tmp_path):
     )
     root = next(f for f in unit["functions"] if f["signature"]["name"] == "__main__")
     sites = [n for n in root["nodes"] if "source_import_store" in n]
+    projections = [n for n in root["nodes"] if "source_import_projection" in n]
     if sys.implementation.name != "cpython" or not any(
         col is not None for _, _, col, _ in getattr(code, "co_positions", lambda: ())()
     ):
-        assert not sites
+        assert not sites and not projections
         return
     assert [(n["location"]["line"], n["module"]) for n in sites] == [
         (3, "pkg.leaf"),
@@ -1266,8 +1279,54 @@ def test_module_import_store_matches_cpython_stack_and_source_span(tmp_path):
         assert (
             root["nodes"][node["binding"]["port"]]["name"] == f"py:driver:{destination}"
         )
+    assert [n["alias"] for n in projections] == ["projected", "deep"]
+    for node in projections:
+        assert "source_import_store" not in node
+        port = node["source_import_projection"]
+        assert port["code_sha256"] == code_sha
+        ops = [
+            port["level"],
+            port["fromlist"],
+            port["import_name"],
+            *port["projection"],
+            port["store"],
+            port["release"],
+        ]
+        source_ops = [
+            i
+            for i in by_offset.values()
+            if ops[0]["offset"] <= i.offset <= ops[-1]["offset"]
+            and i.opname != "EXTENDED_ARG"
+        ]
+        for row, ins in zip(ops, source_ops, strict=True):
+            assert (row["opcode"], row["offset"], port["position"]) == (
+                ins.opname,
+                ins.offset,
+                list(ins.positions),
+            )
+            if "name" in row:
+                assert (row["index"], row["name"]) == (ins.arg, ins.argval)
+            if "oparg" in row:
+                assert row["oparg"] == ins.arg
+        assert (
+            port["store"]["name"] == node["alias"]
+            and port["release"]["opcode"] == "POP_TOP"
+        )
+        assert [
+            r["name"] for r in port["projection"] if r["opcode"] == "IMPORT_FROM"
+        ] == node["module"].split(".")[1:]
+    deep = projections[-1]["source_import_projection"]
+    assert (
+        deep["import_name"]["index"] > 255 and deep["store"]["opcode"] == "STORE_GLOBAL"
+    )
+    assert [r["opcode"] for r in deep["projection"]] == [
+        "IMPORT_FROM",
+        "SWAP",
+        "POP_TOP",
+        "IMPORT_FROM",
+    ]
     assert all(
-        "source_import_store" not in n
+        "source_import_store" not in n and "source_import_projection" not in n
         for f in unit["functions"]
         if f is not root
         for n in f["nodes"]
