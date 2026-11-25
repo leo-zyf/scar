@@ -3236,6 +3236,150 @@ def test_source_dispatch_seals_import_result_and_conditional_callee_for_b1(tmp_p
         inspect()
 
 
+def test_native_import_frame_uses_live_registry_and_dispatches_returned_objects(
+    tmp_path,
+):
+    from scar.backend import compile_ir
+    from scar.contract import read_member
+    from scar.frontend import build
+    from scar.middle import plan
+
+    name, member_name = "source_dep", "describe"
+    entry, leaf = tmp_path / "entry.py", tmp_path / f"{name}.py"
+    entry.write_text(f"import {name}\nprint({name}.{member_name}())\n")
+    leaf.write_text("def describe():\n    return 'value from sealed source'\n")
+    graph, execution, delivery = (tmp_path / n for n in ("graph", "ir", "delivery"))
+    build(entry, graph)
+    assert plan(graph, execution)["status"] == "READY"
+
+    # Each original entry runs in a fresh interpreter. The declaring source
+    # files and entry are the same across cold, warm and modified dispatch.
+    startup = tmp_path / "startup"
+    startup.mkdir()
+    (startup / "sitecustomize.py").write_text(
+        "import builtins, os, sys, types\n"
+        f"name = {name!r}\n"
+        "mode = os.environ['MODE']\n"
+        "obj = types.ModuleType(name)\n"
+        f"setattr(obj, {member_name!r}, lambda: 'replacement')\n"
+        "if mode == 'hit': sys.modules[name] = obj\n"
+        "if mode == 'hook':\n"
+        "    orig = builtins.__import__\n"
+        "    builtins.__import__ = lambda n,*a,**k: obj if n == name else orig(n,*a,**k)\n"
+        "def audit(event, args):\n"
+        "    if event == 'import' and args[0] == name:\n"
+        "        if mode == 'deny': raise RuntimeError('denied')\n"
+        "        if mode == 'audit_insert': sys.modules[name] = obj\n"
+        "sys.addaudithook(audit)\n"
+        "if mode in {'replace','failure','recursive'}:\n"
+        "    from importlib.machinery import PathFinder\n"
+        "    class Loader:\n"
+        "        def create_module(self,spec): return None\n"
+        "        def exec_module(self,module):\n"
+        "            if mode == 'recursive': assert __import__(name) is module\n"
+        "            self.original.exec_module(module)\n"
+        "            if mode in {'replace','failure'}: sys.modules[name] = obj\n"
+        "            if mode == 'failure': raise RuntimeError('exec failure')\n"
+        "        def find_spec(self,fullname,path,target=None):\n"
+        "            if fullname == name:\n"
+        "                spec = PathFinder.find_spec(fullname,path)\n"
+        "                self.original, spec.loader = spec.loader, self\n"
+        "                return spec\n"
+        "    sys.meta_path.insert(0, Loader())\n"
+    )
+    reference = {}
+    for mode in (
+        "cold",
+        "hit",
+        "deny",
+        "hook",
+        "audit_insert",
+        "replace",
+        "failure",
+        "recursive",
+    ):
+        run = subprocess.run(
+            [sys.executable, "-B", entry],
+            capture_output=True,
+            env={**os.environ, "PYTHONPATH": str(startup), "MODE": mode},
+        )
+        reference[mode] = (run.returncode, run.stdout)
+    entry.unlink()
+    leaf.unlink()
+    result = compile_ir(execution, delivery, policy="serial")
+    assert result["status"] == "INCOMPLETE" and "executable" not in result
+    component = result["source_frame_components"]
+    ir = json.loads((execution / "exec-ir.json").read_bytes())
+    index = read_member(execution, ir["module"]["source_dispatch"])
+    (callee,) = index["callees"]
+    constants = read_member(execution, callee["function"])["constants"]
+    (literal,) = constants.values()
+    assert literal["kind"] == "str"
+    source_code = read_member(execution, index["functions"][0]["body"])
+    code = source_code["body"][0]["value"]["source_code"]["code_sha256"]
+    import shutil
+
+    manifest = read_member(delivery, component["manifest"])
+    assert manifest["kind"] == "source_frame_library" and manifest["sources"] == []
+    target, printed = tmp_path / "fresh-target", tmp_path / "fresh-print"
+    shutil.rmtree(graph)
+    shutil.rmtree(execution)
+    env = {**os.environ, "PYTHONPATH": str(Path(scar.__file__).resolve().parents[1])}
+    subprocess.run(
+        [
+            sys.executable,
+            "-B",
+            "-c",
+            _RUN_LAYER,
+            "B2a",
+            delivery / component["schedule"]["path"],
+            target,
+        ],
+        env=env,
+        check=True,
+    )
+    shutil.rmtree(delivery)
+    subprocess.run(
+        [sys.executable, "-B", "-c", _RUN_LAYER, "B2b", target, printed],
+        env=env,
+        check=True,
+    )
+    shutil.rmtree(target)
+    source = Path(__file__).resolve().parents[1] / "fixtures" / "import_frame_host.cpp"
+    native = tmp_path / "run"
+    subprocess.run(
+        [
+            "c++",
+            "-std=c++20",
+            "-I",
+            str(printed / "project"),
+            str(source),
+            "-o",
+            str(native),
+        ],
+        check=True,
+    )
+
+    states = dict(
+        cold="1 1 1 1",
+        hit="0 0 1 1",
+        deny="1 0 0 0",
+        hook="0 0 1 0",
+        audit_insert="1 0 1 1",
+        replace="1 1 1 1",
+        failure="1 1 0 0",
+        recursive="1 1 1 1",
+        mismatch="0 0 0 0",
+    )
+    reference["mismatch"] = (2, b"")
+    for mode, state in states.items():
+        run = subprocess.run(
+            [native, mode, code, literal["value"], "replacement"], capture_output=True
+        )
+        assert (run.returncode, run.stdout) == reference[mode], (mode, run.stderr)
+        assert run.stderr.decode().strip() == state
+
+
 def test_ordered_mapping_views_and_fresh_construction_cross_native_layers(tmp_path):
     from scar.backend.planning import _qualify
     from scar.contract import MAPPING_PROFILE, digest, json_bytes

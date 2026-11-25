@@ -60,6 +60,34 @@ def _deliver_components(out, physical, receipt):
     )
 
 
+def _deliver_frames(out, physical, receipt, *, root=None):
+    from .cpp20 import lower_scheduled, print_target
+
+    schedule = read_member(out, receipt)
+    if (
+        schedule.get("kind") != "source_frame_library"
+        or schedule["ir_sha256"] != physical["ir_sha256"]
+    ):
+        raise ValueError("source-frame library does not belong to this physical plan")
+    root = out if root is None else root
+    folder = out / "source-frames"
+    target = lower_scheduled(out / receipt["path"], folder)
+    _, _, package = open_product(target, "target-ir.json", "scar.cpp20-target-ir")
+    if package["scheduled_ir_sha256"] != receipt["sha256"]:
+        raise ValueError("source-frame target does not match its scheduled component")
+    source = print_target(target, folder)
+    return dict(
+        scope="native_source_frame_components",
+        provider="live_import_and_frame_services_required",
+        schedule=file_receipt(root, out / receipt["path"]),
+        target=file_receipt(root, target),
+        manifest=file_receipt(root, source["cpp20_manifest"]),
+        runtime=file_receipt(root, Path(source["project"]) / "import.hpp"),
+        regions=file_receipt(root, source["header"]),
+        sites=source["sites"],
+    )
+
+
 def compile_ir(source, out, *, policy="auto", workers=None):
     from .planning import schedule_ir
 
@@ -76,6 +104,8 @@ def compile_ir(source, out, *, policy="auto", workers=None):
             physical_plan=str(physical_path),
             issues=physical["issues"],
         )
+        if receipt := physical.get("source_frame_schedule"):
+            result["source_frame_components"] = _deliver_frames(out, physical, receipt)
         if physical.get("kind") == "image_bundle":
             result.update(
                 kind="image_bundle",
@@ -85,6 +115,13 @@ def compile_ir(source, out, *, policy="auto", workers=None):
                     for row in physical["images"]
                 ],
             )
+            for image, item in zip(physical["images"], result["images"], strict=True):
+                child = read_member(out, image["physical"])
+                if receipt := child.get("source_frame_schedule"):
+                    directory = (out / image["physical"]["path"]).parent
+                    item["source_frame_components"] = _deliver_frames(
+                        directory, child, receipt, root=out
+                    )
             if receipt := physical.get("component_schedule"):
                 result["component_delivery"] = _deliver_components(
                     out, physical, receipt

@@ -626,6 +626,10 @@ def lower_scheduled(source, destination):
     path, revision, scheduled = open_product(
         source, "scheduled-ir.json", "scar.scheduled-ir"
     )
+    if scheduled.get("kind") == "source_frame_library":
+        from .imports import lower_library
+
+        return lower_library(path, revision, scheduled, destination)
     if scheduled.get("kind") != "image_bundle":
         return _lower_image(path, revision, scheduled, destination)
     if scheduled.get("status") != "READY":

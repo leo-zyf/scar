@@ -74,7 +74,7 @@ jobs:
       - name: Verify source format
         run: |
           "$RUNNER_TEMP/scar-verify/bin/python" -m black --check scar tests tools
-          find scar -type f \( -name '*.cpp' -o -name '*.hpp' \) \
+          find scar tests -type f \( -name '*.cpp' -o -name '*.hpp' \) \
             -exec clang-format-18 --dry-run --Werror --style=file {} +
       - name: Verify each CPU stage suite from the installed wheel
         id: stages
@@ -118,7 +118,7 @@ jobs:
         if: ${{ !cancelled() && (steps.stages.outcome == 'success' || steps.stages.outcome == 'failure') }}
         run: |
           find "$RUNNER_TEMP/scar-stages" -type f \( -name '*.cpp' -o -name '*.hpp' \) \
-            -path '*/delivery/project/*' ! -path '*/project/vendor/*' \
+            \( -path '*/delivery/project/*' -o -path '*/source-frames/project/*' \) ! -path '*/project/vendor/*' \
             -exec clang-format-18 --dry-run --Werror --style=file {} +
           root="$RUNNER_TEMP/scar-stages/test_compiler"
           for trial in "$root"/test_locked_mixed_target_three[0-9]*; do

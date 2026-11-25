@@ -478,6 +478,37 @@ def _math_product_metadata(product):
     return {**metadata, key: audit}
 
 
+def _print_frame_library(path, product, staging, jobs):
+    from .model import unit_from_data
+    from .printer import print_unit
+
+    if len(product["units"]) != 1 or product["units"][0]["output"] != "regions.hpp":
+        raise ValueError("invalid source-frame library unit table")
+    unit = unit_from_data(read_member(path.parent, product["units"][0]["tree"]))
+    if not unit.once or unit.includes != (("system", "array"), ("local", "import.hpp")):
+        raise ValueError("invalid source-frame library includes")
+    staging.mkdir()
+    (staging / ".clang-format").write_text(_STYLE, encoding="utf-8")
+    (staging / "regions.hpp").write_text(print_unit(unit), encoding="utf-8")
+    (staging / "import.hpp").write_bytes(read_blob(path.parent, product["runtime"]))
+    formatter = shutil.which("clang-format-18") or shutil.which("clang-format")
+    if not formatter:
+        raise ValueError("clang-format is required for LLVM-style C++20 delivery")
+    _format_sources(formatter, [staging / "regions.hpp", staging / "import.hpp"], jobs)
+    (staging / "CMakeLists.txt").write_text(
+        "\n".join(
+            (
+                *_CMAKE_PROJECT,
+                "add_library(scar_source_frames INTERFACE)",
+                'target_include_directories(scar_source_frames INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}")',
+                "target_compile_features(scar_source_frames INTERFACE cxx_std_20)",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+
+
 def print_target(target, destination, *, jobs=4):
     """Print and atomically publish one CMake project for all declared images."""
     if type(jobs) is not int or jobs < 1:
@@ -493,7 +524,15 @@ def print_target(target, destination, *, jobs=4):
     manifest = destination / "cpp20.json"
     with TemporaryDirectory(prefix=".scar-project-", dir=destination) as tmp:
         staging = Path(tmp) / "project"
-        if product.get("kind") == "image_bundle":
+        if product.get("kind") == "source_frame_library":
+            _print_frame_library(path, product, staging, jobs)
+            sources, header, first_source = [], "regions.hpp", "regions.hpp"
+            metadata = dict(
+                kind="source_frame_library",
+                sites=product["sites"],
+                ir_sha256=product["ir_sha256"],
+            )
+        elif product.get("kind") == "image_bundle":
             root, images = product["root_image"], product["images"]
             validate_images(images, root)
             staging.mkdir()

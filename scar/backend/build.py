@@ -93,6 +93,10 @@ def _publish_images(root, installed, manifest, receipt):
 
 def build(manifest) -> Path:
     path, revision, package = open_product(manifest, "cpp20.json", "scar.cpp20-project")
+    if package.get("kind") == "source_frame_library":
+        raise ValueError(
+            "a source-frame interface library needs a consuming native entry"
+        )
     if package["project"] != "project":
         raise ValueError("invalid C++20 project location")
     root = (path.parent / package["project"]).resolve(strict=True)

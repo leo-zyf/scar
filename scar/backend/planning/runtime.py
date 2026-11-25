@@ -679,6 +679,10 @@ def import_effects(module, bindings):
     }
     dispatch = module.get("source_dispatch")
     sites = _dispatch_sites(dispatch, ledger) if dispatch else {}
+    if dispatch:
+        from .import_frames import regions
+
+        frame_regions = regions(dispatch, sites)
     rows, identities = [], set()
     counts = dict(visited=0, unvisited=0, proven_inactive=0)
     for occurrence in ledger["occurrences"]:
@@ -730,6 +734,11 @@ def import_effects(module, bindings):
     return dict(
         semantics_version=1,
         scope="source_import_occurrences",
+        **(
+            {"native_frame_regions": frame_regions}
+            if dispatch and frame_regions
+            else {}
+        ),
         ledger_sha256=digest(json_bytes(ledger)),
         **(
             {
