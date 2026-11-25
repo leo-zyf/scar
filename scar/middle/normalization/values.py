@@ -12,17 +12,31 @@ from scar.contract import (
     sequence_element as _sequence_element,
 )
 
-_NUMPY_SCALAR_TYPES = {"numpy_bool": "bool", "numpy_f64": "f64"}
+_SOURCE_SCALAR_TYPES = {
+    "numpy_bool": "bool",
+    "numpy_f64": "f64",
+    "numpy_c128": "c128",
+    "python_complex": "c128",
+}
 # These are compile-time sets of possible protocols, never runtime tags. A
 # consumer may erase the distinction only after proving one common operation.
 _SCALAR_CHOICES = {
     "binary64_choice": frozenset({"f64", "numpy_f64"}),
     "boolean_choice": frozenset({"bool", "numpy_bool"}),
 }
-SCALARS = {"bool", "i64", "f64", "text", "unit", *_NUMPY_SCALAR_TYPES, *_SCALAR_CHOICES}
+SCALARS = {
+    "bool",
+    "i64",
+    "f64",
+    "text",
+    "unit",
+    *_SOURCE_SCALAR_TYPES,
+    *_SCALAR_CHOICES,
+}
 _UNKNOWN = object()
 _MIN, _MAX = -(1 << 63), (1 << 63) - 1
-_ARRAY_PREFIX = "ndarray:f64:"
+_ARRAY_PREFIX = "ndarray:"
+_ARRAY_ELEMENTS = {"f64", "c128"}
 _HANDLE_PREFIX = "handle:"
 _OBJECT_PREFIX = "object_ref:"
 _PRODUCT_PREFIX = "product_ref:"
@@ -60,11 +74,21 @@ def is_array(kind):
     return kind.startswith(_ARRAY_PREFIX)
 
 
+def array_element(kind):
+    """Physical element type; scalar objects retain their own source protocols."""
+    if not is_array(kind):
+        return None
+    element, separator, _ = kind[len(_ARRAY_PREFIX) :].partition(":")
+    if not separator or element not in _ARRAY_ELEMENTS:
+        raise ValueError(f"unregistered array element protocol: {kind}")
+    return element
+
+
 def rank_domain(kind):
     """Possible ranks: empty for a non-array, None for an unbounded runtime rank."""
     if not is_array(kind):
         return ()
-    suffix = kind[len(_ARRAY_PREFIX) :]
+    suffix = kind.rsplit(":", 1)[1]
     return None if suffix == "*" else tuple(map(int, suffix.split("|")))
 
 
@@ -74,26 +98,38 @@ def rank(kind):
     return domain[0] if domain is not None and len(domain) == 1 else None
 
 
-def array_kind(n):
+def array_kind(n, element="f64"):
+    if element not in _ARRAY_ELEMENTS:
+        raise ValueError(f"unregistered array element protocol: {element}")
+    prefix = f"{_ARRAY_PREFIX}{element}:"
     if n is None:
-        return _ARRAY_PREFIX + "*"
+        return prefix + "*"
     domain = (n,) if type(n) is int else tuple(sorted(set(n)))
     if not domain or any(type(k) is not int or k < 0 for k in domain):
         raise ValueError("array rank domain requires nonnegative integers")
-    return _ARRAY_PREFIX + "|".join(map(str, domain))
+    return prefix + "|".join(map(str, domain))
 
 
 def join_arrays(kinds):
+    kinds = tuple(kinds)
+    elements = {array_element(kind) for kind in kinds}
+    if len(elements) != 1 or None in elements:
+        raise ValueError("array rank joins require the same element type")
     domains = [rank_domain(kind) for kind in kinds]
     return array_kind(
-        None
-        if any(domain is None for domain in domains)
-        else tuple(n for domain in domains for n in domain)
+        (
+            None
+            if any(domain is None for domain in domains)
+            else tuple(n for domain in domains for n in domain)
+        ),
+        element=elements.pop(),
     )
 
 
 def storage_compatible(left, right):
-    return wire(left) == wire(right) or is_array(left) and is_array(right)
+    return wire(left) == wire(right) or (
+        is_array(left) and array_element(left) == array_element(right)
+    )
 
 
 def is_product(kind):
@@ -163,14 +199,14 @@ def wire(kind):
         return dict(kind="handle", resource="process")
     if kind in _SCALAR_CHOICES:
         return "f64" if kind == "binary64_choice" else "bool"
-    if kind in _NUMPY_SCALAR_TYPES:
-        return _NUMPY_SCALAR_TYPES[kind]
+    if kind in _SOURCE_SCALAR_TYPES:
+        return _SOURCE_SCALAR_TYPES[kind]
     if is_array(kind):
         n = rank(kind)
         domain = rank_domain(kind)
         return dict(
             kind="ndarray",
-            element="f64",
+            element=array_element(kind),
             rank=(
                 n
                 if n is not None
@@ -192,9 +228,7 @@ def from_wire(spec):
     if spec.get("kind") == "sequence_ref":
         return sequence_kind(from_wire(_sequence_element(spec)))
     if spec.get("kind") == "ndarray":
-        if spec.get("element") != "f64":
-            raise ValueError("unregistered array element protocol")
-        return array_kind(array_rank_domain(spec))
+        return array_kind(array_rank_domain(spec), spec["element"])
     if spec.get("kind") == "handle":
         return _HANDLE_PREFIX + spec["resource"]
     if spec.get("kind") == "object_ref":
@@ -293,16 +327,13 @@ def scalar_evidence(value):
     item, kind = value.exact, wire(value.kind)
     if kind == "f64" and type(item) is int and -(1 << 53) <= item <= 1 << 53:
         item = float(item)
-    if (
-        type(item)
-        is not {
-            "text": str,
-            "i64": int,
-            "f64": float,
-            "bool": bool,
-            "unit": type(None),
-        }[kind]
-    ):
+    if type(item) is not {
+        "text": str,
+        "i64": int,
+        "f64": float,
+        "bool": bool,
+        "unit": type(None),
+    }.get(kind):
         return None
     if kind == "f64" and not math.isfinite(item):
         return None

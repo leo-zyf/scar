@@ -19,10 +19,10 @@ layer, source, output, *settings = sys.argv[1:]
 implementations = {
     "B1": ("scar.backend.planning", "schedule_ir", ("scar.backend.cpp20", "scar.backend.build")),
     "B2a": ("scar.backend.cpp20", "lower_scheduled",
-            ("scar.backend.planning", "scar.backend.cpp20.printer", "scar.backend.build")),
+            ("scar.backend.planning", "scar.backend.cpp20.project", "scar.backend.cpp20.printer", "scar.backend.build")),
     "B2b": ("scar.backend.cpp20", "print_target",
             ("scar.backend.planning", "scar.backend.cpp20.lowering", "scar.backend.cpp20.objects",
-             "scar.backend.cpp20.libraries", "scar.backend.build")),
+             "scar.backend.cpp20.libraries", "scar.backend.cpp20.target", "scar.backend.build")),
     "B3": ("scar.backend.build", "build", ("scar.backend.planning", "scar.backend.cpp20")),
 }
 module, entry, forbidden = implementations[layer]
@@ -39,7 +39,7 @@ if layer == "B2a" and settings:
 if layer == "B2b":
     # A target package carries the exact SDK revision. Printing must also work
     # without consulting the SDK of the currently installed compiler.
-    implementation.__file__ = str(Path(output) / "absent-sdk" / "__init__.py")
+    importlib.import_module("scar.backend.cpp20.project").__file__ = str(Path(output) / "absent-sdk" / "project.py")
 run = getattr(implementation, entry)
 if layer == "B3":
     run(source)
@@ -619,7 +619,7 @@ def test_cpu_budget_is_shared_with_graph_planner_and_formatter(tmp_path, monkeyp
     from math import isclose
 
     import scar.host as host
-    from scar.backend.cpp20 import _format_workers
+    from scar.backend.cpp20.project import _format_workers
     from scar.backend.planning.cpu import schedule
     from scar.frontend.hardware import snapshot
 
@@ -2163,3 +2163,597 @@ def test_function_numeric_permissions_preserve_strict_neighbors_across_lto(
     target.rename(tmp_path / "moved-target")
     executable = build(delivery / "cpp20.json")
     subprocess.run([str(executable)], check=True)
+
+
+def test_explicit_error_causes_survive_handlers_cleanup_and_exit(tmp_path):
+    from scar.backend.cpp20 import lower_scheduled, print_target
+    from scar.backend.cpp20.lowering import Lowerer
+    from scar.contract import PHYSICAL
+
+    handle = dict(kind="handle", resource="error")
+    value = dict(op="var", name="value", type=handle)
+    cause = dict(op="var", name="cause", type=handle)
+    none = dict(op="literal", type="unit", value=None)
+    plain = dict(op="throw", value=value)
+    dispatch = dict(plain, cause_mode="explicit", cause=cause)
+    clear = dict(plain, cause_mode="explicit", cause=none)
+    region = dict(
+        op="try",
+        body=[dispatch],
+        handlers=[
+            dict(categories=["base_exception"], binding=None, body=[dict(op="rethrow")])
+        ],
+        **{"finally": [dict(op="expr", value=none)]},
+    )
+
+    def routine(name, body, *params):
+        return dict(
+            name=name,
+            params=[dict(name=p, type=handle) for p in params],
+            result="void",
+            body=[body],
+        )
+
+    main = dict(
+        name="main",
+        params=[],
+        result="i32",
+        body=[dict(op="return", value=dict(op="literal", type="i32", value=0))],
+    )
+    funcs = [
+        main,
+        routine("with_cause", region, "value", "cause"),
+        routine("from_none", clear, "value"),
+        routine("again", plain, "value"),
+    ]
+    physical = document(PHYSICAL, ir_sha256="a" * 64)
+    schedule = tmp_path / "scheduled"
+    module = dict(entry="main")
+    for invalid in (
+        dict(plain, cause=cause),
+        dict(plain, cause_mode="explicit"),
+        dict(dispatch, cause_mode="implicit"),
+        dict(dispatch, cause=dict(op="literal", type="text", value="bad")),
+    ):
+        with pytest.raises(ValueError, match="explicit throw"):
+            Lowerer(dict(module, functions=funcs), physical).control.statement(invalid)
+    write_json(
+        schedule / "scheduled-ir.json",
+        document(
+            "scar.scheduled-ir",
+            status="READY",
+            ir_sha256="a" * 64,
+            module=module,
+            physical=member(schedule, "physical", physical),
+            functions=[member(schedule, "functions", f) for f in funcs],
+        ),
+    )
+    target = lower_scheduled(schedule, tmp_path / "target")
+    project = Path(print_target(target, tmp_path / "delivery")["project"])
+    sources = sorted((project / "src").glob("*.cpp"))
+    runtime = tmp_path / "libcause.so"
+    args = ["c++", "-std=c++20", "-O2", "-Werror", "-I", str(project / "include")]
+    subprocess.run([*args, "-fPIC", "-shared", *sources, "-o", runtime], check=True)
+    # A native observer reads the identities and cause metadata after invoking the
+    # sealed IR's actual throw/handler/finally paths. The SDK is the packaged copy.
+    observer = tmp_path / "observe.cpp"
+    observer.write_text(r"""
+#include "scar/program.hpp"
+#include <cassert>
+int main() {
+  std::weak_ptr<const scar::error_record> released;
+  {
+    auto inner = scar::make_error("module_not_found_error", "dependency");
+    auto outer = scar::make_error("import_error", std::string("a\0b", 3));
+    released = outer;
+    assert(scar::matches(inner, "import_error") && !scar::error_suppresses_context(outer));
+    try { with_cause(outer, inner); assert(false); }
+    catch (const scar::program_error &e) {
+      auto seen = scar::capture_error();
+      assert(seen == outer && scar::error_cause(seen) == inner);
+      assert(scar::error_suppresses_context(seen) && e.message() == std::string("a\0b", 3));
+    }
+    try { again(outer); assert(false); }
+    catch (...) { assert(scar::error_cause(scar::capture_error()) == inner); }
+    try { from_none(outer); assert(false); }
+    catch (...) {
+      auto seen = scar::capture_error();
+      assert(seen == outer && scar::error_suppresses_context(seen) && !scar::error_cause(seen));
+    }
+    try { with_cause(outer, outer); assert(false); }
+    catch (...) { assert(scar::error_cause(scar::capture_error()) == outer); }
+    auto exit = scar::make_exit_error(19,"exit",std::string(""));
+    try { with_cause(exit,inner); assert(false); }
+    catch (const scar::exit_signal &ex) {
+      assert(ex.status == 19 && ex.exit_message() && ex.exit_message()->empty());
+      assert(scar::capture_error() == exit && scar::error_cause(exit) == inner);
+    }
+    try { throw std::system_error(std::make_error_code(std::errc::permission_denied)); }
+    catch (...) {
+      auto native = scar::capture_error();
+      auto original = std::current_exception();
+      try { again(native); assert(false); }
+      catch (...) { assert(std::current_exception() == original); }
+      try { with_cause(native, inner); assert(false); }
+      catch (const std::system_error &ex) {
+        assert(ex.code() == std::errc::permission_denied);
+        assert(scar::capture_error() == native && scar::error_cause(native) == inner);
+      }
+    }
+  }
+  assert(released.expired());
+}
+""")
+    exe = tmp_path / "observer"
+    subprocess.run([*args, observer, runtime, "-o", exe], check=True)
+    subprocess.run([exe], check=True)
+
+
+def test_complex128_array_provider_preserves_components_and_storage(tmp_path):
+    from scar.backend import compile_ir
+    from scar.backend.cpp20.lowering import Lowerer
+    from scar.backend.planning import _qualify
+
+    def arr(rank, element="c128"):
+        return dict(kind="ndarray", element=element, rank=rank)
+
+    def lit(ty, val):
+        return dict(op="literal", type=ty, value=val)
+
+    def dims(*sizes):
+        return [lit("i64", n) for n in sizes]
+
+    def cx(real, imag):
+        return lit("c128", [real, imag])
+
+    def math_op(operator, left, right, update=False):
+        scalar = isinstance(left["type"], str) and isinstance(right["type"], str)
+        word = {"add": "add", "sub": "subtract", "mul": "multiply", "div": "divide"}[
+            operator
+        ]
+        return dict(
+            op="array_update" if update else "array_binary",
+            type="unit" if update else left["type"],
+            left=left,
+            right=right,
+            operator=operator,
+            broadcasting="trailing",
+            numeric_policy="numpy_default",
+            effects=["STATE", "IO"] if update else ["MEM", "VAL", "STATE", "IO"],
+            warning=dict(operation=("scalar " if scalar else "") + word),
+            location=dict(file="numbers", line=19),
+        )
+
+    def load(base, *indices):
+        return dict(
+            op="array_load",
+            type="c128",
+            base=base,
+            indices=dims(*indices),
+            effects=["STATE"],
+        )
+
+    body = []
+
+    def bind(name, value):
+        body.append(dict(op="decl", name=name, type=value["type"], init=value))
+        return dict(op="var", name=name, type=value["type"])
+
+    def check(left, right):
+        condition = dict(op="binary", operator="ne", left=left, right=right)
+        body.append(
+            dict(
+                op="if",
+                condition=condition,
+                then=[dict(op="return", value=lit("i32", len(body)))],
+                **{"else": []},
+            )
+        )
+
+    m = bind(
+        "matrix",
+        dict(
+            op="array_literal",
+            type=arr(2),
+            shape=dims(2, 2),
+            values=[cx(1, 2), cx(3, 4), cx(5, 6), cx(7, 8)],
+            effects=["MEM", "VAL"],
+        ),
+    )
+    row = bind(
+        "row",
+        dict(
+            op="array_view",
+            type=arr(1),
+            base=m,
+            indices=dims(-1),
+            effects=["STATE", "MEM"],
+        ),
+    )
+    flat = bind(
+        "flat",
+        dict(
+            op="array_reshape",
+            type=arr(1),
+            value=m,
+            shape=dims(4),
+            layout="C",
+            effects=["STATE", "MEM"],
+        ),
+    )
+    copied = bind(
+        "copied",
+        dict(op="array_copy", type=arr(1), value=row, effects=["MEM", "STATE", "XFER"]),
+    )
+    broadcast = bind(
+        "expanded",
+        dict(
+            op="array_broadcast_copy",
+            type=arr(2),
+            value=row,
+            shape=dims(3, 2),
+            broadcasting="trailing",
+            effects=["MEM", "STATE", "XFER"],
+        ),
+    )
+    body.append(
+        dict(
+            op="array_store",
+            base=row,
+            indices=dims(0),
+            value=cx(2, -3),
+            broadcasting="trailing",
+            effects=["STATE"],
+        )
+    )
+    check(load(flat, 2), cx(2, -3))
+    check(load(copied, 0), cx(5, 6))
+    check(load(broadcast, 2, 0), cx(5, 6))
+    added = bind("sum", math_op("add", row, copied))
+    diff = bind("difference", math_op("sub", row, copied))
+    check(load(added, 0), cx(7, 3))
+    check(load(diff, 0), cx(-3, -9))
+    body.append(math_op("mul", row, row, update=True))
+    check(load(m, 1, 0), cx(-5, -12))
+    zeros = bind(
+        "zeros",
+        dict(
+            op="array_create",
+            type=arr(1),
+            shape=dims(2),
+            initialization="zero",
+            effects=["MEM", "VAL"],
+        ),
+    )
+    check(load(zeros, 1), cx(0, 0))
+    body.append(
+        dict(
+            op="array_store",
+            base=zeros,
+            indices=dims(1),
+            value=dict(op="cast", type="c128", value=lit("f64", 3.5)),
+            broadcasting="trailing",
+            effects=["STATE"],
+        )
+    )
+    check(load(zeros, 1), cx(3.5, 0))
+    negative = bind(
+        "negative",
+        dict(
+            op="array_unary",
+            type=arr(1),
+            value=row,
+            operator="neg",
+            effects=["MEM", "VAL"],
+        ),
+    )
+    check(load(negative, 0), cx(5, 12))
+    real = bind(
+        "indices",
+        dict(
+            op="array_iota",
+            type=arr(1, "f64"),
+            count=lit("i64", 2),
+            max_count=1 << 53,
+            effects=["MEM", "VAL"],
+        ),
+    )
+    check(
+        dict(op="array_size", type="i64", value=real, effects=["STATE"]), lit("i64", 2)
+    )
+    check(math_op("div", lit("f64", 3.0), lit("f64", 2.0)), lit("f64", 1.5))
+    special = bind("special", math_op("mul", cx("nan", "inf"), cx("inf", 0)))
+    for component in ("real", "imag"):
+        value = dict(op="intrinsic", name=component, type="f64", args=[special])
+        check(
+            dict(op="intrinsic", name="isnan", type="bool", args=[value]),
+            lit("bool", True),
+        )
+    body.append(dict(op="return", value=lit("i32", 0)))
+    fn = dict(name="main", result="i32", params=[], body=body)
+    ir = tmp_path / "exec-ir.json"
+    write_json(
+        ir,
+        document(
+            IR,
+            status="READY",
+            module=dict(entry="main"),
+            functions=[member(tmp_path, "functions", fn)],
+        ),
+    )
+    release = compile_ir(ir, tmp_path / "delivery", policy="serial")
+    assert release["status"] == "COMPILED", release
+    physical = json.loads(Path(release["physical_plan"]).read_bytes())
+    binding = physical["operator_backends"]["ndarray"]
+    assert binding["elements"] == ["c128", "f64"]
+    assert "array_iota" in binding["operations_by_element"]["f64"]
+    assert "array_update.mul" in binding["operations_by_element"]["c128"]
+    run = subprocess.run([release["executable"]], check=True, capture_output=True)
+    assert (
+        run.stderr
+        == b"numbers:19: RuntimeWarning: invalid value encountered in scalar multiply\n"
+    )
+
+    lower = Lowerer(dict(functions=[]), physical)
+    for bad in (
+        dict(math_op("mul", row, row), operator="div"),
+        dict(math_op("mul", row, row), operator="pow", power_path="power"),
+        dict(math_op("mul", row, row), operator="eq"),
+        dict(op="array_conjugate", value=row, type=row["type"], effects=["MEM", "VAL"]),
+        dict(
+            op="array_format", type="text", value=row, effects=["VAL", "MEM", "STATE"]
+        ),
+        dict(
+            op="array_view",
+            type=arr(1, "f64"),
+            base=m,
+            indices=dims(0),
+            effects=["STATE", "MEM"],
+        ),
+    ):
+        _, _, issues = _qualify(
+            dict(functions=[dict(name="main", body=[dict(op="expr", value=bad)])])
+        )
+        assert [issue["code"] for issue in issues] == ["missing_operator_binding"]
+        with pytest.raises(ValueError):
+            lower.expression(bad)
+
+
+def test_native_ortho_fourier_binding_survives_sdk_relocation(tmp_path, monkeypatch):
+    import shutil
+
+    import numpy as np
+
+    from scar.backend.build import build
+    from scar.backend.cpp20 import lower_scheduled, print_target
+    from scar.backend.planning import _qualify, schedule_ir
+
+    revision = "33ae5dc94c9cdc7f1c78346504a85de87cadaa12"
+    installed = Path(
+        os.environ.get("SCAR_FOURIER_SDK")
+        or Path.home() / ".local/share/scar/sdk" / ("pocketfft-" + revision)
+    )
+    prefix = tmp_path / "source-sdk"
+    shutil.copytree(installed, prefix)
+    monkeypatch.setenv("SCAR_FOURIER_SDK", str(prefix))
+    vector = dict(kind="ndarray", element="c128", rank=1)
+
+    def lit(ty, v):
+        return dict(op="literal", type=ty, value=v)
+
+    def values(ty, dims, items):
+        return dict(
+            op="array_literal",
+            type=ty,
+            shape=[lit("i64", n) for n in dims],
+            values=[lit("c128", parts) for parts in items],
+            effects=["MEM", "VAL"],
+        )
+
+    def fft(source, direction, diagnostic=False):
+        operation = dict(
+            op="array_fft",
+            operator_family="fourier",
+            input=source,
+            type=vector,
+            axis=0,
+            direction=direction,
+            normalization="ortho",
+            required_provider=dict(name="pocketfft", revision=revision),
+            effects=["MEM", "VAL"],
+            may_raise=True,
+        )
+        if diagnostic:
+            operation.update(
+                numeric_policy="numpy_default",
+                effects=["MEM", "VAL", "STATE", "IO"],
+                warning=dict(
+                    operation={"forward": "fft", "inverse": "ifft"}[direction],
+                    module="sealed.numeric",
+                    location=dict(diagnostic_file="sealed/math", line=101),
+                    source_line="transform(data)",
+                ),
+            )
+        return operation
+
+    body = []
+
+    def bind(n, value):
+        body.append(dict(op="decl", name=n, type=value["type"], init=value))
+        return dict(op="var", name=n, type=value["type"])
+
+    def print_values(value, size):
+        for j in range(size):
+            z = bind(
+                f"z{len(body)}",
+                dict(
+                    op="array_load",
+                    base=value,
+                    indices=[lit("i64", j)],
+                    type="c128",
+                    effects=["STATE"],
+                ),
+            )
+            components = [
+                dict(op="intrinsic", name=k, type="f64", args=[z])
+                for k in ("real", "imag")
+            ]
+            body.append(
+                dict(
+                    op="expr",
+                    value=dict(
+                        op="call",
+                        callee="printf",
+                        args=[dict(op="string", value="%a %a\n"), *components],
+                        type="i32",
+                    ),
+                )
+            )
+
+    samples = [(1, -2), (-3, 1), (5, 4), (-1, -1), (0.25, 8), (2, -4), (1.25, 0)]
+    n = len(samples)
+    matrix = bind(
+        "matrix", values(dict(vector, rank=2), [2, n], [(0, 0)] * n + samples)
+    )
+    data = bind(
+        "data",
+        dict(
+            op="array_view",
+            base=matrix,
+            indices=[lit("i64", 1)],
+            type=vector,
+            effects=["STATE", "MEM"],
+        ),
+    )
+    for direction in ("forward", "inverse"):
+        print_values(bind(direction, fft(data, direction)), n)
+    print_values(data, n)
+    huge = bind("huge", values(vector, [4], [(float(np.finfo(np.float64).max), 0)] * 4))
+    print_values(bind("extreme", fft(huge, "forward", diagnostic=True)), 1)
+    empty = values(vector, [0], [])
+    error = dict(op="var", name="error", type=dict(kind="handle", resource="error"))
+    body.extend(
+        [
+            dict(op="decl", name="error", type=error["type"]),
+            dict(
+                op="try",
+                body=[dict(op="expr", value=fft(empty, "inverse"))],
+                handlers=[
+                    dict(
+                        categories=["value_error"],
+                        binding=error,
+                        body=[
+                            dict(
+                                op="return",
+                                value=dict(
+                                    op="binary",
+                                    operator="ne",
+                                    left=dict(
+                                        op="host_call",
+                                        interface="error.message",
+                                        semantics_version=1,
+                                        args=[error],
+                                        type="text",
+                                        effects=["VAL"],
+                                    ),
+                                    right=lit(
+                                        "text",
+                                        "Invalid number of FFT data points (0) specified.",
+                                    ),
+                                ),
+                            )
+                        ],
+                    )
+                ],
+                **{"else": [], "finally": []},
+            ),
+            dict(op="return", value=lit("i32", 1)),
+        ]
+    )
+    fn = dict(name="main", params=[], result="i32", body=body)
+    printf = dict(
+        name="printf",
+        provider="libc",
+        header="stdio.h",
+        result="i32",
+        variadic=True,
+        params=[
+            dict(name="format", type=dict(kind="ptr", to=dict(kind="const", of="char")))
+        ],
+    )
+    ir = tmp_path / "execution/exec-ir.json"
+    write_json(
+        ir,
+        document(
+            IR,
+            status="READY",
+            module=dict(entry="main", externs=[printf]),
+            functions=[member(ir.parent, "functions", fn)],
+        ),
+    )
+    valid = fft(data, "forward")
+
+    def issues(node, **fields):
+        return _qualify(
+            dict(
+                functions=[dict(name="main", body=[dict(op="expr", value=node)])],
+                **fields,
+            )
+        )[2]
+
+    for override in (
+        dict(type=dict(vector, rank=2)),
+        dict(axis=-1),
+        dict(normalization="backward"),
+        dict(required_provider=dict(name="pocketfft", revision="0" * 40)),
+        dict(n=2),
+        dict(numeric_policy="numpy_default"),
+    ):
+        assert issues(dict(valid, **override))[0]["requirement"] == "fourier"
+    guarded = dict(
+        valid, source_binding=dict(required_family="module_registry", capture="lookup")
+    )
+    assert issues(guarded)[0]["requirement"] == "fourier"
+    assert [
+        i["requirement"]
+        for i in issues(
+            guarded, operator_requirements={"module_registry": {"operations": []}}
+        )
+    ] == ["module_registry"]
+    scheduled = schedule_ir(ir, tmp_path / "schedule", policy="serial")
+    physical = json.loads((scheduled.parent / "physical-plan.json").read_bytes())
+    selected = physical["operator_backends"]["fourier"]
+    assert selected["revision"] == revision and selected["directions"] == [
+        "forward",
+        "inverse",
+    ]
+    ir.parent.rename(tmp_path / "hidden-ir")
+    target = lower_scheduled(scheduled, tmp_path / "target")
+    scheduled.parent.rename(tmp_path / "hidden-schedule")
+    prefix.rename(tmp_path / "hidden-sdk")
+    assert "missing pinned native Fourier SDK" in issues(valid)[0]["detail"]
+    project = print_target(target, tmp_path / "delivery")
+    target.parent.rename(tmp_path / "hidden-target")
+    executable = build(project["cpp20_manifest"])
+    ran = subprocess.run([executable], capture_output=True, check=True)
+    result = [
+        complex(*map(float.fromhex, row.split()))
+        for row in ran.stdout.decode().splitlines()
+    ]
+    baseline = np.array([complex(*v) for v in samples], dtype=np.complex128)
+    assert len(result) == 3 * n + 1
+    for start, transform in ((0, np.fft.fft), (n, np.fft.ifft)):
+        np.testing.assert_allclose(
+            result[start : start + n],
+            transform(baseline, norm="ortho"),
+            rtol=3e-15,
+            atol=3e-15,
+        )
+    np.testing.assert_array_equal(result[2 * n : 3 * n], baseline)
+    assert np.isposinf(result[-1].real) and result[-1].imag == 0
+    assert ran.stderr.decode().splitlines() == [
+        "sealed/math:101: RuntimeWarning: overflow encountered in fft",
+        "  transform(data)",
+        "sealed/math:101: RuntimeWarning: invalid value encountered in fft",
+        "  transform(data)",
+    ]

@@ -8,7 +8,7 @@ from scar.contract import (
     python_provider_id,
     validate_source_literal,
 )
-from . import scalars, sequences, text
+from . import enumerations, scalars, sequences, text
 from .values import Value, argument_evidence, literal, sequence_kind, source_site, wire
 
 _STREAM = "handle:text_stream"
@@ -83,6 +83,7 @@ _METHODS = {
     "readline": ("stream.readline", "text", [("size", "i64", -1)]),
 }
 _MEMBERS = {
+    "enum": {"Enum"},
     "glob": {"glob"},
     "importlib": {"import_module"},
     "os": {"path", "mkdir", "makedirs", "chdir", "getcwd"},
@@ -1009,7 +1010,12 @@ def import_provider(frame, node, steps):
         if primary:
             _glob_import(frame, node, source, steps)
     namespace_facts = source
-    if literal_exports(frame, module):
+    if module == "enum":
+        enumerations.qualify_source(frame, node, source)
+        instance = source_namespace(frame, node, module)
+        _initialize_source_namespace(frame, node, instance)
+        namespace_facts = {**source, "source_namespace": instance}
+    elif literal_exports(frame, module):
         namespace_facts = {
             **source,
             "source_namespace": source_namespace(frame, node, module),
@@ -1027,15 +1033,11 @@ def import_provider(frame, node, steps):
         _path_identity(frame, node, source)
     frame.project.providers[key] = dict(
         source,
-        contract=(
-            _GLOB_PROFILE
-            if module == "glob"
-            else (
-                _IMPORTLIB_PROFILE
-                if module == "importlib"
-                else "closed host APIs with explicit resource effects"
-            )
-        ),
+        contract={
+            "enum": enumerations.PROFILE,
+            "glob": _GLOB_PROFILE,
+            "importlib": _IMPORTLIB_PROFILE,
+        }.get(module, "closed host APIs with explicit resource effects"),
     )
     namespace = Value("host_namespace", module, namespace_facts)
     if node["request"]["form"] == "from":
@@ -1046,6 +1048,8 @@ def import_provider(frame, node, steps):
 
 
 def member(frame, node, base, name, steps):
+    if base.kind in {"enum_class", "enum_member"}:
+        return enumerations.member(frame, node, base, name, steps)
     if base.kind == _STREAM:
         if name not in _METHODS:
             frame.fail(node, "stream_member", f"no closed stream method for {name}")
@@ -1061,6 +1065,13 @@ def member(frame, node, base, name, steps):
             frame, node, base.facts.get("source_namespace"), name, steps
         )
     qualified = base.value + "." + name
+    if qualified == "enum.Enum":
+        for opcode in (
+            "module_attribute_resolve",
+            "module_export_continuation_required",
+        ):
+            require_registry_operator(frame.project, opcode)
+        return enumerations.base(frame, node, base.facts["source_namespace"], steps)
     if qualified in {"subprocess.PIPE", "subprocess.STDOUT"}:
         return literal(-1 if name == "PIPE" else -2)
     if qualified == "os.path":

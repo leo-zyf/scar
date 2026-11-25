@@ -462,15 +462,29 @@ class ControlFlow:
         if op == "resource_scope":
             return self._resource_scope(stmt)
         if op == "throw":
-            if stmt["value"].get("type") != ERROR_TYPE:
+            value = stmt.get("value")
+            if not isinstance(value, dict) or value.get("type") != ERROR_TYPE:
                 raise ValueError("throw requires an error handle")
             self._use_sdk("exceptions.hpp")
-            return [
-                expression_stmt(
-                    call("scar::raise_error", self._expression(stmt["value"]))
+            if "cause_mode" in stmt or "cause" in stmt:
+                cause = stmt.get("cause")
+                if (
+                    stmt.get("cause_mode") != "explicit"
+                    or not isinstance(cause, dict)
+                    or cause.get("type") not in (ERROR_TYPE, "unit")
+                ):
+                    raise ValueError("explicit throw requires an error or unit cause")
+                request = Expr(
+                    "construct",
+                    type=named("scar::explicit_raise"),
+                    qualifier="brace",
+                    args=(self._expression(value), self._expression(cause)),
                 )
-            ]
+                return [expression_stmt(call("scar::raise_error_from", request))]
+            return [expression_stmt(call("scar::raise_error", self._expression(value)))]
         if op == "rethrow":
+            if "value" in stmt or "cause" in stmt or "cause_mode" in stmt:
+                raise ValueError("bare rethrow cannot take an error or cause")
             self._use_sdk("exceptions.hpp")
             return [expression_stmt(call("scar::safe_rethrow"))]
         if op in ("label", "goto"):

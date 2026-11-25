@@ -42,7 +42,15 @@ def apply_binary(frame, node, operator, lhs, rhs, steps, discard=False):
             "tuple value operators require elementwise source comparison contracts",
         )
     if operator in {"is", "isnot"} and any(
-        item.kind in {"numpy_bool", "numpy_f64", "binary64_choice", "boolean_choice"}
+        item.kind
+        in {
+            "numpy_bool",
+            "numpy_f64",
+            "numpy_c128",
+            "python_complex",
+            "binary64_choice",
+            "boolean_choice",
+        }
         or values.is_array(item.kind)
         for item in (lhs, rhs)
     ):

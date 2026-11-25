@@ -1629,6 +1629,30 @@ for j in range(3):
         print('iteration', j)
 else:
     print('wrong')
+def error_value():
+    print('exception expression')
+    return ImportError('wrapped')
+def cause_value():
+    print('cause expression')
+    return ValueError('original')
+try:
+    try:
+        raise error_value() from cause_value()
+    finally:
+        print('chain cleanup')
+except ImportError as problem:
+    print(str(problem))
+try:
+    try:
+        raise ModuleNotFoundError('suppressed') from None
+    except ImportError:
+        raise
+except ImportError as problem:
+    print(str(problem))
+try:
+    raise ImportError from ValueError
+except ImportError as problem:
+    print('class cause', str(problem))
 """)
     reference = tmp_path / "reference"
     reference.mkdir()
@@ -1637,6 +1661,22 @@ else:
     _stage(tmp_path, "frontend", "build", "--entry", entry, "--out", graph)
     entry.unlink()
     _stage(tmp_path, "middle", "plan", "--graph", graph, "--out", plan)
+    from scar.contract import walk_operations
+
+    ir = json.loads((plan / "exec-ir.json").read_bytes())
+    functions = [
+        json.loads((plan / row["path"]).read_bytes()) for row in ir["functions"]
+    ]
+    chains = [
+        node
+        for node in walk_operations(functions)
+        if node.get("cause_mode") == "explicit"
+    ]
+    assert len(chains) == 3
+    assert {json.dumps(node["cause"]["type"], sort_keys=True) for node in chains} == {
+        '"unit"',
+        json.dumps(dict(kind="handle", resource="error"), sort_keys=True),
+    }
     shutil.rmtree(graph)
     result = _stage(tmp_path, "backend", "compile", "--ir", plan, "--out", delivery)
     shutil.rmtree(plan)
@@ -1644,6 +1684,30 @@ else:
     native.mkdir()
     assert _run([result["executable"]], native) == expected
     assert (native / "data.txt").read_bytes() == (reference / "data.txt").read_bytes()
+
+
+def test_complex_arrays_keep_native_components_through_stages(tmp_path):
+    entry = tmp_path / "complex_arrays.py"
+    entry.write_text("""import numpy as np
+a = np.array([2j, 4j], dtype=np.complex128)
+b = a.copy()
+view = b.reshape((2,))
+view[0] = 6j
+c = (a + b) * b
+for i in range(2):
+    print(a[i].real, a[i].imag, b[i].imag, c[i].real, c[i].imag)
+""")
+    expected = _run([sys.executable, "-B", entry], tmp_path)
+    graph, plan, delivery = (tmp_path / name for name in ("graph", "plan", "delivery"))
+    _stage(tmp_path, "frontend", "build", "--entry", entry, "--out", graph)
+    entry.unlink()
+    _stage(tmp_path, "middle", "plan", "--graph", graph, "--out", plan)
+    ir = json.loads((plan / "exec-ir.json").read_bytes())
+    assert ir["module"]["operator_requirements"]["ndarray"]["element"] == "c128"
+    shutil.rmtree(graph)
+    result = _stage(tmp_path, "backend", "compile", "--ir", plan, "--out", delivery)
+    shutil.rmtree(plan)
+    assert _run([result["executable"]], tmp_path) == expected
 
 
 def test_console_and_process_exit_preserve_handlers_and_finalization(tmp_path):

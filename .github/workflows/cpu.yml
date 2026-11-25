@@ -39,6 +39,9 @@ jobs:
           CMAKE_COMMAND="$sdk_tools/cmake/data/bin/cmake" python tools/provision_cpu_sdk.py --prefix "$sdk_prefix"
           echo "SCAR_CPU_SDK=$sdk_prefix" >> "$GITHUB_ENV"
           echo "CMAKE_PREFIX_PATH=$sdk_prefix${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}" >> "$GITHUB_ENV"
+          fft_prefix="$RUNNER_TEMP/scar-sdk/pocketfft-33ae5dc94c9cdc7f1c78346504a85de87cadaa12"
+          python tools/provision_fft_sdk.py --prefix "$fft_prefix"
+          echo "SCAR_FOURIER_SDK=$fft_prefix" >> "$GITHUB_ENV"
       - name: Build and install wheel
         run: |
           packages="$RUNNER_TEMP/scar-packages"

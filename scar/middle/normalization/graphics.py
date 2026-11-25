@@ -2,9 +2,9 @@
 
 from pathlib import PurePosixPath
 
-from scar.contract import python_source_boundary
+from scar.source_contracts import python_source_boundary
 
-from .values import Value, rank, wire
+from .values import Value, array_element, rank, wire
 
 _PROFILE = "pyplot-3.11.2"
 _ROOT = "matplotlib"
@@ -358,7 +358,10 @@ class Graphics:
     def invoke(self, frame, node, name, args, kwargs, steps, discard):
         context = Value(_CONTEXT, None).at(_SLOT, scope="global").value
         if name == "plot":
-            if len(args) != 2 or any(rank(v.kind) not in {1, 2} for v in args):
+            if len(args) != 2 or any(
+                rank(v.kind) not in {1, 2} or array_element(v.kind) != "f64"
+                for v in args
+            ):
                 frame.fail(
                     node,
                     "graphics_plot_data",

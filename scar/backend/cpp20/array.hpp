@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cfenv>
+#include <complex>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -30,6 +31,7 @@
 #include <xtensor/generators/xbuilder.hpp>
 #include <xtensor/views/xbroadcast.hpp>
 #include <xtensor/views/xstrided_view.hpp>
+#include <xtl/xcomplex.hpp>
 
 namespace scar {
 struct array_shape {
@@ -37,8 +39,10 @@ struct array_shape {
   std::initializer_list<std::int64_t> extents;
 };
 
+template <class T> struct array_calculation;
+
 template <class T> class ndarray {
-  friend struct array_calculation;
+  friend struct array_calculation<T>;
   using shape_type = std::vector<std::size_t>;
   using strides_type = std::vector<std::ptrdiff_t>;
   using storage_type = xt::xarray<T, xt::layout_type::row_major>;
@@ -260,6 +264,27 @@ public:
     if (!region_ || index >= region_->size)
       throw std::out_of_range("flat index outside array view");
     return region_->storage->flat(region_->offset + index);
+  }
+
+  // A native vector operator reads the selected view and writes a distinct
+  // allocation. The two owning handles remain live throughout the call.
+  template <class Operator>
+  ndarray transform_vector(Operator &&operation) const {
+    require_rank(1);
+    const auto &src = *region_;
+    auto result = allocate({src.size}, src.size);
+    auto stride = src.strides.front();
+    constexpr auto bytes = static_cast<std::ptrdiff_t>(sizeof(T));
+    if (stride > std::numeric_limits<std::ptrdiff_t>::max() / bytes ||
+        stride < std::numeric_limits<std::ptrdiff_t>::min() / bytes)
+      throw std::length_error("array byte stride overflow");
+    const T *input = src.storage->data();
+    if (src.offset)
+      input += src.offset;
+    std::forward<Operator>(operation)(
+        input, stride * bytes,
+        std::span<T>(result.region_->storage->data(), src.size));
+    return result;
   }
 
   static ndarray zeros(array_shape layout) {
@@ -550,21 +575,22 @@ inline void report_array_warnings(int flags, const array_warning &site) {
   }
 }
 
-struct array_number {
-  std::variant<double, ndarray<double>> value;
+template <class T> struct array_number {
+  std::variant<T, ndarray<T>> value;
   std::size_t rank;
 };
 
-struct array_calculation {
-  array_number left, right;
+template <class T> struct array_calculation {
+  using number = array_number<T>;
+  number left, right;
   array_math operation;
   array_warning warning;
 
 private:
-  using array = ndarray<double>;
-  using shape_type = array::shape_type;
+  using array = ndarray<T>;
+  using shape_type = typename array::shape_type;
 
-  static const shape_type &shape(const array_number &n) {
+  static const shape_type &shape(const number &n) {
     if (const auto *a = std::get_if<array>(&n.value)) {
       a->require_rank(n.rank);
       return a->dimensions();
@@ -574,15 +600,13 @@ private:
     static const shape_type scalar_shape;
     return scalar_shape;
   }
-  static const double *data(const array_number &n) {
-    if (const auto *scalar = std::get_if<double>(&n.value))
+  static const T *data(const number &n) {
+    if (const auto *scalar = std::get_if<T>(&n.value))
       return scalar;
     const auto &r = *std::get<array>(n.value).region_;
     return r.storage->data() + r.offset;
   }
-  static auto source(const array_number &n) {
-    return xt::adapt(data(n), shape(n));
-  }
+  static auto source(const number &n) { return xt::adapt(data(n), shape(n)); }
   shape_type result_shape() const {
     const auto &l = shape(left), &r = shape(right);
     shape_type result(std::max(l.size(), r.size()), 1);
@@ -594,16 +618,50 @@ private:
     }
     return result;
   }
-  template <class Dest>
-  void evaluate(Dest &dst, const array_number &rhs) const {
-    array_fenv environment;
-    auto l = source(left), r = source(rhs);
-    auto dest = xt::noalias(dst);
+  template <class Dest, class Operand>
+  void real_operation(Dest &dst, const Operand &l, const Operand &r,
+                      const number &rhs) const {
     auto verify_exponent = [&](double value) {
       if (rhs.rank || *data(rhs) != value)
         throw std::invalid_argument(
             "array power specialization exponent mismatch");
     };
+    switch (operation) {
+    case array_math::divide:
+      xt::noalias(dst) = l / r;
+      break;
+    case array_math::power:
+      xt::noalias(dst) = xt::pow(l, r);
+      break;
+    case array_math::square:
+      verify_exponent(2.);
+      xt::noalias(dst) = xt::square(l);
+      break;
+    case array_math::sqrt:
+      verify_exponent(0.5);
+      xt::noalias(dst) = xt::sqrt(l);
+      break;
+    case array_math::reciprocal:
+      verify_exponent(-1.);
+      xt::noalias(dst) = 1. / l;
+      break;
+    case array_math::positive:
+      verify_exponent(1.);
+      xt::noalias(dst) = l;
+      break;
+    case array_math::ones_like:
+      verify_exponent(0.);
+      dst.fill(1.);
+      break;
+    default:
+      throw std::invalid_argument("unsupported real array operation");
+    }
+  }
+
+  template <class Dest> void evaluate(Dest &dst, const number &rhs) const {
+    array_fenv environment;
+    auto l = source(left), r = source(rhs);
+    auto dest = xt::noalias(dst);
     switch (operation) {
     case array_math::add:
       dest = l + r;
@@ -612,34 +670,20 @@ private:
       dest = l - r;
       break;
     case array_math::multiply:
-      dest = l * r;
+      if constexpr (std::is_same_v<T, std::complex<double>>) {
+        // This profile multiplies the two binary64 components directly.
+        // std::complex may repair NaN components by recomputing with infinity.
+        using components = xtl::xcomplex<double, double, false>;
+        dest = xt::cast<T>(xt::cast<components>(l) * xt::cast<components>(r));
+      } else {
+        dest = l * r;
+      }
       break;
-    case array_math::divide:
-      dest = l / r;
-      break;
-    case array_math::power:
-      dest = xt::pow(l, r);
-      break;
-    case array_math::square:
-      verify_exponent(2.);
-      dest = xt::square(l);
-      break;
-    case array_math::sqrt:
-      verify_exponent(0.5);
-      dest = xt::sqrt(l);
-      break;
-    case array_math::reciprocal:
-      verify_exponent(-1.);
-      dest = 1. / l;
-      break;
-    case array_math::positive:
-      verify_exponent(1.);
-      dest = l;
-      break;
-    case array_math::ones_like:
-      verify_exponent(0.);
-      dst.fill(1.);
-      break;
+    default:
+      if constexpr (std::is_same_v<T, double>)
+        real_operation(dst, l, r, rhs);
+      else
+        throw std::invalid_argument("unsupported complex array operation");
     }
     report_array_warnings(environment.finish(), warning);
   }
@@ -647,10 +691,10 @@ private:
 public:
   template <class Result> Result fresh() const {
     auto dims = result_shape();
-    if constexpr (std::is_same_v<Result, double>) {
+    if constexpr (std::is_same_v<Result, T>) {
       if (!dims.empty())
         throw std::invalid_argument("arithmetic scalar result rank mismatch");
-      double value;
+      T value;
       auto dst = xt::adapt(&value, dims);
       evaluate(dst, right);
       return value;
@@ -687,10 +731,12 @@ public:
     return nullptr;
   }
 };
-template <class Result> Result array_binary(const array_calculation &request) {
-  return request.fresh<Result>();
+template <class Result, class T = double>
+Result array_binary(const array_calculation<T> &request) {
+  return request.template fresh<Result>();
 }
-inline std::nullptr_t array_update(const array_calculation &request) {
+template <class T = double>
+std::nullptr_t array_update(const array_calculation<T> &request) {
   return request.update();
 }
 } // namespace scar

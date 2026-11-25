@@ -3,7 +3,7 @@
 from dataclasses import dataclass, field
 
 from scar.contract import walk_operations
-from . import values
+from . import enumerations, values
 from .values import Value, literal
 
 
@@ -90,6 +90,7 @@ class InstanceLayout:
 class ObjectModel:
     def __init__(self):
         self.layouts = {}
+        self.enum_classes = set()
         self.class_bodies = set()
         self.proofs = set()
 
@@ -99,16 +100,17 @@ class ObjectModel:
             and _site(obligation.get("symbol"), obligation) in self.proofs
         )
 
-    def define(self, frame, node):
+    def define(self, frame, node, steps):
         if not frame.initializing or frame.dynamic:
             frame.fail(
                 node,
                 "class_activation",
                 "local or conditional class creation requires runtime class identity",
             )
-        if any(
+        bases = node.get("bases", ())
+        if len(bases) > 1 or any(
             node.get(key)
-            for key in ("bases", "keywords", "decorators", "type_params", "annotations")
+            for key in ("keywords", "decorators", "type_params", "annotations")
         ):
             frame.fail(
                 node,
@@ -116,11 +118,15 @@ class ObjectModel:
                 "bases, metaclass keywords, decorators or type parameters require a class creation contract",
             )
         creation = node.get("creation_protocol")
-        if creation and (
-            creation.get("bases") != "implicit_object"
-            or creation.get("metaclass") != "default_type"
-            or creation.get("namespace") != "prepare_then_execute"
-            or "__classcell__" in creation.get("implicit_bindings", {})
+        if (
+            not bases
+            and creation
+            and (
+                creation.get("bases") != "implicit_object"
+                or creation.get("metaclass") != "default_type"
+                or creation.get("namespace") != "prepare_then_execute"
+                or "__classcell__" in creation.get("implicit_bindings", {})
+            )
         ):
             frame.fail(
                 node,
@@ -134,10 +140,23 @@ class ObjectModel:
             or definition.get("owner_class") != symbol
         ):
             frame.fail(node, "class_body", f"missing class namespace body for {symbol}")
-        if symbol in self.layouts:
+        if symbol in self.layouts or symbol in self.enum_classes:
             frame.fail(
                 node, "class_rebind", f"creation of another class identity for {symbol}"
             )
+        if bases:
+            base = frame.evaluate(bases[0], steps)
+            if base.kind != "enum_base":
+                frame.fail(
+                    node,
+                    "class_protocol",
+                    "this base requires its own class creation contract",
+                )
+            result = enumerations.define(frame, node, base, definition, steps)
+            self.enum_classes.add(symbol)
+            self.class_bodies.add(body)
+            self.proofs.add(_site(frame.name, node.get("location", {})))
+            return result
         display_name = (
             node.get("source_name") or node["target"]["name"].rsplit(":", 1)[-1]
         )

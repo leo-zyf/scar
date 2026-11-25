@@ -18,23 +18,6 @@ RESOURCE_FLOW = "scar.resource-flow"
 WORKFLOW = "scar.workflow-graph"
 VERSION = 1
 
-_PYTHON_SOURCE_INTERFACES = {
-    "numpy": ("numpy", "numpy-public-v1", (1, 24), (3, 0)),
-    "matplotlib": ("matplotlib", "pyplot-3.11.2", (3, 11, 2), (3, 11, 3)),
-    "matplotlib.pyplot": (
-        "matplotlib",
-        "pyplot-3.11.2",
-        (3, 11, 2),
-        (3, 11, 3),
-    ),
-    "mpl_toolkits.mplot3d": (
-        "matplotlib",
-        "pyplot-3.11.2",
-        (3, 11, 2),
-        (3, 11, 3),
-    ),
-}
-
 
 def validate_numeric_contract(function):
     """Validate portable permissions against sealed source policy evidence."""
@@ -173,33 +156,6 @@ def python_provider_id(record):
         "canonical_module",
     )
     return digest(json_bytes({key: record[key] for key in fields if key in record}))
-
-
-def python_source_boundary(record):
-    """Return an interface candidate, never permission to erase initialization.
-
-    Frontends may stop source expansion at registered source interfaces. Their
-    execution contracts, effects and individual operations still require the
-    consuming layer's independent qualification.
-    """
-    if record.get("status") != "verified_distribution":
-        return None
-    interface = _PYTHON_SOURCE_INTERFACES.get(record.get("module"))
-    if interface is None:
-        return None
-    distribution, profile, lower, upper = interface
-    release = re.fullmatch(
-        r"(\d+)\.(\d+)\.(\d+)(?:\.post\d+)?(?:\+[A-Za-z0-9.]+)?",
-        str(record.get("version", "")),
-    )
-    if (
-        record.get("distribution", "").lower() == distribution
-        and release
-        and lower <= tuple(map(int, release.group(1, 2, 3))) < upper
-        and re.fullmatch(r"[a-f0-9]{64}", str(record.get("sha256", "")))
-    ):
-        return profile
-    return None
 
 
 @dataclass(frozen=True)
@@ -785,7 +741,80 @@ def validate_artifact_flow(flow):
                 raise ValueError(
                     "literal artifact text disagrees with its content identity"
                 )
+    version_kinds = {"FILE_VERSION", "FILE_VERSION_TEMPLATE"}
+
+    def conditional_candidates(rows):
+        if not isinstance(rows, list):
+            raise ValueError("conditional file candidates require a list")
+        seen = set()
+        for row in rows:
+            if not isinstance(row, dict) or set(row) != {
+                "version",
+                "locator",
+                "invalidated_by",
+                "requires",
+            }:
+                raise ValueError("invalid conditional file candidate record")
+            version, locator = row["version"], row["locator"]
+            if (
+                not isinstance(version, str)
+                or not isinstance(locator, str)
+                or version in seen
+                or records.get(version, {}).get("kind") not in version_kinds
+                or records[version].get("locator") != locator
+                or records.get(locator, {}).get("kind") != "FILE_LOCATOR"
+            ):
+                raise ValueError(
+                    "conditional candidate requires its original file version and locator"
+                )
+            seen.add(version)
+            barriers = row["invalidated_by"]
+            if (
+                not isinstance(barriers, list)
+                or any(not isinstance(ref, str) for ref in barriers)
+                or len(barriers) != len(set(barriers))
+                or any(
+                    records.get(ref, {}).get("kind") != "CANONICAL_OPERATION"
+                    or records[ref].get("operation") != "file_state_barrier"
+                    for ref in barriers
+                )
+                or not isinstance(row["requires"], list)
+                or not row["requires"]
+                or any(
+                    not isinstance(requirement, str) or not requirement
+                    for requirement in row["requires"]
+                )
+            ):
+                raise ValueError(
+                    "conditional candidate requires barriers and unresolved obligations"
+                )
+
     for node in records.values():
+        if "conditional_candidates" in node:
+            conditional_candidates(node["conditional_candidates"])
+        if (
+            node["kind"] == "CANONICAL_OPERATION"
+            and node.get("operation") == "file_state_barrier"
+        ):
+            if (
+                type(node.get("filesystem_epoch")) is not int
+                or node["filesystem_epoch"] < 0
+                or any(
+                    type(node.get(key)) is not bool
+                    for key in ("changes_cwd", "changes_namespace")
+                )
+                or node.get("instance_scope") != "per_normal_dynamic_effect"
+                or not isinstance(node.get("reason"), str)
+                or not node["reason"]
+                or (
+                    node.get("origin") is not None
+                    and records.get(node["origin"], {}).get("kind")
+                    not in {"SOURCE_OPERATION", "CANONICAL_OPERATION"}
+                )
+            ):
+                raise ValueError(
+                    "file state barrier requires its ordered source effect"
+                )
         if node["kind"] == "DIRECTORY_TEMPLATE":
             if node.get("form") not in {
                 "entry",
@@ -874,6 +903,53 @@ def validate_artifact_flow(flow):
             raise ValueError("artifact edge references an absent node")
         if not isinstance(relation.get("kind"), str) or not relation["kind"]:
             raise ValueError("artifact edge requires its relationship kind")
+        kind = relation["kind"]
+        if kind in {
+            "MAY_SATISFY_FILE_VERSION",
+            "CONDITIONALLY_AVAILABLE_BEFORE_LAUNCH",
+            "CONDITIONAL_VERSION_AT_NORMAL_JOIN",
+            "SUPERSEDES_CONDITIONAL_FILE_VERSION",
+        }:
+            source, target = (records[relation[key]] for key in ("source", "target"))
+            expected = (
+                {"FILE_VERSION_REQUIREMENT"}
+                if kind == "MAY_SATISFY_FILE_VERSION"
+                else (
+                    version_kinds
+                    if kind == "SUPERSEDES_CONDITIONAL_FILE_VERSION"
+                    else {"SOURCE_OPERATION", "CANONICAL_OPERATION"}
+                )
+            )
+            if (
+                source["kind"] not in version_kinds
+                or target["kind"] not in expected
+                or relation.get("conditional") is not True
+                or (
+                    kind != "SUPERSEDES_CONDITIONAL_FILE_VERSION"
+                    and relation.get("establishes_current_version") is not False
+                )
+                or (
+                    kind == "CONDITIONALLY_AVAILABLE_BEFORE_LAUNCH"
+                    and relation.get("establishes_child_read") is not False
+                )
+            ):
+                raise ValueError(
+                    "conditional file relation cannot establish a current version or a child read"
+                )
+            for ref in relation.get("invalidated_by", ()):
+                if records.get(ref, {}).get("operation") != "file_state_barrier":
+                    raise ValueError(
+                        "conditional file relation references an absent barrier"
+                    )
+        if kind == "HAS_FILE_STATE_BARRIER":
+            barrier = records[relation["target"]]
+            if (
+                barrier.get("operation") != "file_state_barrier"
+                or barrier.get("origin") != relation["source"]
+            ):
+                raise ValueError(
+                    "file state barrier is not connected to its actual source effect"
+                )
         if relation["kind"] in {"COPIES_FILE_VERSION", "COPIES_REQUIRED_FILE_VERSION"}:
             source, target = (records[relation[key]] for key in ("source", "target"))
             required = relation["kind"] == "COPIES_REQUIRED_FILE_VERSION"
@@ -946,6 +1022,8 @@ def validate_artifact_flow(flow):
         if records.get(effect["operation"], {}).get("kind") != "SOURCE_OPERATION":
             raise ValueError("artifact effect requires its source operation")
     for environment in flow.get("launch_environments", ()):
+        if "conditional_candidates" in environment:
+            conditional_candidates(environment["conditional_candidates"])
         if (
             records.get(environment.get("operation"), {}).get("kind")
             not in {"SOURCE_OPERATION", "CANONICAL_OPERATION"}

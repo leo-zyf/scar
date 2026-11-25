@@ -19,7 +19,8 @@ import sys
 import sysconfig
 import tokenize
 
-from scar.contract import python_provider_id, python_source_boundary
+from scar.contract import python_provider_id
+from scar.source_contracts import python_source_boundary
 
 
 def _digest_file(path, algorithm="sha256"):

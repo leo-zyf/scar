@@ -202,7 +202,7 @@ def alignment(record):
 
 def ndarray_type_rank(spec):
     domain = array_rank_domain(spec)
-    if spec["element"] != "f64":
+    if spec["element"] not in ("f64", "c128"):
         raise ValueError(f"unsupported ndarray type {spec!r}")
     return domain[0] if domain is not None and len(domain) == 1 else None
 
@@ -212,6 +212,25 @@ def ndarray_rank(spec):
     if rank is None:
         raise ValueError("this operation requires a fixed array rank")
     return rank
+
+
+def _array_warning(warning, location):
+    file = location.get("diagnostic_file", location.get("file"))
+    line = location.get("line")
+    if not isinstance(file, str) or not file or type(line) is not int or line <= 0:
+        raise ValueError("array diagnostics require source location")
+    return Expr(
+        "construct",
+        type=named("scar::array_warning"),
+        qualifier="brace",
+        args=(
+            utf8_literal(warning.get("module", file), "std::string_view"),
+            utf8_literal(file, "std::string_view"),
+            integer(line),
+            utf8_literal(warning["operation"], "std::string_view"),
+            utf8_literal(warning.get("source_line", ""), "std::string_view"),
+        ),
+    )
 
 
 def _qualified_parameters(module, physical):
@@ -290,6 +309,12 @@ class Lowerer:
         self.qualified_parameters = _qualified_parameters(module, physical)
         self.regions = physical.get("regions", {})
         self.operator_backends = physical.get("operator_backends", {})
+        fourier = self.operator_backends.get("fourier")
+        if (fourier is not None or "fourier_binding_sha256" in module) and (
+            fourier is None
+            or module.get("fourier_binding_sha256") != digest(json_bytes(fourier))
+        ):
+            raise ValueError("Fourier provider differs from the scheduled module")
         native = self.operator_backends.get("posix_runtime")
         if native is not None and module.get("posix_runtime_binding_sha256") != digest(
             json_bytes(native)
@@ -404,8 +429,12 @@ class Lowerer:
             return named("scar::error_value")
         if kind == "ndarray":
             ndarray_type_rank(spec)
+            schedule = self.operator_backends.get("ndarray", {})
+            # Historical SDK receipts covered binary64 only.
+            elements = schedule.get("elements", ["f64"])
+            if not isinstance(elements, list) or spec["element"] not in elements:
+                raise ValueError("array element type lacks a scheduled CPU provider")
             if "array.hpp" not in self.used_sdk_headers:
-                schedule = self.operator_backends.get("ndarray", {})
                 packages = schedule.get("packages", {})
                 if (
                     schedule.get("provider") != "xtensor-cpu"
@@ -923,6 +952,73 @@ class Lowerer:
             ),
         )
 
+    def fourier_operation(self, node):
+        binding = self.operator_backends.get("fourier", {})
+        input_value = node.get("input")
+        source_type = input_value.get("type") if isinstance(input_value, dict) else None
+        revision = "33ae5dc94c9cdc7f1c78346504a85de87cadaa12"
+        fingerprint = digest(
+            json_bytes({k: v for k, v in node.items() if k != "input"})
+        )
+        direction = node.get("direction")
+        calls = binding.get("calls")
+        use = calls.get(fingerprint) if isinstance(calls, dict) else None
+        if (
+            binding.get("provider") != "pocketfft-cpu"
+            or type(binding.get("semantics_version")) is not int
+            or binding["semantics_version"] != 1
+            or binding.get("revision") != revision
+            or binding.get("profile") != "c2c-c128-rank1-ortho"
+            or binding.get("device") != "cpu"
+            or binding.get("resources", {}).get("workers") != 1
+            or node.get("required_provider")
+            != {"name": "pocketfft", "revision": revision}
+            or node.get("operator_family") != "fourier"
+            or not isinstance(use, dict)
+            or use.get("direction") != direction
+            or use.get("site") != node.get("site")
+            or use.get("numeric_policy") != node.get("numeric_policy")
+            or direction not in ("forward", "inverse")
+            or node.get("normalization") != "ortho"
+            or node.get("may_raise") is not True
+            or type(node.get("axis")) is not int
+            or node["axis"] != 0
+            or {"n", "out", "axes", "workers", "in_place"}.intersection(node)
+            or source_type != {"kind": "ndarray", "element": "c128", "rank": 1}
+            or node.get("type") != source_type
+            or type(source_type["rank"]) is not int
+            or type(node["type"]["rank"]) is not int
+        ):
+            raise ValueError("unqualified rank-one complex128 Fourier operation")
+        self.type_name(source_type)
+        policy = node.get("numeric_policy")
+        warning = node.get("warning", {})
+        effects = set(node.get("effects", ()))
+        if (
+            policy == "numpy_default"
+            and effects == {"MEM", "VAL", "STATE", "IO"}
+            and warning.get("operation")
+            == {"forward": "fft", "inverse": "ifft"}[direction]
+        ):
+            notice = _array_warning(warning, warning.get("location", {}))
+        elif policy is None and effects == {"MEM", "VAL"} and "warning" not in node:
+            notice = name("std::nullopt")
+        else:
+            raise ValueError("unqualified Fourier diagnostic policy")
+        self.use_sdk("fourier.hpp")
+        self.libraries.links.add("PocketFFT")
+        return call(
+            "scar::array_fft",
+            Expr(
+                "braced",
+                args=(
+                    self.expression(input_value),
+                    Expr("literal", value=direction == "forward"),
+                    notice,
+                ),
+            ),
+        )
+
     def array_operation(self, node):
         op = node["op"]
         effects = set(node.get("effects", ()))
@@ -935,6 +1031,19 @@ class Lowerer:
             )
         ):
             raise ValueError(f"unsupported ndarray operation or effects for {op}")
+        port = node.get("base") or node.get("left") or node.get("value") or node
+        port_type = port.get("type")
+        element = port_type.get("element") if isinstance(port_type, dict) else port_type
+        uses = self.operator_backends.get("ndarray", {}).get("operations_by_element")
+        if uses is not None or element == "c128":
+            use = (
+                f"{op}.{node.get('operator')}"
+                if op in {"array_binary", "array_update", "array_unary"}
+                else op
+            )
+            qualified = uses.get(element) if isinstance(uses, dict) else None
+            if not isinstance(qualified, list) or use not in qualified:
+                raise ValueError(f"unqualified {element} array operation {use}")
         if op in ("array_binary", "array_update"):
             return self.array_arithmetic(node)
         if op == "array_format":
@@ -957,6 +1066,8 @@ class Lowerer:
             ):
                 raise ValueError("unsupported array display profile")
             ndarray_type_rank(value.get("type"))
+            if value["type"]["element"] != "f64":
+                raise ValueError("array display is only registered for binary64")
             self.type_name(value["type"])
             self.use_sdk("format.hpp")
             fields = tuple(
@@ -1008,6 +1119,8 @@ class Lowerer:
                     return call("scar::array_size", source, integer(source_rank))
                 return call("scar::" + op, source)
             result_rank = ndarray_rank(node.get("type"))
+            if node["type"]["element"] != source_type["element"]:
+                raise ValueError(f"{op} changes the array element type")
             if op == "array_reshape" and node.get("layout") != "C":
                 raise ValueError("array_reshape requires C layout")
             if op == "array_broadcast_copy" and (
@@ -1078,6 +1191,7 @@ class Lowerer:
             limit = node.get("max_count")
             if (
                 rank != 1
+                or ty["element"] != "f64"
                 or type(limit) is not int
                 or limit != 1 << 53
                 or not isinstance(count, dict)
@@ -1123,8 +1237,11 @@ class Lowerer:
             raise ValueError(f"{op} has too many indices")
         location = group(self.expression(node["base"]), integer(rank), indices)
         if op == "array_view":
-            if ndarray_rank(node["type"]) != remaining:
-                raise ValueError("ndarray view result rank mismatch")
+            if (
+                ndarray_rank(node["type"]) != remaining
+                or node["type"]["element"] != ty["element"]
+            ):
+                raise ValueError("ndarray view result rank or element type mismatch")
             return call(target, location)
         if op == "array_load":
             if remaining or node.get("type") != ty["element"]:
@@ -1132,7 +1249,14 @@ class Lowerer:
             return call(target, location)
         rhs = node["value"]
         rhs_type = rhs.get("type")
-        rhs_rank = 0 if rhs_type == ty["element"] else ndarray_rank(rhs_type)
+        if isinstance(rhs_type, dict):
+            rhs_rank = ndarray_rank(rhs_type)
+            if rhs_type["element"] != ty["element"]:
+                raise ValueError("array store changes the element type")
+        elif rhs_type == ty["element"]:
+            rhs_rank = 0
+        else:
+            raise ValueError("array store requires the target element type")
         if node.get("broadcasting") != "trailing" or (not remaining and rhs_rank):
             raise ValueError("unsupported ndarray assignment broadcasting contract")
         return call(
@@ -1181,35 +1305,32 @@ class Lowerer:
             raise ValueError(
                 "array diagnostic operation differs from numerical operation"
             )
-        location = node.get("location", {})
-        file, line = location.get(
-            "diagnostic_file", location.get("file")
-        ), location.get("line")
-        if not isinstance(file, str) or not file or type(line) is not int or line <= 0:
-            raise ValueError("array diagnostics require source location")
-        notice = Expr(
-            "braced",
-            args=(
-                utf8_literal(warning.get("module", file), "std::string_view"),
-                utf8_literal(file, "std::string_view"),
-                integer(line),
-                utf8_literal(operation, "std::string_view"),
-                utf8_literal(warning.get("source_line", ""), "std::string_view"),
-            ),
-        )
+        notice = _array_warning(warning, node.get("location", {}))
         left, right = node["left"], node["right"]
-        left_array = left.get("type") != "f64"
 
         def operand(value):
             ty = value.get("type")
-            rank = 0 if ty == "f64" else ndarray_rank(ty)
-            return rank, Expr(
-                "braced",
-                args=(cast(self.type_name(ty), self.expression(value)), integer(rank)),
+            rank = 0 if ty in ("f64", "c128") else ndarray_rank(ty)
+            element = ty["element"] if isinstance(ty, dict) else ty
+            return (
+                element,
+                rank,
+                Expr(
+                    "braced",
+                    args=(
+                        cast(self.type_name(ty), self.expression(value)),
+                        integer(rank),
+                    ),
+                ),
             )
 
-        lrank, l = operand(left)
-        rrank, r = operand(right)
+        element, lrank, l = operand(left)
+        right_element, rrank, r = operand(right)
+        if element != right_element:
+            raise ValueError("array arithmetic requires matching element types")
+        if element == "c128" and operator not in ("add", "sub", "mul"):
+            raise ValueError(f"unsupported c128 array arithmetic: {operator}")
+        left_array = isinstance(left.get("type"), dict)
         if (
             operator == "pow"
             and primitive != "power"
@@ -1219,11 +1340,11 @@ class Lowerer:
                 "array power specialization requires array base and scalar exponent"
             )
         rank = max(lrank, rrank)
-        array_type = {"kind": "ndarray", "element": "f64", "rank": rank}
+        array_type = {"kind": "ndarray", "element": element, "rank": rank}
         # A scalar result can still require an array-library execution contract.
         self.type_name(array_type)
         update = node["op"] == "array_update"
-        result = "unit" if update else array_type if rank else "f64"
+        result = "unit" if update else array_type if rank else element
         if node.get("type") != result or (update and not left_array):
             raise ValueError(
                 "array arithmetic result differs from input rank or update target"
@@ -1232,8 +1353,15 @@ class Lowerer:
             "braced", args=(l, r, name("scar::array_math::" + primitive), notice)
         )
         if update:
-            return call("scar::array_update", payload)
-        return call(template("scar::array_binary", self.type_name(result)), payload)
+            return call(
+                template("scar::array_update", self.type_name(element)), payload
+            )
+        return call(
+            template(
+                "scar::array_binary", self.type_name(result), self.type_name(element)
+            ),
+            payload,
+        )
 
     def expression(self, expr):
         self.weight += 1
@@ -1327,6 +1455,8 @@ class Lowerer:
                     ),
                 ),
             )
+        if op == "array_fft":
+            return self.fourier_operation(expr)
         if op.startswith("array_") and op != "array_store":
             return self.array_operation(expr)
         if op == "string":

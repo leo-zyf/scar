@@ -15,6 +15,8 @@ _BRANCHES = {"if", "select"}
 _CALLS = {"call", "indirect_call", "library_call", "process_spawn", "process_request"}
 _FILES = {"fs.copy_file", "fs.copy", "fs.copy2", "fs.copy_tree"}
 _WIDTHS = {
+    "c64": 8,
+    "c128": 16,
     "bool": 1,
     "i8": 1,
     "u8": 1,

@@ -13,6 +13,8 @@ _CLASSES = {
     "IndexError": "index_error",
     "KeyError": "key_error",
     "AttributeError": "attribute_error",
+    "ImportError": "import_error",
+    "ModuleNotFoundError": "module_not_found_error",
     "OSError": "os_error",
     "EOFError": "eof",
     "RuntimeError": "runtime_error",
@@ -100,18 +102,19 @@ def throw(frame, node, steps):
             "raise_form",
             "a throw requires the explicit exception and cause presence flags",
         )
-    if node["has_cause"]:
-        frame.fail(
-            node,
-            "exception_cause",
-            "explicit exception chaining or context suppression needs a cause contract",
-        )
     if not node["has_exception"]:
+        if node["has_cause"]:
+            frame.fail(node, "raise_form", "an explicit cause requires an exception")
         if not frame.handler_depth:
             frame.fail(node, "rethrow_scope", "no lexically active exception handler")
         steps.append(dict(op="rethrow"))
         return
     error = frame.evaluate(node["value"], steps)
+    if node["has_cause"] and error.kind == ERROR:
+        # The cause expression may rebind the original exception's source slot.
+        error = frame.effect(error.value, ERROR, steps, facts=error.facts)
+    # Python evaluates both expressions before normalizing exception classes.
+    cause = frame.evaluate(node["cause"], steps) if node["has_cause"] else None
     if error.kind == "exception_class":
         error = construct(frame, node, error, [], {}, steps)
     if error.kind != ERROR:
@@ -120,7 +123,18 @@ def throw(frame, node, steps):
             "raise_target",
             "only a closed exception object or exception class can be raised",
         )
-    steps.append(dict(op="throw", value=error.value))
+    operation = dict(op="throw", value=error.value)
+    if cause is not None:
+        if cause.kind == "exception_class":
+            cause = construct(frame, node, cause, [], {}, steps)
+        if cause.kind not in {ERROR, "unit"}:
+            frame.fail(
+                node,
+                "exception_cause",
+                "an explicit cause requires a closed exception object, class or None",
+            )
+        operation.update(cause_mode="explicit", cause=cause.value)
+    steps.append(operation)
 
 
 def _affected(body):
@@ -134,9 +148,9 @@ def _affected(body):
     return names
 
 
-def _prefix(start, body):
+def _prefix(frame, start, body, after, effects):
     """A throw may precede any assignment, or follow a write to an existing slot."""
-    state = tuple(slots.copy() for slots in start)
+    state = frame.exceptional_snapshot(start, after, effects)
     for (global_, name), deleted in _affected(body).items():
         scope = state[int(global_)]
         old = scope.get(name)
@@ -219,8 +233,12 @@ def _handler(frame, node, exceptional):
     code = []
     marks = _marks(frame)
     frame.handler_depth += 1
-    falls = frame.sequence(node["body"], code)
-    frame.handler_depth -= 1
+    frame.enter_control("handler", node)
+    try:
+        falls = frame.sequence(node["body"], code)
+    finally:
+        frame.leave_control()
+        frame.handler_depth -= 1
     state = frame.snapshot() if falls else None
     if state:
         _unbind(alias, state)
@@ -230,8 +248,8 @@ def _handler(frame, node, exceptional):
     return dict(categories=cats, binding=binding, body=code), state
 
 
-def _project_final(path, modifications, after):
-    result = tuple(scope.copy() for scope in path)
+def _project_final(frame, path, modifications, before, after):
+    result = frame.project_final_state(path, before, after)
     for global_, name in modifications:
         index = int(global_)
         if name in after[index]:
@@ -247,37 +265,65 @@ def protected(frame, node, steps):
     body, otherwise, final, handlers = [], [], [], []
     marks = _marks(frame)
     frame.dynamic += 1
-    if frame.sequence(node["body"], body) and frame.sequence(node["else"], otherwise):
-        normal.append(frame.snapshot())
-    exceptional = _prefix(start, node["body"])
-    for arm in node["handlers"]:
-        handler, state = _handler(frame, arm, exceptional)
-        handlers.append(handler)
-        if state is not None:
-            normal.append(state)
-    pending = _take(marks)
-    if node["finally"]:
-        # Cleanup also runs for an unhandled exception, return or loop transfer.
-        # Prefixes are conservative and cannot introduce a definitely assigned slot.
-        candidates = [
-            _prefix(start, [node["body"], node["handlers"], node["else"]]),
-            *normal,
-            *[state for _, _, state in pending],
-        ]
-        frame.merge(candidates)
-        if frame.sequence(node["finally"], final):
-            after = frame.snapshot()
-            written = _affected(node["finally"])
-            normal = [_project_final(state, written, after) for state in normal]
-            pending = [
-                (flow, tag, _project_final(state, written, after))
-                for flow, tag, state in pending
+    try:
+        frame.enter_control("try_body", node)
+        try:
+            falls = frame.sequence(node["body"], body)
+        finally:
+            frame.leave_control()
+        body_state = frame.snapshot()
+        if falls:
+            frame.enter_control("try_else", node)
+            try:
+                if frame.sequence(node["else"], otherwise):
+                    normal.append(frame.snapshot())
+            finally:
+                frame.leave_control()
+        exceptional = _prefix(frame, start, node["body"], body_state, body)
+        for arm in node["handlers"]:
+            handler, state = _handler(frame, arm, exceptional)
+            handlers.append(handler)
+            if state is not None:
+                normal.append(state)
+        pending = _take(marks)
+        if node["finally"]:
+            # Cleanup includes exceptional prefixes and pending transfers.
+            # Only changes made by the cleanup project back to each path.
+            candidates = [
+                _prefix(
+                    frame,
+                    start,
+                    [node["body"], node["handlers"], node["else"]],
+                    frame.snapshot(),
+                    [body, handlers, otherwise],
+                ),
+                *normal,
+                *[state for _, _, state in pending],
             ]
-        else:
-            normal, pending = [], []
-    for flow, tag, state in pending:
-        flow[tag].append(state)
-    frame.dynamic -= 1
+            frame.merge(candidates)
+            before = frame.snapshot()
+            frame.enter_control("finally", node)
+            try:
+                falls = frame.sequence(node["finally"], final)
+            finally:
+                frame.leave_control()
+            if falls:
+                after = frame.snapshot()
+                written = _affected(node["finally"])
+                normal = [
+                    _project_final(frame, state, written, before, after)
+                    for state in normal
+                ]
+                pending = [
+                    (flow, tag, _project_final(frame, state, written, before, after))
+                    for flow, tag, state in pending
+                ]
+            else:
+                normal, pending = [], []
+        for flow, tag, state in pending:
+            flow[tag].append(state)
+    finally:
+        frame.dynamic -= 1
     steps.append(
         dict(
             op="try",

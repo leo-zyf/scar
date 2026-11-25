@@ -6,6 +6,7 @@ import unicodedata
 from .values import (
     SCALARS,
     Value,
+    array_element,
     literal,
     is_array,
     is_product,
@@ -127,6 +128,12 @@ def _concat(frame, parts, steps, discard=False):
 
 
 def array_text(frame, node, value, steps):
+    if array_element(value.kind) != "f64":
+        frame.fail(
+            node,
+            "array_format_dtype",
+            "the registered array display profile requires binary64 elements",
+        )
     frame.project.array_ops.add("array_format")
     return frame.effect(
         dict(
@@ -167,6 +174,12 @@ def _numpy_major(frame, node):
 
 
 def _scalar_field(frame, node, value, conversion, spec, steps, discard=False):
+    if wire(value.kind) == "c128":
+        frame.fail(
+            node,
+            "scalar_format_dtype",
+            "complex text requires its source scalar presentation profile",
+        )
     profile = frame.scope.get("text_profile")
     if (
         conversion == "repr"
@@ -256,6 +269,12 @@ def display(frame, node, value, steps):
         return _container(frame, node, value, steps)
     if is_array(value.kind):
         return array_text(frame, node, value, steps)
+    if wire(value.kind) == "c128":
+        frame.fail(
+            node,
+            "scalar_format_dtype",
+            "complex display requires its source scalar presentation profile",
+        )
     if value.kind == "numpy_bool":
         _numpy_major(frame, node)
         # The stream receives str(value); the original program binding keeps its kind.

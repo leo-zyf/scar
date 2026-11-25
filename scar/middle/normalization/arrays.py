@@ -4,13 +4,15 @@ import math
 import operator
 import re
 
-from scar.contract import python_source_boundary, walk_operations
+from scar.contract import walk_operations
+from scar.source_contracts import python_source_boundary
 
-from . import exceptions, products, scalars, sequences, text
+from . import exceptions, fourier, products, scalars, sequences, text
 from .scalars import as_float as _as_float
 from .values import (
     Value,
     _UNKNOWN,
+    array_element,
     array_kind,
     is_array,
     is_product,
@@ -25,7 +27,8 @@ from .values import (
     wire,
 )
 
-_PROVIDED = {"array", "zeros", "float64", "linspace", "meshgrid", "loadtxt"}
+_DTYPES = {"float64": "f64", "complex128": "c128"}
+_PROVIDED = {"array", "zeros", "linspace", "meshgrid", "loadtxt", *_DTYPES}
 _TEXT_ARRAY_SOURCE = {
     "numpy": "09295a80660f17925ae23765ce8cbd7ff7ceae968d5f2f89349f1cb74c0b9e11",
     "numpy.lib._npyio_impl": "51eb4572baad1e8198f71b3488a3cbcdb81ac85aa3c15cc2708cd907198a1fb5",
@@ -387,7 +390,7 @@ def _reshape(frame, node, source, args, options, steps, discard):
     return _output(
         frame,
         "array_reshape",
-        array_kind(len(dims)),
+        array_kind(len(dims), array_element(source.kind)),
         steps,
         facts=frame.project.array_state.reshaped(source, shape),
         discard=discard,
@@ -607,7 +610,7 @@ def import_provider(frame, node, steps):
     }
     if node["request"]["form"] == "import":
         facts = {}
-        if any(
+        if "numpy.fft" in frame.provider_sources or any(
             candidate.get("kind") == "literal"
             for exported in frame.provider_sources.get("numpy", {})
             .get("exports", {})
@@ -620,6 +623,16 @@ def import_provider(frame, node, steps):
 
 
 def provider_member(frame, node, name, steps, namespace=None):
+    if namespace is None and name == "fft" and node.get("op") == "python_import":
+        namespace = Value(
+            "provider_namespace",
+            "numpy",
+            {"source_namespace": frame.source_namespace(node, "numpy")},
+        )
+    if namespace is not None:
+        resolved = fourier.member(frame, node, namespace, name, steps)
+        if resolved is not None:
+            return resolved
     if name not in _PROVIDED:
         return frame.source_export(
             node,
@@ -633,7 +646,9 @@ def provider_member(frame, node, name, steps, namespace=None):
             ),
         )
     return (
-        Value("dtype", "f64") if name == "float64" else Value("array_constructor", name)
+        Value("dtype", _DTYPES[name])
+        if name in _DTYPES
+        else Value("array_constructor", name)
     )
 
 
@@ -740,14 +755,41 @@ def _power_path(frame, node, lhs, rhs):
     return "power"
 
 
-def _operand(frame, node, value):
-    return value.value if is_array(value.kind) else _as_float(frame, node, value)
+def _scalar_element(frame, node, item, element):
+    if wire(item.kind) == "c128":
+        if element == "c128":
+            return item.value
+        frame.fail(
+            node,
+            "array_dtype",
+            "complex to real conversion needs its source casting and warning contract",
+        )
+    value = _as_float(frame, node, item)
+    return dict(op="cast", type="c128", value=value) if element == "c128" else value
+
+
+def _complex(item):
+    return array_element(item.kind) == "c128" or item.kind in {
+        "python_complex",
+        "numpy_c128",
+    }
 
 
 def _operation(frame, node, op, lhs, rhs, steps, *, inplace=False, discard=False):
-    if op not in _OPERATORS:
-        frame.fail(node, "array_operator", f"no binary64 array contract for {op}")
-    left, right = (_operand(frame, node, item) for item in (lhs, rhs))
+    operands = (lhs, rhs)
+    element = "c128" if any(_complex(v) for v in operands) else "f64"
+    if element == "c128" and not all(_complex(v) for v in operands):
+        frame.fail(
+            node,
+            "array_dtype",
+            "mixed real and complex arithmetic requires an explicit promotion contract",
+        )
+    if op not in _OPERATORS or element == "c128" and op not in {"add", "sub", "mult"}:
+        frame.fail(node, "array_operator", f"no {element} array contract for {op}")
+    left, right = (
+        v.value if is_array(v.kind) else _scalar_element(frame, node, v, element)
+        for v in operands
+    )
     shape = _broadcast(frame, node, lhs, rhs, inplace=inplace)
     operator, ufunc = _OPERATORS[op]
     dispatch = {}
@@ -783,9 +825,13 @@ def _operation(frame, node, op, lhs, rhs, steps, *, inplace=False, discard=False
     return _output(
         frame,
         "array_binary",
-        array_kind(len(shape)) if shape else "numpy_f64",
+        array_kind(len(shape), element) if shape else "numpy_" + element,
         steps,
-        facts={"shape": shape} if shape else _scalar_facts(op, lhs, rhs),
+        facts=(
+            {"shape": shape}
+            if shape
+            else _scalar_facts(op, lhs, rhs) if element == "f64" else {}
+        ),
         discard=discard,
         effects=["MEM", "VAL", "STATE", "IO"],
         **contract,
@@ -795,7 +841,7 @@ def _operation(frame, node, op, lhs, rhs, steps, *, inplace=False, discard=False
 def binary(frame, node, op, lhs, rhs, steps, discard=False):
     """Select NumPy arithmetic from source operand identities, including scalar loads."""
     if all(
-        not is_array(v.kind) and v.kind not in {"numpy_f64", "numpy_bool"}
+        not is_array(v.kind) and v.kind not in {"numpy_f64", "numpy_c128", "numpy_bool"}
         for v in (lhs, rhs)
     ):
         return None
@@ -806,6 +852,12 @@ def binary(frame, node, op, lhs, rhs, steps, discard=False):
             "array arithmetic requires resolved ranks or an explicit scalar/array result contract",
         )
     if op in _COMPARISONS:
+        if any(_complex(v) for v in (lhs, rhs)):
+            frame.fail(
+                node,
+                "array_comparison",
+                "complex comparison needs a source-typed comparison and result contract",
+            )
         if any(rank(v.kind) not in (None, 0) for v in (lhs, rhs)):
             frame.fail(
                 node,
@@ -879,7 +931,11 @@ def scalar_unary(frame, node, item, steps, discard):
             "array_rank",
             "unary array results need a resolved zero-dimensional scalar protocol",
         )
-    if op is None or n is None and item.kind not in {"i64", "f64", "numpy_f64"}:
+    if (
+        op is None
+        or n is None
+        and item.kind not in {"i64", "f64", "numpy_f64", "numpy_c128"}
+    ):
         frame.fail(
             node, "unary_contract", f"unclosed {node['operator']} on {item.kind}"
         )
@@ -899,17 +955,17 @@ def scalar_unary(frame, node, item, steps, discard):
         item = _output(
             frame,
             "array_load",
-            "numpy_f64",
+            "numpy_" + array_element(item.kind),
             steps,
             facts=frame.project.array_state.selected(item, []),
             base=item.value,
             indices=[],
             effects=["STATE"],
         )
-    if item.kind == "numpy_f64":
+    if item.kind in {"numpy_f64", "numpy_c128"}:
         return Value(
-            "numpy_f64",
-            dict(op="unary", operator=op, value=item.value, type="f64"),
+            item.kind,
+            dict(op="unary", operator=op, value=item.value, type=wire(item.kind)),
             (
                 {}
                 if item.exact is _UNKNOWN
@@ -1001,23 +1057,28 @@ def _tree(frame, node, item, steps):
     return (len(branches), *shape), [v for _, items in branches for v in items]
 
 
-def _literal_array(frame, node, source, steps, *, force, discard=False):
+def _literal_array(frame, node, source, steps, *, force, element=None, discard=False):
     shape, items = _tree(frame, node, source, steps)
-    if not force and items and all(v.kind == "i64" for v in items):
+    if (
+        not force
+        and items
+        and all(v.kind in {"i64", "bool", "numpy_bool"} for v in items)
+    ):
         frame.fail(
             node,
             "array_dtype",
-            "default integer arrays cannot be lowered to a binary64 array",
+            "default integer and Boolean arrays require their own array storage types",
         )
-    values = [_as_float(frame, node, v) for v in items]
+    element = element or ("c128" if any(_complex(v) for v in items) else "f64")
+    values = [_scalar_element(frame, node, v, element) for v in items]
     return _output(
         frame,
         "array_literal",
-        array_kind(len(shape)),
+        array_kind(len(shape), element),
         steps,
         facts=(
             frame.project.array_state.create(shape, [v.exact for v in items])
-            if all(v.exact is not _UNKNOWN for v in items)
+            if element == "f64" and all(v.exact is not _UNKNOWN for v in items)
             else {"shape": shape}
         ),
         discard=discard,
@@ -1404,7 +1465,7 @@ def _meshgrid(frame, node, args, keywords, steps, discard):
         view = _output(
             frame,
             "array_reshape",
-            array_kind(len(args)),
+            array_kind(len(args), array_element(item.kind)),
             steps,
             value=item.value,
             shape=dimensions,
@@ -1470,6 +1531,8 @@ def _meshgrid(frame, node, args, keywords, steps, discard):
 
 
 def construct(frame, node, target, args, keywords, steps, discard):
+    if target.kind == "array_constructor" and "source_profile" in target.facts:
+        return fourier.invoke(frame, node, target, args, keywords, steps, discard)
     options = dict(keywords)
     if target.kind == "array_reshape_method":
         return _reshape(frame, node, target.value, args, options, steps, discard)
@@ -1513,19 +1576,26 @@ def construct(frame, node, target, args, keywords, steps, discard):
     source = args[0]
     dtype = args[1] if len(args) == 2 else options.pop("dtype", literal(None))
     explicit = dtype.kind != "unit"
-    if explicit and not (
-        dtype.kind == "dtype"
-        and dtype.value == "f64"
-        or dtype.kind == "builtin"
-        and dtype.value == "float"
-        or dtype.kind == "text"
-        and dtype.exact in {"float64", "f8", "d"}
-    ):
-        frame.fail(
-            node,
-            "array_dtype",
-            "only an explicitly resolved binary64 dtype is supported",
-        )
+    element = None
+    if explicit:
+        if dtype.kind == "dtype" and dtype.value in _DTYPES.values():
+            element = dtype.value
+        elif dtype.kind == "builtin":
+            element = {"float": "f64", "complex": "c128"}.get(dtype.value)
+        elif dtype.kind == "text":
+            element = {
+                **_DTYPES,
+                "f8": "f64",
+                "d": "f64",
+                "c16": "c128",
+                "D": "c128",
+            }.get(dtype.exact)
+        if element is None:
+            frame.fail(
+                node,
+                "array_dtype",
+                "array element type needs a registered native-width dtype",
+            )
     if name == "array" and "copy" in options:
         copy = options.pop("copy")
         if copy.kind != "bool" or copy.exact is not True:
@@ -1556,7 +1626,7 @@ def construct(frame, node, target, args, keywords, steps, discard):
         return _output(
             frame,
             "array_create",
-            array_kind(len(dims)),
+            array_kind(len(dims), element or "f64"),
             steps,
             discard=discard,
             facts={"shape": extents},
@@ -1565,6 +1635,12 @@ def construct(frame, node, target, args, keywords, steps, discard):
             effects=["MEM", "VAL"],
         )
     if is_array(source.kind):
+        if explicit and element != array_element(source.kind):
+            frame.fail(
+                node,
+                "array_dtype",
+                "changing the array element type requires an explicit conversion operation",
+            )
         return _output(
             frame,
             "array_copy",
@@ -1575,7 +1651,9 @@ def construct(frame, node, target, args, keywords, steps, discard):
             value=source.value,
             effects=["MEM", "STATE", "XFER"],
         )
-    return _literal_array(frame, node, source, steps, force=explicit, discard=discard)
+    return _literal_array(
+        frame, node, source, steps, force=explicit, element=element, discard=discard
+    )
 
 
 def index(frame, node, steps, rhs=None, discard=False):
@@ -1637,13 +1715,20 @@ def index(frame, node, steps, rhs=None, discard=False):
         frame.fail(node, "array_bounds", "a constant index is outside the current axis")
     indices = [v.value for v in axes]
     result = shape[len(axes) :]
+    element = array_element(base.kind)
     if rhs is not None:
         if products.is_sequence(rhs):
-            rhs = _literal_array(frame, node, rhs, steps, force=True)
+            rhs = _literal_array(frame, node, rhs, steps, force=True, element=element)
         source_rank = rank(rhs.kind)
         if is_array(rhs.kind) and source_rank is None:
             frame.fail(node, "array_rank", "array assignment needs a resolved RHS rank")
         if source_rank is not None:
+            if array_element(rhs.kind) != element:
+                frame.fail(
+                    node,
+                    "array_dtype",
+                    "mixed-element array assignment needs its own conversion and warning contract",
+                )
             actual = rhs.facts.get("shape", (None,) * source_rank)
             extra = max(0, source_rank - len(result))
             if (
@@ -1661,7 +1746,7 @@ def index(frame, node, steps, rhs=None, discard=False):
                 )
             value = rhs.value
         else:
-            value = _as_float(frame, node, rhs)
+            value = _scalar_element(frame, node, rhs, element)
         frame.project.array_state.invalidate(base)
         frame.project.array_ops.add("array_store")
         steps.append(
@@ -1679,7 +1764,7 @@ def index(frame, node, steps, rhs=None, discard=False):
         return _output(
             frame,
             "array_load",
-            "numpy_f64",
+            "numpy_" + element,
             steps,
             facts=frame.project.array_state.selected(base, axes),
             discard=discard,
@@ -1690,7 +1775,7 @@ def index(frame, node, steps, rhs=None, discard=False):
     return _output(
         frame,
         "array_view",
-        array_kind(len(result)),
+        array_kind(len(result), element),
         steps,
         discard=discard,
         facts={"shape": result, **frame.project.array_state.selected(base, axes)},

@@ -1,5 +1,7 @@
 """Close lexical Python protocols from the bound project operation graph."""
 
+import math
+
 from scar.contract import json_bytes, python_provider_id, walk_operations
 from . import (
     arrays,
@@ -20,6 +22,88 @@ from .values import Value as _Value, literal as _literal
 
 def _slot(module, name):
     return f"py:{module}:{name}"
+
+
+def _copy_import_state(state):
+    return dict(
+        binding_epoch=state.get("binding_epoch", 0),
+        registry=state["registry"].copy(),
+        namespace_writes=state["namespace_writes"].copy(),
+        binding_versions=state.get("binding_versions", {}).copy(),
+        import_windows={
+            name: list(windows) for name, windows in state["import_windows"].items()
+        },
+    )
+
+
+def _unresolved_registry(records, reason):
+    states, initializers = set(), set()
+    for record in records:
+        states.update(record.get("possible_states", [record["state"]]))
+        initializers.update(record.get("initializers", ()))
+        if record.get("initializer"):
+            initializers.add(record["initializer"])
+    return dict(
+        state="unresolved",
+        reason=reason,
+        possible_states=sorted(states),
+        initializers=sorted(initializers),
+    )
+
+
+def _join_import_states(states):
+    result = dict(
+        binding_epoch=max(state.get("binding_epoch", 0) for state in states),
+        registry={},
+        namespace_writes={},
+        binding_versions={},
+        import_windows={},
+    )
+    for name in set().union(*(state["registry"] for state in states)):
+        incoming = [
+            state["registry"].get(name, {"state": "absent"}) for state in states
+        ]
+        if all(record["state"] == "absent" for record in incoming):
+            continue
+        result["registry"][name] = (
+            incoming[0]
+            if all(record == incoming[0] for record in incoming[1:])
+            else _unresolved_registry(incoming, "normal_control_join")
+        )
+    for name in set().union(*(state["namespace_writes"] for state in states)):
+        incoming = [state["namespace_writes"].get(name) for state in states]
+        result["namespace_writes"][name] = (
+            incoming[0]
+            if incoming[0] is not None
+            and all(record == incoming[0] for record in incoming[1:])
+            else dict(
+                state="unresolved",
+                reason="namespace_may_change_on_normal_path",
+                epoch=max((record or {}).get("epoch", 0) for record in incoming),
+            )
+        )
+    common = set.intersection(
+        *(set(state.get("binding_versions", {})) for state in states)
+    )
+    for name in common:
+        result["binding_versions"][name] = min(
+            state["binding_versions"][name] for state in states
+        )
+    for name, proof in result["registry"].items():
+        if proof["state"] not in {"ready", "initializing"}:
+            continue
+        windows, seen = [], set()
+        for state in states:
+            for marker, operation, before, epoch in state["import_windows"].get(
+                name, ()
+            ):
+                key = (id(marker), id(operation), json_bytes(before), epoch)
+                if before == proof and key not in seen:
+                    seen.add(key)
+                    windows.append((marker, operation, before, epoch))
+        if windows:
+            result["import_windows"][name] = windows
+    return result
 
 
 def _reachable(roots, edges):
@@ -66,6 +150,7 @@ def _join(paths, sequence_domain=None):
         elif values.is_array(first.kind) and all(
             v is not None
             and values.is_array(v.kind)
+            and values.array_element(v.kind) == values.array_element(first.kind)
             and isinstance(v.value, dict)
             and isinstance(first.value, dict)
             and v.value.get("op") == first.value.get("op") == "var"
@@ -243,6 +328,8 @@ class _Project:
         self.registry_reads = {}
         self.registry_writes = {}
         self.namespace_writes = {}
+        self.binding_versions = {}
+        self.binding_epoch = 0
         self.import_windows = {}
         self.import_markers = []
         self.source_imports = host_protocols.ImportOccurrences(functions)
@@ -263,6 +350,94 @@ class _Project:
             for family, requirement in self.required_operators.items()
         }
 
+    def import_state(self):
+        return _copy_import_state(
+            dict(
+                binding_epoch=self.binding_epoch,
+                registry=self.registry,
+                namespace_writes=self.namespace_writes,
+                binding_versions=self.binding_versions,
+                import_windows=self.import_windows,
+            )
+        )
+
+    def restore_import_state(self, state):
+        state = _copy_import_state(state)
+        (
+            self.registry,
+            self.namespace_writes,
+            self.binding_versions,
+            self.import_windows,
+        ) = (
+            state[key]
+            for key in (
+                "registry",
+                "namespace_writes",
+                "binding_versions",
+                "import_windows",
+            )
+        )
+
+    def next_binding_epoch(self):
+        self.binding_epoch += 1
+        return self.binding_epoch
+
+    def binding_written(self, name):
+        """Name assignment creates a new binding, independently of value identity."""
+        self.binding_versions[name] = self.next_binding_epoch()
+
+    def import_may_write(self, body):
+        """Summarize closed canonical callees without trusting unknown effects.
+
+        Do not cache a negative result: a deferred import marker may acquire its
+        actual producer after a later namespace consumer is analyzed.
+        """
+        pending, seen = [body], set()
+        domains = {
+            "module.registry",
+            "module.namespace",
+            "import.external_effects",
+            "process.import_hooks",
+            "audit_hook.external_effects",
+        }
+        while pending:
+            for operation in walk_operations(pending.pop()):
+                writes = operation.get("writes", ())
+                if (
+                    writes == "UNKNOWN"
+                    or set(writes).intersection(domains)
+                    or set(operation.get("effects", ())).intersection(
+                        {"UNKNOWN", "OPAQUE"}
+                    )
+                    or operation.get("external_effect") == "UNKNOWN"
+                ):
+                    return True
+                opcode = operation["op"]
+                if opcode == "call":
+                    name = operation.get("callee")
+                    function = self.closed.get(name)
+                    if (
+                        function is None
+                        or name in self.registry_writes
+                        or self.functions.get(name, {})
+                        .get("python_scope", {})
+                        .get("kind")
+                        == "module"
+                    ):
+                        return True
+                    if name not in seen:
+                        seen.add(name)
+                        pending.append(function["body"])
+                elif opcode in {
+                    "python_import",
+                    "indirect_call",
+                    "library_call",
+                    "python_invoke",
+                    "object_dispatch",
+                }:
+                    return True
+        return False
+
     def global_read(self, name, value, node=None):
         parts = name.split(":", 2)
         if len(parts) == 3 and parts[0] == "py":
@@ -277,31 +452,75 @@ class _Project:
             if self.functions[active]["python_scope"]["kind"] == "function":
                 self.registry_reads[active][name] = proof
 
-    def scoped_import(self, owner, node, operation, steps):
+    def scoped_import(
+        self, owner, node, operation, steps, *, before=None, completed=None
+    ):
         # Keep the effect at its original source position, including imports
         # inside earlier initializers whose consumers are in another function.
         marker = dict(op="block", body=[])
         pending = False
-        for name, proof in self.registry.items():
-            if proof["state"] != "ready":
+        baseline = self.import_state() if before is None else before
+        epoch = baseline["binding_epoch"]
+        completed = completed or {}
+        for name, proof in baseline["registry"].items():
+            prior = baseline["import_windows"].get(name, ())
+            if proof["state"] == "unresolved" and prior:
+                first = prior[0][2]
+                if all(window[2] == first for window in prior):
+                    proof = first
+            if proof["state"] not in {"ready", "initializing"}:
                 continue
             if (
                 name in operation["direct_registry_keys"]
                 or name in operation["conditional_registry_keys"]
             ):
-                self.registry[name] = dict(
-                    state="unresolved", owner=owner, **values.source_site(node)
-                )
+                if name not in completed:
+                    self.registry[name] = dict(
+                        state="unresolved", owner=owner, **values.source_site(node)
+                    )
                 self.import_windows.pop(name, None)
                 continue
-            self.import_windows.setdefault(name, []).append((marker, operation, proof))
+            self.import_windows[name] = [*prior, (marker, operation, proof, epoch)]
             pending = True
         if pending:
             self.import_markers.append(marker)
             steps.append(marker)
 
+    def registry_entry(self, name, node):
+        """Use an earlier identity only on explicit successful comparison edges."""
+        current = self.registry.get(name, {})
+        windows = self.import_windows.get(name, ())
+        if current.get("state") != "unresolved" or not windows:
+            return current
+        expected = windows[0][2]
+        if not all(window[2] == expected for window in windows):
+            return current
+        self.observe_import(name, "registry", node)
+        self.registry[name] = expected
+        self.decisions.append(
+            dict(
+                code="guarded_module_registry_continuation",
+                module=name,
+                state=expected["state"],
+                guards=[window[1]["occurrence"] for window in windows],
+                proof="normal edges of explicit state comparisons; failed edges require source-equivalent continuation",
+                **values.source_site(node),
+            )
+        )
+        return expected
+
     def observe_import(self, name, domain, node, member=None):
+        version = (
+            self.binding_versions.get(_slot(name, member), 0)
+            if member is not None
+            else 0
+        )
         if domain == "namespace" and (mutation := self.namespace_writes.get(name)):
+            if type(mutation.get("epoch")) is int and version > mutation["epoch"]:
+                mutation = None
+        else:
+            mutation = None
+        if mutation is not None and not self.import_windows.get(name):
             owner = self.active[-1]
             error = _Unclosed(
                 owner,
@@ -313,13 +532,19 @@ class _Project:
                 module=name, member=member, last_change=mutation
             )
             raise error
-        for marker, operation, proof in self.import_windows.get(name, ()):
+        for marker, operation, proof, epoch in self.import_windows.get(name, ()):
+            if domain == "namespace" and member is not None and version > epoch:
+                continue
             checks = operation["checks"].setdefault(name, {"before": proof})
             checks.setdefault(
                 domain,
                 dict(
                     requires=(
-                        "same_module_instance_and_complete"
+                        (
+                            "same_module_instance_and_complete"
+                            if proof["state"] == "ready"
+                            else "same_module_instance_and_initializing"
+                        )
                         if domain == "registry"
                         else "same_namespace_bindings_and_reachable_value_state"
                     ),
@@ -374,16 +599,21 @@ class _Project:
 
     def unknown_registry(self, owner, node):
         """An external import can invoke hooks and replace existing entries."""
-        change = dict(state="unresolved", owner=owner, **values.source_site(node))
+        change = dict(
+            state="unresolved",
+            epoch=self.next_binding_epoch(),
+            owner=owner,
+            **values.source_site(node),
+        )
         self.import_windows.clear()
         for active in self.active:
             if self.functions[active]["python_scope"]["kind"] == "function":
                 self.registry_writes[active] = change
         for name, previous in self.registry.items():
-            if previous["state"] == "ready":
+            if previous["state"] in {"ready", "initializing"}:
                 self.registry[name] = change
-                if name in self.initializers:
-                    self.namespace_writes[name] = change
+            if previous["state"] != "absent" and name in self.initializers:
+                self.namespace_writes[name] = change
 
     def inactive_bodies(self, activation):
         """Only proven edge removal can turn a required body into an inactive body."""
@@ -508,7 +738,14 @@ class _Project:
         self.active.append(name)
         self.global_reads[name] = {}
         self.registry_reads[name] = {}
-        registry_prefix = self.registry.copy() if kind == "module" else None
+        registry_prefix = self.import_state() if kind == "module" else None
+        if kind == "module" and scope["module"] not in self.registry:
+            self.registry[scope["module"]] = dict(
+                state="initializing",
+                initializer=name,
+                owner=name,
+                **values.source_site(source or fn),
+            )
         saved_contents = self.array_state.contents if kind == "function" else None
         if saved_contents is not None:
             self.array_state.contents = {}
@@ -520,7 +757,7 @@ class _Project:
                 if registry_prefix is not None:
                     # No caller may use a proof that required the failed
                     # initializer to return. Its executed prefix is reported.
-                    self.registry = registry_prefix
+                    self.restore_import_state(registry_prefix)
                 self.prefixes.append(frame.prefix_fragment())
                 raise
             self.types[name] = types
@@ -549,6 +786,7 @@ class _Frame:
         self.root_region = None
         self.source_expression = None
         self.dynamic = 0
+        self.control_regions = []
         self.params = []
         self.project.sequences.bind_frame(fn, types)
         for formal, kind in zip(fn["params"], types):
@@ -817,7 +1055,11 @@ class _Frame:
         if global_ and value.kind == "process_method" and not self.dynamic:
             value = processes.persist_method(self, target, value, steps)
         if not values.runtime(value.kind):
-            if self.dynamic or value.kind == "range":
+            if (
+                self.dynamic
+                and not self.protected_normal_context()
+                or value.kind == "range"
+            ):
                 self.fail(
                     target,
                     "conditional_binding",
@@ -834,6 +1076,8 @@ class _Frame:
             ):
                 self.fail(target, "rebind", f"symbolic identity of {name} changes")
             scope[name] = value
+            if global_:
+                self.project.binding_written(name)
             return
         if previous is not None and not self.project.sequences.compatible(
             previous.kind, value.kind
@@ -857,6 +1101,8 @@ class _Frame:
         )
         variable = value.at(name, **({"scope": "global"} if global_ else {}))
         scope[name] = variable
+        if global_:
+            self.project.binding_written(name)
         steps.append(dict(op="assign", target=variable.value, value=value.value))
 
     @property
@@ -1145,9 +1391,12 @@ class _Frame:
     def cached_module(self, node, module):
         """Prove the graph-owned module instance from its preceding activation."""
         symbol = self.project.initializers.get(module)
-        row = self.project.registry.get(module, {})
+        row = self.project.registry_entry(module, node)
         if (
             row.get("state") != "ready"
+            and not (
+                row.get("state") == "initializing" and symbol in self.project.active
+            )
             or not symbol
             or row.get("initializer") != symbol
         ):
@@ -1174,6 +1423,7 @@ class _Frame:
                 module=module,
                 owner=self.name,
                 initialized_by=row,
+                entry_phase=row["state"],
                 **values.source_site(node),
             )
         )
@@ -1191,7 +1441,7 @@ class _Frame:
             )
         occurrence["activation"] = "visited"
         mod = node["module"]
-        if self.dynamic:
+        if self.dynamic and not self.protected_normal_context():
             self.fail(
                 node,
                 "conditional_import",
@@ -1217,6 +1467,7 @@ class _Frame:
             )
         origin = self.import_origin(node)
         if origin is not None:
+            before = self.project.import_state()
             if primary:
                 self.project.source_imports.begin(occurrence, node, steps)
             start = len(steps)
@@ -1255,16 +1506,22 @@ class _Frame:
                     self.project.source_imports.producer(
                         occurrence, op, "source_import"
                     )
-            if primary and not value.facts.get("namespace_instance"):
+            if primary:
                 scoped = host_protocols.registry_import(self, node, origin, occurrence)
-                opaque = any(
-                    "import.external_effects" in op.get("writes", ())
-                    or "module.registry" in op.get("writes", ())
-                    and op.get("source_import_occurrence") != occurrence["id"]
-                    for op in produced
-                )
-                if scoped and not opaque:
-                    self.project.scoped_import(self.name, node, scoped, steps)
+                if scoped:
+                    completed = (
+                        {mod: value.facts["namespace_instance"]}
+                        if value.facts.get("namespace_instance")
+                        else {}
+                    )
+                    self.project.scoped_import(
+                        self.name,
+                        node,
+                        scoped,
+                        steps,
+                        before=before,
+                        completed=completed,
+                    )
                 else:
                     self.project.unknown_registry(self.name, node)
             self.store(node["binding"], value, steps)
@@ -1279,7 +1536,19 @@ class _Frame:
                     node, "import_initializer", f"missing module initializer {symbol}"
                 )
             name = scope["module"]
-            previous = self.project.registry.get(name)
+            previous = self.project.registry_entry(name, node) or None
+            if previous is not None and previous.get("state") == "absent":
+                previous = None
+            if (
+                previous is not None
+                and previous.get("state") == "initializing"
+                and previous.get("initializer") == symbol
+                and symbol in self.project.active
+            ):
+                # The loader already published this exact parent instance before
+                # entering its body. Reusing it does not prove completion.
+                self.project.read_registry(name, previous, node)
+                return
             if previous is not None and previous.get("state") != "ready":
                 self.fail(
                     node,
@@ -1301,6 +1570,12 @@ class _Frame:
             if previous is not None:
                 self.project.observe_import(name, "registry", node)
             if previous is None:
+                self.project.registry[name] = dict(
+                    state="initializing",
+                    initializer=symbol,
+                    owner=self.name,
+                    **values.source_site(node),
+                )
                 fn = self.project.compile(symbol, (), source=node)
                 if fn.get("noreturn"):
                     self.fail(
@@ -1332,10 +1607,15 @@ class _Frame:
                         f"import replaces existing package member {slot}",
                     )
                 self.project.names[slot] = value
+                self.project.binding_written(slot)
 
         for symbol in node["initializers"]:
             initialize(symbol)
-        if self.project.registry.get(mod, {}).get("state") != "ready":
+        target_state = self.project.registry.get(mod, {})
+        if target_state.get("state") != "ready" and not (
+            target_state.get("state") == "initializing"
+            and target_state.get("initializer") in self.project.active
+        ):
             self.fail(
                 node, "import_initializer", f"incomplete or circular import of {mod}"
             )
@@ -1438,6 +1718,26 @@ class _Frame:
             return self.truth(self.evaluate(node, steps), node)
         if op == "literal":
             value = node["value"]
+            if (
+                isinstance(node.get("type"), dict)
+                and node["type"].get("class") == "complex"
+            ):
+                if (
+                    not isinstance(value, list)
+                    or len(value) != 2
+                    or any(
+                        type(part) is not float or not math.isfinite(part)
+                        for part in value
+                    )
+                ):
+                    self.fail(
+                        node,
+                        "literal_contract",
+                        "complex literal requires two finite binary64 components",
+                    )
+                return _Value(
+                    "python_complex", dict(op="literal", type="c128", value=value)
+                )
             if type(value) not in (bool, int, float, str, type(None)) or (
                 type(value) is int and not -(1 << 63) <= value < 1 << 63
             ):
@@ -1485,6 +1785,20 @@ class _Frame:
             return result
         if op == "member":
             base = self.evaluate(node["base"], steps)
+            if base.kind in {"python_complex", "numpy_c128"} and node["field"] in {
+                "real",
+                "imag",
+            }:
+                return self.effect(
+                    dict(
+                        op="intrinsic",
+                        name=node["field"],
+                        args=[base.value],
+                        type="f64",
+                    ),
+                    "numpy_f64" if base.kind == "numpy_c128" else "f64",
+                    steps,
+                )
             if values.object_name(base.kind) is not None:
                 return self.project.objects.member(
                     self, node, base, node["field"], steps
@@ -1884,16 +2198,90 @@ class _Frame:
             ),
         )
 
+    def enter_control(self, kind, node):
+        self.control_regions.append(dict(kind=kind, **values.source_site(node)))
+
+    def leave_control(self):
+        self.control_regions.pop()
+
+    def protected_normal_context(self):
+        return (
+            self.dynamic == len(self.control_regions)
+            and bool(self.control_regions)
+            and all(
+                region["kind"] in {"try_body", "try_else"}
+                for region in self.control_regions
+            )
+        )
+
     def snapshot(self):
-        return self.env.copy(), self.project.names.copy()
+        return self.env.copy(), self.project.names.copy(), self.project.import_state()
+
+    def copy_state(self, state):
+        return state[0].copy(), state[1].copy(), _copy_import_state(state[2])
 
     def restore(self, state):
-        self.env, self.project.names = (scope.copy() for scope in state)
+        self.env, self.project.names, imports = self.copy_state(state)
+        self.project.restore_import_state(imports)
 
     def merge(self, states):
-        self.env, self.project.names = (
-            _join(group, self.project.sequences) for group in zip(*states)
+        self.env = _join([state[0] for state in states], self.project.sequences)
+        self.project.names = _join(
+            [state[1] for state in states], self.project.sequences
         )
+        self.project.restore_import_state(
+            _join_import_states([state[2] for state in states])
+        )
+
+    def exceptional_snapshot(self, start, after, body):
+        result = self.copy_state(start)
+        after = self.snapshot() if after is None else after
+        imports = _join_import_states([start[2], after[2]])
+        if self.project.import_may_write(body):
+            for module in set(start[2]["registry"]) | set(after[2]["registry"]):
+                incoming = [
+                    state["registry"].get(module, {"state": "absent"})
+                    for state in (start[2], after[2])
+                ]
+                imports["registry"][module] = _unresolved_registry(
+                    incoming, "exceptional_import_prefix"
+                )
+                imports["registry"][module]["possible_states"] = [
+                    "absent",
+                    "initializing",
+                    "ready",
+                    "unresolved",
+                ]
+                imports["import_windows"].pop(module, None)
+                if module in self.project.initializers:
+                    imports["namespace_writes"][module] = dict(
+                        state="unresolved",
+                        reason="exceptional_import_prefix",
+                        epoch=self.project.next_binding_epoch(),
+                    )
+        return result[0], result[1], imports
+
+    def project_final_state(self, path, before, after):
+        result = self.copy_state(path)
+        for domain in (
+            "registry",
+            "namespace_writes",
+            "binding_versions",
+            "import_windows",
+        ):
+            prior, current = before[2][domain], after[2][domain]
+            for key in prior.keys() | current.keys():
+                if key in prior and key in current and prior[key] == current[key]:
+                    continue
+                if key in current:
+                    result[2][domain][key] = (
+                        list(current[key])
+                        if domain == "import_windows"
+                        else current[key]
+                    )
+                else:
+                    result[2][domain].pop(key, None)
+        return result
 
     def conditional(self, node, steps):
         check = self.evaluate(node["condition"], steps, truth_context=True)
@@ -1912,13 +2300,17 @@ class _Frame:
         start = self.snapshot()
         arms, exits = [], []
         self.dynamic += 1
-        for side in ("then", "else"):
-            self.restore(start)
-            out = []
-            if self.sequence(node[side], out):
-                exits.append(self.snapshot())
-            arms.append(out)
-        self.dynamic -= 1
+        self.enter_control("branch", node)
+        try:
+            for side in ("then", "else"):
+                self.restore(start)
+                out = []
+                if self.sequence(node[side], out):
+                    exits.append(self.snapshot())
+                arms.append(out)
+        finally:
+            self.leave_control()
+            self.dynamic -= 1
         steps.append(
             dict(op="if", condition=check.value, then=arms[0], **{"else": arms[1]})
         )
@@ -2184,17 +2576,21 @@ class _Frame:
         flow = {"break": [], "continue": []}
         self.loops.append(flow)
         self.dynamic += 1
-        if not empty:
-            if counted:
-                self.store(node["target"], iv, loop["body"])
-            if self.sequence(node["body"], loop["body"]):
-                flow["continue"].append(self.snapshot())
-        else:
-            self.skip_expression(
-                node["body"], dict(rule="empty_loop", guard_site=node.get("site"))
-            )
-        self.dynamic -= 1
-        self.loops.pop()
+        self.enter_control("loop", node)
+        try:
+            if not empty:
+                if counted:
+                    self.store(node["target"], iv, loop["body"])
+                if self.sequence(node["body"], loop["body"]):
+                    flow["continue"].append(self.snapshot())
+            else:
+                self.skip_expression(
+                    node["body"], dict(rule="empty_loop", guard_site=node.get("site"))
+                )
+        finally:
+            self.leave_control()
+            self.dynamic -= 1
+            self.loops.pop()
         broke = flow["break"]
         steps.append(loop)
         if empty:
@@ -2208,9 +2604,13 @@ class _Frame:
             self.merge(normal)
             else_body = []
             self.dynamic += bool(broke)
-            if self.sequence(node.get("else", []), else_body):
-                exits.append(self.snapshot())
-            self.dynamic -= bool(broke)
+            self.enter_control("loop_else", node)
+            try:
+                if self.sequence(node.get("else", []), else_body):
+                    exits.append(self.snapshot())
+            finally:
+                self.leave_control()
+                self.dynamic -= bool(broke)
             if else_body:
                 if broke:
                     steps.append(
@@ -2274,7 +2674,9 @@ class _Frame:
                 self.imported(node, steps)
             elif op == "python_define_class":
                 self.store(
-                    node["target"], self.project.objects.define(self, node), steps
+                    node["target"],
+                    self.project.objects.define(self, node, steps),
+                    steps,
                 )
             elif op == "python_define":
                 if not objects.plain_definition(node):
@@ -2371,6 +2773,7 @@ class _Frame:
             self.project.names[_slot(self.module, "__name__")] = _literal(
                 "__main__" if self.scope["main"] else self.module
             )
+            self.project.binding_written(_slot(self.module, "__name__"))
         body = []
         falls = self.sequence(self.fn["body"], body)
         if falls and not self.initializing:
@@ -2576,9 +2979,18 @@ def normalize_protocols(module):
         dict(op="decl", name=n, type=values.wire(t)) for n, t in project.globals.items()
     )
     if project.array_ops:
-        module.setdefault("operator_requirements", {})["ndarray"] = dict(
-            device="cpu", element="f64", operations=sorted(project.array_ops)
-        )
+        elements = {
+            spec["element"]
+            for node in walk_operations(list(project.closed.values()))
+            if isinstance(spec := node.get("type"), dict)
+            and spec.get("kind") == "ndarray"
+        }
+        requirement = dict(device="cpu", operations=sorted(project.array_ops))
+        if len(elements) == 1:
+            requirement["element"] = next(iter(elements))
+        elif elements:
+            requirement["elements"] = sorted(elements)
+        module.setdefault("operator_requirements", {})["ndarray"] = requirement
     if project.process_ops:
         module.setdefault("operator_requirements", {})["process"] = dict(
             operations=sorted(project.process_ops),

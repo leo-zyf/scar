@@ -20,7 +20,7 @@ from scar.contract import (
     walk_operations,
 )
 from scar.host import array_sdk
-from . import mpi, runtime, toolchain
+from . import fourier, mpi, runtime, toolchain
 
 _ARRAY_OPERATIONS = {
     "array_create",
@@ -40,12 +40,35 @@ _ARRAY_OPERATIONS = {
     "array_update",
     "array_format",
 }
+_ARRAY_OPERATORS = {
+    "array_unary": {"f64": {"neg", "pos"}, "c128": {"neg", "pos"}},
+    "array_binary": {
+        "f64": {"add", "sub", "mul", "div", "pow"},
+        "c128": {"add", "sub", "mul"},
+    },
+}
+_ARRAY_OPERATORS["array_update"] = _ARRAY_OPERATORS["array_binary"]
+
+
+def _array_ports(node):
+    """Immediate element-bearing operands/results; axis counts are shape metadata."""
+    result = node.get("type")
+    if result not in ("i64", "text", "unit", None):
+        yield result
+    for role in ("base", "left", "right", "value"):
+        if isinstance(node.get(role), dict):
+            yield node[role].get("type")
+    if node["op"] == "array_literal":
+        for item in node.get("values", ()):
+            if isinstance(item, dict):
+                yield item.get("type")
 
 
 def _observed_operators(module):
     # Collect tagged operations and the type-only dependencies of older
     # packages in one traversal of the sealed IR.
-    observed, elements, process_requests = {}, set(), []
+    observed, elements, array_nodes, process_requests = {}, set(), [], []
+    fourier_nodes = []
     defined = {fn["name"] for fn in module.get("functions", ())}
     external = [
         decl for decl in module.get("externs", ()) if decl["name"] not in defined
@@ -68,8 +91,31 @@ def _observed_operators(module):
                     ):
                         raise ValueError("invalid operator family or operation tag")
                     observed.setdefault(family, set()).add(op)
-                if isinstance(op, str) and op in _ARRAY_OPERATIONS:
+                if (
+                    op in _ARRAY_OPERATIONS
+                    or family == "ndarray"
+                    or (
+                        isinstance(op, str)
+                        and op.startswith("array_")
+                        and family is None
+                        and op
+                        not in {"array_source_open", "array_text_read", "array_fft"}
+                        and any(
+                            isinstance(t, dict) and t.get("kind") == "ndarray"
+                            for t in _array_ports(node)
+                        )
+                    )
+                ):
                     observed.setdefault("ndarray", set()).add(op)
+                    array_nodes.append(node)
+                    if op in {"array_binary", "array_update"}:
+                        for role in ("left", "right"):
+                            ty = node.get(role, {}).get("type")
+                            if ty in ("f64", "c128"):
+                                elements.add(ty)
+                if op == "array_fft" or family == "fourier":
+                    observed.setdefault("fourier", set()).add(op)
+                    fourier_nodes.append(node)
                 if op in {"array_text_read", "array_source_open"}:
                     observed.setdefault(
                         (
@@ -96,27 +142,75 @@ def _observed_operators(module):
             pending.extend(node.values())
         elif isinstance(node, (tuple, list)):
             pending.extend(node)
-    return observed, elements, process_requests
+    return observed, elements, array_nodes, process_requests, fourier_nodes
 
 
-def _ndarray_binding(requirement, observed):
+def _ndarray_binding(requirement, observed, elements, nodes):
     if (
         not isinstance(requirement, dict)
-        or requirement.keys() - {"device", "element", "operations"}
+        or requirement.keys() - {"device", "element", "elements", "operations"}
         or requirement.get("device", "cpu") != "cpu"
-        or requirement.get("element", "f64") != "f64"
+        or "element" in requirement
+        and "elements" in requirement
         or not isinstance(requirement.get("operations", []), list)
         or any(not isinstance(op, str) for op in requirement.get("operations", ()))
     ):
-        raise ValueError("requires CPU binary64 arrays and registered array operations")
+        raise ValueError("requires CPU arrays and registered array operations")
+    declared = requirement.get("elements")
+    if "elements" not in requirement:
+        declared = (
+            [requirement["element"]]
+            if "element" in requirement
+            else sorted(elements or {"f64"})
+        )
+    if (
+        not isinstance(declared, list)
+        or not declared
+        or any(t not in ("c128", "f64") for t in declared)
+        or len(set(declared)) != len(declared)
+        or not elements.issubset(declared)
+    ):
+        raise ValueError("unsupported or undeclared CPU array element types")
     missing = sorted(
         observed.union(requirement.get("operations", ())) - _ARRAY_OPERATIONS
     )
     if missing:
         raise ValueError("unavailable CPU ndarray operations: " + ", ".join(missing))
+    qualified = {element: set() for element in declared}
+    for node in nodes:
+        op = node["op"]
+        # Associate each use with its own ports. One image can have both
+        # complex arithmetic and real-only operations on independent arrays.
+        kinds = set()
+        for port in _array_ports(node):
+            if isinstance(port, dict) and port.get("kind") == "ndarray":
+                kinds.add(port["element"])
+            elif isinstance(port, str):
+                kinds.add(port)
+        if len(kinds) != 1 or not kinds.issubset(qualified):
+            raise ValueError(f"{op} requires one declared operand/result element type")
+        element = next(iter(kinds))
+        if element == "c128" and op in {"array_iota", "array_format"}:
+            raise ValueError(f"{op} is unavailable for c128")
+        if op in _ARRAY_OPERATORS:
+            operator = node.get("operator")
+            if (
+                not isinstance(operator, str)
+                or operator not in _ARRAY_OPERATORS[op][element]
+            ):
+                raise ValueError(f"{op}.{operator} is unavailable for {element}")
+            op = f"{op}.{operator}"
+        qualified[element].add(op)
+    if declared == ["c128"] and set(requirement.get("operations", ())) & {
+        "array_iota",
+        "array_format",
+    }:
+        raise ValueError("c128 requires a registered complex array operation")
     return dict(
         array_sdk(required=True),
         device="cpu",
+        elements=sorted(qualified),
+        operations_by_element={k: sorted(v) for k, v in qualified.items()},
         selection="fixed semantic provider; no global performance optimum claimed",
     )
 
@@ -185,9 +279,6 @@ def _text_array_binding(requirement, observed, module):
         source="borrowed_named_utf8_stream",
         numeric_converter="system-libc:strtod_l:C",
     )
-
-
-_OPERATOR_BINDINGS = {"ndarray": _ndarray_binding}
 
 
 def _process_binding(requirement, observed, module, context):
@@ -279,7 +370,9 @@ def _qualify(module, image_context=None):
     if not isinstance(requested, dict):
         raise ValueError("operator requirements must be a family-indexed table")
     requested = dict(requested)
-    observed, array_elements, process_requests = _observed_operators(module)
+    observed, array_elements, array_nodes, process_requests, fourier_nodes = (
+        _observed_operators(module)
+    )
     for family, operators in observed.items():
         if family not in requested:
             requirement = dict(operations=sorted(operators))
@@ -318,9 +411,8 @@ def _qualify(module, image_context=None):
                 )
             )
     for family, requirement in sorted(requested.items()):
-        resolve = _OPERATOR_BINDINGS.get(family)
         if (process_requests or "text_array_source" in observed) and (
-            resolve is not None or family in {"mpi", "process", "text_array_io"}
+            family in {"ndarray", "mpi", "process", "text_array_io", "fourier"}
         ):
             # Deployment cannot proceed. Report other unregistered families
             # below without probing any physical providers.
@@ -359,18 +451,27 @@ def _qualify(module, image_context=None):
                 detail = str(exc)
         elif family == "text_array_source":
             detail = "NumPy path resolution includes local/compressed alternatives and URL caching; no qualified native resolver is registered"
-        elif resolve is None:
-            detail = "no target implementation is registered for this operator family"
-        elif family == "ndarray" and array_elements - {"f64"}:
-            detail = "unsupported CPU array element types: " + ", ".join(
-                sorted(array_elements - {"f64"})
-            )
-        else:
+        elif family == "fourier":
             try:
-                bindings[family] = resolve(requirement, observed.get(family, set()))
+                bindings[family] = fourier.qualify(
+                    requirement, fourier_nodes, requested
+                )
                 continue
             except ValueError as exc:
                 detail = str(exc)
+        elif family == "ndarray":
+            try:
+                bindings[family] = _ndarray_binding(
+                    requirement,
+                    observed.get(family, set()),
+                    array_elements,
+                    array_nodes,
+                )
+                continue
+            except ValueError as exc:
+                detail = str(exc)
+        else:
+            detail = "no target implementation is registered for this operator family"
         issues.append(
             dict(
                 stage="B1",
@@ -419,6 +520,7 @@ def _schedule_image(
     module.pop("compilation_binding_sha256", None)
     module.pop("math_interface_binding_sha256", None)
     module.pop("numeric_permissions_binding_sha256", None)
+    module.pop("fourier_binding_sha256", None)
     requirements, bindings, issues = _qualify(module, image_context)
     import_effects = runtime.import_effects(module, bindings)
     import_receipt = (
@@ -428,6 +530,8 @@ def _schedule_image(
     )
     if binding := bindings.get("posix_runtime"):
         module["posix_runtime_binding_sha256"] = digest(json_bytes(binding))
+    if binding := bindings.get("fourier"):
+        module["fourier_binding_sha256"] = digest(json_bytes(binding))
     if "process" in bindings:
         module["image_bindings"] = bindings["process"]["images"]
         if "launches" in bindings["process"]:

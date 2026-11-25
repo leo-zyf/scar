@@ -25,7 +25,7 @@ from .values import (
     evidence_scalar,
     _UNKNOWN,
 )
-from .file_state import Directories
+from .file_state import Directories, FileCandidates
 
 _FILE_FREE_OPERATIONS = {
     "literal",
@@ -418,6 +418,11 @@ def analyze(module):
         file_versions, filesystem_epoch = dict(
             state.get("file_versions", {})
         ), state.get("epoch", 0)
+        file_candidates = (
+            state["conditional_candidates"].clone()
+            if "conditional_candidates" in state
+            else FileCandidates()
+        )
         last_file_operation, operation_ids = state.get("last_operation"), {}
         root_activation = state.get("root_activation", digest(json_bytes(context)))
         return_value = _UNKNOWN
@@ -547,27 +552,110 @@ def analyze(module):
             return process
 
         def invalidate(
-            reason, site=None, *, changes_cwd=False, changes_namespace=False, retain=()
+            reason,
+            site=None,
+            *,
+            changes_cwd=False,
+            changes_namespace=False,
+            retain=(),
+            overwritten=(),
         ):
             nonlocal filesystem_epoch, cwd
+            retain, overwritten = set(retain), set(overwritten)
+            overwritten_versions = {
+                version for key, version in file_versions.items() if key in overwritten
+            }
+            overwritten.update(
+                key
+                for key, version in file_versions.items()
+                if version in overwritten_versions
+            )
+            retained_versions = {
+                version
+                for key, version in file_versions.items()
+                if key in retain and version not in overwritten_versions
+            }
+            retain.update(
+                key
+                for key, version in file_versions.items()
+                if version in retained_versions
+            )
+            retain.difference_update(overwritten)
             filesystem_epoch += 1
+            barrier = add(
+                "CANONICAL_OPERATION",
+                [
+                    root_activation,
+                    context,
+                    "file_state_barrier",
+                    site,
+                    reason,
+                    filesystem_epoch,
+                ],
+                symbol=symbol,
+                site=None,
+                operation="file_state_barrier",
+                origin=site,
+                reason=reason,
+                filesystem_epoch=filesystem_epoch,
+                changes_cwd=changes_cwd,
+                changes_namespace=changes_namespace,
+                instance_scope="per_normal_dynamic_effect",
+                requires=["effect_preserves_candidate_storage_and_locator"],
+            )
             if site is not None:
                 ordered(site)
-                for key, version in file_versions.items():
-                    if key in retain:
-                        continue
+                edges.append(
+                    dict(kind="HAS_FILE_STATE_BARRIER", source=site, target=barrier)
+                )
+            removed = file_candidates.havoc(
+                file_versions,
+                {
+                    version: nodes[version]["locator"]
+                    for version in file_versions.values()
+                },
+                barrier,
+                retain=retain,
+                overwritten=overwritten,
+            )
+            for candidate in file_candidates.rows():
+                if barrier in candidate["invalidated_by"]:
                     edges.append(
                         dict(
                             kind="MAY_INVALIDATE_FILE_VERSION",
-                            source=site,
-                            target=version,
+                            source=barrier,
+                            target=candidate["version"],
                             reason=reason,
                             epoch=filesystem_epoch,
                         )
                     )
-            for key in list(file_versions):
-                if key not in retain:
-                    del file_versions[key]
+            for key, version in list(file_versions.items()):
+                if key in retain:
+                    continue
+                edges.append(
+                    dict(
+                        kind=(
+                            "INVALIDATES_FILE_VERSION"
+                            if key in overwritten
+                            else "MAY_INVALIDATE_FILE_VERSION"
+                        ),
+                        source=barrier,
+                        target=version,
+                        reason=reason,
+                        epoch=filesystem_epoch,
+                    )
+                )
+                del file_versions[key]
+            for version in removed:
+                edges.append(
+                    dict(
+                        kind="INVALIDATES_FILE_VERSION",
+                        source=barrier,
+                        target=version,
+                        reason=reason,
+                        epoch=filesystem_epoch,
+                    )
+                )
             if changes_cwd or changes_namespace:
                 directories.forget(site, changes_cwd=changes_cwd)
                 cwd = directories.cwd
@@ -792,6 +880,16 @@ def analyze(module):
                     source_sites=stream.writes,
                 )
             )
+            if stream.path_key is not None:
+                for previous in file_candidates.overwrite((stream.path_key,)):
+                    edges.append(
+                        dict(
+                            kind="SUPERSEDES_CONDITIONAL_FILE_VERSION",
+                            source=version,
+                            target=previous,
+                            conditional=True,
+                        )
+                    )
             if (
                 stream.path_key is not None
                 and not stream.unresolved
@@ -917,6 +1015,9 @@ def analyze(module):
             if external_process_effects:
                 source_version = None
             source_requirement = None
+            source_candidates = (
+                file_candidates.rows(source_key) if source_key is not None else []
+            )
             if source_version is None:
                 source_requirement = add(
                     "FILE_VERSION_REQUIREMENT",
@@ -929,6 +1030,7 @@ def analyze(module):
                     instance_scope="per_successful_dynamic_copy",
                     historical_instance="not_established",
                     version_status="required_during_copy",
+                    conditional_candidates=source_candidates,
                     requires=["source_readable_regular_file", "normal_completion"],
                 )
                 edges.append(
@@ -939,10 +1041,28 @@ def analyze(module):
                         conditional=True,
                     )
                 )
+                for candidate in source_candidates:
+                    edges.append(
+                        dict(
+                            kind="MAY_SATISFY_FILE_VERSION",
+                            source=candidate["version"],
+                            target=source_requirement,
+                            conditional=True,
+                            invalidated_by=candidate["invalidated_by"],
+                            establishes_current_version=False,
+                            requires=[
+                                *candidate["requires"],
+                                "candidate_satisfies_required_copy_source",
+                            ],
+                        )
+                    )
             invalidate(
                 "copy_may_alias_another_file",
                 site,
-                retain=(source_key,) if source_version is not None else (),
+                retain=(source_key,) if source_key is not None else (),
+                overwritten=(
+                    (target_key,) if not ambiguous and target_key is not None else ()
+                ),
             )
             value = nodes[source_version]["value"] if source_version else None
             for key, locator, case in targets:
@@ -1047,7 +1167,7 @@ def analyze(module):
 
         def expression(node):
             nonlocal fact_epoch_clean, external_process_effects, cwd
-            nonlocal file_versions, filesystem_epoch, last_file_operation, directories, process_states, unresolved_process_instances
+            nonlocal file_versions, file_candidates, filesystem_epoch, last_file_operation, directories, process_states, unresolved_process_instances
             if not isinstance(node, dict):
                 return _UNKNOWN
             op = node["op"]
@@ -1146,6 +1266,7 @@ def analyze(module):
                                 static_site,
                                 cwd,
                                 sorted(file_versions.items()),
+                                file_candidates.rows(),
                                 filesystem_epoch,
                             ]
                         )
@@ -1167,6 +1288,7 @@ def analyze(module):
                         dict(
                             cwd=cwd,
                             file_versions=file_versions,
+                            conditional_candidates=file_candidates,
                             epoch=filesystem_epoch,
                             last_operation=last_file_operation,
                             fact_epoch_clean=fact_epoch_clean,
@@ -1182,6 +1304,7 @@ def analyze(module):
                         child_state["cwd"],
                         child_state["file_versions"],
                     )
+                    file_candidates = child_state["conditional_candidates"]
                     directories = child_state["directories"]
                     directories.create, directories.parent_edge = (
                         directory_node,
@@ -1214,6 +1337,9 @@ def analyze(module):
                             context=state_context,
                             input_versions=input_versions,
                             output_versions=sorted(file_versions.values()),
+                            output_conditional_candidates=sorted(
+                                file_candidates.records
+                            ),
                             normal_path_closed=closed,
                             condition="source_call_reached_and_normal_completion",
                             historical_instance="not_established",
@@ -1498,18 +1624,43 @@ def analyze(module):
                     overlapping = any(not stream.closed for stream in streams)
                     if overlapping:
                         invalidate("possible_overlapping_file_handle")
-                    if args[1] not in {"r", "rt"}:
-                        # Different path spellings may still be hard links.
-                        # Opening a writer kills prior content facts until a
-                        # distinct-storage relationship has actually been proved.
-                        invalidate("file_open_may_write_alias", site)
                     stream = _Stream(site, args[0], args[1], site)
+                    stream.path_key, stream.locator = locate(args[0], site)
+                    if args[1] not in {"r", "rt"}:
+                        # Exclusive creation allocates new storage on normal
+                        # completion. Different path strings alone do not prove
+                        # that a truncating writer is disjoint from old files.
+                        fresh = args[1] in {"x", "xt"}
+                        retained = (
+                            set(file_versions).union(
+                                key
+                                for row in file_candidates.records.values()
+                                for key in row["keys"]
+                            )
+                            - {stream.path_key}
+                            if fresh
+                            else ()
+                        )
+                        invalidate(
+                            (
+                                "exclusive_create_fresh_storage"
+                                if fresh
+                                else "file_open_may_write_alias"
+                            ),
+                            site,
+                            retain=retained,
+                            overwritten=(
+                                (stream.path_key,)
+                                if args[1] in {"w", "wt", "x", "xt"}
+                                and stream.path_key is not None
+                                else ()
+                            ),
+                        )
                     if (
                         directories.directory(args[0], site, known_only=True)
                         is not None
                     ):
                         stream.unresolved.add("path_is_known_directory")
-                    stream.path_key, stream.locator = locate(args[0], site)
                     stream.last_operation = site
                     ordered(site)
                     if overlapping:
@@ -1651,9 +1802,20 @@ def analyze(module):
             if op in {"process_spawn", "process_request"}:
                 site = operation(node)
                 visible = sorted(set(file_versions.values()))
+                conditional_inputs = file_candidates.rows()
                 launch_environment = dict(
                     id="launch-environment:"
-                    + digest(json_bytes([site, context, filesystem_epoch, visible])),
+                    + digest(
+                        json_bytes(
+                            [
+                                site,
+                                context,
+                                filesystem_epoch,
+                                visible,
+                                conditional_inputs,
+                            ]
+                        )
+                    ),
                     operation=site,
                     source_site=node.get("site"),
                     owner_image=module.get("current_image"),
@@ -1676,6 +1838,7 @@ def analyze(module):
                     ),
                     filesystem_epoch=filesystem_epoch,
                     visible_versions=visible,
+                    conditional_candidates=conditional_inputs,
                     prior_live_process_effects=unresolved_process_instances
                     or any(
                         value["termination"] != "terminated"
@@ -1737,6 +1900,19 @@ def analyze(module):
                         establishes_child_read=False,
                     )
                     for version in visible
+                )
+                edges.extend(
+                    dict(
+                        kind="CONDITIONALLY_AVAILABLE_BEFORE_LAUNCH",
+                        source=candidate["version"],
+                        target=site,
+                        conditional=True,
+                        invalidated_by=candidate["invalidated_by"],
+                        requires=candidate["requires"],
+                        establishes_current_version=False,
+                        establishes_child_read=False,
+                    )
+                    for candidate in conditional_inputs
                 )
                 external_process_effects = True
                 fact_epoch_clean = False
@@ -1818,6 +1994,7 @@ def analyze(module):
                     environment=environment,
                     streams=streams,
                     file_versions=file_versions,
+                    conditional_candidates=file_candidates,
                     epoch=filesystem_epoch,
                     last_operation=last_file_operation,
                     fact_epoch_clean=fact_epoch_clean,
@@ -1834,7 +2011,7 @@ def analyze(module):
             return saved
 
         def restore(saved):
-            nonlocal environment, streams, file_versions, filesystem_epoch, last_file_operation
+            nonlocal environment, streams, file_versions, file_candidates, filesystem_epoch, last_file_operation
             nonlocal fact_epoch_clean, external_process_effects, return_value, directories, cwd
             nonlocal stable_origins, process_states, unresolved_process_instances
             copied = deepcopy(
@@ -1843,6 +2020,7 @@ def analyze(module):
             )
             environment, streams = copied["environment"], copied["streams"]
             file_versions, filesystem_epoch = copied["file_versions"], copied["epoch"]
+            file_candidates = copied["conditional_candidates"]
             last_file_operation = copied["last_operation"]
             fact_epoch_clean, external_process_effects = (
                 copied["fact_epoch_clean"],
@@ -1950,6 +2128,48 @@ def analyze(module):
                         derivation="phi",
                     )
                 )
+            candidate_paths = []
+            for index, saved in enumerate((left, right)):
+                selected = saved["conditional_candidates"].clone()
+                for key, version in saved["file_versions"].items():
+                    if key not in files:
+                        selected.add(
+                            version,
+                            key,
+                            nodes[version]["locator"],
+                            requires=(
+                                "candidate_available_on_selected_normal_predecessor",
+                            ),
+                        )
+                mapping = (left_map, right_map)[index]
+                for candidate in list(selected.records.values()):
+                    for directory, name in candidate["keys"]:
+                        mapped = mapping.get(directory, directory)
+                        if mapped is not None and mapped != directory:
+                            selected.add(
+                                candidate["version"],
+                                (mapped, name),
+                                candidate["locator"],
+                                requires=(
+                                    "candidate_locator_maps_to_selected_normal_predecessor",
+                                ),
+                            )
+                for candidate in selected.rows():
+                    edges.append(
+                        dict(
+                            kind="CONDITIONAL_VERSION_AT_NORMAL_JOIN",
+                            source=candidate["version"],
+                            target=joining,
+                            alternative=index,
+                            conditional=True,
+                            invalidated_by=candidate["invalidated_by"],
+                            establishes_current_version=False,
+                        )
+                    )
+                candidate_paths.append(selected)
+            conditional_candidates = FileCandidates.join(*candidate_paths)
+            for version in files.values():
+                conditional_candidates.records.pop(version, None)
             by_identity = [
                 {stream.identity: stream for stream in state["streams"]}
                 for state in (left, right)
@@ -2022,6 +2242,7 @@ def analyze(module):
                 unresolved_process_instances=left["unresolved_process_instances"]
                 or right["unresolved_process_instances"],
                 file_versions=files,
+                conditional_candidates=conditional_candidates,
                 directories=domain,
                 epoch=max(left["epoch"], right["epoch"]),
                 last_operation=joining,
@@ -2478,6 +2699,7 @@ def analyze(module):
             dict(
                 cwd=cwd,
                 file_versions=file_versions,
+                conditional_candidates=file_candidates,
                 epoch=filesystem_epoch,
                 last_operation=last_file_operation,
                 external_process_effects=external_process_effects,
@@ -2518,6 +2740,7 @@ def analyze(module):
         branch_state="normal_exit_intersection_and_version_phi",
         loop_state="normal_exit_effect_havoc_without_unrolling",
         process_lifetime="direct_child_wait_with_unresolved_descendant_effects",
+        conditional_versions="separate_guarded_provenance_not_current_versions",
         read_value="not_constant_folded",
     )
     validate_artifact_flow(graph)

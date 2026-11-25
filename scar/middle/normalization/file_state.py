@@ -253,3 +253,95 @@ class Directories:
             for directory in ambiguous[index]:
                 remaps[index][directory] = None
         return joined, remaps[0], remaps[1]
+
+
+class FileCandidates:
+    """Guarded provenance, kept separate from definitely current file versions.
+
+    Keys are directory-name identities, never inode identities. A barrier only
+    adds a proof obligation; it never promotes one of these records to current.
+    """
+
+    def __init__(self):
+        self.records = {}
+
+    def clone(self):
+        other = type(self)()
+        other.records = {version: dict(row) for version, row in self.records.items()}
+        return other
+
+    def add(self, version, key, locator, *, invalidated_by=(), requires=()):
+        previous = self.records.get(version, {})
+        keys = set(previous.get("keys", ()))
+        if key is not None:
+            keys.add(key)
+        self.records[version] = dict(
+            version=version,
+            locator=locator,
+            keys=tuple(sorted(keys)),
+            invalidated_by=tuple(
+                sorted(set(previous.get("invalidated_by", ())) | set(invalidated_by))
+            ),
+            requires=tuple(sorted(set(previous.get("requires", ())) | set(requires))),
+        )
+
+    def overwrite(self, keys):
+        keys = set(keys)
+        removed = []
+        for version, row in list(self.records.items()):
+            if keys.intersection(row["keys"]):
+                removed.append(version)
+                del self.records[version]
+        return removed
+
+    def havoc(self, versions, locators, barrier, *, retain=(), overwritten=()):
+        retain, overwritten = set(retain), set(overwritten)
+        removed = self.overwrite(overwritten)
+        for key, version in versions.items():
+            if key not in retain and key not in overwritten:
+                self.add(version, key, locators[version])
+        for row in self.records.values():
+            if not retain.intersection(row["keys"]):
+                row["invalidated_by"] = tuple(
+                    sorted(set(row["invalidated_by"]) | {barrier})
+                )
+                row["requires"] = tuple(
+                    sorted(
+                        set(row["requires"])
+                        | {
+                            "referenced_barriers_preserve_file_content_and_locator",
+                            "candidate_is_current_at_consumer",
+                        }
+                    )
+                )
+        return removed
+
+    def rows(self, key=None):
+        return [
+            {
+                "version": row["version"],
+                "locator": row["locator"],
+                "invalidated_by": list(row["invalidated_by"]),
+                "requires": list(row["requires"]),
+            }
+            for _, row in sorted(self.records.items())
+            if key is None or key in row["keys"]
+        ]
+
+    @classmethod
+    def join(cls, left, right):
+        result = cls()
+        for source in (left, right):
+            for row in source.records.values():
+                for key in row["keys"] or (None,):
+                    result.add(
+                        row["version"],
+                        key,
+                        row["locator"],
+                        invalidated_by=row["invalidated_by"],
+                        requires=(
+                            *row["requires"],
+                            "candidate_available_on_selected_normal_predecessor",
+                        ),
+                    )
+        return result

@@ -416,6 +416,88 @@ print(json.dumps(dict(identity_gap=identity_gap,representation_gap=representatio
     assert result["lookup"] == "module_export_matches"
 
 
+def test_module_import_state_keeps_normal_exceptional_and_parent_lifetimes_separate():
+    result = _layer(
+        "normalization",
+        """from scar.middle.normalization.protocols import _Project,_Frame,_Unclosed
+from scar.middle.normalization.values import Value
+from scar.contract import walk_operations
+def variable(name): return dict(op='var',name=name,scope='global')
+def module(name,symbol,body):
+    return dict(name=symbol,params=[],body=body,python_scope=dict(kind='module',module=name,main=False,initializer=symbol))
+child=module('package.child','child_init',[dict(op='assign',target=variable('py:package.child:value'),value=dict(op='literal',type='i64',value=7))])
+inside=dict(op='python_import',module='package.child',provider='project',member='value',initializers=['package_init','child_init'],request=dict(form='from',module='package.child',level=0,fromlist=['value']),binding=variable('py:package:captured'),effects=['CTRL','STATE','IO'],site='package/child')
+parent=module('package','package_init',[inside])
+entry=module('test','entry',[])
+imported=dict(op='python_import',module='package',provider='project',initializers=['package_init'],request=dict(form='import',module='package',level=0),binding=variable('py:test:package'),effects=['CTRL','STATE','IO'],site='test/import')
+project=_Project({'entry':entry,'package_init':parent,'child_init':child});project.active.append('entry');frame=_Frame(project,entry,())
+start=frame.snapshot();steps=[]
+protected=dict(op='try',body=[imported],handlers=[dict(op='exception_handler',test=dict(op='python_builtin',name='ImportError'),name=None,binding=None,body=[dict(op='raise',has_exception=False,has_cause=False)],cleanup=[])],**{'else':[],'finally':[]})
+assert frame.sequence([protected],steps)
+assert not frame.dynamic and not frame.control_regions
+assert project.registry['package']['state']==project.registry['package.child']['state']=='ready'
+calls=[n['callee'] for n in walk_operations(project.closed['package_init']) if n['op']=='call']
+assert calls==['child_init'],calls
+assert [n['callee'] for n in walk_operations(steps) if n['op']=='call']==['package_init']
+after=frame.snapshot()
+assert 'package' not in start[2]['registry']
+assert project.names['py:package:captured'].facts['exact']==7
+exceptional=frame.exceptional_snapshot(start,after,[imported])
+assert exceptional[2]['registry']['package']['state']=='unresolved'
+assert 'initializing' in exceptional[2]['registry']['package']['possible_states']
+frame.merge([after,exceptional]);assert project.registry['package']['state']=='unresolved'
+joined=frame.snapshot()
+projected=frame.project_final_state(after,joined,joined)
+assert projected[2]['registry']['package']['state']=='ready'
+frame.restore(joined);project.unknown_registry('entry',{'site':'finally/callback'})
+projected=frame.project_final_state(after,joined,frame.snapshot())
+assert projected[2]['namespace_writes']['package']['state']=='unresolved'
+frame.restore(after);assert project.registry['package']['state']=='ready'
+clone=frame.copy_state(after);clone[2]['registry'].pop('package')
+assert after[2]['registry']['package']['state']=='ready'
+frame.restore(after)
+frame.env['condition']=Value('bool',dict(op='var',name='condition',type='bool'))
+branch=dict(op='if',condition=dict(op='var',name='condition'),then=[imported],**{'else':[]})
+try: frame.conditional(branch,[])
+except _Unclosed as error: issue=error.issue['code']
+else: raise AssertionError('runtime branch asserted module initialization')
+assert issue=='python.conditional_import'
+assert not frame.dynamic and not frame.control_regions
+frame.dynamic=1;frame.enter_control('loop',{'site':'loop'})
+try:
+    try: frame.imported(imported,[])
+    except _Unclosed as error: assert error.issue['code']=='python.conditional_import'
+    else: raise AssertionError('loop import acquired an unconditional proof')
+finally: frame.leave_control();frame.dynamic=0
+frame.restore(after)
+before=project.import_state()
+comparison=dict(op='module_import_preserves',type='bool',operator_family='module_registry',occurrence='foreign/import',direct_registry_keys=['foreign'],conditional_registry_keys=[],checks={})
+project.unknown_registry('entry',{'site':'foreign/import'})
+guarded=[]
+project.scoped_import('entry',{'site':'foreign/import'},comparison,guarded,before=before)
+assert project.registry['package']['state']=='unresolved'
+assert project.registry_entry('package',{'site':'consumer'})['state']=='ready'
+assert guarded[0]['op']=='if'
+assert guarded[0]['else'][0]['value']['op']=='module_import_continuation_required'
+assert comparison['checks']['package']['registry']['requires']=='same_module_instance_and_complete'
+project.binding_written('py:package:fresh')
+project.observe_import('package','namespace',{'site':'fresh-read'},'fresh')
+assert 'namespace' not in comparison['checks']['package']
+project.observe_import('package','namespace',{'site':'prior-read'},'captured')
+assert comparison['checks']['package']['namespace']['first_member']=='captured'
+project.unknown_registry('entry',{'site':'unrelated/callback'})
+assert project.registry_entry('package',{'site':'later'})['state']=='unresolved'
+print(json.dumps({'normal':'ready','exceptional':'unresolved','child_calls':calls,'branch_issue':issue}))
+""",
+    )
+    assert result == dict(
+        normal="ready",
+        exceptional="unresolved",
+        child_calls=["child_init"],
+        branch_issue="python.conditional_import",
+    )
+
+
 def test_binding_preserves_unit_scoped_provider_and_export_evidence(
     tmp_path, monkeypatch
 ):
@@ -2097,6 +2179,82 @@ print(json.dumps(results))
     ]
 
 
+def test_finite_enums_preserve_nominal_identity_order_aliases_and_guarded_projection():
+    result = _layer(
+        "normalization",
+        """
+from scar.contract import python_provider_id,walk_operations
+from scar.middle.normalization import values
+from scar.middle.normalization.protocols import _Project,_Frame,_Unclosed
+
+provider=dict(module='enum', status='verified_stdlib', interpreter='cpython 3.12.3',platform='linux',
+              loader='path',hash_basis='provider_file',origin='/captured/enum.py',
+              sha256='c8ead615c159598370295649eb296819ad4b40d50b200c4fec2d4269bf7af9ae')
+provider['provider_id']=python_provider_id(provider)
+scope=dict(kind='module', module='colors', initializer='main',provider_sources={'enum':provider})
+def var(name): return dict(op='var',name=name,scope='global')
+def member(base,name): return dict(op='member',base=base,field=name,site=name)
+def assign(name,v,i): return dict(op='assign',target=dict(op='var',name=name),value=values.literal(v).value,
+                                   site='assign-'+str(i),location=dict(file='colors.py',line=i))
+def definition(symbol,body):
+    return dict(op='python_define_class',site='define-'+symbol,symbol=symbol,target=var(symbol),
+                body_symbol=body,bases=[var('Base')],source_name=symbol,qualname=symbol,location=dict(file='colors.py',line=3),
+                creation_protocol=dict(bases='resolve_supplied',metaclass='from_bases',namespace='prepare_then_execute',
+                                       implicit_bindings={'__qualname__':{'source':'lexical_qualname'}}))
+imp=dict(op='python_import',module='enum',member='Enum',binding=var('Base'),site='import',
+         request=dict(form='from',module='enum',level=0,fromlist=['Enum']),effects=['STATE','IO'],
+         source_provider={k:v for k,v in provider.items() if k!='provider_id'},
+         import_resolution={k:v for k,v in provider.items() if k!='provider_id'})
+body=[assign('first',True,4),assign('alias',1,5),assign('also',1.0,6),assign('word','word',7)]
+n1=definition('Channel','body1'); n2=definition('Color','body2')
+entry=dict(name='main',params=[],python_scope=scope,body=[imp,n1,n2])
+def cls(name,owner,statements):
+    return dict(name=name,params=[],owner_class=owner,python_scope=dict(kind='class',module='colors',initializer='main'),body=statements)
+pr=_Project({'main':entry, 'body1':cls('body1','Channel',body), 'body2':cls('body2','Color',body)})
+frame=_Frame(pr,entry,())
+steps=[]
+frame.imported(imp,steps)
+assert pr.names['Base'].kind=='enum_base'
+for d in (n1,n2): frame.store(d['target'],pr.objects.define(frame,d,steps),steps)
+first=frame.evaluate(member(var('Channel'),'first'),steps)
+alias=frame.evaluate(member(var('Channel'),'alias'),steps)
+other=frame.evaluate(member(var('Color'),'first'),steps)
+assert first.kind==alias.kind==other.kind=='enum_member' and first.value==alias.value=='first'
+assert first.facts['identity']==alias.facts['identity']!=other.facts['identity']
+frame.env['chosen']=alias
+ref=dict(op='var',name='chosen')
+name=frame.evaluate(member(ref,'name'),steps)
+value=frame.evaluate(member(ref,'value'),steps)
+assert name.kind=='text' and name.exact=='first' and value.kind=='bool' and value.exact is True
+def rejected(code,f):
+    try: f()
+    except _Unclosed as error: assert error.issue['code']=='python.'+code,error.issue
+    else: raise AssertionError(code)
+rejected('value_contract',lambda:frame.scalar(alias,{}))
+rejected('enum_member_attribute',lambda:frame.evaluate(member(ref,'__dict__'),steps))
+for count,bad in enumerate([dict(op='python_define',target={'name':'__new__'}),dict(op='assign',target={'op':'var','name':'automatic'},value={'op':'call','callee':'auto'})]):
+    d=definition('Bad'+str(count),'b'+str(count))
+    pr.functions[d['body_symbol']]=cls(d['body_symbol'],d['symbol'],[bad])
+    rejected('enum_namespace' if count==0 else 'enum_member_value',lambda:pr.objects.define(frame,d,steps))
+d=definition('Meta','b3'); d['keywords']=[dict(name='metaclass',value=var('meta'))]
+rejected('class_protocol',lambda:pr.objects.define(frame,d,steps))
+alt={**imp,'site':'shadow','source_provider':dict(provider,status='project'),'import_resolution':dict(provider,status='project')}
+rejected('import_identity',lambda:frame.imported(alt,steps))
+ops=[n for step in steps for n in walk_operations(step)]
+classes=[n for n in ops if n['op']=='enum_define']
+assert len(classes)==2 and classes[0]['definition_capture']!=classes[1]['definition_capture']
+assert [(r['name'],r['canonical'],r['ordinal'],r['value']['type'],r['location']['line']) for r in classes[0]['members']]==[
+    ('first','first',0,'bool',4),('alias','first',0,'i64',5),('also','first',0,'f64',6),('word','word',1,'text',7)]
+assert sum(n['op']=='module_namespace_initialize' for n in ops)==1
+assert any(n['op']=='module_attribute_resolve' and n['candidate']['kind']=='source_class' for n in ops)
+assert all(n['member_capture']==alias.facts['member_capture'] for n in ops if n['op']=='enum_project')
+assert {'enum_define','enum_member_read','enum_projection_matches','enum_project','enum_source_continuation_required'}<=set(pr.operator_requirements()['nominal_enum']['operations'])
+print(json.dumps(True))
+""",
+    )
+    assert result
+
+
 def test_immutable_products_preserve_types_identity_and_activation_boundaries():
     result = _layer(
         "normalization",
@@ -2212,6 +2370,140 @@ print(json.dumps(dict(result=closed['result'])))
 """,
     )
     assert result["result"]["kind"] == "product_ref"
+
+
+def test_complex_array_elements_survive_aliases_and_refuse_unqualified_operations():
+    result = _layer(
+        "normalization",
+        """
+from scar.middle.normalization import arrays, expressions, text, values
+from scar.middle.normalization.protocols import _Frame, _Project, _Unclosed
+from scar.contract import walk_operations
+
+frame = _Frame(_Project({}), dict(name='field', body=[], params=[], python_scope=dict(kind='function',module='m')), ())
+frame.project.providers['numpy'] = {'version':'2.5.5'}
+steps=[]
+def index(name, *indices):
+    return dict(op='index', base=dict(op='var',name=name), indices=[dict(op='literal',value=i) for i in indices])
+def invoke(target, *args, **kw):
+    return arrays.construct(frame, {}, target, list(args), kw, steps, False)
+def refuse(field, operation):
+    try: operation()
+    except _Unclosed as error: assert error.issue['code'] == 'python.' + field, error.issue
+    else: raise AssertionError('expected rejection: ' + field)
+
+dtype=arrays.provider_member(frame,{},'complex128',steps)
+constructor=values.Value('array_constructor','zeros')
+z=invoke(constructor, values.Value('tuple',(values.literal(2),values.literal(3))), dtype=dtype)
+frame.env['z']=z
+row=arrays.index(frame,index('z',1),steps)
+frame.env['r']=row
+cp=invoke(arrays.member(frame,{},row,'copy',steps))
+reshaped=invoke(arrays.member(frame,{},row,'reshape',steps),values.literal(3),values.literal(1))
+assert row.facts['array_allocation'] == reshaped.facts['array_allocation'] == z.facts['array_allocation']
+assert cp.facts['array_allocation'] != row.facts['array_allocation']
+scalar=values.Value('python_complex',dict(op='literal',type='c128',value=[2.0,-4.0]))
+arrays.index(frame,index('r',0),steps,rhs=scalar)
+read=arrays.index(frame,index('z',1,0),steps)
+assert read.kind == 'numpy_c128' and values.wire(read.kind)=='c128' and values.scalar_evidence(read) is None
+def arithmetic(operation, lhs, rhs):
+    return expressions.apply_binary(frame,{},operation,lhs,rhs,steps)
+for op in ('add','sub','mult'):
+    assert arithmetic(op,row,read).kind == values.array_kind(1,'c128')
+arrays.update(frame,{'operator':'add'},row,cp,steps)
+assert arrays.scalar_unary(frame,{'operator':'usub'},row,steps,False).kind == row.kind
+literal=invoke(values.Value('array_constructor','array'), values.Value('tuple',(scalar,values.literal(1.0))),dtype=dtype)
+assert literal.kind == row.kind
+ops=list(walk_operations(steps))
+assert any(n['op']=='array_load' and n['type']=='c128' for n in ops)
+assert any(n['op']=='array_store' and n['value']==scalar.value for n in ops)
+assert any(n['op']=='array_literal' and n['values'][1]['op']=='cast' and n['values'][1]['type']=='c128' for n in ops)
+assert all(n['type']['element']=='c128' for n in ops if n['op'] in {'array_copy','array_reshape','array_view','array_binary','array_unary','array_create','array_literal'})
+domain=values.join_arrays((row.kind, z.kind))
+assert values.rank_domain(domain)==(1,2) and values.from_wire(values.wire(domain)) == domain
+assert not values.storage_compatible(domain,values.array_kind(None,'f64'))
+assert values.from_wire(values.wire(values.array_kind(None,'c128'))) == values.array_kind(None,'c128')
+refuse('array_comparison', lambda:arithmetic('eq',read,read))
+refuse('array_operator', lambda:arithmetic('pow',row,cp))
+refuse('array_operator', lambda:arithmetic('div',row,cp))
+refuse('array_dtype', lambda:arithmetic('add',row,values.literal(2.0)))
+refuse('array_dtype', lambda:invoke(values.Value('array_constructor','array'),row,dtype=values.Value('dtype','f64')))
+refuse('array_format_dtype', lambda:text.array_text(frame,{},row,steps))
+print(json.dumps(True))
+""",
+    )
+    assert result is True
+
+
+def test_fourier_contract_requires_sealed_exports_and_preserves_lazy_lookup():
+    result = _layer(
+        "normalization",
+        """
+from scar.contract import python_provider_id, walk_operations
+from scar.middle.normalization import arrays, values
+from scar.middle.normalization.protocols import _Frame, _Project, _Unclosed
+
+def source(module, member, sha):
+    record=dict(module=module,status="verified_distribution",distribution="numpy",version="2.5.5",
+                origin="/sealed/"+member, member=member,sha256=sha,proof_scope="installed_file_with_digest")
+    record["provider_id"]=python_provider_id(record)
+    return record
+root=source("numpy","numpy/__init__.py","09295a80660f17925ae23765ce8cbd7ff7ceae968d5f2f89349f1cb74c0b9e11")
+child=source("numpy.fft","numpy/fft/__init__.py","251bd35d9a814b98e076ab2e0da2a5a7eabbfb11427a7e873ae127d5a26137c0")
+leaf=source("numpy.fft._pocketfft","numpy/fft/_pocketfft.py","c809e89c05cf7b97d75abd73fdda8454403fe67772d4e435aa35bc4ce723eeb6")
+child["exports"]={}
+for name,line in (("fft",121),("ifft",220)):
+    via=[dict(kind=kind,name=name,**{k:record[k] for k in ("module","member","provider_id","sha256")})
+         for kind,record in (("from",child),("definition",leaf))]
+    child["exports"][name]=dict(status="source_candidates",unresolved=[],candidates=[
+        dict(leaf,name=name,line=line,kind="definition",via=via)])
+scope=dict(kind="module",module="experiment",initializer="entry",
+           provider_sources={"numpy":root,"numpy.fft":child})
+node=dict(op="python_import",module="numpy",request=dict(form="import",module="numpy"),site="load",
+          source_provider=root,effects=["IO","STATE"],binding=dict(op="var",name="np"))
+fn=dict(name="entry",params=[],body=[node],python_scope=scope)
+project=_Project({"entry":fn})
+frame=_Frame(project,fn,())
+steps=[]
+row=project.source_imports.get("entry",node)
+project.source_imports.begin(row,node,steps)
+parent=arrays.import_provider(frame,node,steps)
+namespace=arrays.provider_member(frame,{"site":"module-member"},"fft",steps,parent)
+args=values.Value(values.array_kind(1,"c128"),dict(op="var",name="samples",type=values.wire(values.array_kind(1,"c128"))),project.array_state.create((7,)))
+keywords={"norm":values.literal("ortho")}
+def reject(code,fn):
+    try: fn()
+    except _Unclosed as e: assert e.issue["code"]=="python."+code, e.issue
+    else: raise AssertionError(code)
+for name,axis,direction in (("fft",-1,"forward"),("ifft",0,"inverse")):
+    target=arrays.provider_member(frame,{"site":"attr-"+name},name,steps,namespace)
+    options=dict(keywords,axis=values.literal(axis))
+    out=arrays.construct(frame,{"site":"call-"+name},target,[args],options,steps,False)
+    assert out.kind==args.kind and out.facts["shape"]==(7,)
+    assert out.facts["array_allocation"]!=args.facts["array_allocation"]
+    op=next(x for x in walk_operations(steps[-1]) if x["op"]=="array_fft")
+    assert (op["direction"],op["axis"],op["normalization"],op["type"])==(direction,0,"ortho",values.wire(args.kind))
+    assert op["source_binding"]==target.facts["binding"] and op["source_profile"]["definition"]["sha256"]==leaf["sha256"]
+    assert op["warning"]["location"]=={"diagnostic_file":leaf["origin"],"line":101} and "IO" in op["effects"]
+    assert op["empty_axis"]["exception"]=="ValueError"
+reject("fourier_arguments",lambda:arrays.construct(frame,{},target,[args],dict(keywords,n=values.literal(7)),steps,False))
+reject("fourier_input",lambda:arrays.construct(frame,{},target,[values.Value(values.array_kind(1),args.value)],keywords,steps,False))
+reject("fourier_axis",lambda:arrays.construct(frame,{},target,[args],dict(keywords,axis=values.literal(1)),steps,False))
+reject("fourier_normalization",lambda:arrays.construct(frame,{},target,[args],{},steps,False))
+child["exports"]["ifft"]["candidates"][0]["sha256"]="0"*64
+reject("fourier_export",lambda:arrays.provider_member(frame,{},'ifft',steps,namespace))
+rows=[operation for step in steps for operation in walk_operations(step)]
+assert sum(n["op"]=="module_namespace_initialize" for n in rows)==1
+lookups=[n for n in rows if n["op"]=="module_attribute_resolve"]
+assert [n["member"] for n in lookups]==["fft","fft","ifft"]
+assert lookups[1]["namespace_binding"]["capture"]==lookups[0]["capture"]
+assert [n["capture"] for n in rows if n["op"]=="module_callable_matches"]==[n["capture"] for n in lookups[1:]]
+assert sum(n["op"]=="module_export_continuation_required" for n in rows)==5
+assert project.operator_requirements()["fourier"]["required_provider"]["revision"]=="33ae5dc94c9cdc7f1c78346504a85de87cadaa12"
+print(json.dumps(True))
+""",
+    )
+    assert result
 
 
 def test_resource_flow_projects_copies_without_unrolling_or_placement_claims():
@@ -4076,4 +4368,162 @@ print(json.dumps(graph))
     assert not any(
         e["kind"] == "HAS_C_STRING_PAYLOAD" and e["source"] in {r["id"] for r in writes}
         for e in edges
+    )
+
+
+def test_file_candidates_preserve_provenance_without_reviving_current_versions():
+    def literal(value):
+        return dict(op="literal", type="text", value=value)
+
+    def host(interface, *args):
+        return dict(op="host_call", interface=interface, args=list(args))
+
+    def effect(interface, *args):
+        return dict(op="expr", value=host(interface, *args))
+
+    stream = dict(op="var", name="stream")
+
+    def writer(path, value, mode="w"):
+        return [
+            dict(
+                op="decl",
+                name="stream",
+                init=host(
+                    "stream.open",
+                    literal(path),
+                    literal(mode),
+                    literal("utf-8"),
+                    literal("universal"),
+                ),
+            ),
+            effect("stream.write", stream, literal(value)),
+            effect("stream.close", stream),
+        ]
+
+    console = dict(
+        op="expr",
+        value=dict(
+            op="text_print",
+            args=[literal("log")],
+            sep=literal(" "),
+            end=literal("\n"),
+        ),
+    )
+    request = dict(
+        op="expr",
+        value=dict(
+            op="process_request",
+            command=dict(form="argv", args=[]),
+            cwd="inherit",
+            stdin="inherit",
+            stdout="inherit",
+            stderr="inherit",
+        ),
+    )
+    flag = dict(op="var", name="flag", type="bool")
+    result = _layer(
+        "normalization",
+        """from scar.middle.normalization.artifacts import analyze
+from scar.contract import validate_artifact_flow
+result = analyze(data)
+validate_artifact_flow(result['graph'])
+print(json.dumps(result))
+""",
+        dict(
+            functions=[
+                dict(
+                    name="known",
+                    body=[
+                        *writer("stable", "initial"),
+                        *writer("fresh", "fresh", "x"),
+                        request,
+                    ],
+                ),
+                dict(
+                    name="conditional",
+                    params=[dict(name="flag", type="bool")],
+                    body=[
+                        *writer("stable", "initial"),
+                        console,
+                        effect("fs.copy_file", literal("stable"), literal("copied")),
+                        dict(
+                            op="if",
+                            condition=flag,
+                            then=writer("stable", "branch overwrite"),
+                            **{"else": []},
+                        ),
+                        dict(op="while", condition=flag, body=[console]),
+                        request,
+                    ],
+                ),
+                dict(
+                    name="overwritten",
+                    body=[
+                        *writer("stable", "initial"),
+                        console,
+                        *writer("stable", "replacement"),
+                        request,
+                    ],
+                ),
+            ]
+        ),
+    )
+    graph = result["graph"]
+    records = {node["id"]: node for node in graph["nodes"]}
+    launches = {row["symbol"]: row for row in graph["launch_environments"]}
+
+    def version(symbol, text):
+        return next(
+            row["version"]
+            for row in result["constant_materializations"]
+            if row["symbol"] == symbol and records[row["value"]]["literal_text"] == text
+        )
+
+    known = launches["known"]
+    assert version("known", "initial") in known["visible_versions"]
+    assert version("known", "fresh") in known["visible_versions"]
+    assert known["conditional_candidates"] == []
+    conditional = launches["conditional"]
+    initial = version("conditional", "initial")
+    assert initial not in conditional["visible_versions"]
+    (candidate,) = [
+        row
+        for row in conditional["conditional_candidates"]
+        if row["version"] == initial
+    ]
+    assert candidate["invalidated_by"] and candidate["requires"]
+    assert all(
+        records[event]["operation"] == "file_state_barrier"
+        for event in candidate["invalidated_by"]
+    )
+    assert "candidate_available_on_selected_normal_predecessor" in candidate["requires"]
+    assert any(
+        edge["kind"] == "MAY_SATISFY_FILE_VERSION"
+        and edge["source"] == initial
+        and records[edge["target"]]["role"] == "runtime_copy_source"
+        and edge["establishes_current_version"] is False
+        for edge in graph["edges"]
+    )
+    assert any(
+        edge["kind"] == "CONDITIONALLY_AVAILABLE_BEFORE_LAUNCH"
+        and edge["source"] == initial
+        and edge["target"] == conditional["operation"]
+        and edge["establishes_child_read"] is False
+        for edge in graph["edges"]
+    )
+    assert (
+        sum(
+            node.get("operation") == "while" and node.get("symbol") == "conditional"
+            for node in records.values()
+        )
+        == 1
+    )
+    overwritten = launches["overwritten"]
+    old = version("overwritten", "initial")
+    assert old not in overwritten["visible_versions"]
+    assert old not in {row["version"] for row in overwritten["conditional_candidates"]}
+    assert version("overwritten", "replacement") in overwritten["visible_versions"]
+    assert any(
+        edge["kind"] == "INVALIDATES_FILE_VERSION" and edge["target"] == old
+        for edge in graph["edges"]
     )
