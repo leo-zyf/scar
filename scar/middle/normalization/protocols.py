@@ -2006,7 +2006,33 @@ class _Frame:
                     self.fail(
                         node,
                         "import_initializer_identity",
-                        f"{name} did not retain the published instance on initializer return",
+                        f"the initializer can return normally, but its effects leave "
+                        f"the published registry identity of {name} unproven",
+                        source_evidence=dict(
+                            module=name,
+                            initializer=symbol,
+                            publication=publication,
+                            registry_after_body=self.project.imports.registry_entry(
+                                name
+                            ),
+                            last_namespace_change=self.project.imports.namespace_change(
+                                name
+                            ),
+                            open_namespace=self.project.imports.open_namespace,
+                            comparison_windows=[
+                                dict(
+                                    occurrence=operation["occurrence"],
+                                    before_state=before["state"],
+                                    before_epoch=epoch,
+                                    **values.source_site(operation),
+                                )
+                                for _, operation, before, epoch in self.project.imports.windows(
+                                    name
+                                )
+                            ],
+                            producer_role="module_body",
+                            required="actual_import_result_or_exception_before_caller_store",
+                        ),
                     )
             parent, _, leaf = scope["module"].rpartition(".")
             if parent:

@@ -9257,3 +9257,84 @@ def test_open_function_definition_publishes_fresh_object_with_current_builtins(
             assert all(fn is not prior for prior in instances)
             instances.append(fn)
             assert loc["first"] is (replacement if mode == "reentrant_store" else fn)
+
+
+def test_initializer_return_does_not_prove_caller_import_binding(tmp_path, monkeypatch):
+    import builtins
+    from types import ModuleType
+    from unittest.mock import patch
+
+    from scar.frontend import build
+    from scar.middle import plan
+
+    name = "identity_probe_package"
+    package = tmp_path / name
+    package.mkdir()
+    source = package / "__init__.py"
+    source.write_text(
+        "from . import child as unused\ndel unused\n"
+        "tag = 'original'\non_import_body()\n"
+    )
+    (package / "child.py").write_text("pass\n")
+    entry = tmp_path / "main.py"
+    entry.write_text(f"import {name}\n")
+    code = compile(entry.read_bytes(), str(entry), "exec")
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    for mode in ("keep", "replace", "delete", "raise", "hook_return"):
+        seen = []
+        replacement = ModuleType(name)
+        old = object()
+
+        def on_import_body():
+            seen.append(sys.modules[name])
+            if mode == "replace":
+                sys.modules[name] = replacement
+            elif mode == "delete":
+                del sys.modules[name]
+            elif mode == "raise":
+                raise LookupError("body")
+
+        def import_hook(*args):
+            result = builtins.__import__(*args)
+            return replacement if mode == "hook_return" else result
+
+        monkeypatch.setattr(builtins, "on_import_body", on_import_body, raising=False)
+        frame = {
+            "__builtins__": dict(vars(builtins), __import__=import_hook),
+            name: old,
+        }
+        with patch.dict(sys.modules):
+            if mode in {"delete", "raise"}:
+                with pytest.raises(
+                    KeyError if mode == "delete" else LookupError
+                ) as exc:
+                    exec(code, frame)
+                assert exc.value.args == (name if mode == "delete" else "body",)
+                assert frame[name] is old and name not in sys.modules
+            else:
+                exec(code, frame)
+                assert frame[name] is (seen[0] if mode == "keep" else replacement)
+                assert sys.modules[name] is (
+                    replacement if mode == "replace" else seen[0]
+                )
+            assert len(seen) == 1 and seen[0].tag == "original"
+
+    graph, out = tmp_path / "graph", tmp_path / "plan"
+    build(entry, graph)
+    source.unlink()
+    assert plan(graph, out)["status"] == "INCOMPLETE"
+    [gap] = json.loads((out / "plan.json").read_bytes())["issues"]
+    assert (
+        gap["code"] == "python.import_initializer_identity"
+        and gap["location"]["line"] == 1
+    )
+    evidence = gap["source_evidence"]
+    assert evidence["publication"]["publication"]["module"] == name
+    assert evidence["publication"]["state"] == "initializing"
+    state = evidence["registry_after_body"]
+    assert state["state"] == "unresolved" and state["location"]["line"] == 4
+    assert state == evidence["last_namespace_change"]
+    assert evidence["open_namespace"]["site"] == state["site"]
+    assert evidence["comparison_windows"] == []
+    assert evidence["producer_role"] == "module_body"
