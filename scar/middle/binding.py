@@ -83,6 +83,40 @@ def _definition(graph):
     return {**read(graph["signature"]), "body": read(graph["entry"])}
 
 
+def _validate_numeric_evidence(unit, payload):
+    """Bind numerical source evidence without reopening compiler inputs."""
+    facts = unit.get("source_facts", {})
+    contract = facts.get("source_numeric_contract")
+    if contract is None:
+        return
+    if (
+        contract.get("scope") != "compilation_unit"
+        or not contract.get("source", {}).get("sha256")
+        or contract.get("source", {}).get("sha256")
+        != facts.get("files", {}).get(unit.get("path"))
+        or contract.get("source_flags") != unit.get("flags")
+    ):
+        raise ValueError("numerical source contract disagrees with captured unit")
+    headers = facts.get("external_headers", {})
+    for interface in contract.get("source_math_interfaces", ()):
+        evidence = interface.get("evidence", {})
+        header = headers.get(evidence.get("file"))
+        if (
+            not header
+            or evidence.get("sha256") != header.get("sha256")
+            or type(evidence.get("line")) is not int
+            or evidence["line"] < 1
+        ):
+            raise ValueError("mathematical interface lacks its captured header")
+    for function in payload["functions"]:
+        signature = function["signature"]
+        captured = signature.get("source_numeric_contract")
+        if captured is not None and captured != contract:
+            raise ValueError("function numerical evidence disagrees with its unit")
+        if function.get("source_defined") and captured is None:
+            raise ValueError("source function lost its captured numerical contract")
+
+
 def _activation_edges(graph):
     """Preserve call-edge provenance independently of source name resolution."""
     owner = graph["signature"]["name"]
@@ -568,6 +602,7 @@ def bind(graph, folder):
             definitions[fn["name"]].append((index, fn))
         all_issues += unit["diagnostics"]
         payload = read_member(folder, unit["graph"])
+        _validate_numeric_evidence(unit, payload)
         roots.update(
             n["name"]
             for n in payload["global_graph"]["nodes"]

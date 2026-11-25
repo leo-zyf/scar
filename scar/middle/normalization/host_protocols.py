@@ -380,6 +380,77 @@ def builtin(frame, node, name):
 _IMPORTLIB_PROFILE = "cpython-importlib-registry-v1"
 
 
+def require_registry_operator(project, operation):
+    project.require_operator(
+        "module_registry",
+        operation,
+        profile=_IMPORTLIB_PROFILE,
+        scope="process_module_registry",
+        entry_contract={
+            "initial_cache": "unobserved_by_static_capture",
+            "graph_module_first_import": "require_absent_entry_before_each_scheduled_graph_initializer",
+            "hooks": "preserve_import_callbacks_audit_and_failures",
+            "interference": "exclude_unmodelled_registry_replacement_across_each_folded_lookup",
+            "bound_callable": "qualify_the_recorded_source_revision_and_unmodified_CPython_import_module_cache_path",
+        },
+    )
+
+
+def registry_import(frame, node, origin):
+    """Separate the loader's named cache ports from unconstrained callbacks."""
+    name = node["module"]
+    stored = frame.provider_sources.get(name, {})
+    if not (
+        origin.get("status") in {"verified_stdlib", "verified_distribution"}
+        and origin.get("proof_scope")
+        in {"resolved_module", "installed_file_with_digest"}
+        and stored.get("provider_id") == python_provider_id(origin)
+        and stored.get("sha256") == origin.get("sha256")
+        and stored.get("sha256")
+    ):
+        return None
+    parts = name.split(".")
+    keys = [".".join(parts[:i]) for i in range(1, len(parts) + 1)]
+    if child := node.get("member_resolution", {}).get("module"):
+        keys.append(child)
+    return dict(
+        op="module_import_preserves",
+        type="bool",
+        operator_family="module_registry",
+        source_protocol="python.import",
+        module=name,
+        request=node["request"],
+        source_provider_id=stored["provider_id"],
+        source_sha256=stored["sha256"],
+        direct_registry_keys=keys,
+        source_effects=node.get("effects", ["UNKNOWN"]),
+        effects=["CTRL", "STATE", "IO", "MEM"],
+        may_raise=True,
+        reads=[
+            "module.registry",
+            "process.import_hooks",
+            "process.audit_hooks",
+            "filesystem",
+        ],
+        writes=[
+            "requested_registry_entries",
+            "module.namespace",
+            "import.external_effects",
+        ],
+        allocates="UNKNOWN",
+        frees="UNKNOWN",
+        aliases="UNKNOWN",
+        escapes="UNKNOWN",
+        rng_effect="UNKNOWN",
+        external_effect="UNKNOWN",
+        ordering_effect="source_import_order",
+        initialization="execute_or_discharge_original_import_including_hooks_audit_and_failures",
+        checked_interval="state_immediately_before_and_after_this_import",
+        checks={},
+        **source_site(node),
+    )
+
+
 def _importlib_namespace(frame, node, source, steps):
     stored = frame.provider_sources.get("importlib", {})
     if not (
@@ -403,19 +474,7 @@ def _importlib_namespace(frame, node, source, steps):
         previous.get("state") == "ready"
         and previous.get("source_provider_id") == stored["provider_id"]
     )
-    frame.project.require_operator(
-        family,
-        operation,
-        profile=_IMPORTLIB_PROFILE,
-        scope="process_module_registry",
-        entry_contract={
-            "initial_cache": "unobserved_by_static_capture",
-            "graph_module_first_import": "require_absent_entry_before_each_scheduled_graph_initializer",
-            "hooks": "preserve_import_callbacks_audit_and_failures",
-            "interference": "exclude_unmodelled_registry_replacement_across_each_folded_lookup",
-            "bound_callable": "qualify_the_recorded_source_revision_and_unmodified_CPython_import_module_cache_path",
-        },
-    )
+    require_registry_operator(frame.project, operation)
     frame.effect(
         dict(
             op=operation,
@@ -522,7 +581,7 @@ def _import_module(frame, node, target, args, keywords):
             "import_module_binding",
             "importlib's qualified namespace and bootstrap availability are no longer proven",
         )
-    frame.project.read_registry("importlib", proof)
+    frame.project.read_registry("importlib", proof, node)
     return frame.cached_module(node, module)
 
 

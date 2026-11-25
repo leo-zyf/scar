@@ -242,6 +242,9 @@ class _Project:
         self.registry = {}
         self.registry_reads = {}
         self.registry_writes = {}
+        self.namespace_writes = {}
+        self.import_windows = {}
+        self.import_markers = []
         self.shadow, self.single_bind_globals = _global_bindings(functions)
         self.sequences = sequences.Domains(functions, self.single_bind_globals)
 
@@ -259,25 +262,123 @@ class _Project:
             for family, requirement in self.required_operators.items()
         }
 
-    def global_read(self, name, value):
+    def global_read(self, name, value, node=None):
+        parts = name.split(":", 2)
+        if len(parts) == 3 and parts[0] == "py":
+            self.observe_import(parts[1], "namespace", node, parts[2])
         for active in self.active:
             if self.functions[active]["python_scope"]["kind"] == "function":
                 self.global_reads[active][name] = (value.kind, value.value)
 
-    def read_registry(self, name, proof):
+    def read_registry(self, name, proof, node=None):
+        self.observe_import(name, "registry", node)
         for active in self.active:
             if self.functions[active]["python_scope"]["kind"] == "function":
                 self.registry_reads[active][name] = proof
 
+    def scoped_import(self, owner, node, operation, steps):
+        # Keep the effect at its original source position, including imports
+        # inside earlier initializers whose consumers are in another function.
+        marker = dict(op="block", body=[])
+        pending = False
+        for name, proof in self.registry.items():
+            if proof["state"] != "ready":
+                continue
+            if name in operation["direct_registry_keys"]:
+                self.registry[name] = dict(
+                    state="unresolved", owner=owner, **values.source_site(node)
+                )
+                self.import_windows.pop(name, None)
+                continue
+            self.import_windows.setdefault(name, []).append((marker, operation, proof))
+            pending = True
+        if pending:
+            self.import_markers.append(marker)
+            steps.append(marker)
+
+    def observe_import(self, name, domain, node, member=None):
+        if domain == "namespace" and (mutation := self.namespace_writes.get(name)):
+            owner = self.active[-1]
+            error = _Unclosed(
+                owner,
+                node or self.functions[owner],
+                "module_namespace_after_effect",
+                f"an opaque effect may have changed {name}.{member} through a retained module alias",
+            )
+            error.issue["source_evidence"] = dict(
+                module=name, member=member, last_change=mutation
+            )
+            raise error
+        for marker, operation, proof in self.import_windows.get(name, ()):
+            checks = operation["checks"].setdefault(name, {"before": proof})
+            checks.setdefault(
+                domain,
+                dict(
+                    requires=(
+                        "same_module_instance_and_complete"
+                        if domain == "registry"
+                        else "same_namespace_bindings_and_reachable_value_state"
+                    ),
+                    first_consumer=self.active[-1],
+                    **values.source_site(node or {}),
+                    **({"first_member": member} if member is not None else {}),
+                ),
+            )
+            if marker["op"] == "block":
+                for op in (operation["op"], "module_import_continuation_required"):
+                    host_protocols.require_registry_operator(self, op)
+                marker.clear()
+                marker.update(
+                    op="if",
+                    condition=operation,
+                    then=[],
+                    **{
+                        "else": [
+                            dict(
+                                op="expr",
+                                value=dict(
+                                    op="module_import_continuation_required",
+                                    type="void",
+                                    operator_family="module_registry",
+                                    noreturn=True,
+                                    effects=["CTRL", "OPAQUE"],
+                                    semantics="transfer_to_source_equivalent_continuation_or_prove_edge_unreachable_before_delivery",
+                                    **values.source_site(operation),
+                                ),
+                            )
+                        ]
+                    },
+                )
+
+    def finish_imports(self):
+        unused = {
+            id(marker) for marker in self.import_markers if marker["op"] == "block"
+        }
+        if unused:
+            # Prefix reports and completed bodies may have copied a statement
+            # list. They share the original marker objects.
+            pending = [self.prefixes, *self.closed.values()]
+            while pending:
+                item = pending.pop()
+                if isinstance(item, list):
+                    if any(id(value) in unused for value in item):
+                        item[:] = [value for value in item if id(value) not in unused]
+                    pending.extend(item)
+                elif isinstance(item, dict):
+                    pending.extend(item.values())
+
     def unknown_registry(self, owner, node):
         """An external import can invoke hooks and replace existing entries."""
         change = dict(state="unresolved", owner=owner, **values.source_site(node))
+        self.import_windows.clear()
         for active in self.active:
             if self.functions[active]["python_scope"]["kind"] == "function":
                 self.registry_writes[active] = change
         for name, previous in self.registry.items():
             if previous["state"] == "ready":
                 self.registry[name] = change
+                if name in self.initializers:
+                    self.namespace_writes[name] = change
 
     def inactive_bodies(self, activation):
         """Only proven edge removal can turn a required body into an inactive body."""
@@ -343,16 +444,6 @@ class _Project:
                     "argument_types",
                     f"call types {types} conflict with earlier {self.types[name]}",
                 )
-            for slot, required in self.global_reads.get(name, {}).items():
-                current = self.names.get(slot)
-                if current is None or (current.kind, current.value) != required:
-                    raise _Unclosed(
-                        name,
-                        fn,
-                        "name_binding",
-                        f"cached function requires initialized binding {slot} at this call",
-                    )
-                self.global_read(slot, current)
             for module, proof in self.registry_reads.get(name, {}).items():
                 if self.registry.get(module) != proof:
                     error = _Unclosed(
@@ -371,7 +462,17 @@ class _Project:
                         last_change=current,
                     )
                     raise error
-                self.read_registry(module, proof)
+                self.read_registry(module, proof, source or fn)
+            for slot, required in self.global_reads.get(name, {}).items():
+                current = self.names.get(slot)
+                if current is None or (current.kind, current.value) != required:
+                    raise _Unclosed(
+                        name,
+                        fn,
+                        "name_binding",
+                        f"cached function requires initialized binding {slot} at this call",
+                    )
+                self.global_read(slot, current, source or fn)
             if write := self.registry_writes.get(name):
                 self.unknown_registry(write["owner"], write)
             return self.closed[name]
@@ -506,7 +607,11 @@ class _Frame:
         return _Value(kind, None, facts or {}).at(name)
 
     def global_value(self, name, value):
-        self.project.global_read(name, value)
+        self.project.global_read(
+            name,
+            value,
+            self.source_expression or (self.region.current if self.region else None),
+        )
         if (
             self.initializing
             or not values.runtime(value.kind)
@@ -961,6 +1066,7 @@ class _Frame:
 
     def module_member(self, node, module, member, steps, *, optional=False):
         """Read current bindings before considering a missing-attribute hook."""
+        self.project.observe_import(module, "namespace", node, member)
         slot = _slot(module, member)
         candidates = list(node.get("missing_attribute_hooks", ()))
         if candidate := node.get("missing_attribute_hook"):
@@ -1043,7 +1149,7 @@ class _Frame:
                     **({"last_change": row} if row else {}),
                 },
             )
-        self.project.read_registry(module, row)
+        self.project.read_registry(module, row, node)
         self.project.decisions.append(
             dict(
                 code="module_registry_hit",
@@ -1085,6 +1191,7 @@ class _Frame:
             )
         origin = self.import_origin(node)
         if origin is not None:
+            start = len(steps)
             status = origin["status"]
             if req.get("level"):
                 self.fail(
@@ -1113,9 +1220,18 @@ class _Frame:
                     source_evidence=self._import_evidence(mod),
                 )
             if not value.facts.get("namespace_instance"):
-                # A pinned provider identifies the code, but its import hooks
-                # can write process state even when the bound export is pure.
-                self.project.unknown_registry(self.name, node)
+                scoped = host_protocols.registry_import(self, node, origin)
+                writes = {
+                    w
+                    for op in walk_operations(steps[start:])
+                    for w in op.get("writes", ())
+                }
+                if scoped and not writes.intersection(
+                    {"module.registry", "import.external_effects"}
+                ):
+                    self.project.scoped_import(self.name, node, scoped, steps)
+                else:
+                    self.project.unknown_registry(self.name, node)
             self.store(node["binding"], value, steps)
             return
 
@@ -1147,6 +1263,8 @@ class _Frame:
                     "import_initializer_identity",
                     f"the current entry for {name} does not match its graph initializer",
                 )
+            if previous is not None:
+                self.project.observe_import(name, "registry", node)
             if previous is None:
                 fn = self.project.compile(symbol, (), source=node)
                 if fn.get("noreturn"):
@@ -2334,6 +2452,7 @@ def normalize_protocols(module):
     except _Unclosed as error:
         issue = error.issue
         project.sequences.freeze(project, partial=True)
+    project.finish_imports()
     contracts = [
         dict(
             symbol=name,

@@ -415,6 +415,7 @@ def _schedule_image(
     module.pop("posix_runtime_binding_sha256", None)
     module.pop("parameter_access_binding_sha256", None)
     module.pop("compilation_binding_sha256", None)
+    module.pop("math_interface_binding_sha256", None)
     requirements, bindings, issues = _qualify(module, image_context)
     if binding := bindings.get("posix_runtime"):
         module["posix_runtime_binding_sha256"] = digest(json_bytes(binding))
@@ -471,9 +472,19 @@ def _schedule_image(
         if access:
             physical["parameter_access"] = access
         functions = [
-            member(destination, "scheduled-units", fn)
-            for fn in selected.pop("functions")
+            member(destination, "scheduled-units", fn) for fn in selected["functions"]
         ]
+        source_members = {
+            fn["name"]: receipt
+            for fn, receipt in zip(module["functions"], ir["functions"], strict=True)
+        }
+        math = toolchain.math_interfaces(
+            selected, source_members, functions, compilation
+        )
+        if math:
+            physical["math_interfaces"] = math
+            selected["math_interface_binding_sha256"] = digest(json_bytes(math))
+        del selected["functions"]
         if "resource_flow" in selected.get("resource_model", {}):
             inventory = dict(selected["resource_model"])
             inventory["resource_flow"] = member(

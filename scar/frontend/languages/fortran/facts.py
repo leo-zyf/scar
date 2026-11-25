@@ -1023,7 +1023,7 @@ def _compile_capture(path, root, flags, tmp):
             )
         return p.stdout.decode("utf-8", errors="replace")
 
-    fixed = path.suffix.lower() in {".for", ".f", ".ftn", ".f77"}
+    fixed = path.suffix.lower() in {".for", ".f", ".ftn", ".f77", ".fpp"}
     language = None
     for i, flag in enumerate(flags):
         if flag == "-x" and i + 1 < len(flags):
@@ -1037,17 +1037,22 @@ def _compile_capture(path, root, flags, tmp):
         flags,
         "-cpp",
         "-nocpp",
-        path.suffix != path.suffix.lower()
-        or bool(language and language.endswith("-cpp-input")),
+        (
+            language.endswith("-cpp-input")
+            if language not in {None, "none"}
+            else path.suffix
+            in {".F", ".FOR", ".fpp", ".FPP", ".F90", ".F95", ".F03", ".F08"}
+        ),
     )
     semantic_flags = ["-J", str(tmp), "-v", "-fsyntax-only", "-fdump-fortran-original"]
     dependencies = tmp / "source.d"
-    if preprocess:
-        semantic_flags.extend(
-            ["-MD", "-MF", str(dependencies), "-MT", "scar-fortran-source"]
-        )
+    dependency_flags = (
+        ["-MD", "-MF", str(dependencies), "-MT", "scar-fortran-source"]
+        if preprocess
+        else []
+    )
     receipt = {"compiler": compiler}
-    dump = capture([*semantic_flags, str(path)], receipt)
+    dump = capture([*semantic_flags, *dependency_flags, str(path)], receipt)
     dependency_bytes = dependencies.read_bytes() if dependencies.exists() else None
     receipt["dependencies"] = (
         dependency_bytes.decode("utf-8", errors="surrogateescape")
@@ -1260,6 +1265,7 @@ def _capture_unit(path, root, flags):
                 raise Gap("syntax", str(exc)) from exc
             candidate = tmp / ("syntax.f" if fixed else "syntax.f90")
             candidate.write_text(compatible)
+            compatibility_receipt = {}
             checked = capture(
                 [
                     *semantic_flags,
@@ -1269,10 +1275,21 @@ def _capture_unit(path, root, flags):
                     "-I",
                     str(path.parent),
                     str(candidate),
-                ]
+                ],
+                compatibility_receipt,
             )
             if _without_builtin_plus(checked) != _without_builtin_plus(dump):
                 raise Gap("syntax", str(exc)) from exc
+            numeric["syntax_compatibility"] = {
+                "command": compatibility_receipt["semantic_command"],
+                "source_sha256": sha256(candidate.read_bytes()).hexdigest(),
+                "stdout_sha256": compatibility_receipt["semantic_stdout_sha256"],
+                "stderr_sha256": sha256(
+                    compatibility_receipt["semantic_stderr"]
+                ).hexdigest(),
+                "evidence": "gnu_dump_equivalent_ignoring_builtin_unary_plus",
+                "returncode": compatibility_receipt["semantic_returncode"],
+            }
             tree = _syntax(compatible, fixed, root, path, flags)
     if sha256(path.read_bytes()).hexdigest() != source_sha256:
         raise Gap("source_changed", "raw source changed during semantic capture")

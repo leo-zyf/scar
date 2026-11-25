@@ -1314,6 +1314,151 @@ def test_product_identity_pool_and_shared_arrays_across_target_units(tmp_path):
         )
 
 
+def test_math_interface_declaration_remains_distinct_from_vector_authorization(
+    tmp_path,
+):
+    from scar.backend.planning import schedule_ir
+    from scar.contract import digest, json_bytes, read_member
+
+    path, sha = "/absent/selected-math.h", "c" * 64
+    captured = dict(path=path, sha256=sha, size=201, evidence="gnu_semantic_preinclude")
+    evidence = dict(file=path, sha256=sha, line=17, provider=captured["evidence"])
+    interface = dict(
+        semantics_version=1,
+        interface="pow",
+        declaration="gnu_builtin",
+        execution="not_observed",
+        attributes={"simd": {"branch": "notinbranch"}},
+        evidence=evidence,
+        target_condition=dict(selector="x86_64", evaluation="unresolved"),
+    )
+    contract = dict(
+        semantics_version=1,
+        scope="compilation_unit",
+        policy=dict(math_errno=False),
+        caller_observations=dict(errno="unproven", fenv="unproven"),
+        semantic_capture=dict(returncode=0, inputs=[captured]),
+        runtime_fp_environment="unobserved",
+        source_math_interfaces=[
+            interface,
+            dict(interface, evidence=dict(evidence, sha256="d" * 64)),
+        ],
+    )
+    args = [dict(op="literal", type="f64", value=v) for v in (2.0, 3.0)]
+    signed = dict(
+        normalized_name="pow",
+        result_type="f64",
+        argument_types=["f64", "f64"],
+        semantics_version=1,
+    )
+    power = dict(
+        op="intrinsic",
+        name="pow",
+        site="graph/2",
+        args=args,
+        type="f64",
+        source_intrinsic_contract=signed,
+    )
+    integer_power = dict(power, name="powi", site="graph/3")
+    untouched = dict(
+        op="library_call", provider="project", name="pow", site="graph/4", args=args
+    )
+    body = [dict(op="expr", value=node) for node in (integer_power, power, untouched)]
+    ref = dict(
+        op="map",
+        site="ref",
+        index="i",
+        independent=True,
+        extent=dict(op="literal", type="i64", value=3),
+        body=[dict(op="expr", value=dict(power, site="graph/ref"))],
+    )
+    fused = dict(
+        ref,
+        site="fused",
+        body=[dict(op="expr", value=dict(power, site="graph/unselected"))],
+    )
+    body.append(
+        dict(
+            op="schedule_choice",
+            site="choice",
+            reference=[ref],
+            fused=fused,
+            guard="masked_floating_exceptions",
+            proof=dict(stale=dict(power, site="graph/history")),
+        )
+    )
+    body[0]["validation_evidence"] = dict(power, site="graph/not-executed")
+    fn = dict(
+        name="main",
+        result="i32",
+        params=[],
+        body=body,
+        source_numeric_contract=contract,
+    )
+    origin, destination = tmp_path / "execution", tmp_path / "schedule"
+    source = member(origin, "functions", fn)
+    inventory = dict(
+        software_headers={path: dict(size=201, sha256=sha)},
+        platform=dict(architecture="x86_64", isa_profiles={"isa:0": ["sse2"]}),
+    )
+    write_json(
+        origin / "exec-ir.json",
+        document(
+            IR,
+            status="READY",
+            functions=[source],
+            module=dict(
+                entry="main",
+                resource_model=inventory,
+                math_interface_binding_sha256="forged",
+            ),
+        ),
+    )
+    filename = schedule_ir(origin, destination, policy="serial")
+    origin.rename(tmp_path / "hidden-input")
+    package = json.loads(filename.read_bytes())
+    physical = read_member(destination, package["physical"])
+    math = physical["math_interfaces"]
+    decision = math["functions"]["main"]
+    assert package["module"]["math_interface_binding_sha256"] == digest(
+        json_bytes(math)
+    )
+    assert decision["exec_function_sha256"] == source["sha256"]
+    assert decision["scheduled_function_sha256"] == package["functions"][0]["sha256"]
+    retained = read_member(destination, package["functions"][0])["body"]
+    assert retained[:3] == body[:3] and retained[3]["site"] == "ref"
+    assert decision["source_contract_sha256"] == digest(json_bytes(contract))
+    profile = math["source_contracts"][decision["source_contract_sha256"]]
+    assert profile["caller_observations"] == contract["caller_observations"]
+    assert [c["evidence_verified"] for c in profile["declarations"]["pow"]] == [
+        True,
+        False,
+    ]
+    site, mapped = decision["sites"]
+    assert mapped["site"] == "graph/ref" and mapped["operation_path"] == [
+        "body",
+        3,
+        "body",
+        0,
+        "value",
+    ]
+    assert site["site"] == "graph/2" and site["operation_path"] == ["body", 1, "value"]
+    assert (
+        site["source_intrinsic_signature_verified"]
+        and site["selected"] == "preserve_operation"
+    )
+    assert (
+        site["vector_eligibility"] == "not_qualified"
+        and math["target"]["vector_library"] is None
+    )
+    assert {
+        "source_declaration_target_condition",
+        "caller_errno_observation_proof",
+        "caller_fenv_observation_proof",
+        "target_vector_library_abi_qualification",
+    } <= set(site["obligations"])
+
+
 def test_invocation_access_qualifies_only_sealed_definition_parameters(tmp_path):
     from dataclasses import replace
 

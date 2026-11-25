@@ -323,8 +323,11 @@ def test_binding_preserves_unit_scoped_provider_and_export_evidence(
         "import importlib as lib\nfrom importlib import import_module as lookup\n"
         "import provider_sample.kernel\n"
         "def read(): return lookup('provider_sample.kernel').marker\n"
+        "import math\n"
         "before = read()\n"
         "print(read(), lib.import_module('.kernel', package='provider_sample').marker, before)\n"
+        "import provider_sample.kernel as repeated\n"
+        "last = repeated.marker\n"
     )
     cached_graph = tmp_path / "cached-graph"
     build(cached, cached_graph)
@@ -388,7 +391,11 @@ print(json.dumps(issue))
     )
     assert not issues and result["protocol_analysis"]["status"] == "READY"
     requirement = result["operator_requirements"]["module_registry"]
-    assert requirement["operations"] == ["module_namespace_initialize"]
+    assert set(requirement["operations"]) == {
+        "module_namespace_initialize",
+        "module_import_preserves",
+        "module_import_continuation_required",
+    }
     assert (
         requirement["entry_contract"]["initial_cache"] == "unobserved_by_static_capture"
     )
@@ -397,6 +404,20 @@ print(json.dumps(issue))
     assert sum(n.get("callee") == init for n in ops) == 1
     namespace = next(n for n in ops if n["op"] == "module_namespace_initialize")
     assert namespace["may_raise"] and "process.import_hooks" in namespace["reads"]
+    guarded = next(
+        n
+        for n in ops
+        if n["op"] == "if" and n["condition"]["op"] == "module_import_preserves"
+    )
+    transition = guarded["condition"]
+    assert transition["type"] == "bool" and transition["direct_registry_keys"] == [
+        "math"
+    ]
+    checked = transition["checks"]["provider_sample.kernel"]
+    assert (
+        checked["registry"]["site"] and checked["namespace"]["first_member"] == "marker"
+    )
+    assert guarded["else"][0]["value"]["noreturn"]
     hits = [d for d in decisions if d["code"] == "module_registry_hit"]
     assert {d["owner"] for d in hits} == {"py:cached:read", "__main__"}
     assert all(
@@ -435,6 +456,9 @@ print(json.dumps(issue))
     cached_call = after_registry_write(body.index(before) + 1)
     assert cached_call["code"] == "python.import_module_cache"
     assert cached_call["source_evidence"]["required"]["initializer"] == init
+    old_alias = after_registry_write(len(body) - 1)
+    assert old_alias["code"] == "python.module_namespace_after_effect"
+    assert old_alias["source_evidence"]["member"] == "marker"
 
 
 def test_execution_scopes_automatic_for_initializers_before_sealing():
@@ -2726,6 +2750,18 @@ print(json.dumps({'checked':list(results)}))
 
 
 def test_middle_layers_consume_only_preceding_products(tmp_path):
+    numeric = dict(
+        scope="compilation_unit",
+        source=dict(path="/removed/unit.f90", sha256="a" * 64),
+        source_flags=["-O3"],
+        policy=dict(math_errno=False, trapping_math=True),
+        source_math_interfaces=[
+            dict(
+                interface="pow",
+                evidence=dict(file="/removed/math.h", sha256="b" * 64, line=7),
+            )
+        ],
+    )
     ptr = {"kind": "ptr", "to": "i64"}
     ref = {"kind": "ref", "to": "i64"}
     main = dict(
@@ -2757,6 +2793,8 @@ def test_middle_layers_consume_only_preceding_products(tmp_path):
         params=[dict(name="value", type=ptr)],
         body=[dict(op="return")],
     )
+    for function in (main, update):
+        function["source_numeric_contract"] = deepcopy(numeric)
     functions = [function_graph(f, "revision") for f in (main, update)]
     globals_ = function_graph(
         dict(name="@initializers", result="void", params=[], body=[]), "revision"
@@ -2781,6 +2819,15 @@ def test_middle_layers_consume_only_preceding_products(tmp_path):
         topology=[],
         units=[
             dict(
+                path="unit.f90",
+                flags=["-O3"],
+                source_facts=dict(
+                    files={"unit.f90": "a" * 64},
+                    source_numeric_contract=numeric,
+                    external_headers={
+                        "/removed/math.h": dict(sha256="b" * 64, size=10)
+                    },
+                ),
                 graph=shard,
                 initializer_calls=[],
                 diagnostics=[],
@@ -2809,6 +2856,29 @@ print(json.dumps(module))
     )
     assert "declarations" in bound and "normalizations" not in bound
     assert bound["state_evidence"]["main"]["graph_id"] == functions[0]["id"]
+    assert all(f["source_numeric_contract"] == numeric for f in bound["functions"])
+    _layer(
+        "binding",
+        """from scar.middle.binding import bind
+from scar.contract import read_member, member
+from pathlib import Path
+folder=Path(data['folder'])
+for field in ('source', 'interface', 'function'):
+    graph=json.loads(json.dumps(data['graph']))
+    unit=graph['units'][0]
+    if field=='source': unit['source_facts']['files']['unit.f90']='c'*64
+    elif field=='interface': unit['source_facts']['external_headers']['/removed/math.h']['sha256']='c'*64
+    else:
+        payload=read_member(folder,unit['graph'])
+        payload['functions'][0]['signature']['source_numeric_contract']['policy']['math_errno']=True
+        unit['graph']=member(folder,'units',payload)
+    try: bind(graph,folder)
+    except ValueError: pass
+    else: raise AssertionError('inconsistent numerical '+field+' evidence accepted')
+print(json.dumps({'rejected':3}))
+""",
+        dict(graph=graph, folder=str(tmp_path)),
+    )
     graph_file.unlink()
     normalized = _layer(
         "normalization",
@@ -2898,6 +2968,14 @@ print(json.dumps({'path':str(path),'facts':facts}))
     )
     product = json.loads(Path(sealed["path"]).read_bytes())
     assert product["status"] == "READY" and len(product["functions"]) == 3
+    assert (
+        sum(
+            "source_numeric_contract"
+            in json.loads((tmp_path / "sealed" / receipt["path"]).read_bytes())
+            for receipt in product["functions"]
+        )
+        == 2
+    )
 
     missing_argument = deepcopy(bound)
     missing_argument["functions"][0]["body"][1]["value"]["args"].clear()

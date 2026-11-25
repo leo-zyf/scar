@@ -3203,6 +3203,45 @@ def test_fortran_numeric_facts_preserve_source_kinds_and_selected_policy(tmp_pat
         ]
         == "same_semantic_command_dependency_inventory"
     )
+    for index, (suffix, flags, preprocessed) in enumerate(
+        [
+            (".f90", ["-cpp", "-nocpp"], False),
+            (".f90", ["-nocpp", "-cpp"], True),
+            (".F90", ["-x", "f95"], False),
+            (".F90", ["-nocpp"], False),
+            (".f90", ["-O3", "-x", "f95-cpp-input"], True),
+        ]
+    ):
+        source = tmp_path / ("mode" + suffix)
+        source.write_text("subroutine unary(x)\nreal(8) :: x\nx=x+ +x\nend\n")
+        request.write_text(
+            json.dumps(
+                dict(
+                    language="fortran",
+                    source_root=str(tmp_path),
+                    entry="unary_",
+                    units=[dict(path=source.name, flags=flags)],
+                )
+            )
+        )
+        graph = tmp_path / f"graph-mode-{index}"
+        _stage(tmp_path, "frontend", "build", "--manifest", request, "--out", graph)
+        document = json.loads((graph / "graph.json").read_bytes())
+        assert not document["units"][0]["diagnostics"]
+        signature = _payloads(graph, document)[0]["functions"][0]["signature"]
+        contract = signature["source_numeric_contract"]
+        assert contract["source_flags"] == flags
+        assert ("-MD" in contract["validated_command"]) == preprocessed
+        actual = contract["semantic_capture"]["frontend_argv"]
+        assert any(a.startswith("-cpp=") for a in actual) == preprocessed
+        compatibility = contract["syntax_compatibility"]
+        assert compatibility["returncode"] == 0
+        assert (
+            compatibility["evidence"]
+            == "gnu_dump_equivalent_ignoring_builtin_unary_plus"
+        )
+        assert "-nocpp" in compatibility["command"]
+        assert not {"-MD", "-MF", "-MT"}.intersection(compatibility["command"])
 
 
 def test_fixed_form_program_emits_cpp20(tmp_path):
