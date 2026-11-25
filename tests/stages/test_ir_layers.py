@@ -3483,6 +3483,12 @@ def test_resource_flow_projects_copies_without_unrolling_or_placement_claims():
             ],
         ),
         copy(variable("base"), "after-loop"),
+        {
+            "op": "module_object_for",
+            "evaluation": [copy(create(), "source-iterable")],
+            "body": [copy(create(), "source-body")],
+            "else": [copy(create(), "source-exhaustion")],
+        },
     ]
     body[2]["value"]["source_evidence"] = dict(
         op="array_copy", type=array, value=variable("base"), site="historical"

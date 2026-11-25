@@ -6,6 +6,7 @@ from math import prod
 from .contracts import is_complete, publish_program, require_program
 from scar.contract import (
     ARTIFACT_FLOW,
+    LOOP_OPERATIONS,
     IR,
     VERSION,
     digest,
@@ -330,8 +331,8 @@ def annotate_scoped_arrays(function):
                 or (op in {"case", "default"} and not breakable)
             ):
                 raise ValueError(f"automatic array continuation crosses a {op} edge")
-            nested_loop = op in {"for", "each", "while", "do_while", "map"}
             for owner, field, _ in control_regions(node):
+                nested_loop = op in LOOP_OPERATIONS and field != "else"
                 inspect(
                     owner[field],
                     at_function_scope,

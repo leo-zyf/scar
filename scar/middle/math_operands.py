@@ -2,10 +2,14 @@
 
 from collections import Counter
 
-from scar.contract import EXECUTION_ANNOTATIONS, control_regions, walk_operations
+from scar.contract import (
+    EXECUTION_ANNOTATIONS,
+    LOOP_OPERATIONS,
+    control_regions,
+    walk_operations,
+)
 
 _INTEGER = {f"{s}{n}" for s in "iu" for n in (8, 16, 32, 64)}
-_LOOPS = {"for", "while", "do_while", "each", "map"}
 # Expressions evaluated by these statements. Nested statement lists are handled
 # separately, so definitions inside an unentered control arm cannot dominate a use.
 _OPERANDS = (
@@ -298,7 +302,7 @@ def analyze(fn, declarations, introduce):
                 if external(n):
                     record(n, loops)
             nested = loops
-            if stmt["op"] in _LOOPS:
+            if stmt["op"] in LOOP_OPERATIONS:
                 modified = {
                     name for n in _nodes(stmt) if isinstance(name := _written(n), str)
                 }

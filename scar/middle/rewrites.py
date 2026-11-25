@@ -2,6 +2,7 @@
 
 from copy import deepcopy
 from scar.contract import (
+    LOOP_OPERATIONS,
     control_regions,
     external_math_declaration,
     semantic_form as semantics,
@@ -414,7 +415,13 @@ def _bounded_coordinates(fn, changes):
     def sequence(body, env, bounds):
         for statement in body:
             op = statement["op"]
-            if op in {"for", "while", "do_while", "each", "map"}:
+            if op == "module_object_for":
+                # The iterator or its target mapping may call arbitrary source code
+                # between any two iterations. No incoming scalar bound proves a use.
+                env.clear()
+                sequence(statement["body"], {}, {})
+                sequence(statement.get("else", []), {}, {})
+            elif op in LOOP_OPERATIONS:
                 # A body may run after init/condition effects and on any later
                 # iteration after step/body effects. Never carry an earlier
                 # scalar alias through any of those possible writes.

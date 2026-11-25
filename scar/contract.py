@@ -37,6 +37,7 @@ MODULE_REGISTRY_OPERATIONS = frozenset(
         "module_name_load",
         "module_namespace_initialize",
         "module_object_expression",
+        "module_object_for",
         "source_exception_match",
         "source_exception_bind",
         "source_exception_clear",
@@ -1606,7 +1607,13 @@ def semantic_form(value):
     return value
 
 
+LOOP_OPERATIONS = frozenset(
+    {"for", "each", "while", "do_while", "map", "module_object_for"}
+)
+
+
 _CONTROL_REGIONS = {
+    "module_object_for": ("body", "else"),
     "for": ("init", "body"),
     "if": ("then", "else"),
     "try": ("body", "handlers", "else", "finally"),

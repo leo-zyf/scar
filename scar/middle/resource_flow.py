@@ -8,10 +8,15 @@ nor asserts that a conditional operation actually executed.
 from copy import deepcopy
 from math import prod
 
-from scar.contract import digest, json_bytes, semantic_form, walk_operations
+from scar.contract import (
+    LOOP_OPERATIONS,
+    digest,
+    json_bytes,
+    semantic_form,
+    walk_operations,
+)
 from scar.middle.contracts import has_open_effect
 
-_LOOPS = {"for", "while", "do_while", "map", "each"}
 _BRANCHES = {"if", "select"}
 _CALLS = {"call", "indirect_call", "library_call", "process_spawn", "process_request"}
 _FILES = {"fs.copy_file", "fs.copy", "fs.copy2", "fs.copy_tree"}
@@ -383,7 +388,23 @@ def analyze(module, *, partial=False):
                     }
                 )
                 return regions[0] if regions[0] == regions[1] else _region(value)
-            if op in _LOOPS:
+            if op == "module_object_for":
+                # The source expression and GET_ITER run once. Only next, target
+                # publication and the body belong to the repeated region.
+                for field in ("evaluation", "acquire"):
+                    visit(value.get(field), [*path, field], scope)
+                repeated = [*scope, dict(kind=op, path=path)]
+                for field in ("advance", "target", "body"):
+                    environment.clear()
+                    visit(value.get(field), [*path, field], repeated)
+                environment.clear()
+                visit(
+                    value.get("else", []),
+                    [*path, "else"],
+                    [*scope, dict(kind="exhaustion", path=path)],
+                )
+                return None
+            if op in LOOP_OPERATIONS:
                 nested = [*scope, dict(kind=op, path=path)]
                 if op == "for":
                     visit(value.get("init", []), [*path, "init"], nested)

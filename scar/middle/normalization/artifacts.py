@@ -7,6 +7,8 @@ import posixpath
 
 from scar.contract import (
     ARTIFACT_FLOW,
+    LOOP_OPERATIONS,
+    MODULE_REGISTRY_OPERATIONS,
     byte_value_id,
     digest,
     document,
@@ -2334,7 +2336,13 @@ def analyze(module):
             for item in walk_operations(statement):
                 op = item["op"]
                 returns |= op == "return"
-                if op == "host_call":
+                if (
+                    op in MODULE_REGISTRY_OPERATIONS
+                    and item.get("external_effect") == "UNKNOWN"
+                ):
+                    # Source lookups, next and reference release may reenter user code.
+                    effects = opaque = namespace = external_process_effects = True
+                elif op == "host_call":
                     interface = item["interface"]
                     effects |= (
                         interface.startswith("fs.")
@@ -2504,7 +2512,7 @@ def analyze(module):
                     flow = conditional(statement)
                     if flow != "normal":
                         return flow
-                elif op in {"for", "while", "do_while", "map", "each"}:
+                elif op in LOOP_OPERATIONS:
                     flow = loop_summary(statement)
                     if flow != "normal":
                         return flow
