@@ -2041,8 +2041,11 @@ def test_external_import_facts_preserve_ownership_without_execution(
 
 def test_fromlist_checks_precede_all_member_bindings(tmp_path, monkeypatch):
     import dis
+    import pytest
 
+    from scar.frontend.graph import function_graph
     from scar.frontend.languages.python import normalize
+    from scar.middle.binding import _definition
 
     package = tmp_path / "pkg"
     package.mkdir()
@@ -2050,7 +2053,7 @@ def test_fromlist_checks_precede_all_member_bindings(tmp_path, monkeypatch):
     statement = "from . import child as first, dynamic, child as second"
     entry = package / "__init__.py"
     entry.write_text(
-        f"{statement}\n"
+        f"global second\n{statement}\n"
         "def __getattr__(name):\n    raise RuntimeError(name)\n"
         "import math\nfrom . import *\n"
     )
@@ -2074,6 +2077,31 @@ def test_fromlist_checks_precede_all_member_bindings(tmp_path, monkeypatch):
         ("IMPORT_FROM", "dynamic"),
         ("IMPORT_FROM", "child"),
     ]
+    receipt = first["source_fromlist"]
+    assert not any("source_fromlist" in n for n in (dynamic, second, plain, star))
+    assert receipt["code_sha256"] == main["python_scope"]["source_code"]["code_sha256"]
+    assert receipt["level"]["value"] == 1 and receipt["import_name"]["name"] == ""
+    assert receipt["fromlist"]["value"] == ["child", "dynamic", "child"]
+    code = compile(entry.read_bytes(), str(entry), "exec", dont_inherit=True)
+    actual = {ins.offset: ins for ins in dis.get_instructions(code)}
+    rows = [receipt[k] for k in ("level", "fromlist", "import_name")]
+    for pair in receipt["bindings"]:
+        rows.extend((pair["read"], pair["store"]))
+    rows.append(receipt["release"])
+    assert [row["offset"] for row in rows] == [
+        i.offset for i in actual.values() if i.positions.lineno == 2
+    ]
+    for row in rows:
+        ins = actual[row["offset"]]
+        assert row["opcode"] == ins.opname and receipt["position"] == list(
+            ins.positions
+        )
+        if "index" in row:
+            assert row["index"] == ins.arg
+        if "name" in row:
+            assert row["name"] == ins.argval
+    assert receipt["bindings"][2]["store"]["opcode"] == "STORE_GLOBAL"
+    assert rows[-1]["opcode"] == "POP_TOP"
     checks = first["fromlist_checks"]
     assert checks["phase"] == "during_IMPORT_NAME_before_IMPORT_FROM"
     assert not any("fromlist_checks" in row for row in (dynamic, second, plain, star))
@@ -2109,6 +2137,28 @@ def test_fromlist_checks_precede_all_member_bindings(tmp_path, monkeypatch):
             )
         assert item == expected
     assert {"py:pkg.child:<init>", "py:pkg:__getattr__"} <= set(main["calls"])
+
+    graphs = [function_graph(fn, "fromlist-test") for fn in unit["functions"]]
+    graph = next(g for g in graphs if g["signature"]["name"] == "__main__")
+    declarations = {g["signature"]["name"]: g["signature"] for g in graphs}
+    bound = _definition(graph, declarations)
+    group = [n for n in bound["body"] if n.get("location") == first["location"]]
+    assert group[0]["fromlist_binding_sites"] == [n["site"] for n in group]
+    header = next(
+        n["source_fromlist"] for n in graph["nodes"] if "source_fromlist" in n
+    )
+    header["bindings"][2]["store"]["name"] = "first"
+    with pytest.raises(ValueError, match="member read or store"):
+        _definition(graph, declarations)
+    header["bindings"][2]["store"]["name"] = "second"
+    header["release"]["offset"] += 2
+    with pytest.raises(ValueError, match="discontinuous instruction path"):
+        _definition(graph, declarations)
+    header["release"]["offset"] -= 2
+    index = graph["entry"].index({"port": int(group[1]["site"].rsplit("/", 1)[1])})
+    graph["entry"].pop(index)
+    with pytest.raises(ValueError, match="ordered binding ports"):
+        _definition(graph, declarations)
 
 
 def test_numpy_linspace_captures_selected_native_dependency_without_importing(

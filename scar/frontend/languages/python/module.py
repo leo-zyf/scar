@@ -1718,9 +1718,23 @@ class _Scope:
             member_hooks = {}
             import_store = (
                 self.unit.import_stores.get(tuple_position(node))
-                if self.module_scope and not from_import
+                if self.module_scope
                 else None
             )
+            receipt = {}
+            if import_store:
+                key = (
+                    "source_fromlist"
+                    if from_import
+                    else (
+                        "source_import_projection"
+                        if "projection" in import_store
+                        else "source_import_store"
+                    )
+                )
+                receipt[key] = dict(
+                    import_store, code_sha256=self.unit.source_code["code_sha256"]
+                )
             for i, (module, bound, fact) in enumerate(self.unit.module_bindings(node)):
                 alias = node.names[i]
                 self.invalidate_shared()
@@ -1794,20 +1808,7 @@ class _Scope:
                         member=alias.name,
                         alias=alias.asname,
                         bound_value=fact,
-                        **(
-                            {
-                                (
-                                    "source_import_projection"
-                                    if "projection" in import_store
-                                    else "source_import_store"
-                                ): {
-                                    **import_store,
-                                    "code_sha256": self.unit.source_code["code_sha256"],
-                                }
-                            }
-                            if import_store
-                            else {}
-                        ),
+                        **(receipt if i == 0 else {}),
                         request={
                             "form": "from" if from_import else "import",
                             "module": (

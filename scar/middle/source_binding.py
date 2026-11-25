@@ -510,70 +510,85 @@ def bind_source_definition(node, scope, declarations):
         )
 
 
-def bind_import_store(node, scope):
-    """Check an optional bytecode witness against the reconstructed graph ports."""
-    projected = "source_import_projection" in node
-    if projected and "source_import_store" in node:
-        raise ValueError("source import has conflicting publication paths")
-    proof = node["source_import_projection" if projected else "source_import_store"]
-    request, target, loc = node["request"], node["binding"], node["location"]
-    module = node["module"]
-    slot = node.get("alias") or module.partition(".")[0]
-    ports = ("level", "fromlist", "import_name", "store")
+def _bind_import_request(proof, node, scope, *, named):
+    request, loc = node["request"], node["location"]
     if not isinstance(proof, dict) or not all(
-        isinstance(proof.get(key), dict) for key in ports
+        isinstance(proof.get(k), dict) for k in ("level", "fromlist", "import_name")
     ):
         raise ValueError("invalid source import operands")
-    level, fromlist, imported, stored = (proof[key] for key in ports)
+    level, fromlist, imported = (proof[k] for k in ("level", "fromlist", "import_name"))
     code = scope.get("source_code") or {}
-    position = proof.get("position")
-    # CPython may load the import level from its constant table or encode
-    # zero in the instruction itself. Only the former owns a table index.
+    depth = request.get("level")
     immediate = level.get("opcode") == "LOAD_SMALL_INT"
-    indexed = (
-        (fromlist, imported, stored)
-        if immediate
-        else (level, fromlist, imported, stored)
-    )
-    level_matches = (
-        type(level.get("oparg")) is int and level["oparg"] == 0 and "index" not in level
-        if immediate
-        else level.get("opcode") == "LOAD_CONST" and "oparg" not in level
-    )
+    indexed = (fromlist, imported) if immediate else (level, fromlist, imported)
     if not (
         type(proof.get("semantics_version")) is int
         and proof["semantics_version"] == 1
         and code.get("kind") == "module"
         and proof.get("code_sha256") == code["code_sha256"]
         and loc.get("file") == code["source_key"]
-        and position == _source_position(loc)
-        and request.get("form") == "import"
-        and request.get("module") == imported.get("name") == module
-        and projected == ("." in module and node.get("alias") is not None)
-        and request.get("level") == 0
-        and request.get("fromlist") == []
-        and level_matches
-        and fromlist.get("opcode") == "LOAD_CONST"
+        and proof.get("position") == _source_position(loc)
+        and request.get("form") == ("from" if named else "import")
+        and isinstance(request.get("module"), str)
+        and request["module"] == imported.get("name")
+        and type(depth) is int
+        and depth >= 0
+        and (named or depth == 0)
         and type(level.get("value")) is int
-        and level["value"] == 0
+        and level["value"] == depth
+        and (
+            type(level.get("oparg")) is int
+            and level["oparg"] == depth
+            and "index" not in level
+            if immediate
+            else level.get("opcode") == "LOAD_CONST" and "oparg" not in level
+        )
+        and fromlist.get("opcode") == "LOAD_CONST"
         and "value" in fromlist
-        and fromlist["value"] is None
+        and isinstance(request.get("fromlist"), list)
+        and (
+            fromlist["value"] == request["fromlist"]
+            if named
+            else fromlist["value"] is None and not request["fromlist"]
+        )
         and imported.get("opcode") == "IMPORT_NAME"
-        and stored.get("opcode") in {"STORE_NAME", "STORE_GLOBAL"}
-        and stored.get("name") == slot
-        and target.get("op") == "var"
-        and target.get("scope") == "global"
-        and target.get("name") == f"py:{scope['module']}:{slot}"
         and all(type(p.get("index")) is int and p["index"] >= 0 for p in indexed)
         and all(
             type(p.get("offset")) is int and p["offset"] >= 0
-            for p in (level, fromlist, imported, stored)
+            for p in (level, fromlist, imported)
         )
-        and level["offset"] < fromlist["offset"] < imported["offset"] < stored["offset"]
+        and level["offset"] < fromlist["offset"] < imported["offset"]
+    ):
+        raise ValueError("source import operands disagree with their graph ports")
+
+
+def bind_import_store(node, scope):
+    """Check an optional bytecode witness against the reconstructed graph ports."""
+    projected = "source_import_projection" in node
+    if projected and "source_import_store" in node:
+        raise ValueError("source import has conflicting publication paths")
+    proof = node["source_import_projection" if projected else "source_import_store"]
+    _bind_import_request(proof, node, scope, named=False)
+    request, target, loc = node["request"], node["binding"], node["location"]
+    module = node["module"]
+    slot = node.get("alias") or module.partition(".")[0]
+    stored = proof.get("store")
+    if not (
+        isinstance(stored, dict)
+        and module == request["module"]
+        and projected == ("." in module and node.get("alias") is not None)
+        and stored.get("opcode") in {"STORE_NAME", "STORE_GLOBAL"}
+        and stored.get("name") == slot
+        and type(stored.get("index")) is int
+        and stored["index"] >= 0
+        and type(stored.get("offset")) is int
+        and stored["offset"] > proof["import_name"]["offset"]
+        and target.get("op") == "var"
+        and target.get("scope") == "global"
+        and target.get("name") == f"py:{scope['module']}:{slot}"
     ):
         raise ValueError("source import operands disagree with their graph ports")
     if projected:
-        members = module.split(".")[1:]
         if (
             node.get("member") != module
             or request.get("binding_index") != 0
@@ -583,8 +598,88 @@ def bind_import_store(node, scope):
             raise ValueError(
                 "source import projection disagrees with its alias binding"
             )
-        _bind_import_projection(proof, members)
+        _bind_import_projection(proof, module.split(".")[1:])
     return proof
+
+
+def bind_named_fromlist(body, start, scope, references, function_id):
+    """Bind the single IMPORT_NAME result to the sibling read/store ports in source order."""
+    first = body[start]
+    if first.get("op") != "python_import" or not isinstance(first.get("request"), dict):
+        raise ValueError("source fromlist requires an import statement")
+    proof, request, loc = first["source_fromlist"], first["request"], first["location"]
+    _bind_import_request(proof, first, scope, named=True)
+    members, bindings, release = (
+        request["fromlist"],
+        proof.get("bindings"),
+        proof.get("release"),
+    )
+    group = body[start : start + len(members)]
+    if not (
+        members
+        and len(group) == len(members)
+        and isinstance(bindings, list)
+        and len(bindings) == len(group)
+        and isinstance(release, dict)
+        and set(release) == {"opcode", "offset"}
+        and release["opcode"] == "POP_TOP"
+    ):
+        raise ValueError("source fromlist is missing a binding or final release")
+    if request["level"] == 0 and request["module"] != first.get("module"):
+        raise ValueError("source fromlist disagrees with its requested module")
+    ordered = [proof["level"], proof["fromlist"], proof["import_name"]]
+    sites = []
+    for i, (node, member, pair) in enumerate(
+        zip(group, members, bindings, strict=True)
+    ):
+        if not (
+            isinstance(node, dict)
+            and node.get("op") == "python_import"
+            and isinstance(ref := references[start + i], dict)
+            and set(ref) == {"port"}
+            and type(ref["port"]) is int
+            and node.get("site") == f"{function_id}/{ref['port']}"
+            and node.get("module") == first["module"]
+            and node.get("location") == loc
+            and node.get("member") == member
+            and isinstance(member, str)
+            and member.isidentifier()
+            and node.get("request") == dict(request, binding_index=i)
+            and type(node["request"]["binding_index"]) is int
+            and not (i and "source_fromlist" in node)
+            and "source_import_store" not in node
+            and "source_import_projection" not in node
+            and isinstance(pair, dict)
+            and set(pair) == {"read", "store"}
+        ):
+            raise ValueError("source fromlist disagrees with its ordered binding ports")
+        local = node.get("alias") or member
+        read, store = pair["read"], pair["store"]
+        if not (
+            isinstance(local, str)
+            and local.isidentifier()
+            and all(
+                isinstance(row, dict)
+                and set(row) == {"opcode", "offset", "index", "name"}
+                and type(row["index"]) is int
+                and row["index"] >= 0
+                for row in (read, store)
+            )
+            and read["opcode"] == "IMPORT_FROM"
+            and read["name"] == member
+            and store["opcode"] in {"STORE_NAME", "STORE_GLOBAL"}
+            and store["name"] == local
+            and _namespace_target(
+                dict(store, position=proof["position"]), node.get("binding"), scope
+            )
+        ):
+            raise ValueError("source fromlist disagrees with its member read or store")
+        ordered.extend((read, store))
+        sites.append(node["site"])
+    if len(set(sites)) != len(sites):
+        raise ValueError("source fromlist repeats a binding port")
+    _bind_import_offsets([*ordered, release])
+    first["fromlist_binding_sites"] = sites
 
 
 def _bind_import_projection(proof, members):
@@ -627,6 +722,10 @@ def _bind_import_projection(proof, members):
         proof["store"],
         release,
     ]
+    _bind_import_offsets(ordered)
+
+
+def _bind_import_offsets(ordered):
     # These wordcode instructions have no inline caches. An operand wider than
     # one byte owns its preceding EXTENDED_ARG words.
     for earlier, row in zip(ordered, ordered[1:]):
@@ -636,9 +735,7 @@ def _bind_import_projection(proof, members):
             type(row.get("offset")) is not int
             or row["offset"] != earlier["offset"] + 2 * width
         ):
-            raise ValueError(
-                "source import projection has a discontinuous instruction path"
-            )
+            raise ValueError("source import has a discontinuous instruction path")
 
 
 def loader_ports(node, site, declarations, proof):

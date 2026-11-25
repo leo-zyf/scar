@@ -6,6 +6,7 @@ from .source_binding import (
     bind_constant_store,
     bind_exception_arms,
     bind_import_store,
+    bind_named_fromlist,
     bind_source_expression,
     bind_source_definition,
     loader_ports,
@@ -125,13 +126,23 @@ def _definition(graph, declarations=None):
     nodes = graph["nodes"]
     active = set()
 
-    def read(value, successor=None):
+    def read(value, successor=None, *, in_sequence=False):
         if isinstance(value, list):
             # Control-flow receipts can name the next statement in this suite.
-            return [
-                read(v, value[i + 1] if i + 1 < len(value) else None)
+            items = [
+                read(v, value[i + 1] if i + 1 < len(value) else None, in_sequence=True)
                 for i, v in enumerate(value)
             ]
+            for i, item in enumerate(items):
+                if isinstance(item, dict) and "source_fromlist" in item:
+                    bind_named_fromlist(
+                        items,
+                        i,
+                        graph["signature"].get("python_scope", {}),
+                        value,
+                        graph["id"],
+                    )
+            return items
         if not isinstance(value, dict):
             return value
         if "port" in value and len(value) == 1:
@@ -140,6 +151,16 @@ def _definition(graph, declarations=None):
                 raise ValueError(f"invalid operand port {port} in {graph['id']}")
             active.add(port)
             result = read(nodes[port])
+            if "source_fromlist" in result and (
+                not in_sequence or result["op"] != "python_import"
+            ):
+                raise ValueError(
+                    "source fromlist requires ordered import statement ports"
+                )
+            if "fromlist_binding_sites" in result:
+                raise ValueError(
+                    "source fromlist binding sites must come from graph ports"
+                )
             if result["op"] == "python_import" and (
                 "source_import_store" in result or "source_import_projection" in result
             ):
