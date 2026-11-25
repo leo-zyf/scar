@@ -11,6 +11,7 @@ from scar.contract import (
     walk_operations,
 )
 from scar.source_contracts import python_binary_operator
+from . import objects
 from .values import literal, source_site
 
 REGISTRY_PROFILE = "cpython-importlib-registry-v1"
@@ -909,6 +910,66 @@ class _SourceExpressionRegion:
             **source_site(target),
         )
 
+    def function(self, node):
+        symbol = node["symbol"]
+        project = self.frame.project
+        definition = project.functions.get(symbol) or project.function_definitions.get(
+            symbol, {}
+        )
+        scope = definition.get("python_scope", {})
+        child = node["source_definition"]["child"]
+        if (
+            not objects.plain_definition(node)
+            or definition.get("name") != symbol
+            or definition.get("owner_class")
+            or definition.get("call_protocol", {}).get("kind") != "regular"
+            or scope.get("kind") != "function"
+            or scope.get("initializer") != self.frame.name
+            or scope.get("module") != self.frame.module
+            or scope.get("source_key") != self.code["source_key"]
+            or scope.get("definition_code") != child
+            or not isinstance(child, dict)
+            or child.get("qualname") != child.get("name")
+        ):
+            raise ValueError(
+                "function creation requires the sealed ordinary definition in this module"
+            )
+        load = self.take("LOAD_CONST", source=node)
+        code = self.emit(
+            load,
+            "source_object_constant",
+            node,
+            source="current_frame_co_consts",
+            operand=load["index"],
+            expected_code=child,
+        )
+        make = self.take("MAKE_FUNCTION", source=node)
+        if (
+            self.minor == 12
+            and make.get("oparg") != 0
+            or self.minor >= 13
+            and "oparg" in make
+        ):
+            raise ValueError(
+                "function creation requires the source MAKE_FUNCTION without optional attributes"
+            )
+        return self.emit(
+            make,
+            "source_object_make_function",
+            node,
+            code=code,
+            symbol=symbol,
+            globals="current_frame_globals",
+            builtins=dict(
+                lookup="source_lookup_of___builtins___in_current_globals_at_function_creation",
+                absent="current_frame_builtins",
+                module="module_dict",
+                other="actual_object",
+            ),
+            allocation="source_MAKE_FUNCTION_creates_distinct_function_with_source_metadata_each_execution",
+            may_raise=True,
+        )
+
     def statement(self, node):
         if node["op"] == "raise":
             exception = self.value(node["value"]) if node["has_exception"] else None
@@ -931,9 +992,18 @@ class _SourceExpressionRegion:
                 reraise="zero_operands_reraises_actual_handled_exception_with_existing_traceback_or_raises_RuntimeError_if_absent",
                 exception_state="preserve_traceback_cause_context_suppression_and_handled_exception_at_source_transfer",
             )
-        elif node["op"] == "assign":
-            value = self.value(node["value"])
+        elif node["op"] in {"assign", "python_define"}:
+            value = (
+                self.function(node)
+                if node["op"] == "python_define"
+                else self.value(node["value"])
+            )
             target = self.target(node["target"], "STORE_NAME", "STORE_GLOBAL")
+            if (
+                node["op"] == "python_define"
+                and node["source_definition"]["child"]["name"] != target["name"]
+            ):
+                raise ValueError("the source function name and store target differ")
             opcode = "module_global_store"
             ports = dict(
                 slot=target["slot"],
@@ -966,7 +1036,10 @@ class _SourceExpressionRegion:
 def open_object_statement(frame, node, steps):
     """Consume a complete source evaluation stack at its actual store, delete or raise."""
     code = _open_module_code(frame)
-    receipt = node.get("source_expression")
+    field = (
+        "source_definition" if node["op"] == "python_define" else "source_expression"
+    )
+    receipt = node.get(field)
     if not code or not receipt:
         return False
     try:
@@ -981,11 +1054,18 @@ def open_object_statement(frame, node, steps):
         steps,
         opcode,
         source_code=code,
-        source_expression=receipt,
+        **{field: receipt},
         evaluation=region.steps,
         **ports,
         reads=("frame.code", "frame.locals", "python.exception_state"),
         code_match="qualify_current_activation_code_instruction_stack_and_exception_table_before_first_source_instruction",
+        **(
+            {
+                "child_code_match": "qualify_actual_code_constant_type_identity_descriptor_and_empty_freevars_before_first_source_instruction"
+            }
+            if field == "source_definition"
+            else {}
+        ),
         on_code_mismatch="resume_source_equivalent_execution_before_first_instruction_with_original_stack_and_exception_state",
         ownership="retain_each_owned_operand_until_consumed_at_its_source_opcode",
         release="preserve_replaced_or_deleted_values_release_reentry_and_unraisable_finalizer_errors",

@@ -44,6 +44,7 @@ MODULE_REGISTRY_OPERATIONS = frozenset(
         "source_object_region",
         "source_object_attribute",
         "source_object_constant",
+        "source_object_make_function",
         "source_object_convert",
         "source_object_format",
         "source_object_build_string",

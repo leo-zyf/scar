@@ -3453,11 +3453,22 @@ class _Frame:
                     steps,
                 )
             elif op == "python_define":
-                if not objects.plain_definition(node):
-                    defined = objects.bind_function_definition(self, node, steps)
+                if self.initializing and self.project.imports.open_namespace:
+                    if not namespace_operations.open_object_statement(
+                        self, node, steps
+                    ):
+                        self.fail(
+                            node,
+                            "source_definition_evidence",
+                            "function creation in the open module needs its child code, MAKE_FUNCTION and source mapping store",
+                        )
                 else:
-                    defined = _Value("function", node["symbol"])
-                self.store(node["target"], defined, steps)
+                    defined = (
+                        _Value("function", node["symbol"])
+                        if objects.plain_definition(node)
+                        else objects.bind_function_definition(self, node, steps)
+                    )
+                    self.store(node["target"], defined, steps)
             elif op == "raise":
                 exceptions.throw(self, node, steps)
                 return stop()

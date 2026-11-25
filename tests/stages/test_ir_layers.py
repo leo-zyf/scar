@@ -9112,3 +9112,148 @@ def test_open_binary_uses_original_operands_and_transfers_the_slot_result(tmp_pa
         if mode in {"fallback", "unsupported"}:
             suffix.append("left slot")
         assert events == ["left operand", "right operand", *suffix]
+
+
+def test_open_function_definition_publishes_fresh_object_with_current_builtins(
+    tmp_path,
+):
+    from types import ModuleType, SimpleNamespace
+
+    from scar.contract import read_member
+    from scar.frontend import build
+    from scar.middle import plan
+
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    source = pkg / "__init__.py"
+    source.write_text(
+        "from . import child as gone\ndel gone\nchange()\n"
+        "def first():\n    invoked()\n    return token\n"
+        "def other():\n    return token\n"
+        "def restricted(value=option()):\n    return value\n"
+        "def declaration():\n    global other\n"
+    )
+    code = compile(source.read_bytes(), str(source), "exec")
+    (pkg / "child.py").write_text("pass\n")
+    entry = tmp_path / "entry.py"
+    entry.write_text("import pkg\n")
+    graph, out = tmp_path / "graph", tmp_path / "plan"
+    build(entry, graph)
+    source.unlink()
+    assert plan(graph, out)["status"] == "INCOMPLETE"
+    report = json.loads((out / "plan.json").read_bytes())
+    [gap] = report["issues"]
+    assert (gap["location"]["line"], gap["code"]) == (
+        9,
+        "python.source_definition_evidence",
+    )
+    ref = next(
+        r
+        for r in report["protocol_analysis"]["prefix_fragments"]
+        if r["symbol"] == "py:pkg:<init>"
+    )
+    defs = [
+        s["value"]
+        for s in read_member(out, ref["fragment"])["body"]
+        if "source_definition" in s.get("value", {})
+    ]
+    assert [d["store_opcode"] for d in defs] == ["STORE_NAME", "STORE_GLOBAL"]
+    assert [d["name"] for d in defs] == ["first", "other"]
+    for d in defs:
+        load, make = d["evaluation"]
+        port = d["source_definition"]
+        assert d["op"] == "module_global_store" and d["external_effect"] == "UNKNOWN"
+        assert (
+            load["op"] == "source_object_constant"
+            and load["source"] == "current_frame_co_consts"
+        )
+        assert (
+            load["expected_code"] == port["child"]
+            and code.co_consts[load["operand"]].co_name == d["name"]
+        )
+        assert make["op"] == "source_object_make_function" and make["code"] == {
+            "from_offset": load["offset"]
+        }
+        assert (
+            make["globals"] == "current_frame_globals"
+            and make["builtins"]["absent"] == "current_frame_builtins"
+        )
+        assert make["may_raise"] and d["value"] == {"from_offset": make["offset"]}
+        assert [
+            load["offset"],
+            make["offset"],
+            d["target"]["instruction"]["offset"],
+        ] == [i["offset"] for i in port["instructions"]]
+
+    instances = []
+    for mode in (
+        "replace",
+        "module",
+        "absent",
+        "sentinel",
+        "store_failure",
+        "reentrant_store",
+    ):
+        previous = object()
+        replacement = object()
+        before = {"token": previous, "__import__": lambda *a: SimpleNamespace(child=0)}
+        after = {"token": replacement}
+        module = ModuleType("replacement")
+        module.token = replacement
+        glob = {"__builtins__": before}
+        made = []
+        events = []
+
+        class Local(dict):
+            def __setitem__(self, key, value):
+                if key == "first":
+                    made.append(value)
+                    if mode == "store_failure":
+                        raise LookupError("store")
+                super().__setitem__(key, value)
+
+        loc = Local()
+
+        class Old:
+            def __del__(self):
+                if mode == "store_failure":
+                    return
+                events.append(loc["first"] is made[-1])
+                if mode == "reentrant_store":
+                    loc["first"] = replacement
+
+        dict.__setitem__(loc, "first", Old())
+
+        def change():
+            if mode == "absent":
+                del glob["__builtins__"]
+            else:
+                glob["__builtins__"] = {"module": module, "sentinel": 17}.get(
+                    mode, after
+                )
+
+        loc.update(change=change, option=lambda: None)
+        glob["invoked"] = lambda: events.append("body")
+        if mode == "store_failure":
+            with pytest.raises(LookupError, match="store"):
+                exec(code, glob, loc)
+            assert "other" not in glob and not events
+            del loc["first"]
+        else:
+            exec(code, glob, loc)
+            fn = made[0]
+            assert (
+                events == [True] and fn is not glob["other"] and fn.__globals__ is glob
+            )
+            expected = {
+                "module": module.__dict__,
+                "absent": before,
+                "sentinel": 17,
+            }.get(mode, after)
+            assert (
+                fn.__builtins__ is expected and glob["other"].__builtins__ is expected
+            )
+            assert fn.__code__ is code.co_consts[defs[0]["evaluation"][0]["operand"]]
+            assert all(fn is not prior for prior in instances)
+            instances.append(fn)
+            assert loc["first"] is (replacement if mode == "reentrant_store" else fn)
