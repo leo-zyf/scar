@@ -107,30 +107,64 @@ _SPAN = ("line", "end_line", "column", "end_column")
 
 def _binding_sample(sample, line):
     """Validate the collector payload before the graph supplies the port identity."""
-    if not isinstance(sample, dict) or set(sample) != {
-        "owner",
-        "location",
-        "binding_index",
-        "member",
-        "binding",
-        "result",
-    }:
+    if not isinstance(sample, dict):
         raise ValueError("invalid import binding sample fields")
-    loc = sample["location"]
+    loc = sample.get("location")
     if (
         not isinstance(loc, dict)
         or set(loc) != set(_SPAN)
         or any(type(loc[k]) is not int or loc[k] < 1 for k in _SPAN)
         or loc["line"] != line
         or (loc["end_line"], loc["end_column"]) <= (loc["line"], loc["column"])
+        or type(sample.get("owner")) is not str
+        or not sample["owner"]
+    ):
+        raise ValueError("invalid import binding sample position")
+    if sample.get("phase") == "before_IMPORT_NAME":
+        i = sample.get("instruction")
+        binding = sample.get("import_callable")
+        if not (
+            set(sample)
+            == {
+                "owner",
+                "location",
+                "phase",
+                "code_sha256",
+                "instruction",
+                "import_callable",
+                "registry_state",
+            }
+            and isinstance(sample["code_sha256"], str)
+            and re.fullmatch("[a-f0-9]{64}", sample["code_sha256"])
+            and isinstance(i, dict)
+            and set(i) == {"opcode", "offset", "index", "name"}
+            and i["opcode"] == "IMPORT_NAME"
+            and all(type(i[k]) is int and i[k] >= 0 for k in ("offset", "index"))
+            and type(i["name"]) is str
+            and all(part.isidentifier() for part in i["name"].split("."))
+            and sample["registry_state"]
+            in ("absent", "present_none", "present_module", "present_other", "unknown")
+            and isinstance(binding, dict)
+            and (
+                binding.get("kind") in ("absent", "other", "unknown")
+                and set(binding) == {"kind"}
+                or binding.get("kind") in ("builtin_function", "python_function")
+                and not set(binding) - {"kind", "module", "qualname"}
+                and all(type(v) is str and 0 < len(v) <= 4096 for v in binding.values())
+            )
+        ):
+            raise ValueError("invalid pre-import instruction sample")
+        return sample
+    if (
+        set(sample)
+        != {"owner", "location", "binding_index", "member", "binding", "result"}
         or any(
-            type(sample[k]) is not str or not sample[k]
-            for k in ("owner", "member", "binding")
+            type(sample[k]) is not str or not sample[k] for k in ("member", "binding")
         )
         or type(sample["binding_index"]) is not int
         or sample["binding_index"] < 0
     ):
-        raise ValueError("invalid import binding sample position")
+        raise ValueError("invalid import binding sample fields")
     result = sample["result"]
     if isinstance(result, dict):
         kind = result.get("kind")
@@ -167,8 +201,17 @@ def _binding_sample(sample, line):
     raise ValueError("invalid import binding sample value")
 
 
+def _plain_instruction_key(owner, loc, code_sha, instruction):
+    return (
+        owner,
+        *(loc[k] for k in _SPAN),
+        code_sha,
+        *(instruction[k] for k in ("opcode", "offset", "index", "name")),
+    )
+
+
 def link_import_observation(observed, units, images, folder):
-    """F5 joins successful binding samples to exact source ports in one image."""
+    """Join observations of imports and completed bindings to source ports in one image."""
     from scar.contract import digest, json_loads, read_member
 
     image, entry_sha, raw = observed
@@ -177,7 +220,11 @@ def link_import_observation(observed, units, images, folder):
         not isinstance(record, dict)
         or record.get("schema") != "scar.python-import-observation"
         or record.get("schema_version") != 1
-        or record.get("scope") != "instrumented_script_successful_module_bindings"
+        or record.get("scope")
+        not in (
+            "instrumented_script_successful_module_bindings",
+            "instrumented_script_import_sites",
+        )
         or entry_sha != record.get("entry_sha256")
         or not isinstance(record.get("source_sha256"), str)
         or not re.fullmatch("[a-f0-9]{64}", record["source_sha256"])
@@ -209,27 +256,62 @@ def link_import_observation(observed, units, images, folder):
                 continue
             owner = "__main__" if scope.get("main") else scope["module"]
             for port, node in enumerate(fn["nodes"]):
-                if node["op"] != "python_import" or node["request"]["form"] != "from":
+                if node["op"] != "python_import":
                     continue
-                loc = node["location"]
-                key = (
-                    owner,
-                    *(loc[k] for k in _SPAN),
-                    node["request"]["binding_index"],
-                    node["member"],
-                    node.get("alias") or node["member"],
-                )
+                loc, req = node["location"], node["request"]
+                if req["form"] == "from":
+                    key = (
+                        owner,
+                        *(loc[k] for k in _SPAN),
+                        req["binding_index"],
+                        node["member"],
+                        node.get("alias") or node["member"],
+                    )
+                elif req["form"] == "import" and (
+                    proof := node.get("source_import_store")
+                ):
+                    code = scope.get("source_code", {})
+                    ins = proof["import_name"]
+                    if not (
+                        code.get("source_key") == unit["path"] == loc["file"]
+                        and code.get("source_sha256") == record["source_sha256"]
+                        and proof.get("code_sha256") == code.get("code_sha256")
+                        and proof["position"]
+                        == [
+                            loc["line"],
+                            loc["end_line"],
+                            loc["column"] - 1,
+                            loc["end_column"] - 1,
+                        ]
+                        and req["level"] == 0
+                        and req["fromlist"] == []
+                        and ins["name"] == req["module"]
+                    ):
+                        continue
+                    key = _plain_instruction_key(owner, loc, proof["code_sha256"], ins)
+                else:
+                    continue
                 ports.setdefault(key, []).append(f"{fn['id']}/{port}")
     events = []
     for raw_sample in record["events"]:
         sample = _binding_sample(raw_sample, record["line"])
-        key = (
-            sample["owner"],
-            *(sample["location"][k] for k in _SPAN),
-            sample["binding_index"],
-            sample["member"],
-            sample["binding"],
-        )
+        if "phase" in sample:
+            if record["scope"] != "instrumented_script_import_sites":
+                raise ValueError("pre-import sample requires an instruction capture")
+            key = _plain_instruction_key(
+                sample["owner"],
+                sample["location"],
+                sample["code_sha256"],
+                sample["instruction"],
+            )
+        else:
+            key = (
+                sample["owner"],
+                *(sample["location"][k] for k in _SPAN),
+                sample["binding_index"],
+                sample["member"],
+                sample["binding"],
+            )
         sites = ports.get(key, [])
         joined = (
             {"site": sites[0]}

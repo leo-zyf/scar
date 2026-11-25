@@ -1,4 +1,4 @@
-"""Record the actual module-level member bindings of one from-import in CPython."""
+"""Sample CPython module import instructions and successful from-import bindings."""
 
 import argparse
 import dis
@@ -6,11 +6,84 @@ from hashlib import sha256
 import os
 from pathlib import Path
 import sys
-from types import CodeType, FunctionType, ModuleType
+from types import BuiltinFunctionType, CodeType, FunctionType, ModuleType
 import warnings
 
 from scar.contract import write_json
 from .environment import code_digest, run_script
+
+
+def _visible_entry(mapping, name):
+    # A dict lookup can call __eq__ on a user-supplied colliding key. Only
+    # inspect exact str keys in the bounded snapshot; never invoke a matcher.
+    if type(mapping) is not dict:
+        return "unknown", None
+    try:
+        for index, (key, value) in enumerate(mapping.items()):
+            if index >= 16384 or type(key) is not str:
+                return "unknown", None
+            if key == name:
+                return "present", value
+    except RuntimeError:  # The mapping changed during iteration.
+        return "unknown", None
+    return "absent", None
+
+
+def _import_callable(mapping):
+    state, value = _visible_entry(mapping, "__import__")
+    if state != "present":
+        return {"kind": state}
+    if type(value) is not BuiltinFunctionType and type(value) is not FunctionType:
+        return {"kind": "other"}
+    result = {
+        "kind": "python_function" if type(value) is FunctionType else "builtin_function"
+    }
+    # Labels describe the sampled callable; equality of labels is not identity.
+    qualname = (
+        value.__qualname__
+        if type(value) is FunctionType
+        or value.__self__ is None
+        or type(value.__self__) is ModuleType
+        else None
+    )
+    for key, label in (("module", value.__module__), ("qualname", qualname)):
+        if type(label) is str and 0 < len(label) <= 4096:
+            result[key] = label
+    return result
+
+
+def _registry_state(name):
+    module_dict = ModuleType.__dict__["__dict__"].__get__(sys)
+    _, registry = _visible_entry(module_dict, "modules")
+    state, value = _visible_entry(registry, name)
+    if state != "present":
+        return state
+    if value is None:
+        return "present_none"
+    return "present_module" if issubclass(type(value), ModuleType) else "present_other"
+
+
+def _plain_import(instructions, index, incoming):
+    if index < 2 or index + 1 >= len(instructions):
+        return None
+    level, fromlist, request, store = instructions[index - 2 : index + 2]
+    if not (
+        level.opname in {"LOAD_CONST", "LOAD_SMALL_INT"}
+        and type(level.argval) is int
+        and level.argval == 0
+        and fromlist.opname == "LOAD_CONST"
+        and fromlist.argval is None
+        and store.opname in {"STORE_NAME", "STORE_GLOBAL"}
+        and all(i.positions == request.positions for i in (level, fromlist, store))
+        and not any(i.offset in incoming for i in (fromlist, request, store))
+    ):
+        return None
+    return dict(
+        opcode="IMPORT_NAME",
+        offset=request.offset,
+        index=request.arg,
+        name=request.argval,
+    )
 
 
 def _binding(namespace, name):
@@ -86,9 +159,21 @@ class ImportBindingObserver:
                 )
         except (SyntaxError, ValueError):
             return
-        if code_digest(code) != code_digest(expected):
+        identity = code_digest(code)
+        if identity != code_digest(expected):
             return
-        instructions = list(dis.get_instructions(code))
+        bytecode = dis.Bytecode(code)
+        handlers = {entry.target for entry in bytecode.exception_entries}
+        instructions, incoming = [], set()
+        branch_entry = False
+        for ins in bytecode:
+            branch_entry |= ins.is_jump_target or ins.offset in handlers
+            if ins.opname == "EXTENDED_ARG":
+                continue
+            if branch_entry:
+                incoming.add(ins.offset)
+                branch_entry = False
+            instructions.append(ins)
         points = {}
         for i, ins in enumerate(instructions):
             if (
@@ -104,6 +189,16 @@ class ImportBindingObserver:
                 column=pos.col_offset + 1,
                 end_column=pos.end_col_offset + 1,
             )
+            if instruction := _plain_import(instructions, i, incoming):
+                points.setdefault(ins.offset, []).append(
+                    dict(
+                        phase="before_IMPORT_NAME",
+                        location=site,
+                        code_sha256=identity,
+                        instruction=instruction,
+                    )
+                )
+                continue
             j = i + 1
             index = 0
             while j + 2 < len(instructions):
@@ -111,7 +206,7 @@ class ImportBindingObserver:
                 if (
                     member.opname != "IMPORT_FROM"
                     or store.opname not in ("STORE_NAME", "STORE_GLOBAL")
-                    or after.is_jump_target
+                    or after.offset in incoming
                     or after.opname not in {"IMPORT_FROM", "POP_TOP"}
                 ):
                     break
@@ -143,12 +238,21 @@ class ImportBindingObserver:
             or type(frame.f_globals) is not dict
         ):
             return
-        owner = frame.f_globals.get("__name__")
+        _, owner = _visible_entry(frame.f_globals, "__name__")
         if type(owner) is not str:
             return
         for point in points:
             if len(self.events) >= self.limit:
                 self.dropped += 1
+            elif "phase" in point:
+                self.events.append(
+                    dict(
+                        **point,
+                        owner=owner,
+                        import_callable=_import_callable(frame.f_builtins),
+                        registry_state=_registry_state(point["instruction"]["name"]),
+                    )
+                )
             else:
                 self.events.append(
                     dict(
@@ -210,7 +314,11 @@ def main(argv=None):
                 dict(
                     schema="scar.python-import-observation",
                     schema_version=1,
-                    scope="instrumented_script_successful_module_bindings",
+                    scope=(
+                        "instrumented_script_import_sites"
+                        if any("phase" in e for e in observer.events)
+                        else "instrumented_script_successful_module_bindings"
+                    ),
                     interpreter=f"{sys.implementation.name} {sys.version.split()[0]}",
                     entry_sha256=sha256(data).hexdigest(),
                     source_sha256=sha256(observer.data).hexdigest(),

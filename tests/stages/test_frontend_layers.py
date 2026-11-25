@@ -3384,3 +3384,122 @@ def test_attach_import_observation_to_relocated_script_image(tmp_path):
         json.loads((tmp_path / "plan/plan.json").read_bytes())["graph_sha256"]
         == sha256(derived.read_bytes()).hexdigest()
     )
+
+
+def test_plain_import_observation_precedes_frame_callback_and_joins_exact_instruction(
+    tmp_path,
+):
+    from hashlib import sha256
+    import os
+    import sys
+
+    import scar
+    from scar.frontend import build
+    from scar.frontend.observation import link_import_observation
+
+    folder = tmp_path / "src"
+    folder.mkdir()
+    watched = folder / "observed.py"
+    unused_names = ", ".join(f"name{i}" for i in range(270))
+    watched.write_text(
+        f"if False: {unused_names}\nimport subject as alias\nprint(alias.value)\n"
+    )
+    (folder / "subject.py").write_text("value = 11\n")
+    entry = folder / "entry.py"
+    entry.write_text(
+        "import builtins, sys, types\n"
+        "if 'warm' in sys.argv:\n"
+        "    cached = types.ModuleType('subject')\n"
+        "    cached.value = 37\n"
+        "    sys.modules['subject'] = cached\n"
+        "if 'deny' in sys.argv:\n"
+        "    def denied(*args): raise RuntimeError('frame import was denied')\n"
+        "    path = __file__.replace('entry.py', 'observed.py')\n"
+        "    with open(path, 'rb') as stream: code = compile(stream.read(), path, 'exec')\n"
+        "    exec(code, {'__name__':'observed', '__builtins__':dict(vars(builtins), __import__=denied)})\n"
+        "else:\n"
+        "    import observed\n"
+    )
+    out = tmp_path / "graph"
+    build(entry, out)
+    units = json.loads((out / "graph.json").read_bytes())["units"]
+    entry_sha = sha256(entry.read_bytes()).hexdigest()
+    env = dict(os.environ, PYTHONPATH=str(Path(scar.__file__).resolve().parents[1]))
+    sites = []
+    for mode, state, kind in (
+        ("cold", "absent", "builtin_function"),
+        ("warm", "present_module", "builtin_function"),
+        ("deny", "absent", "python_function"),
+    ):
+        sample = tmp_path / f"{mode}.json"
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-B",
+                "-m",
+                "scar.frontend.languages.python.import_observation",
+                "--source",
+                str(watched),
+                "--line",
+                "2",
+                "--out",
+                str(sample),
+                str(entry),
+                mode,
+            ],
+            cwd=folder,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if mode == "deny":
+            assert result.returncode and "frame import was denied" in result.stderr
+        else:
+            assert result.returncode == 0, result.stderr
+            assert result.stdout == ("11\n" if mode == "cold" else "37\n")
+        raw = sample.read_bytes()
+        linked = link_import_observation((None, entry_sha, raw), units, None, out)
+        assert linked["scope"] == "instrumented_script_import_sites"
+        [event] = linked["events"]
+        assert event["phase"] == "before_IMPORT_NAME" and event["owner"] == "observed"
+        assert (
+            event["registry_state"] == state
+            and event["import_callable"]["kind"] == kind
+        )
+        assert event["import_callable"]["qualname"] == (
+            "denied" if mode == "deny" else "__import__"
+        )
+        assert event["instruction"]["name"] == "subject" and "result" not in event
+        assert event["instruction"]["index"] > 255
+        sites.append(event["site"])
+    assert len(set(sites)) == 1
+    ambiguous = link_import_observation(
+        (None, entry_sha, raw), units + units, None, out
+    )
+    assert ambiguous["events"][0]["unresolved"] == "ambiguous_source_port"
+    for field in (
+        "code_sha256",
+        "source_sha256",
+        "offset",
+        "index",
+        "name",
+        "owner",
+        "column",
+    ):
+        altered = json.loads(raw)
+        [event] = altered["events"]
+        if field == "source_sha256":
+            altered[field] = "0" * 64
+        elif field == "code_sha256":
+            event[field] = "0" * 64
+        elif field in ("name", "owner"):
+            (event["instruction"] if field == "name" else event)[field] = "another"
+        else:
+            (event["location"] if field == "column" else event["instruction"])[
+                field
+            ] += 1
+        linked = link_import_observation(
+            (None, entry_sha, json.dumps(altered).encode()), units, None, out
+        )
+        assert linked["events"][0]["unresolved"] == "no_matching_port"
