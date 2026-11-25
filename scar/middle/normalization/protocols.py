@@ -481,10 +481,9 @@ class _Project:
         if current.get("state") != "unresolved" or not windows:
             return current
         expected = self.imports.normal_identity(current, windows)
-        # A folded registry lookup also needs one lifecycle/identity
-        # precondition for every prior comparison. Namespace preservation can
-        # span initialization without claiming that stronger cache hit.
-        if expected is None or any(before != expected for _, _, before, _ in windows):
+        if expected is None or not self.imports.covers_registry_lookup(
+            name, expected, windows
+        ):
             return current
         self.observe_import(name, "registry", node)
         self.imports.bind_registry(name, expected)
@@ -1708,15 +1707,10 @@ class _Frame:
             if previous is not None:
                 self.project.observe_import(name, "registry", node)
             if previous is None:
-                self.project.imports.bind_registry(
-                    name,
-                    dict(
-                        state="initializing",
-                        initializer=symbol,
-                        owner=self.name,
-                        **values.source_site(node),
-                    ),
+                publication = self.project.imports.begin_initializer(
+                    name, symbol, self.name, occurrence["id"], values.source_site(node)
                 )
+                analyzed_body = symbol not in self.project.closed
                 fn = self.project.compile(symbol, (), source=node)
                 if fn.get("noreturn"):
                     self.fail(
@@ -1731,15 +1725,22 @@ class _Frame:
                 steps.append(dict(op="expr", value=call))
                 # Only the continuation of this emitted call has an initialized
                 # module. Merely compiling or finding a cached body proves less.
-                self.project.imports.bind_registry(
-                    name,
-                    dict(
-                        state="ready",
-                        initializer=symbol,
-                        owner=self.name,
-                        **values.source_site(node),
-                    ),
+                still_published = (
+                    self.project.imports.registry_entry(name) is publication
                 )
+                if not still_published:
+                    self.project.registry_entry(name, node)
+                if not self.project.imports.complete_initializer(
+                    name,
+                    publication,
+                    call,
+                    analyzed_body=analyzed_body and still_published,
+                ):
+                    self.fail(
+                        node,
+                        "import_initializer_identity",
+                        f"{name} did not retain the published instance on initializer return",
+                    )
             parent, _, leaf = scope["module"].rpartition(".")
             if parent:
                 slot = namespace_slot(parent, leaf)

@@ -1,5 +1,6 @@
 """Derive target-neutral lowering contracts and seal the execution IR product."""
 
+from collections import Counter
 from copy import deepcopy
 from math import prod
 from .contracts import is_complete, publish_program, require_program
@@ -171,6 +172,150 @@ def annotate_iteration_layouts(function, global_names=()):
     return count
 
 
+_SCALAR_TYPES = (
+    "bool",
+    "char",
+    "i8",
+    "u8",
+    "i16",
+    "u16",
+    "i32",
+    "u32",
+    "i64",
+    "u64",
+    "f32",
+    "f64",
+)
+
+
+def annotate_private_scratch(function, external_names):
+    """Prove uses of a function-scope native buffer only through scalar elements."""
+    body = function["body"]
+    buffers = [node for node in body if node["op"] == "buffer"]
+    if not buffers:
+        return
+    candidates = {
+        node["name"]: node
+        for node in buffers
+        if node["type"] in _SCALAR_TYPES
+        and node["name"] not in external_names
+        and node.get("storage") in (None, "compiler_temporary")
+        and set(node) <= {"op", "name", "type", "extent", "site", "location", "storage"}
+    }
+    if not candidates:
+        return
+    types = {}
+
+    def bind(name, spec):
+        types[name] = spec if name not in types or types[name] == spec else None
+
+    for param in function["params"]:
+        bind(param["name"], param["type"])
+        candidates.pop(param["name"], None)
+    nodes = list(_nodes(body))
+    for node in nodes:
+        if node["op"] in {"try", "goto", "label"}:
+            return
+        if node["op"] in {"decl", "each", "runtime_array", "buffer"}:
+            ty = node["type"]
+            if node["op"] in {"buffer", "runtime_array"}:
+                ty = {"kind": "ptr", "to": ty}
+            bind(node["name"], ty)
+        elif node["op"] == "map":
+            bind(node["index"], "i64")
+
+    def local_type(node):
+        if node.get("op") == "var" and node.get("scope") != "global":
+            return types.get(node["name"])
+
+    def scalar(node):
+        op = node.get("op")
+        if op == "var":
+            return local_type(node) in _SCALAR_TYPES
+        if op == "literal":
+            return node.get("type") in _SCALAR_TYPES
+        if op == "index" or op == "unary" and node["operator"] == "deref":
+            base = node["base"] if op == "index" else node["value"]
+            ty = local_type(base)
+            return (
+                isinstance(ty, dict)
+                and ty.get("kind") == "ptr"
+                and ty.get("to") in _SCALAR_TYPES
+                and (
+                    op != "index"
+                    or len(node["indices"]) == 1
+                    and scalar(node["indices"][0])
+                )
+            )
+        if op == "cast":
+            return (
+                node.get("type") in _SCALAR_TYPES
+                and node.get("mode", "static") == "static"
+                and scalar(node["value"])
+            )
+        if op == "unary":
+            return node["operator"] in {"pos", "neg", "not", "bnot"} and scalar(
+                node["value"]
+            )
+        return (
+            op == "binary"
+            and node["operator"]
+            in {
+                "add",
+                "sub",
+                "mul",
+                "div",
+                "mod",
+                "lt",
+                "le",
+                "gt",
+                "ge",
+                "eq",
+                "ne",
+                "lor",
+                "land",
+                "bor",
+                "band",
+                "bxor",
+                "shl",
+                "shr",
+            }
+            and scalar(node["left"])
+            and scalar(node["right"])
+        )
+
+    # Count name occurrences, including binding positions and other implicit
+    # operands. An unrecognized use or shadow cannot accidentally count as a load.
+    mentions = Counter()
+
+    def count_names(tree):
+        if isinstance(tree, dict):
+            for child in tree.values():
+                count_names(child)
+        elif isinstance(tree, list):
+            for child in tree:
+                count_names(child)
+        elif isinstance(tree, str) and tree in candidates:
+            mentions[tree] += 1
+
+    for stmt in body:
+        if stmt["op"] == "buffer" and mentions[stmt["name"]]:
+            candidates.pop(stmt["name"], None)
+        count_names(stmt)
+    indexed = Counter()
+    for node in nodes:
+        if node["op"] != "assign" or not scalar(node["target"]):
+            continue
+        for expression in (node["target"], node["value"]):
+            if scalar(expression):
+                for use in _nodes(expression):
+                    if use["op"] == "index" and use["base"].get("name") in candidates:
+                        indexed[use["base"]["name"]] += 1
+    for name, node in candidates.items():
+        if indexed[name] and mentions[name] == 1 + indexed[name]:
+            node["private_scratch"] = "indexed_scalar_access_only"
+
+
 def annotate_scoped_arrays(function):
     """Prove whether a lexical continuation can own an automatic array lifetime."""
 
@@ -197,6 +342,8 @@ def annotate_scoped_arrays(function):
     def sequence(items, at_function_scope=False):
         count = 0
         for index, node in enumerate(items):
+            if node["op"] == "buffer":
+                node.pop("private_scratch", None)
             if node["op"] == "for" and any(
                 s["op"] == "runtime_array" for s in node.get("init", ())
             ):
@@ -242,6 +389,47 @@ def prepare(module, *, executable=True):
             annotate_iteration_layouts(fn, globals_) for fn in prepared["functions"]
         )
         lifetimes = sum(annotate_scoped_arrays(fn) for fn in prepared["functions"])
+        symbols = globals_ | {
+            f["name"] for f in (*prepared["functions"], *prepared["externs"])
+        }
+        # A replacement allocator can observe the generated storage even when the
+        # source never takes its address. Explicit source allocations have their
+        # own IR operation and do not enter the native buffer proof.
+        allocators = ("operator new", "operator delete", "_Znw", "_Zna", "_Zdl", "_Zda")
+        observers = {
+            "mallinfo",
+            "mallinfo2",
+            "malloc_info",
+            "malloc_stats",
+            "malloc_usable_size",
+            "mtrace",
+            "std::set_new_handler",
+            "_ZSt15set_new_handlerPFvvE",
+        }
+        custom_heap = (
+            any(name.startswith(allocators) for name in symbols)
+            or bool(symbols & observers)
+            or any(
+                f["name"] in {"malloc", "free", "calloc", "realloc"}
+                for f in prepared["functions"]
+            )
+        )
+        candidates = [
+            fn
+            for fn in prepared["functions"]
+            if any(n["op"] == "buffer" for n in fn["body"])
+        ]
+        if (
+            candidates
+            and not custom_heap
+            and not any(
+                node["op"] == "try"
+                for fn in prepared["functions"]
+                for node in _nodes(fn["body"])
+            )
+        ):
+            for fn in candidates:
+                annotate_private_scratch(fn, symbols)
     inventory = dict(prepared.get("resource_model", {}))
     prepared["resource_model"] = inventory
     flow = validate_resource_flow(

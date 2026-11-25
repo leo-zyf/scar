@@ -603,6 +603,8 @@ def bind(graph, folder):
     text_profiles = {}
     software_headers = {}
     python_classes = _PythonClasses()
+    python_definitions = {}
+    unit_declarations = []
     activation_edges = []
     for index, unit in enumerate(graph["units"]):
         for source, receipt in (
@@ -664,14 +666,43 @@ def bind(graph, folder):
             for n in payload["global_graph"]["nodes"]
             if n["op"] == "function_ref"
         )
+        function_names = []
         for fn in payload["functions"]:
             python_classes.collect(fn)
             activation_edges.extend(_activation_edges(fn))
             signature = fn["signature"]
+            name = signature["name"]
+            function_names.append(name)
+            if signature.get("calling_convention") == "python" and fn.get(
+                "source_defined"
+            ):
+                # Creating a function and invoking its body are distinct events.
+                # Defaults still execute when the body has no reachable call.
+                python_definitions[name] = {
+                    key: signature[key]
+                    for key in (
+                        "name",
+                        "params",
+                        "python_scope",
+                        "call_protocol",
+                        "owner_class",
+                        "location",
+                    )
+                    if key in signature
+                }
             if signature.get("method", {}).get("kind") == "constructor":
                 constructor_initializers[signature["name"]] = signature.get(
                     "initializers", []
                 )
+        # Declarations remain relevant across translation units even when none
+        # of this unit's function bodies are selected.
+        unit_declarations.append(
+            (
+                function_names,
+                payload["externs"],
+                _definition(payload["global_graph"])["body"],
+            )
+        )
         for record in payload["records"]:
             name = record["name"]
             if "initializer_graph" in record:
@@ -795,6 +826,7 @@ def bind(graph, folder):
             break
     class_candidates, candidate_only = python_classes.candidates(reachable, definitions)
     covered = reachable | candidate_only
+    activation_edges = [edge for edge in activation_edges if edge["owner"] in covered]
     issues = [d for d in all_issues if not d.get("symbol") or d["symbol"] in covered]
 
     def issue(code, symbol, detail):
@@ -802,16 +834,16 @@ def bind(graph, folder):
 
     signatures = defaultdict(list)
     functions, globals_, externs, state_evidence = {}, {}, {}, {}
-    python_definitions = {}
-    for unit in graph["units"]:
-        payload = read_member(folder, unit["graph"])
-        for decl in payload["externs"]:
+    for unit, (function_names, external_decls, global_decls) in zip(
+        graph["units"], unit_declarations
+    ):
+        for decl in external_decls:
             name = decl["name"]
             if name in reachable:
                 signatures[name].append(decl)
                 if decl.get("provider"):
                     externs[name] = decl
-        for decl in _definition(payload["global_graph"])["body"]:
+        for decl in global_decls:
             name = decl["name"]
             try:
                 globals_[name] = (
@@ -821,26 +853,11 @@ def bind(graph, folder):
                 )
             except ValueError as error:
                 issue("conflicting_global", name, str(error))
+        if covered.isdisjoint(function_names):
+            continue
+        payload = read_member(folder, unit["graph"])
         for fn in payload["functions"]:
             name = fn["signature"]["name"]
-            signature = fn["signature"]
-            if signature.get("calling_convention") == "python" and fn.get(
-                "source_defined"
-            ):
-                # Creating a function and invoking its body are distinct events.
-                # Defaults still execute when the body has no reachable call.
-                python_definitions[name] = {
-                    key: signature[key]
-                    for key in (
-                        "name",
-                        "params",
-                        "python_scope",
-                        "call_protocol",
-                        "owner_class",
-                        "location",
-                    )
-                    if key in signature
-                }
             if name not in covered:
                 continue
             if "result" in fn["signature"] and "params" in fn["signature"]:
@@ -979,7 +996,7 @@ def bind(graph, folder):
                 **image_context,
                 activation_graph=dict(
                     roots=sorted(roots),
-                    edges=[e for e in activation_edges if e["owner"] in covered],
+                    edges=activation_edges,
                 ),
                 functions=list(functions.values()),
                 **(

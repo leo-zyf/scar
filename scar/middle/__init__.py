@@ -41,9 +41,9 @@ def _plan_image(graph, folder, revision, out, *, shape, trip_count):
         }
     if abi is not None:
         graph = dict(graph, entry_abi=abi)
-    bound, issues, count = bind(graph, folder)
+    module, issues, count = bind(graph, folder)
     binding_issues = len(issues)
-    module, normalized_issues = normalize(bound)
+    module, normalized_issues = normalize(module)
     issues.extend(normalized_issues)
     status = "INCOMPLETE" if issues else "READY"
     lowering_facts = {}

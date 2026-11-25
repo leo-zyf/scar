@@ -37,6 +37,57 @@ class ImportState:
     def bind_registry(self, key, proof):
         self._registry[key] = proof
 
+    def begin_initializer(self, key, initializer, owner, occurrence, source):
+        publication = dict(
+            state="initializing",
+            initializer=initializer,
+            owner=owner,
+            **source,
+            publication=dict(
+                module=key, occurrence=occurrence, analysis_epoch=self.next_epoch()
+            ),
+        )
+        self.bind_registry(key, publication)
+        return publication
+
+    def complete_initializer(self, key, publication, call, *, analyzed_body):
+        if self.registry_entry(key) is not publication:
+            return False
+        ready = dict(publication, state="ready")
+        if (
+            analyzed_body
+            and self.windows(key)
+            and call.get("callee") == publication["initializer"]
+            and call.get("source_import_occurrence")
+            == publication["publication"]["occurrence"]
+        ):
+            # The call consumes this publication, checked across every deferred
+            # callback in its body. A cache replay supplies no such trace.
+            call["module_initialization"] = dict(
+                publication=publication["publication"],
+                entry="registry_instance_published_for_this_initializer_activation",
+                completion="normal_return_of_this_initializer_activation",
+            )
+            ready["completed_from"] = publication
+        self.bind_registry(key, ready)
+        return True
+
+    @staticmethod
+    def covers_registry_lookup(key, expected, windows):
+        published = expected.get("completed_from")
+        seen = {}
+        for _, op, before, _ in windows:
+            if before != expected and before is not published:
+                return False
+            # A shared comparison contains only one before-state per key.
+            check = op["checks"].get(key, {})
+            if (
+                check.get("before", before) != before
+                or seen.setdefault(id(op), before) != before
+            ):
+                return False
+        return True
+
     def windows(self, key):
         return tuple(self._windows.get(key, ()))
 

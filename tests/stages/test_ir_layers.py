@@ -5262,6 +5262,88 @@ def test_captured_effects_chain_across_module_completion_and_normal_branches():
             assert project.registry_entry("entry", {})["state"] == "unresolved"
 
 
+def test_repeated_import_checks_publication_across_initializer_and_audit_hook(tmp_path):
+    from scar.contract import walk_operations
+    from scar.frontend import build
+    from scar.middle.binding import bind
+    from scar.middle.normalization.protocols import normalize_protocols
+
+    entry = tmp_path / "entry.py"
+    (tmp_path / "dep.py").write_text("import math\ncount = 12\n")
+    entry.write_text(
+        "import subprocess\nimport dep\n"
+        f"child = subprocess.Popen([{sys.executable!r}, '-c', 'pass'])\n"
+        "child.wait()\nimport dep as again\nprint(again.count)\n"
+    )
+    assert subprocess.check_output([sys.executable, "-B", entry]) == b"12\n"
+    hooked = """import runpy, sys, types
+def replace(event, args):
+    if event == 'subprocess.Popen':
+        dep = types.ModuleType('dep')
+        dep.count = 73
+        sys.modules['dep'] = dep
+sys.addaudithook(replace)
+runpy.run_path('entry.py', run_name='__main__')
+"""
+    assert (
+        subprocess.check_output([sys.executable, "-B", "-c", hooked], cwd=tmp_path)
+        == b"73\n"
+    )
+    graph = tmp_path / "graph"
+    build(entry, graph)
+    module, issues, _ = bind(json.loads((graph / "graph.json").read_bytes()), graph)
+    assert not issues
+    normal, _, issues = normalize_protocols(module)
+    assert not issues
+    operations = list(walk_operations(normal["functions"]))
+    (producer,) = [x for x in operations if x.get("callee") == "py:dep:<init>"]
+    receipt = producer["module_initialization"]
+    assert receipt["publication"]["occurrence"] == producer["source_import_occurrence"]
+    guards = {
+        n["condition"]["op"]: n
+        for n in operations
+        if n["op"] == "if" and "dep" in n["condition"].get("checks", {})
+    }
+    early = guards["module_import_preserves"]
+    launch = guards["module_state_preserves"]
+    early_check = early["condition"]["checks"]["dep"]
+    launch_check = launch["condition"]["checks"]["dep"]
+    assert early_check["before"]["publication"] == receipt["publication"]
+    assert (
+        early_check["registry"]["requires"] == "same_module_instance_and_initializing"
+    )
+    assert launch_check["before"]["completed_from"] == early_check["before"]
+    assert launch_check["registry"]["requires"] == "same_module_instance_and_complete"
+    assert early["else"][0]["value"]["op"] == "module_import_continuation_required"
+    fallback = launch["else"][0]["value"]
+    assert fallback["op"] == "state_effect_continuation_required"
+    assert fallback["producer_capture"] == launch["condition"]["producer_capture"]
+
+
+def test_completion_cannot_link_a_replaced_publication_or_replayed_initializer():
+    from scar.middle.normalization.import_state import ImportState
+
+    state = ImportState(("dep",))
+
+    def start():
+        return state.begin_initializer("dep", "dep_init", "entry", "import-site", {})
+
+    opening = start()
+    windows = [({}, {"checks": {}}, opening, 0)]
+    state.bind_windows("dep", windows, opening)
+    replacement = start()
+    call = dict(callee="dep_init", source_import_occurrence="import-site")
+    state.complete_initializer("dep", opening, call, analyzed_body=True)
+    assert "module_initialization" not in call
+    assert not state.covers_registry_lookup("dep", state.registry_entry("dep"), windows)
+    state.bind_registry("dep", replacement)
+    state.complete_initializer("dep", replacement, call, analyzed_body=False)
+    assert "module_initialization" not in call
+    state.bind_registry("dep", replacement)
+    state.complete_initializer("dep", replacement, call, analyzed_body=True)
+    assert not state.covers_registry_lookup("dep", state.registry_entry("dep"), windows)
+
+
 @pytest.mark.parametrize(
     ("updates", "bounded"),
     [
@@ -6436,4 +6518,96 @@ def test_process_return_checks_survive_unchanged_loop_paths_and_drop_on_throw(
     assert (
         fallback["resume"]
         == "continue_after_original_action_with_captured_result_and_actual_post_state"
+    )
+
+
+def test_m4_proves_only_function_local_scalar_indexed_scratch():
+    from scar.middle.contracts import publish_program
+    from scar.middle.execution import prepare
+
+    def var(name):
+        return dict(op="var", name=name)
+
+    extent = dict(op="literal", type="i64", value=4)
+    slot = dict(op="index", base=var("work"), indices=[var("i")])
+    buffer = dict(op="buffer", name="work", type="f64", extent=extent)
+    loop = dict(
+        op="map",
+        index="i",
+        extent=extent,
+        independent=True,
+        body=[
+            dict(
+                op="assign",
+                target=slot,
+                value=dict(op="literal", type="f64", value=2.0),
+            ),
+            dict(op="assign", target=var("seen"), value=slot),
+        ],
+    )
+
+    def proof(
+        *extra, decl=buffer, globals_=(), params=(), other_functions=(), externs=()
+    ):
+        fn = dict(
+            name="entry",
+            params=list(params),
+            result="void",
+            body=[dict(op="decl", name="seen", type="f64"), decl, loop, *extra],
+        )
+        module = dict(
+            entry="entry",
+            functions=[fn, *other_functions],
+            externs=list(externs),
+            records=[],
+            globals=list(globals_),
+        )
+        prepared, _ = prepare(publish_program(module, "M3", complete=True))
+        return prepared["functions"][0]["body"][1].get("private_scratch")
+
+    assert proof() == "indexed_scalar_access_only"
+    forged = dict(buffer, private_scratch="indexed_scalar_access_only")
+    for value in (
+        var("work"),
+        dict(op="unary", operator="addr", value=slot),
+        dict(op="call", callee="retain", args=[slot], parameter_modes=["reference"]),
+        dict(op="cast", type=dict(kind="ref", to="f64"), value=slot),
+        dict(
+            op="call", callee="retain", args=[dict(op="cast", type="f64", value=slot)]
+        ),
+    ):
+        assert proof(dict(op="expr", value=value), decl=forged) is None
+    assert (
+        proof(dict(op="block", body=[dict(op="decl", name="work", type="i64")])) is None
+    )
+    assert proof(globals_=[dict(name="work", type="i64")]) is None
+    assert proof(params=[dict(name="work", type="i64")]) is None
+    assert proof(decl=dict(buffer, allocator="custom")) is None
+    assert proof(decl=dict(buffer, storage="static")) is None
+    assert (
+        proof(
+            decl=dict(
+                op="decl",
+                name="work",
+                type=dict(kind="ptr", to="f64"),
+                init=dict(op="allocate", type="f64", extent=extent),
+            )
+        )
+        is None
+    )
+    assert (
+        proof(other_functions=[dict(name="_Znam", params=[], result="void", body=[])])
+        is None
+    )
+    assert proof(externs=[dict(name="mallinfo2", params=[], result="i64")]) is None
+    catcher = dict(
+        op="try", body=[], handlers=[dict(categories=["memory_error"], body=[])]
+    )
+    assert (
+        proof(
+            other_functions=[
+                dict(name="caller", params=[], result="void", body=[catcher])
+            ]
+        )
+        is None
     )
