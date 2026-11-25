@@ -10177,7 +10177,15 @@ def test_conditional_callee_reads_bound_slots_and_returns_through_original_call(
     assert returned["op"] == "frame_return"
     assert returned["value"] == {"from_offset": reread["offset"]}
     assert report["status"] == "INCOMPLETE"
-    assert not json.loads((output / "exec-ir.json").read_bytes())["functions"]
+    ir = json.loads((output / "exec-ir.json").read_bytes())
+    assert not ir["functions"]
+    assert ir["module"]["source_dispatch"] == report["source_dispatch"]
+    index = read_member(output, report["source_dispatch"])
+    assert index["completion"] == "source_prefix"
+    assert index["first_gap"] == report["issues"][0]
+    assert {r["symbol"]: r["function"] for r in index["callees"]} == {
+        name: row["function"] for name, row in fragments.items()
+    }
 
 
 def test_source_dispatch_replays_closed_graph_imports_together_and_retains_source_gap(

@@ -64,7 +64,11 @@ def _plan_image(graph, folder, revision, out, *, shape, trip_count):
         import_analysis["python_entry_environment"] = member(
             out, "analysis", module["python_entry_environment"]
         )
-    sealed_fields = module.keys() & {"source_imports", "source_obligations"}
+    sealed_fields = module.keys() & {
+        "source_imports",
+        "source_obligations",
+        "source_dispatch",
+    }
     if sealed_fields:
         _, _, product = open_product(ir_path, "exec-ir.json", IR)
         import_analysis.update({key: product["module"][key] for key in sealed_fields})
@@ -92,7 +96,7 @@ def _plan_image(graph, folder, revision, out, *, shape, trip_count):
                 protocol_analysis[group] = [
                     {
                         **fragment,
-                        "function": member(out, "analysis", fragment["function"]),
+                        "function": member(out, "functions", fragment["function"]),
                         **(
                             {
                                 "source_imports": member(
@@ -112,7 +116,7 @@ def _plan_image(graph, folder, revision, out, *, shape, trip_count):
                     for key, value in fragment.items()
                     if key not in {"body", "frontier"}
                 }
-                | {"fragment": member(out, "analysis", fragment)}
+                | {"fragment": member(out, "functions", fragment)}
                 for fragment in protocol_analysis["prefix_fragments"]
             ]
     report = document(

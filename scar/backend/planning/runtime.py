@@ -570,6 +570,7 @@ def _dispatch_sites(dispatch, ledger):
                 k: v for symbol in matched for k, v in creations[symbol, member].items()
             }
             linked = set()
+            prefixes = []
             for c in activation.get("candidates", ()):
                 identity = (
                     c["initializer"],
@@ -600,16 +601,31 @@ def _dispatch_sites(dispatch, ledger):
                     == "after_actual_dispatch_and_successful_source_argument_binding"
                     and entry.get("exceptional_exit")
                     == "propagate_at_source_instruction_with_its_live_stack_and_completed_effects"
-                    and _body_returns_to_caller(body)
                 ):
-                    linked.add(identity)
-                    consumed.add(c["symbol"])
+                    if _body_returns_to_caller(body):
+                        linked.add(identity)
+                        consumed.add(c["symbol"])
+                    elif body.get(
+                        "completion"
+                    ) == "conditional_source_prefix" and body.get("frontier", {}).get(
+                        "site"
+                    ):
+                        prefixes.append(
+                            dict(symbol=c["symbol"], frontier=body["frontier"])
+                        )
+                        consumed.add(c["symbol"])
+                    else:
+                        gaps.append("conditional_callable_body_or_continuation")
                 else:
                     gaps.append("conditional_callable_body_or_continuation")
             if expected.keys() != linked:
                 gaps.append("conditional_callable_body_or_continuation")
             consumers.append(
-                dict(site=call["site"], callees=sorted(k[2] for k in linked))
+                dict(
+                    site=call["site"],
+                    callees=sorted(k[2] for k in linked),
+                    **({"partial_callees": prefixes} if prefixes else {}),
+                )
             )
         completion = (
             "modeled_source_path_requires_native_implementation"

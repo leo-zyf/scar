@@ -3991,8 +3991,15 @@ def _source_dispatch(module, project):
                 "source_import_dispatch",
                 "required import has no source producer in the rebuilt entry or its modeled activations",
             ).issue
-    functions = [dict(symbol=name, body=body) for name, body in trial.closed.items()]
-    functions.extend(dict(symbol=f["symbol"], body=f) for f in reversed(trial.prefixes))
+    return _dispatch_product(entry, trial, loaders, callees, refinements, issue)
+
+
+def _dispatch_product(entry, project, loaders, callees, required_sites, issue):
+    """Project existing source regions at a stage boundary without replaying them."""
+    functions = [dict(symbol=name, body=body) for name, body in project.closed.items()]
+    functions.extend(
+        dict(symbol=f["symbol"], body=f) for f in reversed(project.prefixes)
+    )
     if not any(f["symbol"] == entry for f in functions):
         functions.append(
             dict(symbol=entry, body=dict(symbol=entry, completion="prefix", body=[]))
@@ -4013,7 +4020,9 @@ def _source_dispatch(module, project):
             for f in loaders
         ],
         callees=callees,
-        required_imports=[dict(owner=owner, site=site) for owner, site in refinements],
+        required_imports=[
+            dict(owner=owner, site=site) for owner, site in required_sites
+        ],
         provider_obligations=[
             "preserve_original_import_call_and_arbitrary_callable_or_code_mismatch",
             "preserve_source_exceptions_and_unwind_at_each_operation",
@@ -4133,7 +4142,18 @@ def normalize_protocols(module):
     module["source_imports"] = project.source_imports.product(
         project.skipped_sites, omitted
     )
-    if issue is None and not conditional:
+    if conditional:
+        # These entry and loader bodies already exist, possibly only as prefixes.
+        # Late native qualification must see the same scopes and the same first gap.
+        module["source_dispatch"] = _dispatch_product(
+            entry,
+            project,
+            conditional,
+            callee_fragments,
+            project.loader_activations,
+            issue,
+        )
+    elif issue is None:
         dispatch = _source_dispatch(module, project)
         if dispatch is not None:
             module["source_dispatch"] = dispatch
