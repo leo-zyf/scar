@@ -362,6 +362,12 @@ class _Project:
         )
         self.source_index = sites, bindings, self.sequences.source_facts
 
+    def open_module_entry(self, symbol, reason):
+        scope = self.functions[symbol]["python_scope"]
+        state = dict(state="unresolved", owner=symbol, reason=reason)
+        self.imports.open_namespace = state
+        self.imports.bind_registry(self.imports.registry_key(scope["module"]), state)
+
     def require_operator(self, family, operation, **contract):
         requirement = self.required_operators.setdefault(
             family, dict(operations=set(), **contract)
@@ -3775,7 +3781,6 @@ def _conditional_module(project, candidate):
     """Normalize a body only for an actual loader activation with a matching code object."""
     symbol = candidate["symbol"]
     fn = project.functions[symbol]
-    scope = fn["python_scope"]
     trial = _Project(
         project.functions,
         function_definitions=project.function_definitions,
@@ -3785,9 +3790,7 @@ def _conditional_module(project, candidate):
     trial.loader_refinements = project.loader_refinements
     trial.execution_images = project.execution_images
     trial.text_profiles = project.text_profiles
-    unknown = dict(state="unresolved", owner=symbol, reason="actual_loader_activation")
-    trial.imports.open_namespace = unknown
-    trial.imports.bind_registry(trial.imports.registry_key(scope["module"]), unknown)
+    trial.open_module_entry(symbol, "actual_loader_activation")
     issue = None
     try:
         trial.compile(symbol, ())
@@ -3840,63 +3843,183 @@ def _conditional_loader_fragments(project):
     return list(result.values())
 
 
+def _attempt_protocol_entry(
+    module, functions, refinements, source_index, *, open_entry=False
+):
+    """Start from immutable graph facts and keep all effects in this attempt."""
+    project = _Project(
+        functions,
+        entry_environment=(
+            None if open_entry else module.get("python_entry_environment")
+        ),
+        function_definitions=module.get("python_definitions"),
+        source_index=source_index,
+    )
+    project.loader_refinements = refinements
+    project.execution_images = module.get("execution_images", [])
+    project.text_profiles = module.get("text_profiles", {})
+    entry = module["entry"]
+    try:
+        if functions.get(entry, {}).get("python_scope", {}).get("kind") != "module":
+            raise _Unclosed(
+                entry,
+                functions.get(entry, {}),
+                "project_entry",
+                "module entry required for closed Python name binding",
+            )
+        if open_entry:
+            project.open_module_entry(entry, "actual_source_entry_frame")
+        project.compile(entry, ())
+    except _Unclosed as error:
+        return project, error.issue
+    return project, None
+
+
 def _compile_protocol_entry(module, functions):
     """Refine an image's source-import return edges to a fixed point."""
     source_index = None
     refinements = {}
-    entry = module["entry"]
-    # Widen a failed module-identity assumption only at its owning source
-    # instruction. Re-enter with fresh mutable state: imports can patch older
-    # guards, so a shallow frame rollback would retain speculative producers.
+    # Imports can patch earlier guards. Discard the attempt's mutable state
+    # when widening one failed identity assumption at the owning instruction.
     while True:
-        project = _Project(
-            functions,
-            entry_environment=module.get("python_entry_environment"),
-            function_definitions=module.get("python_definitions"),
-            source_index=source_index,
+        project, issue = _attempt_protocol_entry(
+            module, functions, refinements, source_index
         )
-        project.loader_refinements = refinements
-        project.execution_images = module.get("execution_images", [])
-        project.text_profiles = module.get("text_profiles", {})
-        issue = None
-        try:
-            if (
-                entry not in functions
-                or functions[entry].get("python_scope", {}).get("kind") != "module"
-            ):
-                raise _Unclosed(
-                    entry,
-                    functions.get(entry, {}),
-                    "project_entry",
-                    "module entry required for closed Python name binding",
-                )
-            project.compile(entry, ())
-        except _Unclosed as error:
-            issue = error.issue
-            evidence = issue.get("source_evidence", {})
-            ports = evidence.get("loader_ports")
-            key = issue["symbol"], issue.get("site")
-            if (
-                issue["code"] == "python.import_initializer_identity"
-                and ports
-                and ports["site"] == key[1]
-                and key not in refinements
-                and len(ports["body"]["candidates"]) == 1
-                and ports["body"]["candidates"][0]["initializer"]
-                == evidence["initializer"]
-                and evidence["initializer"] in project.closed
-            ):
-                refinements[key] = dict(
-                    owner=key[0],
-                    site=key[1],
-                    symbol=evidence["initializer"],
-                    location=issue["location"],
-                    loader_ports=ports,
-                    rejected_assumption=evidence,
-                )
-                source_index = project.source_index
-                continue
-        return project, issue
+        if not issue or issue["code"] != "python.import_initializer_identity":
+            return project, issue
+        evidence = issue.get("source_evidence", {})
+        ports = evidence.get("loader_ports")
+        key = issue["symbol"], issue.get("site")
+        if not (
+            ports
+            and ports["site"] == key[1]
+            and key not in refinements
+            and len(ports["body"]["candidates"]) == 1
+            and ports["body"]["candidates"][0]["initializer"] == evidence["initializer"]
+            and evidence["initializer"] in project.closed
+        ):
+            return project, issue
+        refinements[key] = dict(
+            owner=key[0],
+            site=key[1],
+            symbol=evidence["initializer"],
+            location=issue["location"],
+            loader_ports=ports,
+            rejected_assumption=evidence,
+        )
+        source_index = project.source_index
+
+
+def _conditional_activations(project):
+    loaders = _conditional_loader_fragments(project)
+    symbols = namespace_operations.link_conditional_function_calls(project, loaders)
+    callees = []
+    for symbol in sorted(symbols):
+        descriptor = project.function_definitions.get(symbol, {})
+        definition = project.functions.get(symbol, descriptor)
+        callees.append(source_frames.conditional_function_body(definition, descriptor))
+    return loaders, callees
+
+
+def _source_dispatch(module, project):
+    """Model an alternative to scheduling graph module bodies under an unproved initial cache."""
+    entry = module["entry"]
+    environment = module.get("python_entry_environment") or {}
+    if (
+        environment.get("analysis", {}).get("application_initial_cache", "unproven")
+        != "unproven"
+    ):
+        return None
+    refinements = {}
+    for row in project.source_imports.rows.values():
+        ports = row.get("loader_ports")
+        producers = row["producer_sites"]
+        if not (
+            row["activation"] == "visited"
+            and row["request"]["form"] == "import"
+            and row["import_effects"]["source_identity"].get("status") == "project"
+            and ports
+            and len(ports["body"]["candidates"]) == 1
+            and producers
+            and all(
+                p["role"] == "module_body"
+                and p.get("callee") == ports["body"]["candidates"][0]["initializer"]
+                for p in producers
+            )
+        ):
+            continue
+        key = row["owner"], row["site"]
+        refinements[key] = dict(
+            owner=key[0],
+            site=key[1],
+            symbol=ports["body"]["candidates"][0]["initializer"],
+            location=row["location"],
+            loader_ports=ports,
+            rejected_assumption=dict(kind="unproved_initial_module_cache"),
+        )
+    if not refinements:
+        return None
+    trial, issue = _attempt_protocol_entry(
+        module, project.functions, refinements, project.source_index, open_entry=True
+    )
+    trial.finish_imports()
+    try:
+        trial.sequences.freeze(trial, partial=issue is not None)
+    except ValueError as error:
+        issue = _Unclosed(
+            entry, project.functions[entry], "sequence_element_type", str(error)
+        ).issue
+        trial.sequences.freeze(trial, partial=True)
+    loaders, callees = _conditional_activations(trial)
+    reached = {(f["owner"], f["site"]) for f in loaders}
+    for candidate in loaders:
+        issue = issue or candidate["activation_handoff"].get("source_issue")
+    for callee in callees:
+        if not issue and callee["completion"] != "conditional_source_body":
+            frontier = callee["frontier"]
+            issue = _Unclosed(
+                callee["symbol"],
+                frontier,
+                "source_function_body",
+                frontier["requirement"],
+            ).issue
+    for key, required in refinements.items():
+        if not issue and key not in reached:
+            issue = _Unclosed(
+                key[0],
+                required,
+                "source_import_dispatch",
+                "required import has no source producer in the rebuilt entry or its modeled activations",
+            ).issue
+    functions = [dict(symbol=name, body=body) for name, body in trial.closed.items()]
+    functions.extend(dict(symbol=f["symbol"], body=f) for f in reversed(trial.prefixes))
+    if not any(f["symbol"] == entry for f in functions):
+        functions.append(
+            dict(symbol=entry, body=dict(symbol=entry, completion="prefix", body=[]))
+        )
+    return dict(
+        semantics_version=1,
+        entry=entry,
+        completion="source_prefix" if issue else "modeled_source_entry",
+        functions=functions,
+        loaders=[
+            dict(
+                owner=f["owner"],
+                site=f["site"],
+                symbol=f["symbol"],
+                function=f["function"],
+                entry=f["activation_handoff"]["entry"],
+            )
+            for f in loaders
+        ],
+        callees=callees,
+        required_imports=[dict(owner=owner, site=site) for owner, site in refinements],
+        provider_obligations=[
+            "preserve_original_import_call_and_arbitrary_callable_or_code_mismatch",
+            "preserve_source_exceptions_and_unwind_at_each_operation",
+        ],
+        **({"first_gap": issue} if issue else {}),
+    )
 
 
 def normalize_protocols(module):
@@ -3913,17 +4036,7 @@ def normalize_protocols(module):
     omitted = set()
     obligation_analysis = None
     resolved_symbols = None
-    conditional = _conditional_loader_fragments(project)
-    call_targets = namespace_operations.link_conditional_function_calls(
-        project, conditional
-    )
-    callee_fragments = []
-    for symbol in sorted(call_targets):
-        descriptor = project.function_definitions.get(symbol, {})
-        definition = functions.get(symbol, descriptor)
-        callee_fragments.append(
-            source_frames.conditional_function_body(definition, descriptor)
-        )
+    conditional, callee_fragments = _conditional_activations(project)
     if issue is None:
         issue = next(
             (
@@ -3942,7 +4055,7 @@ def normalize_protocols(module):
                     candidate,
                     "loader_activation_contract",
                     f"{len(conditional)} caller-owned conditional module activation(s) need matching live frames or source continuations; "
-                    f"{len(call_targets)} published function(s) are linked to conditional source calls; native dispatch and continuations remain open",
+                    f"{len(callee_fragments)} published function(s) are linked to conditional source calls; native dispatch and continuations remain open",
                 )
                 error.issue["source_evidence"] = {
                     "initializer": candidate["symbol"],
@@ -4020,6 +4133,10 @@ def normalize_protocols(module):
     module["source_imports"] = project.source_imports.product(
         project.skipped_sites, omitted
     )
+    if issue is None and not conditional:
+        dispatch = _source_dispatch(module, project)
+        if dispatch is not None:
+            module["source_dispatch"] = dispatch
     contracts = [
         dict(
             symbol=name,

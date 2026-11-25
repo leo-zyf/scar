@@ -10178,3 +10178,92 @@ def test_conditional_callee_reads_bound_slots_and_returns_through_original_call(
     assert returned["value"] == {"from_offset": reread["offset"]}
     assert report["status"] == "INCOMPLETE"
     assert not json.loads((output / "exec-ir.json").read_bytes())["functions"]
+
+
+def test_source_dispatch_replays_closed_graph_imports_together_and_retains_source_gap(
+    tmp_path, monkeypatch
+):
+    from copy import deepcopy
+    from scar.contract import EXECUTION_ANNOTATIONS, walk_operations
+    from scar.frontend import build
+    from scar.middle.binding import bind
+    from scar.middle.normalization import protocols
+
+    for lib in ("first", "second"):
+        (tmp_path / (lib + ".py")).write_text(f"def read():\n    return '{lib}'\n")
+    entry = tmp_path / "main.py"
+    entry.write_text(
+        "import first\nimport second\nprint(first.read())\nprint(second.read())\n"
+    )
+    graph = tmp_path / "graph"
+    build(entry, graph)
+    bound, issues, _ = bind(json.loads((graph / "graph.json").read_bytes()), graph)
+    assert not issues
+    legacy = deepcopy(bound)
+    attempts = []
+    attempt = protocols._attempt_protocol_entry
+
+    def counted(*args, **kwargs):
+        project, issue = attempt(*args, **kwargs)
+        attempts.append(
+            (kwargs.get("open_entry", False), args[3], project.source_index)
+        )
+        return project, issue
+
+    monkeypatch.setattr(protocols, "_attempt_protocol_entry", counted)
+    module, _, issues = protocols.normalize_protocols(bound)
+    assert not issues
+    assert [a[0] for a in attempts] == [False, True] and attempts[1][1] is attempts[0][
+        2
+    ]
+    assert all(
+        {p["role"] for p in row["producer_sites"]} == {"module_body"}
+        for row in module["source_imports"]["occurrences"]
+    )
+    dispatch = module["source_dispatch"]
+    assert (
+        dispatch["completion"] == "modeled_source_entry" and "first_gap" not in dispatch
+    )
+    assert {(x["owner"], x["site"]) for x in dispatch["required_imports"]} == {
+        (r["owner"], r["site"]) for r in module["source_imports"]["occurrences"]
+    }
+    assert {x["symbol"] for x in dispatch["loaders"]} == {
+        "py:first:<init>",
+        "py:second:<init>",
+    }
+    [root] = dispatch["functions"]
+    assert root["body"]["name"] == root["symbol"] == dispatch["entry"]
+    ops = list(
+        walk_operations(root["body"]["body"], exclude_fields=EXECUTION_ANNOTATIONS)
+    )
+    assert sum(op["op"] == "module_import_publish" for op in ops) == 2
+    candidates = {
+        c["symbol"]
+        for op in ops
+        for c in op.get("conditional_activation", {}).get("candidates", ())
+    }
+    assert (
+        candidates
+        == {f["symbol"] for f in dispatch["callees"]}
+        == {"py:first:read", "py:second:read"}
+    )
+    assert all(
+        f["completion"] == "conditional_source_body" for f in dispatch["callees"]
+    )
+    assert (
+        "preserve_source_exceptions_and_unwind_at_each_operation"
+        in dispatch["provider_obligations"]
+    )
+    fn = next(f for f in legacy["functions"] if f["name"] == "py:second:<init>")
+    creation = next(n for n in fn["body"] if n["op"] == "python_define")
+    del creation["source_definition"]
+    module, _, issues = protocols.normalize_protocols(legacy)
+    assert not issues
+    alternative = module["source_dispatch"]
+    assert alternative["completion"] == "source_prefix"
+    assert alternative["first_gap"]["symbol"] == fn["name"]
+    assert alternative["first_gap"]["location"]["line"] == 1
+    loader = next(x for x in alternative["loaders"] if x["symbol"] == fn["name"])
+    assert (
+        loader["function"]["completion"] == "prefix" and not loader["function"]["body"]
+    )
