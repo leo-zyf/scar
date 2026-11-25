@@ -1,6 +1,6 @@
 """B1 qualification of source-declared external execution interfaces."""
 
-from collections import Counter
+from collections import Counter, defaultdict
 from contextlib import contextmanager
 from functools import cached_property
 import os
@@ -18,6 +18,8 @@ from scar.contract import (
     control_regions,
     digest,
     json_bytes,
+    source_call_operands,
+    source_function_publication,
     validate_python_entry_environment,
     walk_operations,
 )
@@ -421,10 +423,227 @@ def _entry_observation(record):
     )
 
 
+def _body_returns_to_caller(fragment):
+    fn = fragment.get("function", {})
+    regions = fn.get("body", ())
+    if fragment.get("completion") != "conditional_source_body" or not regions:
+        return False
+    steps = regions[-1].get("steps", ())
+    if (
+        not steps
+        or steps[-1].get("op") != "frame_return"
+        or steps[-1].get("destination") != "actual_caller"
+    ):
+        return False
+    slots = fn.get("constants", {})
+    for op in walk_operations(regions, exclude_fields=EXECUTION_ANNOTATIONS):
+        if (
+            op.get("op") == "source_object_constant"
+            and op.get("source") == "current_frame_co_consts"
+        ):
+            if str(op["operand"]) not in slots:
+                return False
+        value = op.get("value")
+        if isinstance(value, dict) and value.get("source") == "current_frame_co_consts":
+            if str(value["index"]) not in slots:
+                return False
+    return True
+
+
+def _dispatch_sites(dispatch, ledger):
+    required = {(r["owner"], r["site"]) for r in dispatch["required_imports"]}
+    occurrences = {(r["owner"], r["site"]): r for r in ledger["occurrences"]}
+    if not all(
+        key in occurrences and occurrences[key]["activation"] == "visited"
+        for key in required
+    ):
+        raise ValueError("source dispatch import lacks a visited source occurrence")
+    complete = dispatch["completion"] == "modeled_source_entry"
+    if not complete and dispatch["completion"] != "source_prefix":
+        raise ValueError("invalid source dispatch completion")
+    loaders = {(r["owner"], r["site"], r["symbol"]): r for r in dispatch["loaders"]}
+    callees = {r["symbol"]: r for r in dispatch["callees"]}
+    imports, calls, creations = defaultdict(list), defaultdict(list), defaultdict(dict)
+    scopes = {r["symbol"]: r["body"] for r in dispatch["functions"]}
+    if dispatch["entry"] not in scopes:
+        raise ValueError("source dispatch lacks its entry body")
+    # A loader can be selected at several sites. Its site-indexed entry and its
+    # source body have separate identities; traverse each sealed body once.
+    bodies = {(name, id(fn)): (name, fn, None) for name, fn in scopes.items()}
+    for loader in loaders.values():
+        symbol, fn = loader["symbol"], loader["function"]
+        code = loader["entry"]["code"]["code_sha256"]
+        bodies[symbol, id(fn)] = (symbol, fn, code)
+    for owner, fn, code in bodies.values():
+        for op in walk_operations(fn["body"], exclude_fields=EXECUTION_ANNOTATIONS):
+            if op["op"] == "module_import_publish":
+                imports[owner, op["site"]].append(op)
+            if code and (published := source_function_publication(op, code)):
+                make, target, child = published
+                key = (
+                    owner,
+                    target["name"],
+                    make["symbol"],
+                    make["site"],
+                    make["offset"],
+                    target["offset"],
+                )
+                creations[owner, target["name"]][key] = child
+            for edge in source_call_operands(op):
+                calls[owner, edge[3]["occurrence"]].append(edge)
+    results = {}
+    consumed = set()
+    for key in required:
+        owner, site = key
+        row = occurrences[key]
+        gaps, matched, consumers = [], {}, []
+        matching = [
+            op
+            for op in imports[key]
+            if op.get("occurrence") == row["id"] and op.get("request") == row["request"]
+        ]
+        bindings = {}
+        loader_ports = row.get("loader_ports", {})
+        body = loader_ports.get("body", {})
+        imported = matching[0] if len(matching) == 1 else {}
+        call = imported.get("import_call", {})
+        port = imported.get("source_import_store") or imported.get(
+            "source_import_projection", {}
+        )
+        if imported:
+            instruction = port.get("import_name", {})
+            if (
+                instruction.get("opcode") != "IMPORT_NAME"
+                or instruction.get("name") != row["request"]["module"]
+                or instruction.get("offset") != loader_ports["dispatch"]["instruction"]
+                or call.get("importer")
+                != {"mapping": "frame.builtins", "key": "__import__"}
+                or call.get("result") != "import_result"
+                or imported.get("unwind")
+                != "on_import_failure_skip_store_on_store_failure_preserve_completed_effects_and_unwind_source_stack"
+                or imported.get("exceptional_exit")
+                != "propagate_at_failing_source_operation_preserving_completed_effects"
+                or imported.get("on_code_mismatch")
+                != "resume_source_equivalent_execution_before_first_source_import_operand"
+            ):
+                gaps.append("import_result_or_exception_continuation")
+            binding, store = imported["binding"], port.get("store", {})
+            bindings[binding["site"], binding["slot"]] = binding
+            value = {"result": "import_result"}
+            for step in imported.get("projection", {}).get("steps", ()):
+                if step["instruction"]["opcode"] == "IMPORT_FROM":
+                    value = step["result"]
+            if (
+                [(b["site"], b["name"]) for b in row["bindings"]] != list(bindings)
+                or binding.get("value") != value
+                or store.get("opcode") not in {"STORE_NAME", "STORE_GLOBAL"}
+                or binding.get("opcode") != store["opcode"]
+                or binding.get("offset") != store["offset"]
+                or store["offset"] != loader_ports["binding"]["instruction"]
+                or binding.get("name") != store["name"]
+            ):
+                gaps.append("source_binding_store")
+        else:
+            gaps.append("source_import_dispatch")
+        for c in body.get("candidates", ()):
+            symbol = c["initializer"]
+            loader = loaders.get((*key, symbol), {})
+            entry = loader.get("entry", {})
+            if (
+                call.get("body") != body
+                or body.get("completion") != "return_to_loader_or_propagate"
+                or entry.get("code", {}).get("code_sha256") != c["code_sha256"]
+                or entry.get("selection") != "each_actual_matching_code_activation"
+                or entry.get("on_mismatch")
+                != "resume_source_equivalent_execution_before_module_body"
+            ):
+                gaps.append("conditional_loader_body_or_continuation")
+            else:
+                matched[symbol] = c["code_sha256"]
+        for call, load, attribute, previous in calls[owner, row["id"]]:
+            binding = bindings.get((previous["site"], previous["slot"]), {})
+            attribute = attribute or {}
+            member = attribute.get("name") or binding.get("member")
+            activation = call.get("conditional_activation", {})
+            origin = activation.get("origin", {})
+            expected = {
+                k: v for symbol in matched for k, v in creations[symbol, member].items()
+            }
+            linked = set()
+            for c in activation.get("candidates", ()):
+                identity = (
+                    c["initializer"],
+                    member,
+                    c["symbol"],
+                    c["creation_site"],
+                    c["make_offset"],
+                    c["store_offset"],
+                )
+                body = callees.get(c["symbol"], {})
+                entry = body.get("entry", {})
+                if (
+                    expected.get(identity) == c["code"]
+                    and c.get("source_body") == entry.get("graph")
+                    and c["code"]["code_sha256"]
+                    == entry.get("code", {}).get("code_sha256")
+                    and origin.get("occurrence") == row["id"]
+                    and origin.get("import_owner") == owner
+                    and origin.get("import_offset")
+                    == loader_ports["dispatch"]["instruction"]
+                    and origin.get("binding_site") == previous["site"]
+                    and origin.get("store_offset") == binding.get("offset")
+                    and origin.get("load_site") == load.get("site")
+                    and origin.get("attribute_site") == attribute.get("site")
+                    and activation.get("on_other")
+                    == "continue_original_call_or_entered_source_frame_without_repeating_lookup_arguments_or_dispatch"
+                    and entry.get("timing")
+                    == "after_actual_dispatch_and_successful_source_argument_binding"
+                    and entry.get("exceptional_exit")
+                    == "propagate_at_source_instruction_with_its_live_stack_and_completed_effects"
+                    and _body_returns_to_caller(body)
+                ):
+                    linked.add(identity)
+                    consumed.add(c["symbol"])
+                else:
+                    gaps.append("conditional_callable_body_or_continuation")
+            if expected.keys() != linked:
+                gaps.append("conditional_callable_body_or_continuation")
+            consumers.append(
+                dict(site=call["site"], callees=sorted(k[2] for k in linked))
+            )
+        completion = (
+            "modeled_source_path_requires_native_implementation"
+            if complete
+            else "source_prefix"
+        )
+        results[key] = dict(
+            status="missing_source_dataflow" if gaps else completion,
+            missing=sorted(set(gaps)),
+            loaders=sorted(matched),
+            calls=consumers,
+        )
+    # The callee table contains only bodies selected from actual source calls.
+    # A disconnected declaration cannot substitute for a removed consumer.
+    orphan_owners = {
+        owner
+        for (owner, _), created in creations.items()
+        if any(key[2] in callees and key[2] not in consumed for key in created)
+    }
+    for site in results.values():
+        if orphan_owners.intersection(site["loaders"]):
+            site["status"] = "missing_source_dataflow"
+            site["missing"] = sorted(
+                set(site["missing"]) | {"conditional_callable_body_or_continuation"}
+            )
+    return results
+
+
 def import_effects(module, bindings):
     """Keep source occurrence coverage separate from native interface supply."""
     ledger = module.get("source_imports")
     if ledger is None:
+        if "source_dispatch" in module:
+            raise ValueError("source dispatch requires the import occurrence ledger")
         return None
     if (
         ledger.get("semantics_version") != 1
@@ -442,6 +661,8 @@ def import_effects(module, bindings):
         for owner, node in _import_operations(module)
         if "source_import_occurrence" in node
     }
+    dispatch = module.get("source_dispatch")
+    sites = _dispatch_sites(dispatch, ledger) if dispatch else {}
     rows, identities = [], set()
     counts = dict(visited=0, unvisited=0, proven_inactive=0)
     for occurrence in ledger["occurrences"]:
@@ -478,6 +699,11 @@ def import_effects(module, bindings):
                 source_coverage=occurrence["effect_coverage"],
                 producers=producers,
                 obligations=occurrence["obligations"],
+                **(
+                    {"source_dispatch": sites[occurrence["owner"], occurrence["site"]]}
+                    if (occurrence["owner"], occurrence.get("site")) in sites
+                    else {}
+                ),
                 complete_effect_equivalence=(
                     "unproven"
                     if activation == "visited"
@@ -489,6 +715,23 @@ def import_effects(module, bindings):
         semantics_version=1,
         scope="source_import_occurrences",
         ledger_sha256=digest(json_bytes(ledger)),
+        **(
+            {
+                "source_dispatch": {
+                    "completion": dispatch["completion"],
+                    **(
+                        {"index_sha256": dispatch["index_sha256"]}
+                        if "index_sha256" in dispatch
+                        else {}
+                    ),
+                    "scope": "source_import_publication_and_linked_conditional_calls",
+                    "provider_obligations": dispatch["provider_obligations"],
+                    "required_imports": len(sites),
+                }
+            }
+            if dispatch
+            else {}
+        ),
         **(
             {"entry_environment": _entry_observation(ledger["entry_environment"])}
             if "entry_environment" in ledger
@@ -532,6 +775,9 @@ def import_effect_issue(report):
                 owner=first["owner"],
                 site=first["site"],
                 obligations=first["obligations"],
+                source_dispatch=first.get(
+                    "source_dispatch", {"status": "missing_source_dataflow"}
+                ),
             ),
         ),
     )

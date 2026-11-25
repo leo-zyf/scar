@@ -882,6 +882,31 @@ def _load_module(path, ir):
     )
     if "source_imports" in module:
         module["source_imports"] = read_member(path.parent, module["source_imports"])
+    if "source_dispatch" in module:
+        receipt = module["source_dispatch"]
+        index = read_member(path.parent, receipt)
+        if index.get("entry") != module["entry"] or index.get("semantics_version") != 1:
+            raise ValueError("source dispatch index does not match its execution IR")
+        bodies = {}
+        for table, field in (
+            ("functions", "body"),
+            ("loaders", "function"),
+            ("callees", "function"),
+        ):
+            for row in index[table]:
+                ref = row[field]
+                key = (ref["path"], ref["sha256"], ref["size"])
+                if key not in bodies:
+                    bodies[key] = read_member(path.parent, ref)
+                fn = bodies[key]
+                if fn.get("name", fn.get("symbol")) != row["symbol"] or not isinstance(
+                    fn.get("body"), list
+                ):
+                    raise ValueError(
+                        "source dispatch member does not match its indexed symbol"
+                    )
+                row[field] = fn
+        module["source_dispatch"] = dict(index, index_sha256=receipt["sha256"])
     if "source_obligations" in module:
         module["source_obligations"] = read_member(
             path.parent, module["source_obligations"]
@@ -926,10 +951,14 @@ def _schedule_image(
         fields = dict(
             stage="B1", status="INCOMPLETE", ir_sha256=revision, issues=issues
         )
+        physical = document(PHYSICAL, target="cpu-cxx20")
+        if "source_dispatch" in ir["module"]:
+            module = _load_module(path, ir)
+            physical["source_import_effects"] = runtime.import_effects(module, {})
         return _seal_schedule(
             destination,
             fields,
-            document(PHYSICAL, target="cpu-cxx20"),
+            physical,
             dict(entry=ir["module"]["entry"]),
         )
     if "unresolved" in ir:
@@ -954,6 +983,7 @@ def _schedule_image(
     linkage = runtime.ImageLinkage(module)
     requirements, bindings, issues = _qualify(module, image_context, linkage=linkage)
     import_effects = runtime.import_effects(module, bindings)
+    module.pop("source_dispatch", None)
     if not issues and (missing := runtime.import_effect_issue(import_effects)):
         issues.append(missing)
     import_receipt = (

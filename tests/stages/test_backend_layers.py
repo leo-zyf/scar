@@ -3170,6 +3170,72 @@ def test_registry_diagnostic_preserves_observation_scope_and_actual_reads(tmp_pa
         runtime.import_effects(dict(functions=[], source_imports=corrupt), {})
 
 
+def test_source_dispatch_seals_import_result_and_conditional_callee_for_b1(tmp_path):
+    import shutil
+
+    from scar.backend.planning import schedule_ir
+    from scar.contract import read_member
+    from scar.frontend import build
+    from scar.middle import plan
+
+    entry, leaf = tmp_path / "entry.py", tmp_path / "leaf.py"
+    entry.write_text("import leaf\nprint(leaf.fetch())\n")
+    leaf.write_text("def fetch():\n    return 'result'\n")
+    graph, execution = tmp_path / "graph", tmp_path / "execution"
+    build(entry, graph)
+    entry.unlink()
+    leaf.unlink()
+    assert plan(graph, execution)["status"] == "READY"
+    shutil.rmtree(graph)
+    (execution / "plan.json").unlink()
+    path = execution / "exec-ir.json"
+    ir = json.loads(path.read_bytes())
+    index = read_member(execution, ir["module"]["source_dispatch"])
+    (loader,), (callee,) = index["loaders"], index["callees"]
+    assert "body" not in callee["function"]
+    assert read_member(execution, callee["function"])["symbol"] == callee["symbol"]
+
+    def inspect():
+        out = tmp_path / "schedule"
+        schedule_ir(execution, out, policy="serial")
+        physical = json.loads((out / "physical-plan.json").read_bytes())
+        assert physical["status"] == "INCOMPLETE"
+        (reason,) = physical["issues"]
+        assert reason["code"] == "unqualified_source_import"
+        (occurrence,) = physical["source_import_effects"]["occurrences"]
+        assert occurrence["complete_effect_equivalence"] == "unproven"
+        assert (
+            reason["qualification"]["evidence"]["source_dispatch"]
+            == occurrence["source_dispatch"]
+        )
+        return occurrence["source_dispatch"]
+
+    detail = inspect()
+    assert detail["status"] == "modeled_source_path_requires_native_implementation"
+    assert detail["loaders"] == [loader["symbol"]]
+    assert detail["calls"][0]["callees"] == [callee["symbol"]]
+
+    (caller,) = index["functions"]
+    original = caller["body"]
+    body = read_member(execution, original)
+    body["body"] = body["body"][:1]
+    caller["body"] = member(execution, "functions", body)
+    ir["module"]["source_dispatch"] = member(execution, "analysis", index)
+    write_json(path, ir)
+    assert inspect()["missing"] == ["conditional_callable_body_or_continuation"]
+
+    caller["body"] = original
+    index["callees"] = []
+    ir["module"]["source_dispatch"] = member(execution, "analysis", index)
+    write_json(path, ir)
+    missing = inspect()
+    assert missing["status"] == "missing_source_dataflow"
+    assert missing["missing"] == ["conditional_callable_body_or_continuation"]
+    (execution / loader["function"]["path"]).write_bytes(b"{}")
+    with pytest.raises(ValueError, match="checksum mismatch"):
+        inspect()
+
+
 def test_ordered_mapping_views_and_fresh_construction_cross_native_layers(tmp_path):
     from scar.backend.planning import _qualify
     from scar.contract import MAPPING_PROFILE, digest, json_bytes

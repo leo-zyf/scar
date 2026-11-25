@@ -459,6 +459,32 @@ def prepare(module, *, executable=True):
     )
 
 
+def _seal_source_dispatch(out, dispatch, entry):
+    if (
+        dispatch.get("semantics_version") != 1
+        or dispatch.get("entry") != entry
+        or dispatch.get("completion") not in {"modeled_source_entry", "source_prefix"}
+    ):
+        raise ValueError("invalid source dispatch entry")
+    index = dict(dispatch)
+    for table, field in (
+        ("functions", "body"),
+        ("loaders", "function"),
+        ("callees", "function"),
+    ):
+        index[table] = []
+        for row in dispatch[table]:
+            function = row[field]
+            if (
+                not row.get("symbol")
+                or function.get("name", function.get("symbol")) != row["symbol"]
+                or not isinstance(function.get("body"), list)
+            ):
+                raise ValueError("source dispatch body disagrees with its symbol")
+            index[table].append({**row, field: member(out, "functions", function)})
+    return member(out, "analysis", index)
+
+
 def seal(module, out, *, status, graph_sha256, contract, issues=()):
     require_program(module, "M4")
     if status not in {"READY", "INCOMPLETE"}:
@@ -481,6 +507,10 @@ def seal(module, out, *, status, graph_sha256, contract, issues=()):
     imports = payload.get("source_imports")
     if imports is not None:
         payload["source_imports"] = member(out, "analysis", imports)
+    if "source_dispatch" in payload:
+        payload["source_dispatch"] = _seal_source_dispatch(
+            out, payload["source_dispatch"], payload["entry"]
+        )
     if isinstance(payload.get("source_obligations"), dict):
         payload["source_obligations"] = member(
             out, "analysis", payload["source_obligations"]
@@ -508,11 +538,11 @@ def seal(module, out, *, status, graph_sha256, contract, issues=()):
                 if "source_obligations" in payload
                 else {}
             ),
-            **(
-                {"source_imports": payload["source_imports"]}
-                if imports is not None
-                else {}
-            ),
+            **{
+                k: payload[k]
+                for k in ("source_imports", "source_dispatch")
+                if k in payload
+            },
         }
         if "artifact_flow" in inventory:
             payload["resource_model"] = {"artifact_flow": inventory["artifact_flow"]}
