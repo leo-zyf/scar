@@ -80,8 +80,22 @@ def artifact_graph(units, payloads, build, images, root):
         )
         if profile := unit.get("compilation_profile_sha256"):
             profiles.setdefault(profile, []).append(reader)
+        origins = unit["source_facts"].get("source_origins", {})
         for name, sha256 in unit["source_facts"]["files"].items():
-            path = posixpath.normpath(posixpath.join(str(root), name))
+            origin = origins.get(name)
+            if origin is not None:
+                path = origin.get("origin")
+                if (
+                    not isinstance(path, str)
+                    or not posixpath.isabs(path)
+                    or origin.get("sha256") != sha256
+                ):
+                    raise ValueError("captured source origin disagrees with its buffer")
+                path = posixpath.normpath(path)
+            else:
+                if name.startswith("@python/"):
+                    raise ValueError("external source buffer has no physical origin")
+                path = posixpath.normpath(posixpath.join(str(root), name))
             file = locator(path)
             version = snapshot(file, sha256, reader)
             edge(
@@ -89,6 +103,7 @@ def artifact_graph(units, payloads, build, images, root):
                 reader,
                 version,
                 evidence="parser_owned_buffer",
+                **({"source_key": name} if origin is not None else {}),
             )
         for path, receipt in unit["source_facts"].get("external_headers", {}).items():
             file = locator(path)

@@ -3004,6 +3004,120 @@ def test_conditional_copy_materialization_is_removed_through_all_stages(
     assert _run([retained["executable"]], tmp_path) == expected
 
 
+def test_fortran_numeric_facts_preserve_source_kinds_and_selected_policy(tmp_path):
+    data = (
+        "subroutine typed(x,y,n,z,a,q,flag)\n"
+        "real(8), intent(in) :: x,a(3)\n"
+        "real, intent(in) :: y\n"
+        "integer, intent(in) :: n\n"
+        "real(8), intent(out) :: z\n"
+        "complex(8), intent(out) :: q\n"
+        "logical, intent(out) :: flag\n"
+        "z = log(x)+sqrt(x)+real(n,8)+y**x+a(n)**2\n"
+        "q = cmplx(y,y,8)\n"
+        "flag = n > 0\n"
+        "end\n"
+    ).encode()
+    source = tmp_path / "typed.f90"
+    source.write_bytes(data)
+    variants = [
+        (["-O3"], {"math_errno": False}),
+        (
+            ["-O3", "-ffast-math", "-frounding-math", "-ffp-contract=off"],
+            dict(
+                math_errno=False,
+                finite_only=True,
+                signed_zeros=False,
+                trapping_math=False,
+                rounding_math=True,
+                fp_contract="off",
+            ),
+        ),
+    ]
+    for index, (flags, expected) in enumerate(variants):
+        request = tmp_path / "request.json"
+        request.write_text(
+            json.dumps(
+                dict(
+                    language="fortran",
+                    source_root=str(tmp_path),
+                    entry="typed_",
+                    units=[dict(path=source.name, flags=flags)],
+                )
+            )
+        )
+        graph = tmp_path / f"graph-{index}"
+        _stage(tmp_path, "frontend", "build", "--manifest", request, "--out", graph)
+        document = json.loads((graph / "graph.json").read_bytes())
+        facts = document["units"][0]["source_facts"]
+        assert facts["compiler"].startswith("GNU Fortran ")
+        assert facts["files"] == {source.name: sha256(data).hexdigest()}
+        unit = _payloads(graph, document)[0]
+        assert not document["units"][0]["diagnostics"]
+        function = next(
+            f for f in unit["functions"] if f["signature"]["name"] == "typed_"
+        )
+        signature = function["signature"]
+        contract = signature["source_numeric_contract"]
+        assert {key: contract["policy"][key] for key in expected} == expected
+        assert contract["source"]["sha256"] == facts["files"][source.name]
+        assert contract["caller_observations"] == dict(
+            errno="unproven", fenv="unproven"
+        )
+        assert contract["runtime_fp_environment"] == "unobserved"
+        assert contract["applicability"]["include_contents"] == "not_fingerprinted"
+        assert "-Q" not in contract["validated_command"]
+        assert contract["option_query"]["command"][-1] == str(source)
+        assert contract["option_query"]["returncode"] == 0
+        for tool in ("driver", "frontend"):
+            identity = contract["compiler"][tool]
+            assert (
+                identity["sha256"]
+                == sha256(Path(identity["path"]).read_bytes()).hexdigest()
+            )
+        assert [p["type"] for p in signature["params"]] == [
+            dict(kind="ptr", to=kind)
+            for kind in ("f64", "f32", "i32", "f64", "f64", "c128", "i32")
+        ]
+        nodes = function["nodes"]
+        powers = [
+            n
+            for n in nodes
+            if n.get("op") == "intrinsic" and n["name"] in {"pow", "powi"}
+        ]
+        assert {
+            n["name"]: [nodes[arg["port"]]["type"] for arg in n["args"]] for n in powers
+        } == {"pow": ["f32", "f64"], "powi": ["f64", "i32"]}
+        for node in powers:
+            assert node["type"] == "f64"
+            assert node["location"]["line"] == 8
+            assert node["source_intrinsic_contract"]["result_type"] == "f64"
+        calls = [
+            n["source_intrinsic_contract"]
+            for n in nodes
+            if "source_intrinsic_contract" in n
+        ]
+        assert any(
+            c["source_name"] == "real"
+            and c["result_type"] == "f64"
+            and c["selected_kind"] == 8
+            for c in calls
+        )
+        assert any(
+            c["source_name"] == "cmplx"
+            and c["result_type"] == "c128"
+            and c["selected_kind"] == 8
+            for c in calls
+        )
+        assert {"__log_r8", "__sqrt_r8"} <= set(signature["source_intrinsic_bindings"])
+        assert any(
+            n.get("op") == "binary"
+            and n.get("operator") == "gt"
+            and n["type"] == "bool"
+            for n in nodes
+        )
+
+
 def test_fixed_form_program_emits_cpp20(tmp_path):
     data = b"      PROGRAM LEGACY\n      WRITE (*,'(I4)') 8\n      END\n"
     source = tmp_path / "legacy.f"

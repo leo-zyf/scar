@@ -20,6 +20,126 @@ _LAYERS = {
 }
 
 
+def test_external_source_modules_keep_lookup_order_and_offline_stage_products(tmp_path):
+    from base64 import urlsafe_b64encode
+    from hashlib import sha256
+    import shutil
+
+    from scar.contract import read_member
+
+    source = tmp_path / "source"
+    site = source / ".sdk/site-packages"
+    package = site / "graph_source_fixture"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text(
+        'print("package-init")\nknown = 17\n'
+        'def __getattr__(name):\n    print("lookup", name)\n    return 23\n'
+    )
+    (package / "known.py").write_text('print("unexpected-child")\n')
+    metadata = site / "graph_source_fixture-1.0.dist-info"
+    metadata.mkdir()
+    (metadata / "METADATA").write_text(
+        "Metadata-Version: 2.1\nName: graph-source-fixture\nVersion: 1.0\n"
+    )
+    (metadata / "top_level.txt").write_text("graph_source_fixture\n")
+    records = []
+    for path in sorted(site.rglob("*")):
+        if path.is_file():
+            raw = path.read_bytes()
+            digest = urlsafe_b64encode(sha256(raw).digest()).decode().rstrip("=")
+            records.append(f"{path.relative_to(site)},sha256={digest},{len(raw)}")
+    (metadata / "RECORD").write_text("\n".join(records) + "\n")
+    main = source / "main.py"
+    main.write_text(
+        "import graph_source_fixture as p\nimport graph_source_fixture as again\n"
+        "print(p.known)\nprint(p.missing)\n"
+        "from graph_source_fixture import known\nprint(known)\n"
+    )
+    guarded = source / "guarded.py"
+    guarded.write_text("from graph_source_fixture import missing\nprint(missing)\n")
+    env = dict(
+        os.environ,
+        PYTHONPATH=os.pathsep.join((str(site), str(Path(scar.__file__).parents[1]))),
+        PYTHONDONTWRITEBYTECODE="1",
+    )
+    expected = subprocess.run(
+        [sys.executable, "-B", main],
+        env=env,
+        capture_output=True,
+        check=True,
+    ).stdout
+    assert expected == b"package-init\n17\nlookup missing\n23\n17\n"
+    from_expected = subprocess.run(
+        [sys.executable, "-B", guarded],
+        env=env,
+        capture_output=True,
+        check=True,
+    ).stdout
+    assert from_expected == b"package-init\nlookup missing\nlookup missing\n23\n"
+    command = """
+import sys
+phase, *args = sys.argv[1:]
+forbidden = tuple('scar.' + p for p in ('frontend', 'middle', 'backend') if p != phase)
+class Boundary:
+    def find_spec(self, name, path=None, target=None):
+        if any(name == p or name.startswith(p + '.') for p in forbidden):
+            raise RuntimeError('stage import violation ' + name)
+sys.meta_path.insert(0, Boundary())
+from scar.cli import main
+raise SystemExit(main(args))
+"""
+
+    def run(phase, *args, returncode=0):
+        p = subprocess.run(
+            [sys.executable, "-B", "-c", command, phase, *map(str, args)],
+            cwd=tmp_path,
+            env=env,
+            capture_output=True,
+            timeout=90,
+        )
+        assert p.returncode == returncode, p.stderr.decode(errors="replace")
+        return json.loads(p.stdout)
+
+    graph = tmp_path / "graph"
+    negative = tmp_path / "from-graph"
+    run("frontend", "build", "--entry", main, "--out", graph)
+    run("frontend", "build", "--entry", guarded, "--out", negative)
+    program = json.loads((graph / "graph.json").read_bytes())
+    external = [u for u in program["units"] if u["path"].startswith("@python/")]
+    assert external
+    flow = read_member(graph, program["artifact_flow"])
+    assert any(
+        n.get("kind") == "FILE_LOCATOR"
+        and n.get("path") == str(package / "__init__.py")
+        for n in flow["nodes"]
+    )
+    assert not any(
+        n.get("kind") == "FILE_LOCATOR" and "/@python/" in n.get("path", "")
+        for n in flow["nodes"]
+    )
+    shutil.rmtree(source)
+    plan, delivery = tmp_path / "plan", tmp_path / "delivery"
+    assert run("middle", "plan", "--graph", graph, "--out", plan)["status"] == "READY"
+    ir = json.loads((plan / "exec-ir.json").read_bytes())
+    functions = [read_member(plan, ref) for ref in ir["functions"]]
+    assert any("__getattr__" in f["name"] for f in functions)
+    assert not any("graph_source_fixture.known:<init>" in f["name"] for f in functions)
+    shutil.rmtree(graph)
+    result = run("backend", "compile", "--ir", plan, "--out", delivery)
+    shutil.rmtree(plan)
+    actual = subprocess.run([result["executable"]], capture_output=True, check=True)
+    assert actual.stdout == expected and not actual.stderr
+    rejected = tmp_path / "from-plan"
+    assert (
+        run("middle", "plan", "--graph", negative, "--out", rejected, returncode=2)[
+            "status"
+        ]
+        == "INCOMPLETE"
+    )
+    report = json.loads((rejected / "plan.json").read_bytes())
+    assert any(i["code"] == "python.import_from_hook" for i in report["issues"])
+
+
 def test_workflow_binds_entry_state_without_inventing_child_file_versions(tmp_path):
     process = dict(kind="handle", resource="process")
 

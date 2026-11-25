@@ -588,6 +588,39 @@ class Body:
                     position = binary("div", position, count)
         return self.memory_index(name, coordinates)
 
+    def _intrinsic_result(
+        self,
+        source_name,
+        normalized_name,
+        expression,
+        dtype,
+        argument_types,
+        conversion_basis,
+        **details,
+    ):
+        families = {normalized_name, _LEGACY_MATH.get(source_name, source_name)}
+        bindings = [
+            name
+            for name in getattr(self, "intrinsic_bindings", ())
+            if any(name.startswith("__" + family + "_") for family in families)
+        ]
+        return {
+            **expression,
+            "source_intrinsic_contract": {
+                "semantics_version": 1,
+                "provider": "fortran_intrinsic_or_operator",
+                "source_name": source_name,
+                "normalized_name": normalized_name,
+                "argument_types": list(argument_types),
+                "result_type": dtype,
+                "conversion_basis": conversion_basis,
+                "validation": "accepted_by_captured_gnu_semantics",
+                "gnu_resolution_candidates": bindings,
+                "gnu_resolution_scope": "procedure_catalog_not_callsite_binding",
+                **details,
+            },
+        }, dtype
+
     def reduction(self, name, args):
         if len(args) != 1:
             raise Gap("array_reduction", name + " with DIM, MASK or KIND")
@@ -600,6 +633,7 @@ class Body:
         iterator = self.fresh("reduction_index")
         accumulator = self.fresh("reduction")
         value, dtype = self.expression(args[0], var(iterator))
+        source_dtype = dtype
         if name in {"sum", "product"}:
             initial = literal(
                 dtype,
@@ -634,9 +668,19 @@ class Body:
                 },
             ]
         )
-        return var(accumulator), dtype
+        return self._intrinsic_result(
+            name,
+            name,
+            var(accumulator),
+            dtype,
+            [source_dtype],
+            "fortran_array_reduction",
+            argument_forms=["array"],
+            source_rank=len(shape),
+        )
 
     def intrinsic(self, name, args, element):
+        source_name = name
         if name in {"sum", "product", "any", "all", "maxval", "minval", "count"}:
             return self.reduction(name, args)
         if name in {"lbound", "ubound", "size"}:
@@ -645,14 +689,21 @@ class Body:
             target = str(args[0]).lower()
             self.bind_dimensions(target)
             if len(args) == 1 and name == "size":
-                return (
+                return self._intrinsic_result(
+                    name,
+                    name,
                     cast(self.default_integer, self.size(target)),
                     self.default_integer,
+                    [self.fact(target).dtype],
+                    "fortran_array_inquiry_default_integer",
+                    argument_forms=["array"],
+                    source_rank=len(self.fact(target).bounds),
                 )
             if len(args) != 2:
                 raise Gap("array_inquiry", name + " needs scalar DIM")
             dim = args[1].items[1] if kind(args[1]) == "Actual_Arg_Spec" else args[1]
-            dimension = integer(self.expression(dim)[0])
+            dimension_value, dimension_type = self.expression(dim)
+            dimension = integer(dimension_value)
             bounds = self.fact(target).bounds
             if dimension is None or not 1 <= dimension <= len(bounds):
                 raise Gap("array_inquiry", name + " dynamic DIM")
@@ -671,7 +722,16 @@ class Body:
                     val,
                     literal("i64", int(name == "lbound")),
                 )
-            return cast(self.default_integer, val), self.default_integer
+            return self._intrinsic_result(
+                name,
+                name,
+                cast(self.default_integer, val),
+                self.default_integer,
+                [self.fact(target).dtype, dimension_type],
+                "fortran_array_inquiry_default_integer",
+                argument_forms=["array", "scalar"],
+                source_rank=len(bounds),
+            )
         keywords = {}
         positional = []
         for arg in args:
@@ -711,25 +771,50 @@ class Body:
                 )
                 if width not in (4, 8):
                     raise Gap("kind", name)
+                selected_kind = width
                 target = "c" + str(16 * width)
             if dtype.startswith("c") and len(xs) == 1:
-                return cast(target, xs[0]), target
-            return {
-                "op": "intrinsic",
-                "name": "complex",
-                "args": xs,
-                "type": target,
-            }, target
+                return self._intrinsic_result(
+                    source_name,
+                    "complex",
+                    cast(target, xs[0]),
+                    target,
+                    types,
+                    "fortran_complex_kind_selection",
+                    selected_kind=selected_kind,
+                )
+            return self._intrinsic_result(
+                source_name,
+                "complex",
+                {
+                    "op": "intrinsic",
+                    "name": "complex",
+                    "args": xs,
+                    "type": target,
+                },
+                target,
+                types,
+                "fortran_complex_kind_selection",
+                selected_kind=selected_kind,
+            )
         if name in {"dreal", "aimag", "dimag"}:
             if not dtype.startswith("c"):
                 raise Gap("intrinsic", name + " requires COMPLEX")
             target = "f" + str(int(dtype[1:]) // 2)
-            return {
-                "op": "intrinsic",
-                "name": "real" if name == "dreal" else "imag",
-                "args": list(xs),
-                "type": target,
-            }, target
+            component = "real" if name == "dreal" else "imag"
+            return self._intrinsic_result(
+                source_name,
+                component,
+                {
+                    "op": "intrinsic",
+                    "name": component,
+                    "args": list(xs),
+                    "type": target,
+                },
+                target,
+                types,
+                "fortran_complex_component_kind",
+            )
 
         if name in {"real", "float", "sngl", "dble", "int", "ifix", "idint"} and len(
             xs
@@ -757,28 +842,60 @@ class Body:
                 if dtype.startswith("c")
                 else xs[0]
             )
-            return cast(target, value), target
+            return self._intrinsic_result(
+                source_name,
+                "int" if category == "i" else "real",
+                cast(target, value),
+                target,
+                types,
+                "fortran_conversion_intrinsic_kind_selection",
+                selected_kind=width,
+            )
         if name in {"aint", "dint"}:
-            return {
-                "op": "intrinsic",
-                "name": "trunc",
-                "type": dtype,
-                "args": [xs[0]],
-            }, dtype
+            return self._intrinsic_result(
+                source_name,
+                "trunc",
+                {
+                    "op": "intrinsic",
+                    "name": "trunc",
+                    "type": dtype,
+                    "args": [xs[0]],
+                },
+                dtype,
+                types,
+                "fortran_real_integral_value_same_kind",
+            )
         name = _LEGACY_MATH.get(name, name)
         if name not in _MATH:
             raise Gap("intrinsic", name)
         result = dtype
         if name == "abs" and dtype.startswith("c"):
             result = "f" + str(int(dtype[1:]) // 2)
-        return {
-            "op": "intrinsic",
-            "name": name,
-            "args": list(xs),
-            "type": result,
-        }, result
+        return self._intrinsic_result(
+            source_name,
+            name,
+            {
+                "op": "intrinsic",
+                "name": name,
+                "args": list(xs),
+                "type": result,
+            },
+            result,
+            types,
+            "fortran_intrinsic_argument_and_result_kinds",
+        )
 
     def expression(self, node, element=None):
+        expression, dtype = self._expression(node, element)
+        if "type" in expression and expression["type"] != dtype:
+            raise Gap(
+                "expression_type",
+                f"expression type {expression['type']} conflicts with inferred {dtype}",
+                node,
+            )
+        return {"location": self.location(node), **expression, "type": dtype}, dtype
+
+    def _expression(self, node, element=None):
         tag, parts = kind(node), getattr(node, "items", ())
         if tag == "Name":
             name = str(node).lower()
@@ -856,12 +973,24 @@ class Body:
             if operator == "**":
                 # Integer exponents retain the base type, including an integral result.
                 dtype = a if b.startswith("i") else numeric_type(a, b)
-                return {
-                    "op": "intrinsic",
-                    "name": "powi" if b.startswith("i") else "pow",
-                    "args": [left, right],
-                    "type": dtype,
-                }, dtype
+                name = "powi" if b.startswith("i") else "pow"
+                return self._intrinsic_result(
+                    "**",
+                    name,
+                    {
+                        "op": "intrinsic",
+                        "name": name,
+                        "args": [left, right],
+                        "type": dtype,
+                    },
+                    dtype,
+                    [a, b],
+                    (
+                        "fortran_integer_exponent_preserves_base_kind"
+                        if b.startswith("i")
+                        else "fortran_numeric_exponent_kind_promotion"
+                    ),
+                )
             op = _OPERATORS[operator]
             dtype = numeric_type(a, b)
             if dtype.startswith("c"):

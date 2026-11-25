@@ -18,6 +18,8 @@ import sys
 import sysconfig
 import tokenize
 
+from scar.contract import python_provider_id, python_source_boundary
+
 
 def _digest_file(path, algorithm="sha256"):
     digest = new_hash(algorithm)
@@ -50,9 +52,10 @@ def _interpreter_digest(compiler_id):
 class Imports:
     """One capture's standard-finder results. No loader executes a target module."""
 
-    def __init__(self, root, compiler_id, *, search_root=None):
+    def __init__(self, root, compiler_id, *, search_root=None, snapshots=None):
         self.root = root
         self.compiler_id = compiler_id
+        self.snapshots = {} if snapshots is None else snapshots
         self.search_path = list(
             dict.fromkeys(
                 str(Path(p or ".").resolve()) for p in (search_root or root, *sys.path)
@@ -69,6 +72,9 @@ class Imports:
         self.file_hash = cache(_digest_file)
         self.named_distributions = cache(
             lambda name: tuple(distributions(name=name, path=self.search_path))
+        )
+        self.installed_directory = cache(
+            lambda path: next(iter(distributions(path=[str(path)])), None) is not None
         )
         self.members = cache(self._members)
         self.providers = {}
@@ -92,6 +98,14 @@ class Imports:
             stdout_errors=getattr(sys.stdout, "errors", None),
             utf8_mode=bool(sys.flags.utf8_mode),
         )
+
+    def snapshot(self, path, raw=None):
+        """Share exactly the bytes inspected for ownership, exports and grammar."""
+        if path not in self.snapshots:
+            self.snapshots[path] = _Source(
+                path, path.read_bytes() if raw is None else raw
+            )
+        return self.snapshots[path]
 
     def _find(self, name, standard=False):
         parent, _, leaf = name.rpartition(".")
@@ -145,7 +159,11 @@ class Imports:
             loader, origin, digest, basis = (
                 "path",
                 str(source),
-                self.file_hash(source),
+                (
+                    self.snapshot(source).sha256
+                    if isinstance(spec.loader, SourceFileLoader)
+                    else self.file_hash(source)
+                ),
                 "provider_file",
             )
         return dict(
@@ -182,7 +200,7 @@ class Imports:
                 members.setdefault(absolute, []).append(member)
         return members
 
-    def distribution_source(self, name, origin):
+    def distribution_source(self, name, origin, loader):
         key = os.path.normcase(os.path.abspath(origin))
         root_name = name.split(".", 1)[0]
 
@@ -215,14 +233,19 @@ class Imports:
             )
         dist, member = claims[0]
         path = Path(origin).resolve(strict=True)
-        digest = self.file_hash(path)
+        source = self.snapshot(path) if loader == "source" else None
+        digest = source.sha256 if source is not None else self.file_hash(path)
         if member.hash:
             expected = member.hash
             try:
                 actual = (
                     digest
                     if expected.mode == "sha256"
-                    else self.file_hash(path, expected.mode)
+                    else (
+                        new_hash(expected.mode, source.raw).hexdigest()
+                        if source is not None
+                        else self.file_hash(path, expected.mode)
+                    )
                 )
             except (TypeError, ValueError):
                 return dict(
@@ -248,6 +271,7 @@ class Imports:
         return dict(
             status="verified_distribution",
             module=name,
+            loader=loader,
             distribution=metadata["Name"],
             version=metadata["Version"],
             member=str(member),
@@ -293,16 +317,27 @@ class Imports:
                     result["aliases"] = {"os.path": self.record(path_name)}
                 return result
         if source := self.project_source(name):
+            # A script's environment may live inside its source tree. Establish
+            # ownership from the selected import directory and actual RECORD.
+            depth = name.count(".") + (spec.submodule_search_locations is not None)
+            directory = Path(spec.origin).parents[depth]
+            if self.installed_directory(directory):
+                claimed = self.distribution_source(name, spec.origin, "source")
+                if claimed.get("resolution") != "unowned":
+                    return claimed
             return dict(
                 status="project",
                 module=name,
                 origin=str(source),
                 file=source.relative_to(self.root).as_posix(),
             )
-        if isinstance(
-            spec.loader, (SourceFileLoader, SourcelessFileLoader, ExtensionFileLoader)
+        for loader, kind in (
+            (SourceFileLoader, "source"),
+            (SourcelessFileLoader, "bytecode"),
+            (ExtensionFileLoader, "extension"),
         ):
-            return self.distribution_source(name, spec.origin)
+            if isinstance(spec.loader, loader):
+                return self.distribution_source(name, spec.origin, kind)
         return dict(
             status="unresolved",
             module=name,
@@ -314,7 +349,12 @@ class Imports:
     def record(self, name):
         if name not in self.providers:
             try:
-                self.providers[name] = self.identify(name)
+                record = self.identify(name)
+                if record.get("status") == "verified_distribution":
+                    record["provider_id"] = python_provider_id(record)
+                    if interface := python_source_boundary(record):
+                        record["source_interface"] = interface
+                self.providers[name] = record
             except (OSError, ValueError, TypeError) as error:
                 self.providers[name] = dict(
                     status="unresolved",
@@ -366,27 +406,30 @@ class Imports:
         }
         return dict(scope="absolute_module_suite", order=order, modules=modules)
 
-    def providers_for(self, tree):
+    def providers_for(
+        self, tree, module="", package=False, *, nodes=None, value_uses=None
+    ):
         names = set()
         aliases = defaultdict(set)
         requests = defaultdict(set)
         accesses = set()
-        for node in ast.walk(tree):
+        for node in ast.walk(tree) if nodes is None else nodes:
             if isinstance(node, ast.Import):
                 for a in node.names:
                     names.add(a.name)
                     local = a.asname or a.name.split(".")[0]
                     aliases[local].add((a.name if a.asname else local, ()))
-            elif isinstance(node, ast.ImportFrom) and not node.level and node.module:
-                names.add(node.module)
+            elif isinstance(node, ast.ImportFrom):
+                base = relative_module(node, module, package)
+                if not base:
+                    continue
+                names.add(base)
                 for alias in node.names:
-                    candidate = node.module + "." + alias.name
+                    candidate = base + "." + alias.name
                     if alias.name == "*":
                         continue
-                    requests[node.module].add(alias.name)
-                    aliases[alias.asname or alias.name].add(
-                        (node.module, (alias.name,))
-                    )
+                    requests[base].add(alias.name)
+                    aliases[alias.asname or alias.name].add((base, (alias.name,)))
                     if (
                         self.find(candidate)
                         or candidate == "os.path"
@@ -397,12 +440,17 @@ class Imports:
                 path = _dotted(node)
                 if path:
                     accesses.add(path)
+            elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+                accesses.add((node.id,))
         for root, *parts in sorted(accesses):
             for target, prefix in aliases.get(root, ()):
                 namespace = target
                 qualified = (*prefix, *parts)
                 for i, part in enumerate(qualified):
-                    requests[namespace].add(".".join(qualified[i:]))
+                    member = ".".join(qualified[i:])
+                    requests[namespace].add(member)
+                    if value_uses is not None:
+                        value_uses.add((namespace, member))
                     child = namespace + "." + part
                     if not self.find(child):
                         break
@@ -557,11 +605,37 @@ class _Binding:
 
 @dataclass(frozen=True)
 class _Source:
-    tree: ast.Module
-    lines: list
-    star_names: object
-    package: bool
-    string_keys: dict
+    path: Path
+    raw: bytes
+
+    @cached_property
+    def sha256(self):
+        return sha256(self.raw).hexdigest()
+
+    @cached_property
+    def text(self):
+        encoding, _ = tokenize.detect_encoding(BytesIO(self.raw).readline)
+        return self.raw.decode(encoding).replace("\r\n", "\n").replace("\r", "\n")
+
+    @cached_property
+    def tree(self):
+        return ast.parse(self.text, filename=str(self.path))
+
+    @cached_property
+    def lines(self):
+        return self.text.split("\n")
+
+    @cached_property
+    def star_names(self):
+        return _star_names(self.tree)
+
+    @property
+    def package(self):
+        return self.path.name == "__init__.py"
+
+    @cached_property
+    def string_keys(self):
+        return _loop_keys(self.tree)
 
 
 def _loop_keys(tree):
@@ -644,27 +718,15 @@ class ExportSources:
             return None, "no_python_source"
         return self.read_file(path, record["sha256"])
 
-    @staticmethod
-    def _read_file(path, expected):
+    def _read_file(self, path, expected):
         try:
-            raw = path.read_bytes()
-            if sha256(raw).hexdigest() != expected:
+            source = self.imports.snapshot(path)
+            if source.sha256 != expected:
                 return None, "source_snapshot_changed"
-            encoding, _ = tokenize.detect_encoding(BytesIO(raw).readline)
-            text = raw.decode(encoding).replace("\r\n", "\n").replace("\r", "\n")
-            tree = ast.parse(text, filename=str(path))
+            _ = source.tree
         except (OSError, SyntaxError, UnicodeError, LookupError) as error:
             return None, "source_read: " + str(error)
-        return (
-            _Source(
-                tree,
-                text.split("\n"),
-                _star_names(tree),
-                path.name == "__init__.py",
-                _loop_keys(tree),
-            ),
-            None,
-        )
+        return source, None
 
     def _bindings(self, module, name, before):
         source, _ = self.source(module)

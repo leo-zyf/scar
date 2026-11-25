@@ -640,6 +640,119 @@ def test_external_import_facts_preserve_ownership_without_execution(
     assert imported["initializers"] == [] and "IO" in imported["effects"]
 
 
+def test_distribution_source_units_share_capture_and_follow_requested_bodies(
+    tmp_path, monkeypatch
+):
+    from base64 import urlsafe_b64encode
+    from collections import Counter
+    from hashlib import sha256
+
+    from scar.contract import walk_operations
+
+    project = tmp_path / "project"
+    project.mkdir()
+    installed = project / ".sdk" / "site-packages"
+    package = installed / "orbit_source"
+    package.mkdir(parents=True)
+    marker = tmp_path / "import-executed"
+    contents = {
+        "__init__": f"open({str(marker)!r}, 'w').close()\nfrom .ops import apply, unused_binding\n"
+        "def __getattr__(name):\n    from .lookup import missing\n    return missing(name)\n"
+        "def dormant():\n    from .unused import unused\n    return unused()\n",
+        "ops": "def apply(x):\n    from .step import step\n    return step(x)\n"
+        "def unused_binding():\n    from .unused import unused\n    return unused()\n",
+        "step": "def step(x): return x + 2\n",
+        "lookup": "def missing(name): raise AttributeError(name)\n",
+        "unused": "def unused(): return 123\n",
+    }
+    metadata = installed / "orbit_source-1.0.dist-info"
+    metadata.mkdir()
+    (metadata / "METADATA").write_text(
+        "Metadata-Version: 2.1\nName: orbit-source\nVersion: 1.0\n"
+    )
+    rows = []
+    for name, text in contents.items():
+        data = text.encode()
+        path = package / f"{name}.py"
+        path.write_bytes(data)
+        checksum = urlsafe_b64encode(sha256(data).digest()).decode().rstrip("=")
+        rows.append(f"{path.relative_to(installed)},sha256={checksum},{len(data)}\n")
+    (metadata / "RECORD").write_text("".join(rows))
+    monkeypatch.syspath_prepend(str(installed))
+    entry = project / "entry.py"
+    entry.write_text("import orbit_source as namespace\nnamespace.apply(1)\n")
+
+    reads, parses, scopes = Counter(), Counter(), Counter()
+    read, parse, scope = Path.read_bytes, ast.parse, symtable.symtable
+
+    def counted_read(path):
+        reads[path] += 1
+        return read(path)
+
+    def count(function, counter):
+        def capture(source, filename, *args, **kwargs):
+            counter[Path(filename)] += 1
+            return function(source, filename, *args, **kwargs)
+
+        return capture
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "read_bytes", counted_read)
+        patch.setattr(ast, "parse", count(parse, parses))
+        patch.setattr(symtable, "symtable", count(scope, scopes))
+        captured = python.capture_project(entry, project)
+    assert set(captured.catalog) == {
+        "entry",
+        "orbit_source",
+        "orbit_source.ops",
+        "orbit_source.step",
+        "orbit_source.lookup",
+    }
+    assert not marker.exists() and not reads[package / "unused.py"]
+    installed.rename(tmp_path / "hidden")
+    entry.unlink()
+    for profile, unit in zip(captured.profiles, captured.units, strict=True):
+        assert reads[unit.path] == parses[unit.path] == scopes[unit.path] == 1
+        module = profile["abi"]["module"]
+        row = captured.catalog[module]
+        assert row["graph_backed"] and row["path"] == profile["path"] == unit.source_key
+        assert unit.source_digests == {
+            unit.source_key: captured.source_digests[unit.source_key]
+        }
+        output = _offline(
+            monkeypatch, python, unit, (ast, "parse"), (symtable, "symtable")
+        )
+        if module == "entry":
+            assert "orbit_source.step" not in profile["abi"]["project"]
+            imported = next(
+                op
+                for op in walk_operations(output["functions"])
+                if op["op"] == "python_import"
+            )
+            assert imported["provider"] != "project" and imported["initializers"] == [
+                "py:orbit_source:<init>"
+            ]
+            continue
+        provider = row["source_provider"]
+        assert (
+            provider["status"] == "verified_distribution"
+            and provider["loader"] == "source"
+        )
+        assert (
+            unit.source_key == f"@python/{provider['provider_id']}/{provider['member']}"
+        )
+        assert unit.source_origins[unit.source_key]["origin"] == str(unit.path)
+        initializer = next(
+            fn for fn in output["functions"] if fn["name"] == f"py:{module}:<init>"
+        )
+        assert initializer["location"]["file"] == unit.source_key
+        if module == "orbit_source":
+            assert any(
+                fn["name"] == "py:orbit_source:__getattr__"
+                for fn in output["functions"]
+            )
+
+
 def test_external_exports_follow_aliases_and_preserve_source_evidence(
     tmp_path, monkeypatch
 ):

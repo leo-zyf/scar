@@ -2,6 +2,7 @@
 
 import ast
 from collections import Counter
+from pathlib import PurePosixPath
 
 from scar.contract import walk_operations
 
@@ -11,7 +12,7 @@ from .numeric import Unsupported, _array_function, _names, _scalar_function
 
 def normalize_unit(parsed):
     """F2: turn captured syntax and lexical facts into source-independent operations."""
-    path, root, abi, tree = parsed.path, parsed.root, parsed.abi, parsed.tree
+    abi, tree = parsed.abi, parsed.tree
     if tree is None:
         return dict(functions=[], externs=[], diagnostics=list(parsed.diagnostics))
     if abi.get("kind") == "python_module":
@@ -22,14 +23,17 @@ def normalize_unit(parsed):
     )
     exports, imports = abi.get("exports", {}), abi.get("imports", {})
     symbols = {**{name: exports.get(name, name) for name in definitions}, **imports}
-    module = ".".join(path.relative_to(root).with_suffix("").parts)
+    source_key = parsed.source_key
+    module = abi.get("module") or ".".join(
+        PurePosixPath(source_key).with_suffix("").parts
+    )
     profile = dict(
         module=module,
         main=False,
         project={
             module: {
-                "path": path.relative_to(root).as_posix(),
-                "package": path.name == "__init__.py",
+                "path": source_key,
+                "package": parsed.path.name == "__init__.py",
                 "exports": parsed.exports,
             }
         },
@@ -70,7 +74,7 @@ def normalize_unit(parsed):
                 code="python." + getattr(error, "kind", type(node).__name__),
                 detail=str(error),
                 symbol=symbol,
-                file=str(path.relative_to(root)),
+                file=source_key,
                 line=getattr(error, "line", node.lineno),
             )
         )
@@ -105,7 +109,7 @@ def normalize_unit(parsed):
                         "function parameters need a typed binding or float annotation",
                     )
                 f = _scalar_function(protocols[symbol])
-            f["location"] = dict(file=str(path.relative_to(root)), line=fn.lineno)
+            f["location"] = dict(file=source_key, line=fn.lineno)
             functions.append(f)
         except Unsupported as exc:
             problem(fn, exc, symbol)

@@ -2,17 +2,14 @@
 
 import ast
 import builtins
-from collections import deque
+from collections import defaultdict, deque
 from dataclasses import dataclass, field, replace
 import dis
 from functools import cache
-from hashlib import sha256
-from io import BytesIO, TextIOWrapper
 from math import isfinite
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import symtable
 import sys
-import tokenize
 from types import CodeType
 import unicodedata
 
@@ -69,10 +66,13 @@ class ParsedUnit:
     source_text: str = ""
     text_profiles: dict = field(default_factory=dict)
     tuple_sites: dict = field(default_factory=dict)
+    source_key: str = ""
+    source_origins: dict = field(default_factory=dict)
+    import_value_uses: frozenset = frozenset()
 
     @property
     def source_digests(self):
-        return {self.path.relative_to(self.root).as_posix(): self.source_hash}
+        return {self.source_key: self.source_hash}
 
     compiler_id = f"{sys.implementation.name} {sys.version.split()[0]}"
 
@@ -183,13 +183,22 @@ def parse_unit(
     source_bytes=None,
     source_hashes=None,
     _imports=None,
+    _source_key=None,
+    _source_origin=None,
 ):
     """F1: read source once and capture both CPython syntax and lexical binding."""
     path, root = Path(path).resolve(), Path(root).resolve()
     imports = _imports or Imports(root, ParsedUnit.compiler_id)
-    relative = path.relative_to(root).as_posix()
-    raw = path.read_bytes() if source_bytes is None else source_bytes
-    source_hash = sha256(raw).hexdigest()
+    relative = _source_key or path.relative_to(root).as_posix()
+    snapshot = imports.snapshot(path, source_bytes)
+    source_hash = snapshot.sha256
+    if _source_origin and _source_origin["sha256"] != source_hash:
+        raise ValueError(f"Python provider and captured source disagree: {relative}")
+    origins = (
+        {relative: {**_source_origin, "size": len(snapshot.raw)}}
+        if _source_origin
+        else {}
+    )
     if (
         source_hashes
         and relative in source_hashes
@@ -197,17 +206,12 @@ def parse_unit(
     ):
         raise ValueError(f"Python source snapshot differs from input lock: {relative}")
     try:
-        buffer = BytesIO(raw)
-        encoding, _ = tokenize.detect_encoding(buffer.readline)
-        buffer.seek(0)
-        with TextIOWrapper(buffer, encoding=encoding) as source:
-            text = source.read()
-        tree = ast.parse(text, filename=str(path))
+        text, tree = snapshot.text, snapshot.tree
         scopes = LexicalScope.capture(symtable.symtable(text, str(path), "exec"))
         tuple_sites = _tuple_sites(tree, text, path, relative, source_hash)
-    except (SyntaxError, UnicodeError) as error:
+    except (SyntaxError, UnicodeError, LookupError) as error:
         location = dict(
-            file=path.relative_to(root).as_posix(),
+            file=relative,
             line=getattr(error, "lineno", None),
             column=getattr(error, "offset", None),
         )
@@ -230,9 +234,17 @@ def parse_unit(
             (issue,),
             runtime_facts=imports.runtime,
             text_profiles=_text_profiles(),
+            source_key=relative,
+            source_origins=origins,
         )
     module = (abi or {}).get("module") or ".".join(
         path.relative_to(root).with_suffix("").parts
+    )
+    value_uses = set()
+    providers = (
+        imports.providers_for(tree, module, snapshot.package, value_uses=value_uses)
+        if not origins
+        else {}
     )
     return ParsedUnit(
         path,
@@ -244,11 +256,14 @@ def parse_unit(
         frozenset(sys.stdlib_module_names),
         _catalog(tree, module),
         source_hash,
-        providers=imports.providers_for(tree),
+        providers=providers,
         runtime_facts=imports.runtime,
         source_text=text,
         text_profiles=_text_profiles(),
         tuple_sites=tuple_sites,
+        source_key=relative,
+        source_origins=origins,
+        import_value_uses=frozenset(value_uses),
     )
 
 
@@ -364,13 +379,19 @@ class ProjectCapture:
         self.resolved = {}
         self.finders = {}
         self.projects = {}
+        self.snapshots = {}
 
-    def _read(self, path, module, imports):
-        key = (path, imports)
+    def _read(self, path, module, imports, provider):
+        external = provider["status"] == "verified_distribution"
+        relative = (
+            f"@python/{provider['provider_id']}/{provider['member']}"
+            if external
+            else path.relative_to(self.root).as_posix()
+        )
+        key = (relative, module, imports)
         if key not in self.resolved:
-            facts = self.parsed.get(path)
+            facts = self.parsed.get(relative)
             if facts is None:
-                relative = path.relative_to(self.root).as_posix()
                 facts = parse_unit(
                     path,
                     root=self.root,
@@ -378,16 +399,51 @@ class ProjectCapture:
                     source_bytes=self.buffers.get(relative),
                     source_hashes=self.source_hashes,
                     _imports=imports,
+                    _source_key=relative,
+                    _source_origin=(
+                        {
+                            k: provider[k]
+                            for k in (
+                                "module",
+                                "provider_id",
+                                "origin",
+                                "sha256",
+                                "member",
+                            )
+                        }
+                        if external
+                        else None
+                    ),
                 )
-                self.parsed[path] = facts
+                self.parsed[relative] = facts
+            elif facts.path != path:
+                raise ValueError(
+                    f"two physical sources resolve to one Python unit: {relative}"
+                )
             elif facts.tree is not None:
                 # The same bytes can import a different helper in a different image.
-                facts = replace(facts, providers=imports.providers_for(facts.tree))
+                value_uses = set()
+                facts = replace(
+                    facts,
+                    exports=(
+                        facts.exports
+                        if module == facts.abi["module"]
+                        else _catalog(facts.tree, module)
+                    ),
+                    providers=(
+                        {}
+                        if external
+                        else imports.providers_for(
+                            facts.tree,
+                            module,
+                            path.name == "__init__.py",
+                            value_uses=value_uses,
+                        )
+                    ),
+                    import_value_uses=frozenset(value_uses),
+                )
             self.resolved[key] = facts
-        facts = self.resolved[key]
-        if facts.tree is not None and module != facts.abi["module"]:
-            return replace(facts, exports=_catalog(facts.tree, module))
-        return facts
+        return self.resolved[key]
 
     def capture(self, entry, *, search_root=None) -> ParsedProject:
         entry = (self.root / entry).resolve()
@@ -396,7 +452,10 @@ class ProjectCapture:
         if key not in self.projects:
             if directory not in self.finders:
                 self.finders[directory] = Imports(
-                    self.root, ParsedUnit.compiler_id, search_root=directory
+                    self.root,
+                    ParsedUnit.compiler_id,
+                    search_root=directory,
+                    snapshots=self.snapshots,
                 )
             self.projects[key] = _capture_project(
                 entry, self.root, directory, self.finders[directory], self._read
@@ -404,56 +463,152 @@ class ProjectCapture:
         return self.projects[key]
 
 
+def _import_nodes(tree, requested):
+    """Visit the initialization suite and code that a requested operation may invoke."""
+    definitions = defaultdict(list)
+    functions = (ast.FunctionDef, ast.AsyncFunctionDef)
+    for node in scope_nodes(tree.body):
+        if isinstance(node, (*functions, ast.ClassDef)):
+            definitions[node.name].append(node)
+
+    pending = [tree]
+    visited = set()
+
+    def callable_body(node):
+        if isinstance(node, ast.ClassDef):
+            for member in node.body:
+                if isinstance(member, functions) and member.name in {
+                    "__init__",
+                    "__new__",
+                }:
+                    pending.extend(member.body)
+        else:
+            pending.extend(node.body)
+
+    for name, line in requested:
+        for node in definitions.get(name, ()):
+            if line is None or line == node.lineno:
+                callable_body(node)
+    while pending:
+        node = pending.pop()
+        if node in visited:
+            continue
+        visited.add(node)
+        yield node
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            for definition in definitions.get(node.func.id, ()):
+                callable_body(definition)
+        if isinstance(node, (*functions, ast.Lambda)):
+            # Definitions evaluate their headers. Calling the resulting function
+            # is a separate event; a merely present nested import opens no file.
+            pending.append(node.args)
+            pending.extend(getattr(node, "decorator_list", ()))
+            pending.extend(getattr(node, "type_params", ()))
+            if annotation := getattr(node, "returns", None):
+                pending.append(annotation)
+        else:
+            pending.extend(ast.iter_child_nodes(node))
+
+
 def _capture_project(entry, root, directory, imports, read) -> ParsedProject:
-    """Discover local imports on the same syntax trees that F2 will normalize."""
+    """Use one ordinary unit per local or requested verified Python source module."""
 
     def module_path(path):
         relative = path.relative_to(directory).with_suffix("")
         pieces = relative.parts[:-1] if relative.name == "__init__" else relative.parts
         return ".".join(pieces) or "__main__"
 
-    resolve = cache(imports.project_source)
-
     entry_module = module_path(entry)
     catalog = {}
     modules = {}
-    pending = deque([(entry_module, entry)])
+    origins = {
+        entry_module: dict(
+            status="project",
+            module=entry_module,
+            origin=str(entry),
+            file=entry.relative_to(root).as_posix(),
+        )
+    }
+    requests = defaultdict(set)
+    pending = deque([entry_module])
     scheduled = {entry_module}
 
-    def enqueue(module):
-        parts = module.split(".")
-        for i in range(1, len(parts) + 1):
-            candidate = ".".join(parts[:i])
-            if candidate in scheduled:
-                continue
-            path = resolve(candidate)
-            if path:
-                scheduled.add(candidate)
-                pending.append((candidate, path))
+    def enqueue(name, body=None):
+        record = imports.record(name)
+        if record["status"] == "verified_distribution":
+            if (
+                record.get("source_interface")
+                or record["loader"] != "source"
+                or record["proof_scope"] != "installed_file_with_digest"
+            ):
+                return
+            member = PurePosixPath(record["member"])
+            if member.is_absolute() or ".." in member.parts or member.suffix != ".py":
+                return
+        elif record["status"] != "project":
+            return
+        changed = name not in origins
+        origins.setdefault(name, record)
+        if body is not None and body not in requests[name]:
+            requests[name].add(body)
+            changed = True
+        if changed and name not in scheduled:
+            pending.append(name)
+            scheduled.add(name)
 
     while pending:
-        module, path = pending.popleft()
+        module = pending.popleft()
+        scheduled.remove(module)
+        origin = origins[module]
+        path = Path(origin["origin"])
         package = path.name == "__init__.py"
-        relative = path.relative_to(root).as_posix()
-        facts = read(path, module, imports)
+        facts = read(path, module, imports, origin)
+        if facts.tree is not None and origin["status"] != "project":
+            value_uses = set()
+            facts = replace(
+                facts,
+                providers=imports.providers_for(
+                    facts.tree,
+                    module,
+                    package,
+                    nodes=_import_nodes(facts.tree, requests[module]),
+                    value_uses=value_uses,
+                ),
+                import_value_uses=frozenset(value_uses),
+            )
         modules[module] = facts
         catalog[module] = {
-            "path": relative,
+            "path": facts.source_key,
             "package": package,
             "exports": facts.exports,
+            "source_provider": origin,
+            "graph_backed": facts.tree is not None,
         }
-        if facts.tree is None:
-            continue
-        for node in ast.walk(facts.tree):
-            if isinstance(node, ast.Import):
-                for name in node.names:
-                    enqueue(name.name)
-            elif isinstance(node, ast.ImportFrom):
-                source = _relative(node, module, package)
-                if source:
-                    enqueue(source)
-                    for name in node.names:
-                        enqueue(source + "." + name.name)
+        for name, record in facts.providers.items():
+            enqueue(name)
+            if record.get("source_interface") or not record.get("exports"):
+                continue
+            enqueue(name, ("__getattr__", None))
+            for member, export in record["exports"].items():
+                # Executing `from pkg import f` inspects the binding. The
+                # implementation of f is demanded only when its value is used.
+                if (name, member) not in facts.import_value_uses:
+                    continue
+                for candidate in export.get("candidates", ()):
+                    enqueue(candidate["module"], (candidate["name"], candidate["line"]))
+
+    def visible_modules(name):
+        # Catalog membership is image-wide. A translation profile needs only
+        # names this source can resolve; repeating every export of every unit
+        # in each profile makes serialization quadratic in the package graph.
+        visible = {name, *modules[name].providers}
+        for provider in modules[name].providers.values():
+            for export in provider.get("exports", {}).values():
+                visible.update(c["module"] for c in export.get("candidates", ()))
+        return {
+            module: catalog[module] for module in sorted(visible) if module in catalog
+        }
+
     profiles = tuple(
         dict(
             path=spec["path"],
@@ -462,7 +617,7 @@ def _capture_project(entry, root, directory, imports, read) -> ParsedProject:
                 kind="python_module",
                 module=name,
                 main=name == entry_module,
-                project=catalog,
+                project=visible_modules(name),
             ),
         )
         for name, spec in catalog.items()
@@ -471,10 +626,7 @@ def _capture_project(entry, root, directory, imports, read) -> ParsedProject:
         profiles,
         tuple(replace(modules[p["abi"]["module"]], abi=p["abi"]) for p in profiles),
         catalog,
-        {
-            unit.path.relative_to(root).as_posix(): unit.source_hash
-            for unit in modules.values()
-        },
+        {unit.source_key: unit.source_hash for unit in modules.values()},
     )
 
 

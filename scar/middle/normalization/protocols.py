@@ -1,6 +1,6 @@
 """Close lexical Python protocols from the bound project operation graph."""
 
-from scar.contract import walk_operations
+from scar.contract import json_bytes, python_provider_id, walk_operations
 from . import (
     arrays,
     expressions,
@@ -234,6 +234,7 @@ class _Project:
         self.graphics = graphics.Graphics()
         self.decisions = []
         self.skipped_sites = {}
+        self.skipped_edges = {}
         self.live_sites = set()
         self.actual_calls = set()
         self.active = []
@@ -268,7 +269,15 @@ class _Project:
         removed, kept = [], []
         for edge in edges:
             key = edge["owner"], edge.get("site")
-            if (
+            edge_key = (
+                *key,
+                edge["target"],
+                edge.get("role"),
+                json_bytes(edge.get("condition")),
+            )
+            if edge_key in self.skipped_edges:
+                removed.append(dict(edge, proof=self.skipped_edges[edge_key]))
+            elif (
                 edge.get("site") is not None
                 and key in self.skipped_sites
                 and key not in self.live_sites
@@ -873,7 +882,87 @@ class _Frame:
                         "import_resolution",
                         f"the graph identifies {root} without a source identity for {module}",
                     )
+        if node.get("graph_backed"):
+            initializer = self.project.initializers.get(module)
+            scope = self.project.functions.get(initializer, {}).get("python_scope", {})
+            captured = scope.get("source_provider") or {}
+            if (
+                not initializer
+                or scope.get("graph_backed") is not True
+                or python_provider_id(captured) != python_provider_id(resolved)
+            ):
+                self.fail(
+                    node,
+                    "import_initializer",
+                    f"the source graph initializer does not identify {module}",
+                )
+            return None
         return resolved
+
+    def skip_activation(self, node, target, role, condition, proof):
+        if node.get("site") is not None:
+            key = self.name, node["site"], target, role, json_bytes(condition)
+            self.project.skipped_edges[key] = proof
+
+    def module_member(self, node, module, member, steps, *, optional=False):
+        """Read current bindings before considering a missing-attribute hook."""
+        slot = _slot(module, member)
+        candidates = list(node.get("missing_attribute_hooks", ()))
+        if candidate := node.get("missing_attribute_hook"):
+            candidates.append(candidate)
+        candidates = [
+            c
+            for c in candidates
+            if c.get("when")
+            == dict(kind="package_attribute_missing", module=module, name=member)
+        ]
+        value = self.project.names.get(slot)
+        if value is not None:
+            for candidate in candidates:
+                self.skip_activation(
+                    node,
+                    candidate["symbol"],
+                    "conditional_attribute",
+                    candidate["when"],
+                    dict(rule="module_member_bound", slot=slot),
+                )
+            return self.global_value(slot, value)
+        if slot in self.project.shadow:
+            self.fail(
+                node,
+                "module_attribute_state",
+                f"the current binding state of {module}.{member} is unresolved",
+            )
+        hook = self.project.names.get(_slot(module, "__getattr__"))
+        if hook is not None:
+            permitted = {c["symbol"] for c in candidates}
+            if hook.kind != "function" or hook.value not in permitted:
+                self.fail(
+                    node,
+                    "module_attribute_hook",
+                    f"the current lookup hook of {module} has no matching source edge",
+                )
+            for candidate in candidates:
+                if candidate["symbol"] != hook.value:
+                    self.skip_activation(
+                        node,
+                        candidate["symbol"],
+                        "conditional_attribute",
+                        candidate["when"],
+                        dict(rule="module_hook_binding", selected=hook.value),
+                    )
+            return self.invoke_project(
+                node, hook.value, [_literal(member)], {}, steps, False
+            )
+        if _slot(module, "__getattr__") in self.project.shadow:
+            self.fail(
+                node,
+                "module_attribute_state",
+                f"the current lookup hook binding of {module} is unresolved",
+            )
+        if optional:
+            return None
+        self.fail(node, "attribute", f"unbound module attribute {module}.{member}")
 
     def imported(self, node, steps):
         req = node.get("request", {})
@@ -973,6 +1062,23 @@ class _Frame:
             self.fail(
                 node, "import_initializer", f"incomplete or circular import of {mod}"
             )
+        if req["form"] == "from" and req.get("binding_index", 0) == 0:
+            # A package's fromlist check precedes all IMPORT_FROM bindings.
+            # AttributeError suppression and conditional child loading require
+            # an exception/cache-state join, not an unconditional hook call.
+            scope = self.project.functions[self.project.initializers[mod]][
+                "python_scope"
+            ]
+            if scope.get("package"):
+                for member in req.get("fromlist", ()):
+                    if _slot(mod, member) in self.project.names:
+                        self.module_member(node, mod, member, steps)
+                    elif _slot(mod, "__getattr__") in self.project.names:
+                        self.fail(
+                            node,
+                            "import_from_hook",
+                            "package fromlist lookup requires its AttributeError and module-cache contract",
+                        )
         for optional in node.get("conditional_initializers", ()):
             when = optional["when"]
             if when.get("kind") != "package_attribute_missing":
@@ -980,6 +1086,12 @@ class _Frame:
                     node, "import_guard", "unsupported conditional submodule binding"
                 )
             if _slot(when["module"], when["name"]) not in self.project.names:
+                if _slot(when["module"], when["name"]) in self.project.shadow:
+                    self.fail(
+                        node,
+                        "module_attribute_state",
+                        "conditional import has an unresolved existing member binding",
+                    )
                 if _slot(when["module"], "__getattr__") in self.project.names:
                     self.fail(
                         node,
@@ -987,16 +1099,30 @@ class _Frame:
                         "package implements dynamic attribute lookup",
                     )
                 initialize(optional["initializer"])
+            else:
+                self.skip_activation(
+                    node,
+                    optional["initializer"],
+                    "conditional_import",
+                    when,
+                    dict(
+                        rule="module_member_bound",
+                        slot=_slot(when["module"], when["name"]),
+                    ),
+                )
         if req["form"] == "import":
             value = _Value("module", mod if node.get("alias") else mod.split(".")[0])
         else:
-            value = self.project.names.get(_slot(mod, node["member"]))
-            if value is None:
+            if (
+                _slot(mod, node["member"]) not in self.project.names
+                and _slot(mod, "__getattr__") in self.project.names
+            ):
                 self.fail(
                     node,
-                    "import_binding",
-                    f"{mod} has no bound member {node['member']}",
+                    "import_from_hook",
+                    "IMPORT_FROM needs its lookup failure and ImportError conversion contract",
                 )
+            value = self.module_member(node, mod, node["member"], steps)
         self.store(node["binding"], value, steps)
 
     def evaluate(self, node, steps, discard=False, *, truth_context=False):
@@ -1115,10 +1241,7 @@ class _Frame:
             if sequence_member is not None:
                 return sequence_member
             if base.kind == "module":
-                slot = _slot(base.value, node["field"])
-                value = self.project.names.get(slot)
-                if value is not None:
-                    return self.global_value(slot, value)
+                return self.module_member(node, base.value, node["field"], steps)
             self.fail(
                 node,
                 "attribute",

@@ -2,6 +2,8 @@
 
 from pathlib import PurePosixPath
 
+from scar.contract import python_source_boundary
+
 from .values import Value, rank, wire
 
 _PROFILE = "pyplot-3.11.2"
@@ -43,7 +45,7 @@ def _verified(frame, node, source, module):
     }[module]
     digest = source.get("sha256")
     if not (
-        source.get("status") == "verified_distribution"
+        python_source_boundary(source) == _PROFILE
         and source.get("module") == module
         and source.get("distribution", "").lower() == _ROOT
         and source.get("version") == "3.11.2"

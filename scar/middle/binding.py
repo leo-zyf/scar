@@ -4,6 +4,7 @@ from collections import defaultdict
 from scar.contract import (
     digest,
     json_bytes,
+    python_provider_id,
     read_member,
     semantic_form as semantics,
     validate_images,
@@ -23,25 +24,7 @@ def _provider_sources(records):
         if record.get("status") not in {"verified_distribution", "verified_stdlib"}:
             sources[module] = record
             continue
-        identity = {
-            key: record[key]
-            for key in (
-                "module",
-                "status",
-                "origin",
-                "sha256",
-                "hash_basis",
-                "distribution",
-                "version",
-                "member",
-                "loader",
-                "interpreter",
-                "platform",
-                "canonical_module",
-            )
-            if key in record
-        }
-        sources[module] = dict(record, provider_id=digest(json_bytes(identity)))
+        sources[module] = dict(record, provider_id=python_provider_id(record))
     return sources
 
 
@@ -61,6 +44,8 @@ _SITE_OPERATIONS = {
     "continue",
     "call",
     "library_call",
+    "intrinsic",
+    "member",
     "process_launch",
     "process_stream",
     "process_wait",
@@ -109,6 +94,28 @@ def _activation_edges(graph):
     edges, attributed = [], set()
     for port, node in enumerate(graph["nodes"]):
         targets = []
+        hooks = list(node.get("missing_attribute_hooks", ()))
+        if hook := node.get("missing_attribute_hook"):
+            hooks.append(hook)
+        for hook in hooks:
+            when = hook.get("when", {})
+            if (
+                not isinstance(hook.get("symbol"), str)
+                or when.get("kind") != "package_attribute_missing"
+                or not isinstance(when.get("module"), str)
+                or not isinstance(when.get("name"), str)
+            ):
+                raise ValueError("invalid module attribute activation candidate")
+            attributed.add(hook["symbol"])
+            edges.append(
+                dict(
+                    owner=owner,
+                    target=hook["symbol"],
+                    site=f"{graph['id']}/{port}",
+                    role="conditional_attribute",
+                    condition=when,
+                )
+            )
         if node["op"] == "call" and isinstance(node.get("callee"), str):
             targets.append((node["callee"], "call"))
         if node["op"] == "python_invoke":
@@ -117,10 +124,17 @@ def _activation_edges(graph):
             )
         if node["op"] == "python_import":
             targets.extend((v, "import") for v in node.get("initializers", ()))
-            targets.extend(
-                (v["initializer"], "conditional_import")
-                for v in node.get("conditional_initializers", ())
-            )
+            for conditional in node.get("conditional_initializers", ()):
+                attributed.add(conditional["initializer"])
+                edges.append(
+                    dict(
+                        owner=owner,
+                        target=conditional["initializer"],
+                        site=f"{graph['id']}/{port}",
+                        role="conditional_import",
+                        condition=conditional["when"],
+                    )
+                )
         if node["op"] == "python_define_class":
             targets.append((node["body_symbol"], "class_creation"))
         for target, role in targets:

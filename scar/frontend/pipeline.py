@@ -74,6 +74,10 @@ def _unit(job):
         providers=getattr(parsed, "providers", {}),
         runtime=getattr(parsed, "runtime_facts", {}),
     )
+    if source_origins := getattr(parsed, "source_origins", None):
+        source_facts["source_origins"] = source_origins
+    if numeric := getattr(parsed, "source_numeric_contract", None):
+        source_facts["source_numeric_contract"] = numeric
     if text_profiles := getattr(parsed, "text_profiles", None):
         source_facts["text_profiles"] = text_profiles
     if external_headers := getattr(parsed, "external_headers", None):

@@ -256,6 +256,7 @@ def normalize_unit(parsed: ParsedUnit) -> dict:
     out = {"functions": [], "externs": [], "diagnostics": list(parsed.diagnostics)}
     if parsed.diagnostics:
         return out
+    out["source_numeric_contract"] = parsed.source_numeric_contract
     globals_ = []
     externs = {}
     records = {}
@@ -300,6 +301,8 @@ def normalize_unit(parsed: ParsedUnit) -> dict:
             "params": [],
             "result": "i32" if main else "void",
             "location": parsed.location(head),
+            "source_numeric_contract": parsed.source_numeric_contract,
+            "source_intrinsic_bindings": list(procedure.intrinsic_bindings),
         }
         out["functions"].append(fn)
         if procedure.problem:
@@ -323,6 +326,7 @@ def normalize_unit(parsed: ParsedUnit) -> dict:
                 interoperable=interoperable,
             )
             builder.interfaces = procedure.interfaces
+            builder.intrinsic_bindings = procedure.intrinsic_bindings
             builder.formats = procedure.formats
             builder.main = main
             if result:

@@ -4,7 +4,7 @@ import math
 import operator
 import re
 
-from scar.contract import walk_operations
+from scar.contract import python_source_boundary, walk_operations
 
 from . import exceptions, products, scalars, sequences, text
 from .scalars import as_float as _as_float
@@ -584,17 +584,7 @@ def _output(frame, node, kind, steps, *, facts=None, discard=False, **fields):
 
 def import_provider(frame, node):
     source = node.get("source_provider", {})
-    release = re.fullmatch(
-        r"(\d+)\.(\d+)\.(\d+)(?:\.post\d+)?(?:\+[A-Za-z0-9.]+)?",
-        str(source.get("version", "")),
-    )
-    if not (
-        source.get("status") == "verified_distribution"
-        and source.get("distribution", "").lower() == "numpy"
-        and release
-        and (1, 24) <= tuple(map(int, release.group(1, 2))) < (3, 0)
-        and source.get("sha256")
-    ):
+    if python_source_boundary(source) != "numpy-public-v1":
         frame.fail(
             node,
             "provider_identity",

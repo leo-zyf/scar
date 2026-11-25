@@ -664,6 +664,149 @@ def _logical_flags(flags):
     return result
 
 
+_NUMERIC_OPTIONS = {
+    "math_errno": "-fmath-errno",
+    "rounding_math": "-frounding-math",
+    "trapping_math": "-ftrapping-math",
+    "signed_zeros": "-fsigned-zeros",
+    "finite_only": "-ffinite-math-only",
+    "fp_contract": "-ffp-contract",
+    "unsafe_math": "-funsafe-math-optimizations",
+    "associative_math": "-fassociative-math",
+    "reciprocal_math": "-freciprocal-math",
+    "signaling_nans": "-fsignaling-nans",
+    "protect_parens": "-fprotect-parens",
+}
+
+
+@lru_cache(maxsize=16)
+def _compiler_receipt(driver, frontend, identities):
+    # File identities invalidate the cache if either GNU executable is replaced.
+    def binary(path):
+        content = Path(path).read_bytes()
+        return {
+            "path": path,
+            "sha256": sha256(content).hexdigest(),
+            "size": len(content),
+        }
+
+    def query(option):
+        return subprocess.run(
+            [driver, option], check=True, capture_output=True, text=True, timeout=30
+        ).stdout.strip()
+
+    return {
+        "provider": "gnu_fortran",
+        "version": query("-dumpfullversion"),
+        "target": query("-dumpmachine"),
+        "driver": binary(driver),
+        "frontend": binary(frontend),
+    }
+
+
+def _numeric_contract(path, root, flags, capture, source_sha256):
+    compiler = capture["compiler"]
+    selected = _logical_flags(flags)
+    frontend_query = subprocess.run(
+        [compiler, *selected, "-print-prog-name=f951"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    frontend = Path(frontend_query.stdout.strip()).resolve()
+    driver = str(Path(compiler).resolve())
+    identities = tuple(
+        (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns)
+        for stat in (Path(driver).stat(), frontend.stat())
+    )
+    identity = _compiler_receipt(driver, str(frontend), identities)
+    # --help exits before parsing: this query observes f951 option selection.
+    # The separate semantic command validated the same real source and flags.
+    command = [
+        compiler,
+        *selected,
+        "-fsyntax-only",
+        "-Q",
+        "--help=optimizers",
+        "--help=fortran",
+        str(path),
+    ]
+    result = subprocess.run(command, cwd=root, capture_output=True, timeout=30)
+    if result.returncode:
+        raise Gap("numeric_policy", "GNU source-context option query failed")
+    rows = {}
+    for line in (result.stdout + result.stderr).decode(errors="replace").splitlines():
+        match = re.match(r"^\s*(-f[\w-]+)(?:=\[[^]]+\])?\s+(.*?)\s*$", line)
+        if match and match[1] in _NUMERIC_OPTIONS.values():
+            rows[match[1]] = match[2]
+    policy, unresolved = {}, []
+    for name, option in _NUMERIC_OPTIONS.items():
+        chosen = rows.get(option)
+        if chosen in {"[enabled]", "[disabled]"}:
+            policy[name] = chosen == "[enabled]"
+        elif name == "fp_contract" and chosen in {"off", "on", "fast"}:
+            policy[name] = chosen
+        else:
+            policy[name] = None
+            unresolved.append(
+                {"field": name, "reason": "option_query_has_no_explicit_value"}
+            )
+    return {
+        "semantics_version": 1,
+        "scope": "compilation_unit",
+        "provider": "gnu_fortran",
+        "compiler": identity,
+        "source": {"path": str(path), "sha256": source_sha256},
+        "source_flags": list(flags),
+        "validated_command": capture["semantic_command"],
+        "option_query": {
+            "command": command,
+            "cwd": str(root),
+            "returncode": result.returncode,
+            "stdout_sha256": sha256(result.stdout).hexdigest(),
+            "stderr_sha256": sha256(result.stderr).hexdigest(),
+            "selected_rows": rows,
+            "evidence": "observed_frontend_option_selection_not_source_execution",
+        },
+        "policy": policy,
+        "unresolved": unresolved,
+        "applicability": {
+            "evidence": "inferred_same_selected_frontend_and_flags_as_validated_source",
+            "source_contents": "raw_file_digest",
+            "include_contents": "not_fingerprinted",
+            "warning": "The option query exits before parsing; it does not independently validate source or preinclude contents.",
+        },
+        "caller_observations": {"errno": "unproven", "fenv": "unproven"},
+        "runtime_fp_environment": "unobserved",
+    }
+
+
+def _intrinsic_bindings(dump):
+    scopes = list(_SCOPE.finditer(dump))
+    result, ancestors = {}, []
+    for i, scope in enumerate(scopes):
+        depth = len(scope[1].expandtabs())
+        while ancestors and ancestors[-1][0] >= depth:
+            ancestors.pop()
+        ancestors.append((depth, scope[2].lower()))
+        section = dump[
+            scope.end() : scopes[i + 1].start() if i + 1 < len(scopes) else None
+        ]
+        code = re.split(r"^[ \t]*code:[ \t]*$", section, maxsplit=1, flags=re.M)
+        result[tuple(name for _, name in ancestors)] = tuple(
+            sorted(
+                set(
+                    re.findall(
+                        r"\b(__[a-zA-Z0-9_]+)\[\[", code[1] if len(code) == 2 else ""
+                    )
+                )
+            )
+        )
+    return result
+
+
 def _compile_capture(path, root, flags, tmp):
     compiler = shutil.which("gfortran")
     if compiler is None:
@@ -735,7 +878,18 @@ def _compile_capture(path, root, flags, tmp):
                     "directive",
                     f"{file}:{source_line}: active accelerator or parallel directive",
                 )
-    return text, locations, fixed, dump, capture, semantic_flags
+    return (
+        text,
+        locations,
+        fixed,
+        dump,
+        capture,
+        semantic_flags,
+        {
+            "compiler": compiler,
+            "semantic_command": [compiler, *flags, *semantic_flags, str(path)],
+        },
+    )
 
 
 def _syntax(text, fixed, root, path, flags):
@@ -821,6 +975,7 @@ class Procedure:
     main: bool
     block_data: bool
     problem: dict | None
+    intrinsic_bindings: tuple = ()
 
     def external_name(self, name):
         if name not in self.links:
@@ -837,8 +992,13 @@ class ParsedUnit:
     procedures: tuple = ()
     target: TargetABI | None = None
     diagnostics: tuple = ()
+    compiler_id: str | None = None
+    source_digests: dict = field(default_factory=dict)
+    source_numeric_contract: dict = field(default_factory=dict)
+    intrinsic_bindings: dict = field(default_factory=dict)
 
     def location(self, node):
+        original = node
         while node is not None:
             item = getattr(node, "item", None)
             if getattr(item, "span", None):
@@ -846,8 +1006,17 @@ class ParsedUnit:
                 if 0 <= at < len(self.locations):
                     file, line = self.locations[at]
                     return {"file": file, "line": line}
+            node = getattr(node, "parent", None)
+        node = original
+        while node is not None:
             children = getattr(node, "content", ())
             node = children[0] if children else None
+            item = getattr(node, "item", None)
+            if getattr(item, "span", None):
+                at = item.span[0] - 1
+                if 0 <= at < len(self.locations):
+                    file, line = self.locations[at]
+                    return {"file": file, "line": line}
         return {"file": str(self.path), "line": 1}
 
 
@@ -861,11 +1030,13 @@ def _capture_unit(path, root, flags):
         "f128" if default_real == "f64" and "-fdefault-double-8" not in flags else "f64"
     )
     defaults = (default_int, default_real, double)
+    source_sha256 = sha256(path.read_bytes()).hexdigest()
     with TemporaryDirectory(prefix="scar-fortran-") as temporary:
         tmp = Path(temporary)
-        text, locations, fixed, dump, capture, semantic_flags = _compile_capture(
-            path, root, flags, tmp
+        text, locations, fixed, dump, capture, semantic_flags, commands = (
+            _compile_capture(path, root, flags, tmp)
         )
+        numeric = _numeric_contract(path, root, flags, commands, source_sha256)
         try:
             tree = _syntax(text, fixed, root, path, flags)
         except FortranSyntaxError as exc:
@@ -890,8 +1061,23 @@ def _capture_unit(path, root, flags):
             if _without_builtin_plus(checked) != _without_builtin_plus(dump):
                 raise Gap("syntax", str(exc)) from exc
             tree = _syntax(compatible, fixed, root, path, flags)
+    if sha256(path.read_bytes()).hexdigest() != source_sha256:
+        raise Gap("source_changed", "raw source changed during semantic capture")
     tables = _facts(dump)
-    unit = ParsedUnit(path, tuple(flags), defaults, tuple(locations))
+    relative = (
+        path.relative_to(root).as_posix() if path.is_relative_to(root) else str(path)
+    )
+    identity = numeric["compiler"]
+    unit = ParsedUnit(
+        path,
+        tuple(flags),
+        defaults,
+        tuple(locations),
+        compiler_id=f"GNU Fortran {identity['version']} ({identity['target']})",
+        source_digests={relative: source_sha256},
+        source_numeric_contract=numeric,
+        intrinsic_bindings=_intrinsic_bindings(dump),
+    )
     programs = list(_programs(tree))
     bindings = {}
     for parents, program in programs:
@@ -1035,6 +1221,7 @@ def _capture_procedure(unit, parents, node, tables, bindings):
         main=main,
         block_data=block,
         problem=problem,
+        intrinsic_bindings=unit.intrinsic_bindings.get((*parents, name), ()),
     )
 
 

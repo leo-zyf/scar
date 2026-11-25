@@ -146,6 +146,7 @@ def _guarded(fact, state):
         "maybe_unbound",
         "process_channels",
         "import_sources",
+        "imported_path",
     ):
         if key in fact:
             result[key] = fact[key]
@@ -322,7 +323,8 @@ class _ModuleGraph:
     """Own one file and retain structured evidence separately from executable ABI bodies."""
 
     def __init__(self, parsed, abi, aliases=None):
-        self.path = parsed.path.relative_to(parsed.root).as_posix()
+        self.path = parsed.source_key
+        self.root = parsed.root
         self.module = abi["module"]
         self.main = abi["main"]
         self.tree = parsed.tree
@@ -344,14 +346,14 @@ class _ModuleGraph:
             ),
             "compiler": parsed.compiler_id,
         }
-        self.project = abi["project"]
+        self.catalog = abi["project"]
         self.functions = []
         self.externs = {}
         self.diagnostics = []
         self.aliases = aliases or {}
         self._seen = set()
         self.initial = {}
-        self.package = self.project[self.module]["package"]
+        self.package = self.catalog[self.module]["package"]
         self.root_symbol = "__main__" if self.main else _function(self.module, "<init>")
         self.table = parsed.scopes
         self.builtins = parsed.builtins
@@ -362,6 +364,44 @@ class _ModuleGraph:
         self.tuple_sites = parsed.tuple_sites
         self.source_lines = parsed.source_text.splitlines()
         self.diagnostic_file = str(parsed.path)
+
+    def graph_backed(self, module):
+        entry = self.catalog.get(module)
+        return entry is not None and entry.get("graph_backed", True)
+
+    def origin(self, module):
+        entry = self.catalog.get(module, {})
+        record = self.providers.get(module) or entry.get("source_provider")
+        if record is not None:
+            return record
+        # Earlier project catalogs stored root-relative source keys.
+        path = entry.get("path")
+        if path and not path.startswith("@python/"):
+            return dict(status="project", module=module, origin=str(self.root / path))
+        return None
+
+    def import_provider(self, module, origin):
+        status = (origin or {}).get("status")
+        if status == "project":
+            return "project"
+        if status == "verified_distribution":
+            return "python_package"
+        if status == "verified_stdlib":
+            return "python_stdlib"
+        return provider(module, self.libraries)
+
+    def lookup_hooks(self, module, name):
+        if name in {"*", "__getattr__"} or not self.graph_backed(module):
+            return []
+        slot = self.catalog[module]["exports"].get("__getattr__", {})
+        return [
+            dict(
+                symbol=d["symbol"],
+                when=dict(kind="package_attribute_missing", module=module, name=name),
+            )
+            for d in slot.get("definitions", ())
+            if d["class"] == "function"
+        ]
 
     def tuple_identity(self, node):
         fact = self.tuple_sites.get(tuple_position(node), {"kind": "unresolved"})
@@ -427,22 +467,23 @@ class _ModuleGraph:
             for alias in node.names:
                 bound = alias.asname or alias.name.split(".")[0]
                 module = alias.name if alias.asname else bound
-                yield alias.name, bound, _guarded(
-                    {"class": "module", "module": module}, "sys.modules." + module
-                )
+                fact = {"class": "module", "module": module}
+                if alias.name != module:
+                    fact["imported_path"] = alias.name
+                yield alias.name, bound, _guarded(fact, "sys.modules." + module)
             return
         base = _relative(node, self.module, self.package)
         for alias in node.names:
             name = alias.name
             sub = ".".join(x for x in (base, name) if x)
             state = _function(base, name)
-            if base in self.project:
-                slot = self.project[base]["exports"].get(name)
+            if self.graph_backed(base):
+                slot = self.catalog[base]["exports"].get(name)
                 fact = _guarded(_declared(slot or {"state": state}), state)
             else:
                 slot = None
                 fact = _guarded({"external": sub}, sub)
-            if sub in self.project and name != "*":
+            if self.graph_backed(sub) and name != "*":
                 if not slot:
                     fact = _guarded({"class": "module", "module": sub}, state)
                 fact["import_sources"] = [
@@ -460,7 +501,7 @@ class _ModuleGraph:
         # of a module initializer is maintained separately by its own graph.
         self.initial = {
             name: _declared(slot)
-            for name, slot in self.project[self.module]["exports"].items()
+            for name, slot in self.catalog[self.module]["exports"].items()
         }
         for node in self.tree.body:
             if isinstance(node, (ast.Import, ast.ImportFrom)):
@@ -508,6 +549,17 @@ class _Scope:
 
     def record(self, node, op, **fields):
         return {"op": op, "location": self.unit.location(node), **fields}
+
+    def attribute_hooks(self, module, *names):
+        hooks = [
+            hook
+            for name in dict.fromkeys(names)
+            for hook in self.unit.lookup_hooks(module, name)
+        ]
+        self.calls.update(h["symbol"] for h in hooks)
+        if len(hooks) == 1:
+            return {"missing_attribute_hook": hooks[0]}
+        return {"missing_attribute_hooks": hooks} if hooks else {}
 
     def cell_owner(self, name):
         if name in self.cells and not self.class_scope:
@@ -669,6 +721,13 @@ class _Scope:
                 module=self.unit.module,
                 initializer=self.unit.root_symbol,
                 main=self.unit.main,
+                package=self.unit.package,
+                source_key=self.unit.path,
+                source_provider=(
+                    self.unit.catalog[self.unit.module].get("source_provider")
+                    or self.unit.origin(self.unit.module)
+                ),
+                graph_backed=True,
                 **(
                     {"text_profile": self.unit.text_profile}
                     if self.unit.text_profile
@@ -752,7 +811,7 @@ class _Scope:
             return result
         return {}
 
-    def expr(self, node):
+    def expr(self, node, *, read_target=False):
         R = self.record
         kind = type(node).__name__
         if node is None:
@@ -815,6 +874,7 @@ class _Scope:
             name = node.attr
             f = {}
             member = None
+            hooks = {}
             handles = b.get("process_handles")
             if handles and name in _STREAM_DIRECTIONS:
                 channel = b.get("process_channels", {}).get(name, {"route": "runtime"})
@@ -876,14 +936,20 @@ class _Scope:
             elif "module" in b:
                 module = b["module"]
                 sub = module + "." + name
-                if sub in self.unit.project:
-                    f = {"class": "module", "module": sub}
-                elif module in self.unit.project:
+                if self.unit.graph_backed(module):
                     member = _function(module, name)
-                    slot = self.unit.project[module]["exports"].get(
-                        name, {"state": member}
-                    )
-                    f = _guarded(_declared(slot), member)
+                    slot = self.unit.catalog[module]["exports"].get(name)
+                    declared = _declared(slot) if slot else {}
+                    path = b.get("imported_path", "")
+                    if not slot and (path == sub or path.startswith(sub + ".")):
+                        declared = {
+                            "class": "module",
+                            "module": sub,
+                            "imported_path": path,
+                        }
+                    f = _guarded(declared, member)
+                    if isinstance(node.ctx, ast.Load) or read_target:
+                        hooks = self.attribute_hooks(module, name)
                 else:
                     f = {"external": sub}
             elif "external" in b:
@@ -923,6 +989,9 @@ class _Scope:
             fields = {"base": base, "field": name, "type": _py_type(f.get("class"))}
             if member:
                 fields["binding"] = self.variable_reference(member)
+            if hooks:
+                fields.update(hooks, effects=["CTRL", "STATE", "IO"])
+                self.invalidate_shared()
             return R(node, "member", **fields), f
         if isinstance(node, ast.Call):
             target, t = self.expr(node.func)
@@ -1277,7 +1346,7 @@ class _Scope:
             ),
         )
 
-    def destination(self, node, fact):
+    def destination(self, node, fact, *, read_target=False):
         if isinstance(node, ast.Name):
             self.env[node.id] = fact
             return {**self.variable(node.id), "location": self.unit.location(node)}
@@ -1285,7 +1354,7 @@ class _Scope:
             return self.record(
                 node, "unpack", items=[self.destination(n, {}) for n in node.elts]
             )
-        target = self.expr(node)[0]
+        target = self.expr(node, read_target=read_target)[0]
         if isinstance(node, (ast.Subscript, ast.Attribute)):
             # Attribute/subscript writes may modify any alias of the receiver.
             self.invalidate_shared()
@@ -1395,11 +1464,11 @@ class _Scope:
                     parts = module.split(".")
                     for depth in range(1, len(parts) + 1):
                         path = ".".join(parts[:depth])
-                        if path in self.unit.project:
+                        if self.unit.graph_backed(path):
                             deps.append(_function(path, "<init>"))
                     for member in fromlist:
                         child = module + "." + member
-                        if child in self.unit.project:
+                        if self.unit.graph_backed(child):
                             conditional.append(
                                 {
                                     "module": child,
@@ -1413,6 +1482,21 @@ class _Scope:
                             )
                 self.calls.update(deps)
                 self.calls.update(row["initializer"] for row in conditional)
+                origin = self.unit.origin(module)
+                top = self.unit.origin(module.partition(".")[0])
+                child = module + "." + alias.name
+                child_origin = (
+                    self.unit.origin(child)
+                    if from_import and alias.name != "*"
+                    else None
+                )
+                hooks = (
+                    self.attribute_hooks(
+                        module, *(fromlist if i == 0 else (alias.name,))
+                    )
+                    if from_import
+                    else {}
+                )
                 if bound == "*" or not module:
                     self.issue(
                         node, "import_binding", "dynamic or relative wildcard binding"
@@ -1438,42 +1522,24 @@ class _Scope:
                             "fromlist": fromlist,
                             "binding_index": i if from_import else 0,
                         },
-                        provider=(
-                            "project"
-                            if module in self.unit.project
-                            else provider(module, self.unit.libraries)
-                        ),
-                        **(
-                            {
-                                "source_provider": self.unit.providers[
-                                    module.split(".")[0]
-                                ]
-                            }
-                            if module.split(".")[0] in self.unit.providers
-                            else {}
-                        ),
-                        **(
-                            {"import_resolution": self.unit.providers[module]}
-                            if module in self.unit.providers
-                            else {}
-                        ),
+                        provider=self.unit.import_provider(module, origin),
+                        graph_backed=self.unit.graph_backed(module),
+                        **({"source_provider": top} if top else {}),
+                        **({"import_resolution": origin} if origin else {}),
+                        **hooks,
                         **(
                             {
                                 "member_resolution": {
-                                    "module": module + "." + alias.name,
+                                    "module": child,
                                     "when": {
                                         "kind": "package_attribute_missing",
                                         "module": module,
                                         "name": alias.name,
                                     },
-                                    "source": self.unit.providers[
-                                        module + "." + alias.name
-                                    ],
+                                    "source": child_origin,
                                 }
                             }
-                            if from_import
-                            and alias.name != "*"
-                            and module + "." + alias.name in self.unit.providers
+                            if child_origin
                             else {}
                         ),
                         initializers=deps,
@@ -1683,7 +1749,7 @@ class _Scope:
                     node,
                     "update",
                     operator=type(node.op).__name__.lower(),
-                    target=self.destination(node.target, {}),
+                    target=self.destination(node.target, {}, read_target=True),
                     value=value,
                 )
             ]
