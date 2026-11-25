@@ -8803,3 +8803,128 @@ def test_open_sequence_displays_keep_allocation_order_and_tuple_identity(tmp_pat
         "python.source_expression_operands",
         5,
     )
+
+
+def test_open_condition_consumes_one_actual_truth_and_routes_its_result(tmp_path):
+    from types import SimpleNamespace
+
+    from scar.contract import read_member
+    from scar.frontend import build
+    from scar.middle import plan
+
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    source = pkg / "__init__.py"
+    source.write_text(
+        "from . import child as gone\ndel gone\n"
+        "if not receiver.method(argument()):\n    left()\nelse:\n    right()\n"
+        "if receiver.method(argument()):\n    yes()\nboundary = 0 or 1\n"
+    )
+    code = compile(source.read_bytes(), str(source), "exec")
+    (pkg / "child.py").write_text("pass\n")
+    entry = tmp_path / "main.py"
+    entry.write_text("import pkg\n")
+    graph, out = tmp_path / "graph", tmp_path / "plan"
+    build(entry, graph)
+    source.unlink()
+    assert plan(graph, out)["status"] == "INCOMPLETE"
+    report = json.loads((out / "plan.json").read_bytes())
+    [gap] = report["issues"]
+    assert (gap["location"]["line"], gap["code"]) == (
+        9,
+        "python.global_store_after_callback",
+    )
+    row = next(
+        r
+        for r in report["protocol_analysis"]["prefix_fragments"]
+        if r["symbol"] == "py:pkg:<init>"
+    )
+    body = read_member(out, row["fragment"])["body"]
+    evaluations = [s for s in body if s["op"] == "decl"]
+    branches = [s for s in body if s["op"] == "if"]
+    assert len(evaluations) == len(branches) == 2
+    for decl, branch, negated in zip(evaluations, branches, (True, False)):
+        action = decl["init"]
+        region = action["expression"]
+        steps = region["steps"]
+        assert (
+            action["op"] == "module_object_expression"
+            and action["external_effect"] == "UNKNOWN"
+            and action["may_raise"]
+        )
+        assert branch["condition"]["name"] == decl["name"] and region["type"] == "bool"
+        assert [s["op"] for s in steps] == [
+            "module_name_load",
+            "source_object_attribute",
+            "module_name_load",
+            "source_object_call",
+            "source_object_call",
+            "source_object_truth",
+        ]
+        arg, call, truth = steps[-3:]
+        assert call["args"] == [{"from_offset": arg["offset"]}] and truth["value"] == {
+            "from_offset": call["offset"]
+        }
+        assert (
+            region["branch"]["input"]
+            == region["result"]["value"]
+            == {"from_offset": truth["offset"]}
+        )
+        assert region["result"]["equals"] is not negated
+        jump = region["branch"]["instruction"]
+        assert jump["opcode"] == (
+            "POP_JUMP_IF_TRUE" if negated else "POP_JUMP_IF_FALSE"
+        )
+        assert jump["target"] == region["branch"]["taken"]["offset"]
+        assert truth["opcode"] == (
+            "TO_BOOL" if sys.version_info >= (3, 13) else jump["opcode"]
+        )
+        assert truth["offset"] <= jump["offset"]
+        assert "before_first_operand" in action["on_code_mismatch"]
+
+    for mode in ("true", "false", "error", "argument_error"):
+        events = []
+
+        class Decision:
+            def __bool__(self):
+                events.append("truth")
+                env["left"] = lambda: events.append("rebound left")
+                if mode == "error":
+                    raise RuntimeError("truth")
+                return mode == "true"
+
+        class Receiver:
+            @property
+            def method(self):
+                events.append("descriptor")
+
+                def invoke(arg):
+                    events.append("call")
+                    return Decision()
+
+                return invoke
+
+        def argument():
+            events.append("argument")
+            if mode == "argument_error":
+                raise RuntimeError("argument")
+
+        env = dict(
+            __builtins__={"__import__": lambda *a: SimpleNamespace(child=0)},
+            receiver=Receiver(),
+            argument=argument,
+            right=lambda: events.append("right"),
+            yes=lambda: events.append("yes"),
+        )
+        trace = ["descriptor", "argument", "call", "truth"]
+        if mode in ("error", "argument_error"):
+            with pytest.raises(RuntimeError):
+                exec(code, env)
+            assert events == (trace if mode == "error" else trace[:2])
+        else:
+            exec(code, env)
+            assert events == trace + (
+                ["right"] + trace + ["yes"]
+                if mode == "true"
+                else ["rebound left"] + trace
+            )

@@ -2757,7 +2757,13 @@ class _Frame:
         return result[0], {} if imports["open_namespace"] else result[1], imports
 
     def conditional(self, node, steps):
-        check = self.evaluate(node["condition"], steps, truth_context=True)
+        check = None
+        if node.get("source_expression") is not None:
+            check = namespace_operations.open_object_expression(
+                self, node, steps, truth_context=True, discard=False
+            )
+        if check is None:
+            check = self.evaluate(node["condition"], steps, truth_context=True)
         if check.value["op"] == "literal":
             self.skip_expression(
                 node["else"] if check.value["value"] else node["then"],

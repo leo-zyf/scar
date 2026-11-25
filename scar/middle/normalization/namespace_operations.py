@@ -793,6 +793,63 @@ class _SourceExpressionRegion:
             **source_site(node),
         )
 
+    def condition(self, node, ports):
+        condition = node["condition"]
+        negated = condition["op"] == "unary" and condition.get("operator") == "not"
+        operand = condition["value"] if negated else condition
+        if (
+            operand["op"] not in {"call", "python_invoke", "library_call"}
+            or ports.get("negated") is not negated
+            or not _matches_position(
+                {"position": ports.get("condition_position")},
+                condition,
+                self.code["source_key"],
+            )
+            or not _matches_position(
+                {"position": ports.get("operand_position")},
+                operand,
+                self.code["source_key"],
+            )
+        ):
+            raise ValueError(
+                "condition and branch operands disagree with the source graph"
+            )
+        value = self.value(operand)
+        conversion = self.take("TO_BOOL", source=operand) if self.minor >= 13 else None
+        jump = self.take(
+            "POP_JUMP_IF_TRUE" if negated else "POP_JUMP_IF_FALSE", source=operand
+        )
+        self.finish()
+        if jump["target"] != ports["else"]["offset"]:
+            raise ValueError("conditional jump does not enter the sealed alternative")
+        truth = self.emit(
+            conversion or jump,
+            "source_object_truth",
+            operand,
+            type="bool",
+            value=value,
+            opcode=(conversion or jump)["opcode"],
+            dispatch="consume_actual_call_result_at_source_truth_instruction_including_bool_or_len_and_release",
+        )
+        return dict(
+            op="source_object_region",
+            type="bool",
+            steps=self.steps,
+            # The surrounding structured if consumes this exact boolean. The
+            # source conditional jumps to the alternative when it does not match.
+            result=dict(value=truth, equals=not negated),
+            branch=dict(
+                instruction=jump,
+                input=truth,
+                taken=ports["else"],
+                fallthrough=ports["then"],
+                fallthrough_marker=ports["fallthrough_marker"],
+            ),
+            ownership="source_truth_consumes_owned_result_and_only_exact_boolean_reaches_the_two_edges",
+            tracing="preserve_jump_event_and_run_fallthrough_marker_only_on_fallthrough_before_suite",
+            **source_site(condition),
+        )
+
     def finish(self):
         if self.index != len(self.instructions):
             raise ValueError(
@@ -952,16 +1009,23 @@ def open_object_expression(frame, node, steps, *, truth_context, discard):
     """Only a truth value or completed discard may leave this source evaluation stack."""
     if not (truth_context or discard) or not (code := _open_module_code(frame)):
         return None
+    conditional = truth_context and node.get("op") == "if"
     receipt = (
         node.get("source_expression")
-        if discard
+        if conditional
+        or discard
         and not truth_context
         and node.get("op") in {"call", "python_invoke", "library_call"}
         else None
     )
     if receipt is not None:
         try:
-            expression = _SourceExpressionRegion(frame, code, receipt).discard(node)
+            region = _SourceExpressionRegion(frame, code, receipt)
+            expression = (
+                region.condition(node, receipt["branch"])
+                if conditional
+                else region.discard(node)
+            )
         except (ValueError, IndexError, KeyError, TypeError) as error:
             frame.fail(node, "source_expression_operands", str(error))
     elif truth_context:
