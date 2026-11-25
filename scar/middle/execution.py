@@ -1,6 +1,7 @@
 """Derive target-neutral lowering contracts and seal the execution IR product."""
 
 from copy import deepcopy
+from .contracts import is_complete, publish_program, require_program
 from scar.contract import (
     ARTIFACT_FLOW,
     IR,
@@ -211,6 +212,9 @@ def annotate_scoped_arrays(function):
 def prepare(module, *, executable=True):
     from .resource_flow import analyze
 
+    require_program(module, "M3")
+    if executable and not is_complete(module):
+        raise ValueError("M4 cannot prepare a partial program for execution")
     prepared = deepcopy(module) if executable else dict(module)
     layouts = lifetimes = 0
     if executable:
@@ -241,7 +245,7 @@ def prepare(module, *, executable=True):
         scope="logical copies and source resource domains; runtime placement is not established",
     )
     inventory["resource_flow"] = flow
-    return prepared, dict(
+    return publish_program(prepared, "M4", complete=executable), dict(
         iteration_layouts=layouts,
         scoped_lifetimes=lifetimes,
         invocation_access_roots=access_roots if executable else 0,
@@ -251,6 +255,11 @@ def prepare(module, *, executable=True):
 
 
 def seal(module, out, *, status, graph_sha256, contract, logical_optimization):
+    require_program(module, "M4")
+    if status not in {"READY", "INCOMPLETE"}:
+        raise ValueError("invalid execution IR completion status")
+    if status == "READY" and not is_complete(module):
+        raise ValueError("M4 cannot seal a partial program as executable")
     if status == "READY":
         for function in module["functions"]:
             validate_access_contract(function)

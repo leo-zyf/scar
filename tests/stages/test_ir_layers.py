@@ -20,6 +20,86 @@ _LAYERS = {
 }
 
 
+def test_middle_products_reject_out_of_order_passes_and_keep_inputs_owned(tmp_path):
+    canonical = dict(
+        entry="main",
+        functions=[
+            dict(
+                name="main",
+                params=[],
+                result="i32",
+                body=[
+                    dict(
+                        op="return",
+                        value=dict(
+                            op="binary",
+                            operator="add",
+                            type="i32",
+                            left=dict(op="literal", type="i32", value=3),
+                            right=dict(op="literal", type="i32", value=4),
+                        ),
+                    )
+                ],
+                state_contract=dict(private_scalars=[], scalars={}),
+            )
+        ],
+        globals=[],
+        externs=[],
+        records=[],
+    )
+    rewritten = _layer(
+        "rewrites",
+        """from copy import deepcopy
+from scar.middle.rewrites import rewrite
+source=product(data,'M2')
+before=deepcopy(source)
+try: rewrite(data)
+except ValueError: pass
+else: raise AssertionError('unlabelled program accepted')
+wrong=product(dict(data,declarations={},abi_environment={}),'M1')
+try: rewrite(wrong)
+except ValueError: pass
+else: raise AssertionError('M1 bypassed M2')
+output,changes=rewrite(source)
+assert source==before and output['functions'][0] is not source['functions'][0]
+assert output['functions'][0]['state_contract'] is not source['functions'][0]['state_contract']
+assert output['functions'][0]['body'][0]['value']['value']==7
+assert changes[0]['rule']=='constant_fold'
+partial=product(data,'M2',complete=False)
+skipped,changes=rewrite(partial)
+assert not changes and skipped['layer_contract']['completion']=='partial'
+assert skipped['functions']==data['functions']
+print(json.dumps(output))
+""",
+        canonical,
+    )
+    result = _layer(
+        "execution",
+        """from pathlib import Path
+from scar.middle.execution import prepare,seal
+source=data['module']
+try: prepare(product(source,'M2'))
+except ValueError: pass
+else: raise AssertionError('M2 bypassed M3')
+try: prepare(product(source,'M3',complete=False))
+except ValueError: pass
+else: raise AssertionError('partial program prepared for execution')
+module,facts=prepare(source)
+assert source['layer_contract']['phase']=='M3'
+assert module['layer_contract']['phase']=='M4'
+try: seal(source,Path(data['out']),status='READY',graph_sha256=None,contract={},logical_optimization=True)
+except ValueError: pass
+else: raise AssertionError('unprepared M3 product sealed')
+path=seal(module,Path(data['out']),status='READY',graph_sha256=None,contract={},logical_optimization=True)
+print(json.dumps(dict(path=str(path))))
+""",
+        dict(module=rewritten, out=str(tmp_path / "execution")),
+    )
+    sealed = json.loads(Path(result["path"]).read_bytes())
+    assert sealed["module"]["layer_contract"]["phase"] == "M4"
+    assert sealed["status"] == "READY"
+
+
 def test_external_source_modules_keep_lookup_order_and_offline_stage_products(tmp_path):
     from base64 import urlsafe_b64encode
     from hashlib import sha256
@@ -229,7 +309,7 @@ consumer=document(ARTIFACT_FLOW,nodes=[
 images=[]
 for name,flow in [('driver',data['flow']),('worker',consumer)]:
     module=dict(entry='main',functions=[],resource_model=dict(artifact_flow=flow))
-    path=seal(module,out/name,status='INCOMPLETE',graph_sha256='source',
+    path=seal(product(module,'M4',complete=False),out/name,status='INCOMPLETE',graph_sha256='source',
               contract={},logical_optimization=False)
     images.append(dict(id=name,entry='main',output=name,ir=file_receipt(out,path)))
 relocated=out.with_name('relocated-ir')
@@ -272,6 +352,14 @@ class BlockOtherLayers:
 blocked = json.loads(sys.argv[1])
 sys.meta_path.insert(0,BlockOtherLayers())
 data=json.loads(sys.stdin.read())
+from scar.middle.contracts import publish_program
+def product(module, phase, complete=True):
+    module=dict(module)
+    for field in ('functions','globals','externs','records'):
+        module.setdefault(field,[])
+    if 'entry' not in module and module['functions']:
+        module['entry']=module['functions'][0]['name']
+    return publish_program(module,phase,complete=complete)
 """ + code
     result = subprocess.run(
         [sys.executable, "-B", "-c", script, json.dumps(blocked)],
@@ -755,7 +843,7 @@ def test_execution_scopes_automatic_for_initializers_before_sealing():
     result = _layer(
         "execution",
         """from scar.middle.execution import prepare
-module,facts=prepare(data)
+module,facts=prepare(product(data,'M3'))
 print(json.dumps(dict(module=module,facts=facts)))
 """,
         dict(functions=[function], globals=[]),
@@ -775,7 +863,7 @@ def _canonical_function(function):
     module = _layer(
         "normalization",
         """from scar.middle.normalization import normalize
-module,issues=normalize(data)
+module,issues=normalize(product(data,'M1'))
 assert not issues
 print(json.dumps(module))
 """,
@@ -837,10 +925,10 @@ def test_invocation_access_uses_source_claims_and_allows_shared_reads():
     output = _layer(
         "normalization",
         """from scar.middle.normalization import normalize
-module, issues = normalize(data)
+module, issues = normalize(product(data,'M1'))
 assert not issues
 data["functions"][1]["body"][1]["value"]["parameter_types"][0] = {"kind": "ptr", "to": "f32"}
-assert any(i["code"] == "argument_referent_type" for i in normalize(data)[1])
+assert any(i["code"] == "argument_referent_type" for i in normalize(product(data,'M1'))[1])
 print(json.dumps(module["functions"]))
 """,
         {
@@ -3383,7 +3471,7 @@ print(json.dumps({'rejected':4}))
     normalized = _layer(
         "normalization",
         """from scar.middle.normalization import normalize
-module,issues=normalize(data)
+module,issues=normalize(product(data,'M1'))
 assert not issues
 print(json.dumps(module))
 """,
@@ -3464,7 +3552,7 @@ print(json.dumps({'function':data,'changes':changes}))
         "execution",
         """from pathlib import Path
 from scar.middle.execution import prepare,seal
-module,facts=prepare(data['module'])
+module,facts=prepare(product(data['module'],'M3'))
 path=seal(module,Path(data['out']),status='READY',graph_sha256='reference',contract={},logical_optimization=True)
 print(json.dumps({'path':str(path),'facts':facts}))
 """,
@@ -3495,7 +3583,7 @@ print(json.dumps({'path':str(path),'facts':facts}))
     missing_argument["functions"][0]["body"][1]["value"]["args"].clear()
     issues = _layer(
         "normalization",
-        "from scar.middle.normalization import normalize\nprint(json.dumps(normalize(data)[1]))",
+        "from scar.middle.normalization import normalize\nprint(json.dumps(normalize(product(data,'M1'))[1]))",
         missing_argument,
     )
     arity = next(issue for issue in issues if issue["code"] == "argument_count")
@@ -4526,4 +4614,149 @@ print(json.dumps(result))
     assert any(
         edge["kind"] == "INVALIDATES_FILE_VERSION" and edge["target"] == old
         for edge in graph["edges"]
+    )
+
+
+def test_file_derivations_consume_final_interfaces_and_identify_partial_prefixes():
+    pointer = dict(kind="ptr", to=dict(kind="const", of="char"))
+    reference = dict(kind="ref", to=dict(kind="const", of="char"))
+
+    def literal(text):
+        return dict(op="literal", type="text", value=text)
+
+    def host(interface, *args):
+        return dict(op="host_call", interface=interface, args=list(args))
+
+    system = dict(
+        op="call",
+        callee="system",
+        site="system-call",
+        type="i32",
+        args=[dict(op="var", name="command", type=reference)],
+        parameter_types=[reference],
+        artifact_effect=dict(
+            semantics_version=1,
+            interface="process.system",
+            operands=dict(command=["args", 0]),
+            defaults={},
+            obligations=[],
+            contract=dict(
+                semantics_version=1,
+                source_interface="system",
+                count_unit="bytes",
+                null_command="query_command_processor_availability",
+                command_read="through_first_nul_when_nonnull",
+                process_effect="external_command_processor_when_nonnull",
+                return_value="implementation_status_not_direct_exit_code",
+            ),
+        ),
+    )
+    stream = dict(op="var", name="stream")
+    writer = dict(
+        name="writer",
+        result="void",
+        params=[],
+        body=[
+            dict(
+                op="decl",
+                name="stream",
+                type=dict(kind="handle", resource="text_stream"),
+                init=host(
+                    "stream.open",
+                    literal("header"),
+                    literal("w"),
+                    literal("utf-8"),
+                    literal("universal"),
+                ),
+            ),
+            dict(op="expr", value=host("stream.write", stream, literal("constant"))),
+            dict(op="expr", value=host("stream.close", stream)),
+        ],
+    )
+    main = dict(
+        name="main",
+        result="void",
+        params=[dict(name="command", type=reference)],
+        body=[dict(op="expr", value=system)],
+    )
+    module = dict(
+        entry="main",
+        functions=[main, writer],
+        globals=[],
+        records=[],
+        declarations={},
+        abi_environment=dict(architecture="x86_64"),
+        externs=[
+            dict(
+                name="system",
+                result="i32",
+                params=[dict(name="command", type=pointer)],
+                provider="libc",
+                header="stdlib.h",
+                variadic=False,
+            )
+        ],
+    )
+    result = _layer(
+        "normalization",
+        """from copy import deepcopy
+from scar.middle.contracts import publish_program, require_program
+from scar.middle.normalization import normalize
+bound = publish_program(data, 'M1', complete=True)
+module, issues = normalize(bound)
+assert not issues
+require_program(module, 'M2')
+assert bound['functions'][0]['body'][0]['value']['parameter_types'] != module['functions'][0]['body'][0]['value']['parameter_types']
+assert 'runtime_boundary' not in bound['functions'][0]['body'][0]['value']
+upstream_partial, upstream_issues = normalize(publish_program(deepcopy(bound), 'M1', complete=False))
+assert not upstream_issues
+partial = deepcopy(bound)
+partial['entry'] = 'entry'
+partial['functions'].append(dict(
+    name='entry', result='void', params=[], execution_kind='python_protocol',
+    python_scope=dict(kind='module', module='fixture', main=True),
+    body=[dict(op='expr', value=dict(op='call', target=dict(op='python_builtin', name='print'), args=[dict(op='literal', type='text', value='prefix')], keywords=[])),
+          dict(op='expr', value=dict(op='var', name='not_bound'))],
+))
+partial = publish_program(partial, 'M1', complete=True)
+opened, unresolved = normalize(partial)
+assert unresolved
+require_program(opened, 'M2')
+print(json.dumps(dict(complete=module, partial=opened, upstream_partial=upstream_partial)))
+""",
+        module,
+    )
+    complete, partial = result["complete"], result["partial"]
+    upstream_partial = result["upstream_partial"]
+    assert upstream_partial["layer_contract"]["completion"] == "partial"
+    assert upstream_partial["artifact_analysis"]["basis"]["phase"] == "interface_prefix"
+    assert not upstream_partial["artifact_analysis"]["basis"]["complete"]
+    call = complete["functions"][0]["body"][0]["value"]
+    assert call["args"][0]["op"] == "unary" and call["args"][0]["operator"] == "addr"
+    assert call["parameter_types"] == [pointer]
+    assert call["runtime_boundary"]["profile"] == "posix_libc_system_v1"
+    assert complete["artifact_analysis"]["buffers"]["coverage"]["qualified_calls"] == 1
+    assert "command" in complete["functions"][0]["state_contract"]["escaped"]
+    complete_basis = complete["artifact_analysis"]["basis"]
+    assert complete_basis["phase"] == "canonical" and complete_basis["complete"]
+    assert {
+        "object_interfaces",
+        "abi_declarations",
+        "call_arguments",
+        "mpi_effects",
+        "frame_state",
+    } <= set(complete_basis["completed_passes"])
+    assert complete_basis == complete["artifact_analysis"]["buffers"]["basis"]
+    assert (
+        complete_basis
+        == complete["resource_model"]["artifact_flow"]["coverage"]["derivation_basis"]
+    )
+    partial_basis = partial["artifact_analysis"]["basis"]
+    assert partial_basis["phase"] == "protocol_prefix" and not partial_basis["complete"]
+    assert partial["layer_contract"]["completion"] == "partial"
+    assert "call_arguments" not in partial_basis["completed_passes"]
+    assert partial["protocol_analysis"]["prefix_fragments"]
+    assert any(
+        row["symbol"] == "writer"
+        for row in partial["artifact_analysis"]["constant_materializations"]
     )

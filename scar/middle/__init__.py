@@ -19,13 +19,9 @@ from scar.contract import (
 def _plan_image(graph, folder, revision, out, *, optimize_graph, shape, trip_count):
     from .binding import bind
     from .normalization import normalize
-    from .rewrites import optimize
+    from .rewrites import rewrite
     from .execution import prepare, seal
 
-    bound, issues, count = bind(graph, folder)
-    binding_issues = len(issues)
-    module, normalized_issues = normalize(bound)
-    issues.extend(normalized_issues)
     abi = graph.get("entry_abi")
     if shape is not None or trip_count is not None:
         if not abi or abi["kind"] != "binary_f64_arrays":
@@ -43,15 +39,15 @@ def _plan_image(graph, folder, revision, out, *, optimize_graph, shape, trip_cou
             "shape": shape if shape is not None else abi["shape"],
             "count": trip_count if trip_count is not None else abi["count"],
         }
-    if abi:
-        module["entry_abi"] = abi
+    if abi is not None:
+        graph = dict(graph, entry_abi=abi)
+    bound, issues, count = bind(graph, folder)
+    binding_issues = len(issues)
+    module, normalized_issues = normalize(bound)
+    issues.extend(normalized_issues)
     status = "INCOMPLETE" if issues else "READY"
-    changes = []
     lowering_facts = {}
-    if not issues:
-        for fn in module["functions"]:
-            if optimize_graph:
-                changes.extend(optimize(fn))
+    module, changes = rewrite(module, enabled=optimize_graph)
     module, lowering_facts = prepare(module, executable=not issues)
     ir_path = seal(
         module,

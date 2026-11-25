@@ -299,6 +299,14 @@ class _Project:
             for name, f in functions.items()
             if (scope := f.get("python_scope", {})).get("kind") == "module"
         }
+        self.main_namespace = next(
+            (
+                owner
+                for owner, symbol in self.initializers.items()
+                if functions[symbol]["python_scope"].get("main")
+            ),
+            None,
+        )
         self.names = {}
         self.globals = {}
         self.types = {}
@@ -438,6 +446,15 @@ class _Project:
                     return True
         return False
 
+    def registry_key(self, namespace):
+        """A script's lexical globals live in the process's __main__ instance."""
+        return "__main__" if namespace == self.main_namespace else namespace
+
+    def namespace_owner(self, registry_key):
+        if registry_key == "__main__" and self.main_namespace is not None:
+            return self.main_namespace
+        return registry_key
+
     def global_read(self, name, value, node=None):
         parts = name.split(":", 2)
         if len(parts) == 3 and parts[0] == "py":
@@ -510,17 +527,18 @@ class _Project:
         return expected
 
     def observe_import(self, name, domain, node, member=None):
+        key = self.registry_key(name) if domain == "namespace" else name
         version = (
             self.binding_versions.get(_slot(name, member), 0)
             if member is not None
             else 0
         )
-        if domain == "namespace" and (mutation := self.namespace_writes.get(name)):
+        if domain == "namespace" and (mutation := self.namespace_writes.get(key)):
             if type(mutation.get("epoch")) is int and version > mutation["epoch"]:
                 mutation = None
         else:
             mutation = None
-        if mutation is not None and not self.import_windows.get(name):
+        if mutation is not None and not self.import_windows.get(key):
             owner = self.active[-1]
             error = _Unclosed(
                 owner,
@@ -529,13 +547,13 @@ class _Project:
                 f"an opaque effect may have changed {name}.{member} through a retained module alias",
             )
             error.issue["source_evidence"] = dict(
-                module=name, member=member, last_change=mutation
+                module=name, registry_key=key, member=member, last_change=mutation
             )
             raise error
-        for marker, operation, proof, epoch in self.import_windows.get(name, ()):
+        for marker, operation, proof, epoch in self.import_windows.get(key, ()):
             if domain == "namespace" and member is not None and version > epoch:
                 continue
-            checks = operation["checks"].setdefault(name, {"before": proof})
+            checks = operation["checks"].setdefault(key, {"before": proof})
             checks.setdefault(
                 domain,
                 dict(
@@ -551,6 +569,7 @@ class _Project:
                     first_consumer=self.active[-1],
                     **values.source_site(node or {}),
                     **({"first_member": member} if member is not None else {}),
+                    **({"lexical_namespace": name} if domain == "namespace" else {}),
                 ),
             )
             if marker["op"] == "block":
@@ -612,7 +631,10 @@ class _Project:
         for name, previous in self.registry.items():
             if previous["state"] in {"ready", "initializing"}:
                 self.registry[name] = change
-            if previous["state"] != "absent" and name in self.initializers:
+            if (
+                previous["state"] != "absent"
+                and self.namespace_owner(name) in self.initializers
+            ):
                 self.namespace_writes[name] = change
 
     def inactive_bodies(self, activation):
@@ -739,8 +761,9 @@ class _Project:
         self.global_reads[name] = {}
         self.registry_reads[name] = {}
         registry_prefix = self.import_state() if kind == "module" else None
-        if kind == "module" and scope["module"] not in self.registry:
-            self.registry[scope["module"]] = dict(
+        registry_key = self.registry_key(scope["module"])
+        if kind == "module" and registry_key not in self.registry:
+            self.registry[registry_key] = dict(
                 state="initializing",
                 initializer=name,
                 owner=name,
@@ -1180,6 +1203,7 @@ class _Frame:
         source = node.get("source_provider", {})
         exact = "import_resolution" in node
         if not exact and local:
+            self.require_import_instance(node, module)
             return None
         resolved = node.get("import_resolution") if exact else source
         if not isinstance(resolved, dict) or not isinstance(source, dict):
@@ -1222,6 +1246,7 @@ class _Frame:
             )
         status = resolved.get("status")
         if status == "project":
+            self.require_import_instance(node, module)
             if not local or module not in self.project.initializers:
                 self.fail(
                     node,
@@ -1329,6 +1354,7 @@ class _Frame:
 
     def module_member(self, node, module, member, steps, *, optional=False):
         """Read current bindings before considering a missing-attribute hook."""
+        module = self.project.namespace_owner(module)
         self.project.observe_import(module, "namespace", node, member)
         slot = _slot(module, member)
         candidates = list(node.get("missing_attribute_hooks", ()))
@@ -1388,9 +1414,25 @@ class _Frame:
             return None
         self.fail(node, "attribute", f"unbound module attribute {module}.{member}")
 
+    def require_import_instance(self, node, module):
+        if self.project.registry_key(module) != module:
+            self.fail(
+                node,
+                "import_entry_instance",
+                f"importing {module!r} needs a second module namespace and initialization for the running script",
+                source_evidence=dict(
+                    lexical_namespace=module,
+                    running_registry_key="__main__",
+                    requested_registry_key=module,
+                    graph_initializer=self.project.initializers[module],
+                ),
+            )
+
     def cached_module(self, node, module):
         """Prove the graph-owned module instance from its preceding activation."""
-        symbol = self.project.initializers.get(module)
+        self.require_import_instance(node, module)
+        namespace = self.project.namespace_owner(module)
+        symbol = self.project.initializers.get(namespace)
         row = self.project.registry_entry(module, node)
         if (
             row.get("state") != "ready"
@@ -1401,8 +1443,6 @@ class _Frame:
             or row.get("initializer") != symbol
         ):
             state = row.get("state", "no_scheduled_initialization")
-            if symbol and symbol in self.project.active:
-                state = "initializing"
             self.fail(
                 node,
                 "import_module_cache",
@@ -1427,7 +1467,7 @@ class _Frame:
                 **values.source_site(node),
             )
         )
-        return _Value("module", module)
+        return _Value("module", namespace)
 
     def imported(self, node, steps):
         req = node.get("request", {})
@@ -1535,7 +1575,9 @@ class _Frame:
                 self.fail(
                     node, "import_initializer", f"missing module initializer {symbol}"
                 )
-            name = scope["module"]
+            if mod != "__main__":
+                self.require_import_instance(node, scope["module"])
+            name = self.project.registry_key(scope["module"])
             previous = self.project.registry_entry(name, node) or None
             if previous is not None and previous.get("state") == "absent":
                 previous = None
@@ -2253,7 +2295,7 @@ class _Frame:
                     "unresolved",
                 ]
                 imports["import_windows"].pop(module, None)
-                if module in self.project.initializers:
+                if self.project.namespace_owner(module) in self.project.initializers:
                     imports["namespace_writes"][module] = dict(
                         state="unresolved",
                         reason="exceptional_import_prefix",

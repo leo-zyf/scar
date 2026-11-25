@@ -1,6 +1,7 @@
 """Normalize closed symbol bindings and call contracts without reading graph files."""
 
 from copy import deepcopy
+from ..contracts import is_complete, publish_program, require_program
 from scar.contract import (
     json_bytes,
     semantic_form as semantics,
@@ -461,32 +462,66 @@ def _state_contract(function, evidence):
     )
 
 
+def _derive_artifacts(module, *, phase):
+    """Derive evidence only after the contracts named by this input phase."""
+    from .artifacts import analyze as analyze_artifacts
+    from .buffers import analyze_buffers
+    from scar.contract import validate_artifact_flow
+
+    complete = phase == "canonical"
+    basis = dict(
+        phase=phase,
+        complete=complete,
+        evidence_scope=(
+            "post_interface_and_state_contracts_pre_logical_rewrites"
+            if phase != "protocol_prefix"
+            else "qualified_closed_functions_and_protocol_prefixes_pre_interface_contracts"
+        ),
+        completed_passes=[
+            "protocol_normalization",
+            "numeric_contract_validation",
+            "parameter_access",
+            *(
+                [
+                    "object_interfaces",
+                    "abi_declarations",
+                    "call_arguments",
+                    "mpi_effects",
+                    "frame_state",
+                ]
+                if phase != "protocol_prefix"
+                else []
+            ),
+        ],
+    )
+    analysis = analyze_artifacts(module)
+    buffers = analyze_buffers(module, analysis["graph"])
+    flow = validate_artifact_flow(buffers.pop("graph"))
+    flow.setdefault("coverage", {})["derivation_basis"] = basis
+    analysis.update(graph=flow, basis=basis, buffers={**buffers, "basis": basis})
+    module["artifact_analysis"] = analysis
+    if flow["nodes"]:
+        module.setdefault("resource_model", {})["artifact_flow"] = flow
+
+
 def normalize(bound):
     from .protocols import normalize_protocols
     from .mpi import qualify as qualify_mpi
-    from .artifacts import analyze as analyze_artifacts
-    from .buffers import analyze_buffers
-    from scar.contract import validate_artifact_flow, validate_numeric_contract
+    from scar.contract import validate_numeric_contract
 
+    require_program(bound, "M1")
     module = deepcopy(bound)
     module, protocol_changes, issues = normalize_protocols(module)
     for function in module["functions"]:
         validate_numeric_contract(function)
         _parameter_access(function)
-    module["artifact_analysis"] = analyze_artifacts(module)
-    buffers = analyze_buffers(module, module["artifact_analysis"]["graph"])
-    module["artifact_analysis"]["graph"] = validate_artifact_flow(buffers.pop("graph"))
-    module["artifact_analysis"]["buffers"] = buffers
-    if module["artifact_analysis"]["graph"]["nodes"]:
-        module.setdefault("resource_model", {})["artifact_flow"] = module[
-            "artifact_analysis"
-        ]["graph"]
     if issues:
         # An open object protocol is not a native ABI. In particular, Python
         # keyword/default binding cannot be checked by counting C arguments.
         module["normalizations"] = protocol_changes
         module["baseline_defects"] = []
-        return module, issues
+        _derive_artifacts(module, phase="protocol_prefix")
+        return publish_program(module, "M2", complete=False), issues
     declarations = module.pop("declarations")
     environment = module.pop("abi_environment")
     functions = {f["name"]: f for f in module["functions"]}
@@ -531,4 +566,6 @@ def normalize(bound):
     for function in module["functions"]:
         evidence = module.get("state_evidence", {}).get(function["name"], {})
         function["state_contract"] = _state_contract(function, evidence)
-    return module, issues
+    complete = is_complete(bound) and not issues
+    _derive_artifacts(module, phase="canonical" if complete else "interface_prefix")
+    return publish_program(module, "M2", complete=complete), issues

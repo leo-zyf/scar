@@ -986,14 +986,102 @@ for i in range(-5, 6):
     print(i // 3, i % 3, i // -3, i % -3)
 """)
     expected = _run([sys.executable, "-B", entry], source)
+    script = entry.read_text()
+    hook_probe = """
+import builtins, runpy, sys
+original_import = builtins.__import__
+class Observed:
+    def __init__(self, original): self.original = original
+    def __getattr__(self, name): return getattr(self.original, name)
+    def zeros(self, *args, **kwargs):
+        print("read changed __main__.np")
+        return self.original.zeros(*args, **kwargs)
+def tracked(name, globals=None, locals=None, fromlist=(), level=0):
+    if name == 'numpy' and globals and globals.get('__name__') == 'settings':
+        assert name in sys.modules
+        sys.modules['__main__'].np = Observed(sys.modules[name])
+    return original_import(name, globals, locals, fromlist, level)
+builtins.__import__ = tracked
+try: runpy.run_path(sys.argv[1], run_name='__main__')
+finally: builtins.__import__ = original_import
+"""
+    assert _run([sys.executable, "-B", "-c", hook_probe, entry], source) == (
+        b"read changed __main__.np\n" + expected
+    )
     graph, plan, delivery = (tmp_path / name for name in ("graph", "plan", "delivery"))
     _stage(tmp_path, "frontend", "build", "--entry", entry, "--out", graph)
     shutil.rmtree(source)
     _stage(tmp_path, "middle", "plan", "--graph", graph, "--out", plan)
     shutil.rmtree(graph)
-    result = _stage(tmp_path, "backend", "compile", "--ir", plan, "--out", delivery)
+    failure = _stage(
+        tmp_path, "backend", "compile", "--ir", plan, "--out", delivery, returncode=2
+    )
+    assert any(
+        issue["code"] == "missing_operator_binding"
+        and issue["requirement"] == "module_registry"
+        for issue in failure["issues"]
+    )
+    from scar.contract import read_member, walk_operations
+
+    ir = json.loads((plan / "exec-ir.json").read_bytes())
+    ledger = read_member(plan, ir["module"]["source_imports"])
+    assert {
+        row["owner"]
+        for row in ledger["occurrences"]
+        if row["request"]["module"] == "numpy"
+    } == {"__main__", "py:settings:<init>"}
+    guards = [
+        op
+        for ref in ir["functions"]
+        for op in walk_operations(read_member(plan, ref))
+        if op["op"] == "module_import_preserves"
+    ]
+    assert len(guards) == 1 and guards[0]["module"] == "numpy"
+    namespace = guards[0]["checks"]["__main__"]["namespace"]
+    assert (
+        namespace["lexical_namespace"] == "entry" and namespace["first_member"] == "np"
+    )
+    assert namespace["first_consumer"] == "py:entry:scratch"
+
+    # One source import leaves the numerical and storage checks independent of
+    # unknown hook effects between the creation and later use of a module alias.
+    folder = tmp_path / "one-import"
+    folder.mkdir()
+    source = folder / "source"
+    source.mkdir()
+    entry = source / "entry.py"
+    entry.write_text(
+        script.replace(
+            "import settings\n",
+            "import settings\nlower = -np.array((settings.upper[0], settings.upper[1]))\n",
+            1,
+        ).replace("settings.lower", "lower")
+    )
+    (source / "settings.py").write_text("upper = [7.5, 9.5]\n")
+    assert _run([sys.executable, "-B", entry], source) == expected
+    graph, plan, delivery = (folder / name for name in ("graph", "plan", "delivery"))
+    _stage(folder, "frontend", "build", "--entry", entry, "--out", graph)
+    shutil.rmtree(source)
+    _stage(folder, "middle", "plan", "--graph", graph, "--out", plan)
+    shutil.rmtree(graph)
+    result = _stage(folder, "backend", "compile", "--ir", plan, "--out", delivery)
     shutil.rmtree(plan)
-    assert _run([result["executable"]], tmp_path) == expected
+    assert _run([result["executable"]], folder) == expected
+
+    folder = tmp_path / "second-instance"
+    folder.mkdir()
+    entry = folder / "again.py"
+    entry.write_text(
+        "if __name__ == '__main__':\n    import again\n    print(__name__, again.__name__)\n"
+    )
+    assert _run([sys.executable, "-B", entry], folder) == b"__main__ again\n"
+    graph, plan = folder / "graph", folder / "plan"
+    _stage(folder, "frontend", "build", "--entry", entry, "--out", graph)
+    entry.unlink()
+    _stage(folder, "middle", "plan", "--graph", graph, "--out", plan, returncode=2)
+    issues = json.loads((plan / "plan.json").read_bytes())["issues"]
+    issue = next(row for row in issues if row["code"] == "python.import_entry_instance")
+    assert issue["source_evidence"]["requested_registry_key"] == "again"
 
     # Writes kill contents through every alias. Loop bodies are not specialized
     # to their first visit, and function signatures do not freeze a prior input.
@@ -3516,9 +3604,11 @@ def coordinate_library(tmp_path_factory):
         declarations={},
         abi_environment={},
     )
-    normalized, issues = normalize(bound)
+    from scar.middle.contracts import publish_program
+
+    normalized, issues = normalize(publish_program(bound, "M1", complete=True))
     assert not issues
-    module, facts = prepare(normalized)
+    module, facts = prepare(publish_program(normalized, "M3", complete=True))
     assert facts["iteration_layouts"] == 1
     source = seal(
         module,

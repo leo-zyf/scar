@@ -304,6 +304,7 @@ def test_file_graph_and_workflow_members_survive_schedule_relocation(
     from scar.backend.planning import schedule_ir
     from scar.contract import ARTIFACT_FLOW, json_bytes, read_blob, read_member
     from scar.middle.execution import seal
+    from scar.middle.contracts import publish_program
 
     source, schedule = tmp_path / "execution", tmp_path / "schedule"
     images, expected = [], {}
@@ -322,8 +323,11 @@ def test_file_graph_and_workflow_members_survive_schedule_relocation(
             entry="main",
             functions=[function],
             globals=[],
+            externs=[],
+            records=[],
             resource_model={"artifact_flow": flow},
         )
+        module = publish_program(module, "M4", complete=True)
         args = dict(graph_sha256="f" * 64, contract={}, logical_optimization=False)
         ir = seal(module, folder, status="READY", **args)
         receipt = member(folder, "analysis", flow)
@@ -887,6 +891,7 @@ def test_cpu_costs_price_the_traversal_actually_emitted():
 
 def test_copy_costs_share_one_calibration_and_preserve_runtime_binding(tmp_path):
     from scar.middle.execution import prepare, seal
+    from scar.middle.contracts import publish_program
 
     array = dict(kind="ndarray", element="f64", rank=1)
     ptr = dict(kind="ptr", to="u8")
@@ -930,9 +935,10 @@ def test_copy_costs_share_one_calibration_and_preserve_runtime_binding(tmp_path)
             functions=[fn],
             globals=[],
             externs=[dict(name="memcpy", provider="libc")],
+            records=[],
             resource_model=dict(resources=resources),
         )
-        prepared, _ = prepare(module)
+        prepared, _ = prepare(publish_program(module, "M3", complete=True))
         return seal(
             prepared,
             tmp_path / name,

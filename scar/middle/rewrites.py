@@ -1,6 +1,27 @@
-"""Local equivalence rules and legality proofs for pointwise iteration domains."""
+"""M3 rewrites canonical products using local equivalence and legality proofs."""
 
+from copy import deepcopy
 from scar.contract import control_regions, semantic_form as semantics
+from .contracts import is_complete, publish_program, require_program
+
+
+def rewrite(module, *, enabled=True):
+    """Return an M3 product without mutating M2 bodies or ownership evidence."""
+    require_program(module, "M2")
+    if type(enabled) is not bool:
+        raise ValueError("logical rewrite selection must be explicit")
+    result, changes = dict(module), []
+    if enabled and is_complete(module):
+        result["functions"] = []
+        for source in module["functions"]:
+            function = dict(source)
+            # optimize rebuilds the body before changing it. Its ownership
+            # annotations also need a private copy; the remaining fields are read-only.
+            if "state_contract" in source:
+                function["state_contract"] = deepcopy(source["state_contract"])
+            changes.extend(optimize(function))
+            result["functions"].append(function)
+    return publish_program(result, "M3", complete=is_complete(module)), changes
 
 
 def _fold(expr, changes):

@@ -1,6 +1,7 @@
 """Resolve program entries and reconstruct executable operations from graph ports."""
 
 from collections import defaultdict
+from .contracts import publish_program
 from scar.contract import (
     digest,
     json_bytes,
@@ -887,55 +888,60 @@ def bind(graph, folder):
         (obligations if deferred else binding_issues).append(problem)
     issues = binding_issues
     return (
-        dict(
-            entry=graph["entry"],
-            **image_context,
-            activation_graph=dict(
-                roots=sorted(roots),
-                edges=[e for e in activation_edges if e["owner"] in covered],
-            ),
-            functions=list(functions.values()),
-            globals=list(globals_.values()),
-            externs=list(externs.values()),
-            records=[r for name, r in records.items() if name in used_records],
-            state_evidence=state_evidence,
-            text_profiles=text_profiles,
-            **(
-                dict(
-                    python_class_candidates=class_candidates,
-                    python_candidate_only=sorted(candidate_only),
-                )
-                if class_candidates
-                else {}
-            ),
-            **({"protocol_obligations": obligations} if protocol_names else {}),
-            declarations={
-                name: [
-                    dict(
-                        name=name,
-                        result=s["result"],
-                        params=s["params"],
-                        variadic=bool(s.get("variadic")),
-                    )
-                    for s in rows
-                ]
-                for name, rows in signatures.items()
-            },
-            abi_environment=dict(
-                architecture=graph.get("platform", {}).get("architecture")
-            ),
-            resource_model=dict(
-                resources=graph.get("resources", []),
-                topology=graph.get("topology", []),
-                platform=graph.get("platform", {}),
-                software_headers=software_headers,
+        publish_program(
+            dict(
+                entry=graph["entry"],
+                **({"entry_abi": graph["entry_abi"]} if graph.get("entry_abi") else {}),
+                **image_context,
+                activation_graph=dict(
+                    roots=sorted(roots),
+                    edges=[e for e in activation_edges if e["owner"] in covered],
+                ),
+                functions=list(functions.values()),
+                globals=list(globals_.values()),
+                externs=list(externs.values()),
+                records=[r for name, r in records.items() if name in used_records],
+                state_evidence=state_evidence,
+                text_profiles=text_profiles,
                 **(
-                    {"artifact_flow": artifact_flow}
-                    if artifact_flow is not None
+                    dict(
+                        python_class_candidates=class_candidates,
+                        python_candidate_only=sorted(candidate_only),
+                    )
+                    if class_candidates
                     else {}
                 ),
-                **({"build_bindings": build_bindings} if build_bindings else {}),
+                **({"protocol_obligations": obligations} if protocol_names else {}),
+                declarations={
+                    name: [
+                        dict(
+                            name=name,
+                            result=s["result"],
+                            params=s["params"],
+                            variadic=bool(s.get("variadic")),
+                        )
+                        for s in rows
+                    ]
+                    for name, rows in signatures.items()
+                },
+                abi_environment=dict(
+                    architecture=graph.get("platform", {}).get("architecture")
+                ),
+                resource_model=dict(
+                    resources=graph.get("resources", []),
+                    topology=graph.get("topology", []),
+                    platform=graph.get("platform", {}),
+                    software_headers=software_headers,
+                    **(
+                        {"artifact_flow": artifact_flow}
+                        if artifact_flow is not None
+                        else {}
+                    ),
+                    **({"build_bindings": build_bindings} if build_bindings else {}),
+                ),
             ),
+            "M1",
+            complete=not issues,
         ),
         issues,
         len(reachable),
