@@ -56,7 +56,11 @@ Python 的受支持文件、目录、文本流、结构化循环及异常／清�
 
 本次生成版相对上游为 1.139×。12 次运行每次核对 156 个二进制场和 7 个仅规范化创建日期的文本输出。插桩将主要差额定位到 rank 5 进入归约前的插值计算。M4 证明临时数组的访问方式，B1 在目标 CPU 上读取缓存线及页大小，B2 在容量以内使用局部存储，超出时使用堆。六个 C++ 翻译单元共有 94 处存储声明发生变化。逐次原始计时见 `artifacts/current/cpu-amss/evidence/abe-clean.json`。
 
-完整驱动的 M2 已通过 `generate_TwoPuncture_input.py:14` 的再次导入。当前计划停在 `scipy/__init__.py:60` 的条件子模块导入。F1 已记录子模块文件及条件边，导入钩子仍可在当前语句执行期间改变父包属性，进而改变是否执行子模块初始化。完整约 30 分钟工况尚未验收。当前图、分镜像计划和两个 C++20 工程位于 `artifacts/current/cpu-amss/`。
+同一 ABE 可执行文件还回放了 13 步。在 16 个固定 rank 上，上游耗时 617.17 s，生成版耗时 537.56 s。这组各跑一次，用于检查长程结果。156 个二进制场文件逐字节一致，两个插值诊断文件的最大绝对差分别为 2.06e-12 和 4.16e-12。逐文件结果保存在 `artifacts/current/cpu-amss/evidence/handoff/science.json`。
+
+完整驱动的 M2 仍停在 `scipy/__init__.py:60`。F2 记录有序的子模块候选及各次成员读取，M2 保留当前导入回调对返回对象和属性的影响，M4 将未决原因封入执行 IR。此次 B1 只读 IR 即可报告驱动未就绪及两个可独立编译的求解器。约 30 分钟的官方驱动工况尚未验收。完整图、物理计划和两个 C++20 工程位于 `artifacts/current/cpu-amss/`。
+
+提交 `c99ebbbc` 的安装包在本机运行 170 项分层及集成测试，166 项通过。四项集成在 B1 的模块状态资格检查失败，涉及主进程文件操作、数学函数、MPI 控制器和子进程管道。七处检查尚需实际导入或进程启动的状态转移，以及状态被回调改变后的原生执行路径。逐项记录保存在 `artifacts/current/cpu-amss/evidence/handoff/integration-frontiers.json`。
 
 层间接口见 [架构](docs/ARCHITECTURE.md)，图和 IR 形式见 [模型](docs/MODEL.md)。`tests/stages` 通过禁止跨阶段导入及移走上游源码、图和报告，检查阶段独立性。GitHub Actions 从安装后的 wheel 执行同一检查。
 
