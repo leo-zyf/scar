@@ -6238,3 +6238,65 @@ def test_counted_loop_only_drops_remainders_with_a_stable_induction_domain():
         0, dict(op="decl", name="n", type="i64", init=constant(1))
     )
     assert not reduced(shadow)
+
+
+def test_folded_extent_preserves_axis_order_for_coordinate_traversal():
+    from scar.middle.execution import annotate_iteration_layouts
+    from scar.middle.rewrites import optimize
+
+    def lit(n):
+        return dict(op="literal", type="i64", value=n)
+
+    def binary(op, lhs, rhs):
+        return dict(op="binary", operator=op, left=lhs, right=rhs)
+
+    pos = dict(op="var", name="i")
+    # Non-square first-axis-fastest layout, with a non-unit memory stride.
+    offset = binary(
+        "add",
+        binary("mul", lit(3), binary("mod", pos, lit(2))),
+        binary("mod", binary("div", pos, lit(2)), lit(5)),
+    )
+    fn = {
+        "params": [],
+        "body": [
+            dict(
+                op="map",
+                index="i",
+                extent=binary("mul", lit(2), lit(5)),
+                independent=False,
+                site="store",
+                body=[
+                    dict(
+                        op="assign",
+                        target=dict(
+                            op="index",
+                            base=dict(op="var", name="out"),
+                            indices=[offset],
+                        ),
+                        value=lit(3),
+                    )
+                ],
+            )
+        ],
+    }
+    for a, b in ((0, 5), (-2, -5), (1 << 62, 4)):
+        changed = deepcopy(fn)
+        changed["body"][0]["extent"] = binary("mul", lit(a), lit(b))
+        optimize(changed)
+        assert "extent_factors" not in changed["body"][0]
+    optimize(fn)
+    loop = fn["body"][0]
+    assert loop["extent"] == lit(10) and loop["extent_factors"] == [2, 5]
+    source_body = deepcopy(loop["body"])
+    assert annotate_iteration_layouts(fn) == 1
+    traversal = loop["iteration_layout"]
+    assert loop["body"] == source_body
+    assert traversal["order"] == "first_axis_fastest" and traversal["axes"] == [
+        lit(2),
+        lit(5),
+    ]
+    assert [row["axis"] for row in traversal["coordinates"]] == [0, 1]
+    loop["extent_factors"] = [1, 11]
+    with pytest.raises(ValueError, match="extent factorization"):
+        annotate_iteration_layouts(fn)

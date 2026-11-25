@@ -27,7 +27,26 @@ def _fold(expr, changes):
         return [_fold(v, changes) for v in expr]
     if not isinstance(expr, dict):
         return expr
+    domain = expr.get("extent") if expr.get("op") == "map" else None
     expr = {k: _fold(v, changes) for k, v in expr.items()}
+    if domain and domain.get("operator") == "mul" and expr["extent"]["op"] == "literal":
+
+        def factors(node):
+            if node.get("op") == "binary" and node["operator"] == "mul":
+                yield from factors(node["left"])
+                yield from factors(node["right"])
+            else:
+                yield (
+                    node.get("value")
+                    if node.get("op") == "literal" and node["type"] == "i64"
+                    else None
+                )
+
+        # Retain the source factorization before folding the extent to one
+        # integer. The order of factors is the order of radix reconstruction.
+        axes = list(factors(domain))
+        if all(type(n) is int and n > 0 for n in axes):
+            expr["extent_factors"] = axes
     if expr.get("op") != "binary" or expr["operator"] not in {"add", "sub", "mul"}:
         return expr
     a, b = expr["left"], expr["right"]

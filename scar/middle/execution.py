@@ -1,6 +1,7 @@
 """Derive target-neutral lowering contracts and seal the execution IR product."""
 
 from copy import deepcopy
+from math import prod
 from .contracts import is_complete, publish_program, require_program
 from scar.contract import (
     ARTIFACT_FLOW,
@@ -76,6 +77,21 @@ def _coordinate_layout(stmt, private, definitions):
         return [atom(expr)]
 
     axes = factors(stmt["extent"])
+    if "extent_factors" in stmt:
+        counts = stmt["extent_factors"]
+        extent = stmt["extent"]
+        if not (
+            isinstance(counts, list)
+            and len(counts) > 1
+            and all(type(n) is int and n > 0 for n in counts)
+            and extent.get("op") == "literal"
+            and extent.get("type") == "i64"
+            and type(extent.get("value")) is int
+            and 0 < extent["value"] < 1 << 63
+            and prod(counts) == extent["value"]
+        ):
+            raise ValueError("invalid folded map extent factorization")
+        axes = [dict(op="literal", type="i64", value=n) for n in counts]
     if any(axis is None for axis in axes):
         return None
     # The original sequence is observable. Exclude control transfers, calls
