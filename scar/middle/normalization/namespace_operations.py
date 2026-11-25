@@ -4,6 +4,7 @@ import re
 
 from scar.contract import (
     MODULE_REGISTRY_OPERATIONS,
+    EXECUTION_ANNOTATIONS,
     digest,
     json_bytes,
     python_constant_rhs_sha256,
@@ -1598,3 +1599,174 @@ def open_exception_handler(frame, node, index, count):
     header["on_match"].append(dict(op="expr", value=bind))
     header["cleanup"].append(dict(op="expr", value=clear))
     return header
+
+
+def _published_functions(project, fragments):
+    """Index only MAKE_FUNCTION results consumed by their original module STORE."""
+    exports = {}
+    for fragment in fragments:
+        owner = fragment["symbol"]
+        code = fragment["activation_handoff"]["entry"]["code"]
+        for store in walk_operations(
+            fragment["function"]["body"], exclude_fields=EXECUTION_ANNOTATIONS
+        ):
+            proof = store.get("source_definition")
+            if (
+                store["op"] != "module_global_store"
+                or not proof
+                or proof["code_sha256"] != code["code_sha256"]
+                or len(store.get("evaluation", ())) != 2
+            ):
+                continue
+            load, make = store["evaluation"]
+            target = store["target"]["instruction"]
+            if not (
+                load["op"] == "source_object_constant"
+                and load["expected_code"] == proof["child"]
+                and make["op"] == "source_object_make_function"
+                and make["code"] == {"from_offset": load["offset"]}
+                and store["value"] == {"from_offset": make["offset"]}
+                and target == proof["instructions"][-1]
+            ):
+                continue
+            symbol = make["symbol"]
+            child = dict(
+                initializer=owner,
+                creation_site=make["site"],
+                make_offset=make["offset"],
+                store_offset=target["offset"],
+                symbol=symbol,
+                code=proof["child"],
+            )
+            body = project.function_definitions.get(symbol, {}).get("source_body", {})
+            if body.get("code_sha256") == proof["child"]["code_sha256"]:
+                child["source_body"] = body
+            key = owner, target["name"]
+            group = exports.setdefault(key, [])
+            if child not in group:
+                group.append(child)
+    return exports
+
+
+def _call_import_bindings(op, owners):
+    """Yield the qualified source of each published binding, including aliased members."""
+    if op["op"] == "module_import_publish":
+        port = op.get("source_import_projection") or op.get("source_import_store")
+        if not port:
+            return
+        name = port["import_name"]["name"]
+        module = name if "projection" in port else name.partition(".")[0]
+        for candidate in op["import_call"].get("body", {}).get("candidates", ()):
+            owner = candidate["initializer"]
+            if candidate["module"] == module and owners.get(owner) == (
+                module,
+                candidate["code_sha256"],
+            ):
+                yield op["binding"], owner, None, port["import_name"]["offset"]
+    elif op["op"] == "module_fromlist_publish" and (port := op.get("source_fromlist")):
+        # IMPORT_FROM reads this member from the actual returned object. Parent
+        # package initializers in the same request are distinct candidates.
+        for owner in op["initializers"]:
+            if owner in owners and owners[owner][0] == op["resolved_module"]:
+                for binding in op["bindings"]:
+                    yield binding, owner, binding["member"], port["import_name"][
+                        "offset"
+                    ]
+
+
+def _call_and_lookup(call, by_offset):
+    def operand(ref):
+        return by_offset.get(ref.get("from_offset"), ref)
+
+    target = operand(call["target"])
+    attribute = target if target.get("op") == "source_object_attribute" else None
+    name = operand(attribute["base"]) if attribute else target
+    if name.get("op") == "module_name_load":
+        return call, name, attribute
+    return None
+
+
+def link_conditional_function_calls(project, conditional):
+    """Connect already evaluated callees to optional function creations in sealed modules."""
+    exports = _published_functions(project, conditional)
+    if not exports:
+        return set()
+    owners = {
+        f["symbol"]: (
+            project.functions[f["symbol"]]["python_scope"]["module"],
+            f["activation_handoff"]["entry"]["code"]["code_sha256"],
+        )
+        for f in conditional
+    }
+    selected = set()
+    scopes = [
+        *project.closed.values(),
+        *project.prefixes,
+        *(f["function"] for f in conditional),
+    ]
+    for scope in scopes:
+        imports, calls = {}, []
+        for op in walk_operations(scope["body"], exclude_fields=EXECUTION_ANNOTATIONS):
+            if op["op"] in {"module_import_publish", "module_fromlist_publish"}:
+                for binding, owner, member, offset in _call_import_bindings(op, owners):
+                    key = op["occurrence"], binding["site"], binding["slot"]
+                    imports.setdefault(key, []).append(
+                        (owner, member, offset, binding, op["frame_globals"]["owner"])
+                    )
+            if op["op"] == "source_object_call" and "op" in op["target"]:
+                calls.append(_call_and_lookup(op, {}))
+            for field in ("steps", "evaluation"):
+                steps = op.get(field)
+                if isinstance(steps, list):
+                    by_offset = {}
+                    for step in steps:
+                        if not isinstance(step, dict):
+                            continue
+                        if step.get("op") == "source_object_call":
+                            calls.append(_call_and_lookup(step, by_offset))
+                        if "offset" in step:
+                            by_offset[step["offset"]] = step
+        for edge in calls:
+            if edge is None:
+                continue
+            call, name, attribute = edge
+            previous = name.get("source_evidence", {}).get("prior_publication", {})
+            key = tuple(previous.get(k) for k in ("occurrence", "site", "slot"))
+            for owner, member, offset, binding, importer in imports.get(key, ()):
+                if (attribute is None) != (member is not None):
+                    continue
+                candidates = exports.get((owner, member or attribute["name"]), ())
+                if not candidates:
+                    continue
+                call["conditional_activation"] = dict(
+                    semantics_version=1,
+                    origin=dict(
+                        import_owner=importer,
+                        occurrence=key[0],
+                        binding_site=key[1],
+                        import_offset=offset,
+                        store_offset=binding["offset"],
+                        load_site=name["site"],
+                        **(
+                            {"attribute_site": attribute["site"]}
+                            if attribute
+                            else {
+                                "read_offset": binding["read"]["instruction"]["offset"]
+                            }
+                        ),
+                    ),
+                    candidates=list(candidates),
+                    when="original_call_directly_selects_exact_function_from_witnessed_successful_creation_store_and_frame_uses_that_same_child_code_object",
+                    witness="no_extra_references_callbacks_or_reuse_of_dead_object_identity",
+                    inputs=[
+                        "selected_function",
+                        "active_frame",
+                        "actual_code",
+                        "actual_globals",
+                        "actual_builtins",
+                        "bound_arguments",
+                    ],
+                    on_other="continue_original_call_or_entered_source_frame_without_repeating_lookup_arguments_or_dispatch",
+                )
+                selected.update(c["symbol"] for c in candidates)
+    return selected

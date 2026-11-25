@@ -9901,6 +9901,118 @@ def test_module_for_uses_actual_callable_iterator_mapping_and_exhaustion(tmp_pat
         )
 
 
+def test_imported_function_candidate_uses_actual_selected_callable_and_frame(tmp_path):
+    from types import FunctionType
+
+    from scar.contract import walk_operations
+    from scar.frontend import build
+    from scar.middle.binding import bind
+    from scar.middle.normalization import namespace_operations, protocols
+
+    package = tmp_path / "pkg"
+    package.mkdir()
+    (package / "child.py").write_text("pass\n")
+    (package / "__init__.py").write_text(
+        "from . import child as old\ndel old\n"
+        "def f(value):\n    return value\n"
+        "on_import()\n"
+    )
+    entry = tmp_path / "entry.py"
+    entry.write_text(
+        "import pkg as receiver\nfrom pkg import f as chosen\n"
+        "receiver.f(arg())\nchosen(arg())\nunrelated.f(arg())\n"
+    )
+    graph = tmp_path / "graph"
+    build(entry, graph)
+    bound, issues, _ = bind(json.loads((graph / "graph.json").read_bytes()), graph)
+    assert not issues
+    functions = {
+        f["name"]: f
+        for f in bound["functions"]
+        if f.get("execution_kind") == "python_protocol"
+    }
+    project, issue = protocols._compile_protocol_entry(bound, functions)
+    assert not issue
+    conditional = protocols._conditional_loader_fragments(project)
+    assert namespace_operations.link_conditional_function_calls(
+        project, conditional
+    ) == {"py:pkg:f"}
+    calls = [
+        op
+        for op in walk_operations(project.closed[bound["entry"]]["body"])
+        if op["op"] == "source_object_call"
+    ]
+    edges = {
+        c["location"]["line"]: c["conditional_activation"]
+        for c in calls
+        if "conditional_activation" in c
+    }
+    assert set(edges) == {3, 4}
+    property_edge, named_edge = edges[3], edges[4]
+    assert (
+        property_edge["origin"]["attribute_site"]
+        and "read_offset" not in property_edge["origin"]
+    )
+    assert named_edge["origin"]["read_offset"] < named_edge["origin"]["store_offset"]
+    assert property_edge["origin"]["occurrence"] != named_edge["origin"]["occurrence"]
+    assert property_edge["candidates"] == named_edge["candidates"]
+    [creation] = property_edge["candidates"]
+    assert (
+        creation["symbol"] == "py:pkg:f"
+        and creation["make_offset"] < creation["store_offset"]
+    )
+    assert (
+        creation["code"]["name"] == "f" and "bound_arguments" in property_edge["inputs"]
+    )
+
+    def original(value):
+        events.append(("original", value))
+
+    def other(value):
+        events.append(("other", value))
+
+    for mode in ("same", "clone", "code_replaced", "argument_raises"):
+        events = []
+        # Both functions capture the same cell, so CPython permits replacing
+        # __code__ while evaluating the argument to the already-loaded function.
+        witness = FunctionType(
+            original.__code__, globals(), closure=original.__closure__
+        )
+        clone = FunctionType(
+            original.__code__, dict(globals()), closure=original.__closure__
+        )
+        selected = clone if mode == "clone" else witness
+
+        class Receiver:
+            @property
+            def f(self):
+                events.append("lookup")
+                return selected
+
+        def arg():
+            events.append("argument")
+            if mode == "argument_raises":
+                raise KeyError("argument")
+            if mode == "code_replaced":
+                witness.__code__ = other.__code__
+            return 4
+
+        if mode == "argument_raises":
+            with pytest.raises(KeyError, match="argument"):
+                Receiver().f(arg())
+            assert events == ["lookup", "argument"]
+        else:
+            Receiver().f(arg())
+            assert (selected is witness and selected.__code__ is original.__code__) is (
+                mode == "same"
+            )
+            assert events == [
+                "lookup",
+                "argument",
+                ("other" if mode == "code_replaced" else "original", 4),
+            ]
+
+
 def test_conditional_module_rebuilds_from_unknown_bindings_and_owns_its_imports(
     tmp_path,
 ):
