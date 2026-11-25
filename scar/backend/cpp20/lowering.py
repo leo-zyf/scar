@@ -1873,12 +1873,28 @@ class Lowerer:
             self.buffer_count += 1
             owner = f"scar_buffer_{self.buffer_count}"
             ty = self.type_name(stmt["type"])
-            owner_type = Type(
-                "template", name="std::unique_ptr", args=(Type("array", element=ty),)
-            )
-            allocation = Expr(
-                "new", type=ty, extent=E(stmt["extent"]), qualifier="default"
-            )
+            extent = E(stmt["extent"])
+            if "inline_capacity" in stmt:
+                capacity = stmt["inline_capacity"]
+                if (
+                    stmt.get("private_scratch") != "indexed_scalar_access_only"
+                    or type(capacity) is not int
+                    or capacity < 1
+                ):
+                    raise ValueError(
+                        "small buffer placement lacks a qualified capacity or lifetime"
+                    )
+                owner_type = Type(
+                    "template", name="scar::small_buffer", args=(ty, integer(capacity))
+                )
+                allocation = extent
+            else:
+                owner_type = Type(
+                    "template",
+                    name="std::unique_ptr",
+                    args=(Type("array", element=ty),),
+                )
+                allocation = Expr("new", type=ty, extent=extent, qualifier="default")
             box = Expr(
                 "construct", type=owner_type, args=(allocation,), qualifier="paren"
             )

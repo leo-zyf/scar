@@ -21,6 +21,7 @@
 #include <initializer_list>
 #include <ios>
 #include <limits>
+#include <memory>
 #include <new>
 #include <stdexcept>
 #include <string>
@@ -230,6 +231,24 @@ inline std::nullptr_t text_print(const text_output &output) {
 }
 
 template <class T, std::size_t N> using array = T[N];
+// Both stores have the default-initialization semantics of new T[count].
+template <class T, std::size_t N> class small_buffer {
+  static_assert(N > 0 && std::is_arithmetic_v<T>);
+  T local_[N];
+  std::unique_ptr<T[]> heap_;
+
+public:
+  template <class I> explicit small_buffer(I count) {
+    static_assert(std::is_integral_v<I>);
+    if constexpr (std::is_signed_v<I>)
+      if (count < 0)
+        throw std::bad_array_new_length();
+    if (static_cast<std::uintmax_t>(count) > N)
+      heap_.reset(new T[count]);
+  }
+  T *get() noexcept { return heap_ ? heap_.get() : local_; }
+};
+
 template <class R, class... A> using function = R(A...);
 template <class R, class... A> using variadic_function = R(A..., ...);
 template <class T, class F>

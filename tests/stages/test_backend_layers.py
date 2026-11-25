@@ -3545,3 +3545,88 @@ int main(int argc, char **argv) {{
     }
     received = subprocess.check_output([binary, *map(str, cases)], text=True)
     assert received.splitlines() == list(cases.values())
+
+
+def test_private_buffer_placement_respects_proof_budget_and_heap_fallback(
+    tmp_path, monkeypatch
+):
+    from scar.backend.planning import cpu
+    from scar.backend.cpp20.lowering import Lowerer
+    from scar.backend.cpp20.printer import statement
+
+    def buffer(name, proof=True):
+        value = dict(
+            op="buffer", name=name, type="f64", extent=dict(op="var", name="n")
+        )
+        if proof:
+            value["private_scratch"] = "indexed_scalar_access_only"
+        return value
+
+    fn = dict(
+        name="worker",
+        result="void",
+        params=[dict(name="n", type="i64")],
+        body=[buffer("x"), buffer("y"), buffer("escaped", False), buffer("z")],
+    )
+    module = dict(functions=[fn], globals=[])
+    monkeypatch.setattr(cpu, "_scratch_geometry", lambda: None)
+    fallback, _ = cpu.schedule(module, "serial")
+    assert all("inline_capacity" not in op for op in fallback["functions"][0]["body"])
+    monkeypatch.setattr(cpu, "_scratch_geometry", lambda: (32, 64))
+    scheduled, physical = cpu.schedule(module, "serial")
+    ops = scheduled["functions"][0]["body"]
+    assert [s.get("inline_capacity") for s in ops] == [4, 4, None, None]
+    assert {a["name"] for a in physical["allocations"]} == {"x", "y"}
+    lower = Lowerer(scheduled, physical)
+    rendered = "\n".join(statement(s) for s in lower.statement(ops[0]))
+    assert "scar::small_buffer" in rendered
+    assert "new " in "\n".join(statement(s) for s in lower.statement(ops[2]))
+    source = tmp_path / "buffer.cpp"
+    source.write_text(
+        """
+#include "runtime.hpp"
+#include <cstdint>
+#include <cstdlib>
+#include <new>
+static int allocations = 0;
+void *operator new[](std::size_t n) {
+  ++allocations;
+  if (auto p=std::malloc(n)) return p;
+  throw std::bad_alloc();
+}
+void operator delete[](void* p) noexcept { std::free(p); }
+void operator delete[](void* p, std::size_t) noexcept { std::free(p); }
+void check(std::int64_t v_n) {
+"""
+        + rendered
+        + """
+  if (v_n>0) {
+    v_x[v_n-1]=2.75;
+    if(v_x[v_n-1]!=2.75) std::abort();
+  }
+}
+int main(){
+  check(0); check(4);
+  if(allocations!=0) return 1;
+  check(5);
+  if(allocations!=1) return 2;
+  try { check(-1); } catch(const std::bad_array_new_length&){ return 0; }
+  return 3;
+}
+"""
+    )
+    binary = tmp_path / "buffer"
+    subprocess.run(
+        [
+            "c++",
+            "-std=c++20",
+            "-Werror",
+            "-I",
+            str(Path(scar.__file__).parent / "backend/cpp20"),
+            str(source),
+            "-o",
+            str(binary),
+        ],
+        check=True,
+    )
+    subprocess.run([str(binary)], check=True)

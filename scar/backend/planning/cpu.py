@@ -126,6 +126,25 @@ _BYTES = {
 }
 
 
+def _scratch_geometry():
+    """Deployment cache line and page size, in bytes, or no placement offer."""
+    try:
+        line = int(
+            subprocess.check_output(
+                ["getconf", "LEVEL1_DCACHE_LINESIZE"],
+                text=True,
+                stderr=subprocess.DEVNULL,
+                timeout=2,
+            )
+        )
+        page = os.sysconf("SC_PAGESIZE")
+        if 0 < line <= page and page % line == 0:
+            return line, page
+    except (OSError, ValueError, subprocess.SubprocessError):
+        pass
+    return None
+
+
 def _unqualified(dtype):
     while isinstance(dtype, dict) and dtype.get("kind") in {"const", "ref"}:
         dtype = dtype.get("of", dtype.get("to"))
@@ -698,6 +717,43 @@ def schedule(module, mode, worker_limit=None):
             region["fallback"] = work["unpriced"] or ["target calibration unavailable"]
         choices[site] = (region, lines)
 
+    geometry = None
+    measured_geometry = False
+
+    def place_private_buffer(stmt):
+        nonlocal geometry, measured_geometry, used
+        if "inline_capacity" in stmt:
+            raise ValueError("logical buffer contains a target placement")
+        if stmt.get("private_scratch") != "indexed_scalar_access_only":
+            return
+        dtype = stmt["type"]
+        if not isinstance(dtype, str) or dtype not in _BYTES:
+            return
+        if not measured_geometry:
+            geometry = _scratch_geometry()
+            measured_geometry = True
+        if geometry is None:
+            return
+        line, page = geometry
+        capacity = line // _BYTES[dtype]
+        if not capacity or used + line > page:
+            return
+        used += line
+        stmt["inline_capacity"] = capacity
+        report.setdefault("allocations", []).append(
+            dict(
+                function=fn["name"],
+                name=stmt["name"],
+                site=stmt.get("site"),
+                storage="inline_or_heap",
+                type=dtype,
+                inline_capacity=capacity,
+                cache_line_bytes=line,
+                function_payload_budget_bytes=page,
+                evidence="deployment getconf L1 data cache line and sysconf page size",
+            )
+        )
+
     def choose(items):
         output = []
         for stmt in items:
@@ -740,6 +796,8 @@ def schedule(module, mode, worker_limit=None):
                 else:
                     output.extend(choose(reference))
                 continue
+            if op == "buffer":
+                place_private_buffer(stmt)
             if op == "runtime_array":
                 if stmt.get("scope_control") != "lexical_continuation":
                     raise ValueError(
@@ -768,5 +826,6 @@ def schedule(module, mode, worker_limit=None):
         return output
 
     for fn in selected["functions"]:
+        used = 0
         fn["body"] = choose(fn["body"])
     return selected, report
