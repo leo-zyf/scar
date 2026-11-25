@@ -1,8 +1,10 @@
 """M2: bind verified source host APIs to language-independent effect contracts."""
 
+from contextlib import contextmanager
 import math
 
 from scar.contract import (
+    EXECUTION_ANNOTATIONS,
     digest,
     json_bytes,
     python_provider_id,
@@ -471,6 +473,7 @@ class ImportOccurrences:
         self.nodes = {}
         self.last = {}
         self.initialization_points = {}
+        self.provider_region = None
         self.comparisons = {}
         for owner, fn in functions.items():
             work = [fn.get("body", [])]
@@ -558,6 +561,50 @@ class ImportOccurrences:
             self.initialization_points[row["id"]] = (marker, node)
             steps.append(marker)
 
+    def _record_provider_operations(self, row):
+        if self.provider_region is None or self.provider_region[0] is not row:
+            return
+        _, steps, start = self.provider_region
+        for operation in walk_operations(
+            steps[start:], exclude_fields=EXECUTION_ANNOTATIONS
+        ):
+            if (
+                operation.get("source_protocol") == "python.import"
+                and "source_import_occurrence" not in operation
+            ):
+                self.producer(row, operation, "source_import")
+
+    @contextmanager
+    def external_request(self, frame, row, node, origin, steps, *, primary):
+        """Resolve provider bindings while retaining the one source loader, even on a partial prefix."""
+        if primary:
+            self.begin(row, node, steps)
+        previous = self.provider_region
+        self.provider_region = (row, steps, len(steps))
+        try:
+            yield
+        finally:
+            try:
+                self._record_provider_operations(row)
+                source = (
+                    origin
+                    if origin.get("module") == node["module"]
+                    else origin.get("aliases", {}).get(node["module"], {})
+                )
+                if primary and not row["producer_sites"] and source.get("sha256"):
+                    retain_import_result(
+                        frame.project,
+                        row,
+                        self.initialization_points[row["id"]],
+                        dict(
+                            module=node["module"],
+                            source_provider_id=python_provider_id(source),
+                            source_sha256=source["sha256"],
+                        ),
+                    )
+            finally:
+                self.provider_region = previous
+
     def producer(self, row, operation, role):
         operation.setdefault("site", row["site"])
         operation["source_import_occurrence"] = row["id"]
@@ -570,11 +617,17 @@ class ImportOccurrences:
                 k: operation[k] for k in ("operator_family", "callee") if k in operation
             },
         )
+        if operation.get("namespace_binding", {}).get(
+            "retains"
+        ) == "actual_IMPORT_NAME_result" and operation.get("state_capture"):
+            item["captures_import_result_and_state"] = True
         if item not in row["producer_sites"]:
             row["producer_sites"].append(item)
         row["effect_coverage"] = "MODELED" if role == "source_import" else "PARTIAL"
         if role == "source_import":
             row["obligations"] = ["qualify_equivalent_source_import_on_target"]
+            if item.get("captures_import_result_and_state"):
+                row["obligations"].append("qualify_ordered_source_bindings_and_release")
         operation["import_effects"] = _refresh_import_effects(row)
         for comparison in self.comparisons.get(row["id"], ()):
             comparison["occurrence_effect_coverage"] = row["effect_coverage"]
@@ -697,6 +750,7 @@ def source_provider(frame, node, origin, steps):
 def _initialize_source_namespace(frame, node, namespace):
     ledger = frame.project.source_imports
     row = ledger.rows[namespace["occurrence"]]
+    ledger._record_provider_operations(row)
     if any(producer["role"] == "source_import" for producer in row["producer_sites"]):
         return row
     point = ledger.initialization_points.get(row["id"])
@@ -747,6 +801,9 @@ def retain_import_result(project, row, point, namespace):
             occurrence=row["id"],
             instance_scope="per_successful_dynamic_import",
             retains="actual_IMPORT_NAME_result",
+            consumers="following_IMPORT_FROM_lookups_or_plain_store_consume_the_returned_object_in_source_order",
+            qualification="require_actual_source_lookup_store_release_and_error_paths_for_each_binding",
+            bindings=row["bindings"],
         ),
         state_capture=dict(
             occurrence=row["id"],

@@ -991,7 +991,8 @@ def setup(source):
 project,frame,imports=setup(data)
 steps=[]
 frame.imported(imports[0],steps)
-assert steps[0]['op']=='block' and not steps[0]['body']
+assert steps[0]['op']=='block'
+assert steps[0]['body'][0]['value']['op']=='module_namespace_initialize'
 frame.imported(imports[1],steps)
 operations=list(walk_operations(steps))
 initializers=[n for n in operations if n['op']=='module_namespace_initialize']
@@ -1012,6 +1013,7 @@ assert value['projection'].startswith('actual_captured_object')
 assert 'capture' not in bound.facts['source_export_binding']
 row=next(iter(project.source_imports.rows.values()))
 assert len(row['bindings'])==2 and row['effect_coverage']=='MODELED'
+assert initializers[0]['namespace_binding']['bindings']==row['bindings']
 assert len(row['producer_sites'])==1
 assert {'module_export_matches','module_export_value','module_export_continuation_required'} <= set(project.operator_requirements()['module_registry']['operations'])
 try:
@@ -1286,11 +1288,14 @@ print(json.dumps(issue))
     )
     assert sum(op.get("source_import_occurrence") == fromlist["id"] for op in ops) == 1
     unused = next(r for r in rows if r["request"]["module"] == "time")
-    assert (
-        unused["effect_coverage"] == "UNPROVEN"
-        and unused["obligations"]
-        and not unused["producer_sites"]
-    )
+    [loader] = [op for op in ops if op.get("source_import_occurrence") == unused["id"]]
+    [site] = unused["producer_sites"]
+    assert unused["effect_coverage"] == "MODELED" and unused["obligations"]
+    assert site["opcode"] == loader["op"] == "module_namespace_initialize"
+    assert site["site"] == loader["site"] == unused["site"]
+    assert loader["namespace_binding"]["retains"] == "actual_IMPORT_NAME_result"
+    assert loader["namespace_binding"]["bindings"] == unused["bindings"]
+    assert loader["external_effect"] == "UNKNOWN" and loader["may_raise"]
     occurrence = next(r for r in rows if r["id"] == transition["occurrence"])
     assert transition["writes"] == [] and transition["reads"] == [
         "occurrence.before",

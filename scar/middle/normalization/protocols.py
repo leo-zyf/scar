@@ -192,7 +192,9 @@ class _Region:
         )
         setup = []
         for statement in self.steps[self.end : before_child]:
-            if statement["op"] not in {"decl", "assign", "expr"}:
+            if statement["op"] not in {"decl", "assign", "expr"} and not statement.get(
+                "pending_import_effect"
+            ):
                 break
             setup.append(statement)
         if setup:
@@ -620,12 +622,26 @@ class _Project:
                     if captured_effect
                     else "module_import_continuation_required"
                 )
-                if not captured_effect and not operation["producer_sites"]:
+                resume = {}
+                if captured_effect:
+                    resume = dict(
+                        producer_capture=operation["producer_capture"],
+                        resume="continue_after_original_action_with_captured_result_and_actual_post_state",
+                    )
+                elif operation.get("source_protocol") == "module_state_comparison":
                     ledger = self.source_imports
-                    row = ledger.rows[operation["occurrence"]]
-                    point = ledger.initialization_points.get(row["id"])
-                    if point is not None:
-                        host_protocols.retain_import_result(self, row, point, operation)
+                    row = ledger.rows.get(operation["occurrence"])
+                    if row is not None:
+                        if any(
+                            p["opcode"] == "module_namespace_initialize"
+                            and p["role"] == "source_import"
+                            and p.get("captures_import_result_and_state")
+                            for p in row["producer_sites"]
+                        ):
+                            resume = dict(
+                                occurrence=row["id"],
+                                resume="continue_from_original_import_result_and_post_state_without_reexecuting_loader",
+                            )
                 for op in (operation["op"], continuation):
                     namespace_operations.require_registry_operator(self, op)
                 if captured_effect:
@@ -648,19 +664,7 @@ class _Project:
                                     noreturn=True,
                                     effects=["CTRL", "OPAQUE"],
                                     semantics="transfer_to_source_equivalent_continuation_or_prove_edge_unreachable_before_delivery",
-                                    **(
-                                        dict(
-                                            producer_capture=operation[
-                                                "producer_capture"
-                                            ],
-                                            resume="continue_after_original_action_with_captured_result_and_actual_post_state",
-                                        )
-                                        if captured_effect
-                                        else dict(
-                                            occurrence=operation["occurrence"],
-                                            resume="continue_from_original_import_result_and_post_state_without_reexecuting_loader",
-                                        )
-                                    ),
+                                    **resume,
                                     **values.source_site(operation),
                                 ),
                             )
@@ -1870,43 +1874,39 @@ class _Frame:
             before = self.project.imports.snapshot()
             self.project.array_state.invalidate()
             self.project.sequences.invalidate()
-            if primary:
-                self.project.source_imports.begin(occurrence, node, steps)
-            start = len(steps)
-            status = origin["status"]
             if req.get("level"):
                 self.fail(
                     node,
                     "import_parent",
                     f"relative external import of {mod} needs a closed parent package",
                 )
-            if status == "verified_stdlib" and host_protocols.supports_import(mod):
-                value = host_protocols.import_provider(self, node, steps)
-                receipt = self.project.providers["stdlib:" + mod.partition(".")[0]]
-                receipt["import_effects"] = node.get("effects", ["UNKNOWN"])
-            elif status == "verified_distribution" and mod == "numpy":
-                value = arrays.import_provider(self, node, steps)
-            elif status == "verified_distribution" and graphics.handles_import(node):
-                value = self.project.graphics.import_provider(self, node, steps)
-            elif host_protocols.literal_exports(self, mod):
-                value = host_protocols.source_provider(self, node, origin, steps)
-            else:
-                identity = (
-                    f"{origin['distribution']} {origin['version']}"
-                    if origin.get("distribution") and origin.get("version")
-                    else "the standard library"
-                )
-                self.fail(
-                    node,
-                    "import_semantics",
-                    f"{mod} resolves to {identity} at {origin.get('origin')}. Its initialization, effects and exported bindings have no execution contract.",
-                    source_evidence=self._import_evidence(mod),
-                )
-            produced = list(walk_operations(steps[start:]))
-            for op in produced:
-                if op.get("source_protocol") == "python.import":
-                    self.project.source_imports.producer(
-                        occurrence, op, "source_import"
+            with self.project.source_imports.external_request(
+                self, occurrence, node, origin, steps, primary=primary
+            ):
+                status = origin["status"]
+                if status == "verified_stdlib" and host_protocols.supports_import(mod):
+                    value = host_protocols.import_provider(self, node, steps)
+                    receipt = self.project.providers["stdlib:" + mod.partition(".")[0]]
+                    receipt["import_effects"] = node.get("effects", ["UNKNOWN"])
+                elif status == "verified_distribution" and mod == "numpy":
+                    value = arrays.import_provider(self, node, steps)
+                elif status == "verified_distribution" and graphics.handles_import(
+                    node
+                ):
+                    value = self.project.graphics.import_provider(self, node, steps)
+                elif host_protocols.literal_exports(self, mod):
+                    value = host_protocols.source_provider(self, node, origin, steps)
+                else:
+                    identity = (
+                        f"{origin['distribution']} {origin['version']}"
+                        if origin.get("distribution") and origin.get("version")
+                        else "the standard library"
+                    )
+                    self.fail(
+                        node,
+                        "import_semantics",
+                        f"{mod} resolves to {identity} at {origin.get('origin')}. Its initialization, effects and exported bindings have no execution contract.",
+                        source_evidence=self._import_evidence(mod),
                     )
             if primary:
                 scoped = host_protocols.registry_import(self, node, origin, occurrence)
