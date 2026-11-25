@@ -74,7 +74,7 @@ F1 的导出候选可沿赋值与重导出到达有准确源类型和位置的�
 | M1 绑定 | 完整图包 | `BoundProgram`，连接入口、符号、记录与全局存储，闭合普通调用、回调和隐含对象生命周期，保留声明变体及状态证据 | `binding.py` |
 | M2 规范化 | `BoundProgram` | `CanonicalProgram`，检查 ABI，明确引用/指针和旧方言转换，生成标量归属与逃逸合同，记录原版缺陷与处理证明 | `normalization/program.py` 及同层领域模块 |
 | M3 化简 | `CanonicalProgram` | 等价改写后的操作及证明，包括有界索引、整数常量、重复域和合法融合选择 | `rewrites.py` |
-| M4 执行封存 | 逻辑操作、约束与改写记录 | 迭代布局、生存期及复制/物化资源关系，输出 `exec-ir.json`、`functions/`、`resources/` | `execution.py`、`resource_flow.py` |
+| M4 执行封存 | 逻辑操作、约束与改写记录 | 迭代布局、生存期、局部数值缓冲区的允许访问方式及复制/物化关系，输出 `exec-ir.json`、`functions/`、`resources/` | `execution.py`、`resource_flow.py` |
 
 M2 的实现统一归入 `normalization/` 包：`program.py` 负责本层协调和 ABI，`protocols.py` 负责源协议、名称与控制，数组、标量、文本、对象、异常、图形、主机、进程和 MPI 各由同层领域模块处理，`values.py` 提供本层值记录。公开入口仍为 `normalization.normalize`；旧平铺模块删除，不保留转发垫片。
 
@@ -206,6 +206,8 @@ AMSS 当前已保存的官方驱动图含宏文件生成、复制、进程启动
 | B2a 目标降级 | `scheduled-ir.json` | 类型化 C++ 目标树，封存 `target-ir.json` 及翻译单元成员 | `cpp20/target.py`、`lowering.py` 及同层领域模块 |
 | B2b 打印封装 | `target-ir.json` | 从目标树打印声明、类型、表达式和语句，LLVM 格式化，封存工程及 `cpp20.json` | `cpp20/project.py`、`printer.py`；共享目标模型与纯收据校验 |
 | B3 构建 | `cpp20.json` | 验证工程成员，CMake 构建并安装，输出 `build.json` 和可执行文件 | `build.py` |
+
+局部数值缓冲区由 M4 标记 `private_scratch`。适用条件包括标量下标读写、作用域内独立绑定以及可见地址和分配效果检查。B1 读取目标 CPU 的 L1 数据缓存线和内存页大小，每个合格缓冲区最多使用一条缓存线的内联容量，每函数的内联数据预算为一页。B2 在实际长度超过容量时调用 `new[]`，使用原元素类型及初始化方式。缺少证明或目标数据时，物理计划沿用堆分配。
 
 B2a 的目标树使用 `Type`、`Expr`、`Stmt`、`Decl`、`Attribute` 和 `Unit` 记录。类型、控制流和函数体都通过这些节点构造。打印器只依赖目标树模型和 Python 标准库。原始应用源码及其语法不进入后端。固定 C++ 支持代码是独立的 `runtime.hpp`；硬件探针是独立的 `calibration.cpp`，均遵循 LLVM 格式并随包安装。
 
