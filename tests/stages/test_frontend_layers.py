@@ -749,6 +749,94 @@ def test_module_constant_stores_bind_source_bytecode_and_graph(tmp_path, monkeyp
     assert sorted(receipts, key=lambda r: r["store"]["offset"]) == rows
 
 
+def test_module_docstring_store_uses_actual_compiler_constant_and_optimization(
+    tmp_path,
+):
+    import dis
+    import os
+    import sys
+
+    import scar
+    from scar.contract import digest, json_bytes, read_member
+    from scar.middle.binding import _definition
+
+    source = (
+        '("""heading\n    detail\n      nested\n    end\n    """)\n'
+        'global __doc__\nseen = __doc__\n"later"\n__doc__ = "replacement"\n'
+        'def helper():\n    "function doc"\n'
+    )
+    entry = tmp_path / "example.py"
+    entry.write_text(source)
+    for level in (0, 2):
+        out = tmp_path / f"graph-{level}"
+        env = dict(
+            os.environ,
+            PYTHONPATH=str(Path(scar.__file__).resolve().parents[1]),
+            PYTHONOPTIMIZE=str(level),
+        )
+        subprocess.run(
+            [
+                sys.executable,
+                "-B",
+                "-m",
+                "scar",
+                "build",
+                "--entry",
+                str(entry),
+                "--out",
+                str(out),
+            ],
+            cwd=tmp_path,
+            env=env,
+            check=True,
+            capture_output=True,
+        )
+        [unit] = json.loads((out / "graph.json").read_bytes())["units"]
+        graphs = read_member(out, unit["graph"])["functions"]
+        root = next(g for g in graphs if g["signature"]["name"] == "__main__")
+        body = _definition(
+            root, {g["signature"]["name"]: g["signature"] for g in graphs}
+        )["body"]
+        writes = [
+            n for n in body if n.get("target", {}).get("name") == "py:example:__doc__"
+        ]
+        code = compile(source, str(entry), "exec", dont_inherit=True, optimize=level)
+        namespace = {"__doc__": "seed"}
+        exec(code, namespace)
+        assert [n["value"]["value"] for n in writes] == (
+            ["replacement"] if level else [namespace["seen"], "replacement"]
+        )
+        assert namespace["seen"] == ("seed" if level else code.co_consts[0])
+        if level:
+            assert all(n.get("location", {}).get("line") != 1 for n in body)
+            continue
+        doc = writes[0]
+        proof = doc["source_constant_store"]
+        rows = {i.offset: i for i in dis.get_instructions(code)}
+        for field, operand in (("load", doc["value"]), ("store", doc["target"])):
+            row = proof[field]
+            ins = rows[row["offset"]]
+            loc = operand["location"]
+            assert (row["opcode"], row["index"], row["position"]) == (
+                ins.opname,
+                ins.arg,
+                list(ins.positions),
+            )
+            assert row["position"] == [
+                loc["line"],
+                loc["end_line"],
+                loc["column"] - 1,
+                loc["end_column"] - 1,
+            ]
+        assert (
+            proof["store"]["opcode"] == "STORE_GLOBAL"
+            and proof["store"]["name"] == "__doc__"
+        )
+        assert proof["load"]["value_sha256"] == digest(json_bytes(namespace["seen"]))
+        if sys.version_info[:2] == (3, 14):
+            assert doc["value"]["value"] != ast.parse(source).body[0].value.value
+
+
 def test_compiled_module_fold_and_raise_use_complete_source_operands(tmp_path):
     import dis
     import sys

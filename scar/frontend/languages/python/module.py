@@ -425,6 +425,7 @@ class _ModuleGraph:
         self.tuple_sites = parsed.tuple_sites
         self.mapping_builders = parsed.mapping_builders
         self.constant_stores = parsed.constant_stores
+        self.module_docstring = parsed.module_docstring
         self.source_code = parsed.source_code
         self.name_loads = parsed.name_loads
         self.import_stores = parsed.import_stores
@@ -1483,7 +1484,7 @@ class _Scope:
     def variable_reference(symbol):
         return {"op": "var", "scope": "global", "name": symbol}
 
-    def unhandled(self, node):
+    def unhandled(self, node, field="protocol", detail=None):
         # A missing protocol can select, defer or repeat any child. Treating
         # child syntax as operations would invent execution ordering and facts.
         self.widen([node])
@@ -1512,7 +1513,7 @@ class _Scope:
                 "UNKNOWN",
             ),
             missing=self.issue(
-                node, "protocol", "unbound " + type(node).__name__ + " protocol"
+                node, field, detail or "unbound " + type(node).__name__ + " protocol"
             ),
         )
 
@@ -2026,7 +2027,33 @@ class _Scope:
                 )
             ]
         if isinstance(node, ast.Expr):
-            return [R(node, "expr", value=self.expr(node.value)[0])]
+            if not (
+                self.module_scope
+                and node is self.unit.tree.body[0]
+                and isinstance(node.value, ast.Constant)
+                and type(node.value.value) is str
+            ):
+                return [R(node, "expr", value=self.expr(node.value)[0])]
+            document = self.unit.module_docstring
+            if document.get("omitted"):
+                return []
+            if "value" not in document:
+                return [
+                    self.unhandled(
+                        node,
+                        "module_docstring_store",
+                        "missing positioned module __doc__ publication or compiler omission",
+                    )
+                ]
+            # Keep the statement's own span, including parentheses. CPython
+            # attributes both the value and the implicit target to the string.
+            target = ast.copy_location(
+                ast.Name(id="__doc__", ctx=ast.Store()), node.value
+            )
+            constant = ast.copy_location(
+                ast.Constant(value=document["value"]), node.value
+            )
+            node = ast.copy_location(ast.Assign(targets=[target], value=constant), node)
         if isinstance(node, ast.AnnAssign):
             return self.annotated_assignment(node)
         if isinstance(node, ast.Assign):

@@ -80,6 +80,7 @@ class ParsedUnit:
     import_value_uses: frozenset = frozenset()
     mapping_builders: dict = field(default_factory=dict)
     constant_stores: dict = field(default_factory=dict)
+    module_docstring: dict = field(default_factory=dict)
     source_code: dict = field(default_factory=dict)
     name_loads: dict = field(default_factory=dict)
     import_stores: dict = field(default_factory=dict)
@@ -109,9 +110,18 @@ def _constant_store_rhs(value):
     )
 
 
-def _constant_store_sites(program, instructions, assignments, handler_targets):
+def _constant_store_sites(
+    program, instructions, assignments, handler_targets, docstring
+):
     """Identify a single source LOAD_CONST feeding the precise module store."""
-    by_target = {tuple_position(node.targets[0]): node for node in assignments}
+    by_target = {
+        tuple_position(node.targets[0]): (node, node.targets[0].id)
+        for node in assignments
+    }
+    document = {}
+    if docstring is not None:
+        by_target[tuple_position(docstring.value)] = (docstring, "__doc__")
+    doc_write = False
     # Single-target assignments have disjoint RHS ranges. Count every positioned
     # instruction in each folded RHS, including instructions before its last load.
     folded = sorted(
@@ -135,8 +145,20 @@ def _constant_store_sites(program, instructions, assignments, handler_targets):
             load = None
         if opcode == "EXTENDED_ARG":
             continue
-        node = by_target.get(instruction.positions)
-        if node is not None and opcode in {"STORE_NAME", "STORE_GLOBAL"}:
+        target = by_target.get(pos)
+        if (
+            opcode in {"STORE_NAME", "STORE_GLOBAL"}
+            and docstring is not None
+            and instruction.argval == "__doc__"
+        ):
+            # Missing column information can make an explicit later write on
+            # the same line indistinguishable from the implicit one.
+            doc_write |= pos.lineno is None or (
+                docstring.lineno <= pos.lineno <= docstring.end_lineno
+                and (None in pos or pos == tuple_position(docstring.value))
+            )
+        if target is not None and opcode in {"STORE_NAME", "STORE_GLOBAL"}:
+            node, name = target
             span = tuple_position(node)
             # A finally suite may give one source target several bytecode stores.
             # A match at one copy cannot serve as a receipt for all copies.
@@ -150,9 +172,9 @@ def _constant_store_sites(program, instructions, assignments, handler_targets):
                 and (
                     not isinstance(node.value, ast.Constant)
                     or type(value) is str
-                    and value == node.value.value
+                    and (node is docstring or value == node.value.value)
                 )
-                and program.co_names[instruction.arg] == node.targets[0].id
+                and program.co_names[instruction.arg] == name
             ):
                 sites[span] = dict(
                     semantics_version=1,
@@ -167,11 +189,13 @@ def _constant_store_sites(program, instructions, assignments, handler_targets):
                     store=dict(
                         opcode=opcode,
                         index=instruction.arg,
-                        name=node.targets[0].id,
+                        name=name,
                         offset=instruction.offset,
                         position=list(instruction.positions),
                     ),
                 )
+                if node is docstring:
+                    document["value"] = value
             else:
                 sites[span] = None
         load = instruction if opcode == "LOAD_CONST" else None
@@ -183,7 +207,12 @@ def _constant_store_sites(program, instructions, assignments, handler_targets):
             != 1
         ):
             sites.pop(tuple_position(a), None)
-    return {span: receipt for span, receipt in sites.items() if receipt is not None}
+    stores = {span: receipt for span, receipt in sites.items() if receipt is not None}
+    if docstring is not None and tuple_position(docstring) not in stores:
+        document = (
+            {"omitted": True} if sys.flags.optimize == 2 and not doc_write else {}
+        )
+    return stores, document
 
 
 def _name_load_sites(program, instructions, names):
@@ -1227,6 +1256,9 @@ def _compiler_sites(tree, path, relative, source_hash):
             expressions[tuple_position(operand)] = node
         elif isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
             expressions[tuple_position(node.value)] = node.value
+    docstring = (
+        tree.body[0] if ast.get_docstring(tree, clean=False) is not None else None
+    )
     if not (
         nodes
         or mappings
@@ -1235,6 +1267,7 @@ def _compiler_sites(tree, path, relative, source_hash):
         or imports
         or expressions
         or definitions
+        or docstring is not None
     ):
         return {}
     optimize = sys.flags.optimize
@@ -1242,12 +1275,22 @@ def _compiler_sites(tree, path, relative, source_hash):
     unit = digest(json_bytes([relative, source_hash, ParsedUnit.compiler_id, optimize]))
     instructions = (
         list(dis.get_instructions(program))
-        if assignments or names or imports or expressions or definitions
+        if assignments
+        or names
+        or imports
+        or expressions
+        or definitions
+        or docstring is not None
         else None
     )
     entries = (
         dis.Bytecode(program).exception_entries
-        if assignments or imports or expressions or tries or definitions
+        if assignments
+        or imports
+        or expressions
+        or tries
+        or definitions
+        or docstring is not None
         else ()
     )
     handlers = {e.target for e in entries}
@@ -1256,10 +1299,10 @@ def _compiler_sites(tree, path, relative, source_hash):
         if definitions
         else {}
     )
-    stores = (
-        _constant_store_sites(program, instructions, assignments, handlers)
-        if assignments
-        else {}
+    stores, document = (
+        _constant_store_sites(program, instructions, assignments, handlers, docstring)
+        if assignments or docstring is not None
+        else ({}, {})
     )
     loads = _name_load_sites(program, instructions, names) if names else {}
     import_stores = (
@@ -1286,7 +1329,12 @@ def _compiler_sites(tree, path, relative, source_hash):
             compiler=ParsedUnit.compiler_id,
             optimize=optimize,
         )
-        if stores or loads or import_stores or statement_expressions or definition_sites
+        if stores
+        or document
+        or loads
+        or import_stores
+        or statement_expressions
+        or definition_sites
         else {}
     )
     fresh, conflict = object(), object()
@@ -1353,6 +1401,7 @@ def _compiler_sites(tree, path, relative, source_hash):
         tuple_sites=sites,
         mapping_builders=mappings,
         constant_stores=stores,
+        module_docstring=document,
         source_code=source_code,
         name_loads=loads,
         import_stores=import_stores,
