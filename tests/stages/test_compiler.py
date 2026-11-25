@@ -170,6 +170,43 @@ if False:
     )
 
 
+def test_literal_text_sequence_provenance_keeps_reads_mutations_and_bounds(tmp_path):
+    entry = tmp_path / "entry.py"
+    entry.write_text("""items = "first::second".split("::")
+alias = items
+first = items[0]
+items.append("changed")
+print(first == "first", alias[-1] == "changed", alias is items)
+print("dev" not in "1.2.3", "α" > "z")
+numbers = [1]
+for index in range(3):
+    print(numbers[-1])
+    numbers.append(index)
+try:
+    numbers[99]
+except IndexError:
+    print("bounds kept")
+""")
+    expected = subprocess.run(
+        [sys.executable, "-B", entry], capture_output=True, timeout=30
+    )
+    assert expected.returncode == 0 and not expected.stderr
+    graph, plan, delivery = (tmp_path / name for name in ("graph", "plan", "delivery"))
+    _stage(tmp_path, "frontend", "build", "--entry", entry, "--out", graph)
+    entry.unlink()
+    _stage(tmp_path, "middle", "plan", "--graph", graph, "--out", plan)
+    shutil.rmtree(graph)
+    compiled = _stage(tmp_path, "backend", "compile", "--ir", plan, "--out", delivery)
+    shutil.rmtree(plan)
+    actual = subprocess.run([compiled["executable"]], capture_output=True, timeout=30)
+    assert (actual.returncode, actual.stdout, actual.stderr) == (
+        expected.returncode,
+        expected.stdout,
+        expected.stderr,
+    )
+    assert actual.stdout == b"True True True\nTrue True\n1\n0\n1\nbounds kept\n"
+
+
 def test_source_coverage_survives_graph_index_diagnostic_removal(tmp_path):
     source = tmp_path / "state.f90"
     source.write_text(

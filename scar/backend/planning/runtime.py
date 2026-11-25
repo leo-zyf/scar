@@ -1,6 +1,7 @@
 """B1 qualification of source-declared external execution interfaces."""
 
 from collections import Counter
+from contextlib import contextmanager
 import os
 from pathlib import Path
 import platform
@@ -18,6 +19,24 @@ from scar.contract import (
     validate_python_entry_environment,
     walk_operations,
 )
+
+
+class QualificationFailure(ValueError):
+    """One failed B1 rule, with the evidence available at its decision point."""
+
+    def __init__(self, stage, rule, detail, **evidence):
+        super().__init__(detail)
+        self.qualification = dict(stage=stage, rule=rule, evidence=evidence)
+
+
+@contextmanager
+def qualification_check(stage, rule, **evidence):
+    try:
+        yield
+    except QualificationFailure:
+        raise
+    except (ValueError, OSError, subprocess.SubprocessError) as error:
+        raise QualificationFailure(stage, rule, str(error), **evidence) from error
 
 
 def private_mapping_writes(function):
@@ -114,6 +133,7 @@ _CONTRACT = dict(
 )
 
 _GUARDS, _CHECKS, _BINDING_READS = 16, 4, 4
+_STATE_COMPARISONS = frozenset({"module_import_preserves", "module_state_preserves"})
 _CHECK_FIELDS = (
     "requires",
     "first_consumer",
@@ -140,6 +160,16 @@ def _import_operations(module):
 
 
 def _guard_details(checks):
+    if not isinstance(checks, dict) or any(
+        not isinstance(domains, dict) or not isinstance(domains.get("before", {}), dict)
+        for domains in checks.values()
+    ):
+        raise QualificationFailure(
+            "semantic_contract",
+            "module_registry.guard_checks",
+            "module registry guard requires domain-indexed checks",
+            field="checks",
+        )
     rows = []
     check_count = read_count = shown_reads = 0
     for key, domains in checks.items():
@@ -148,6 +178,17 @@ def _guard_details(checks):
                 continue
             check_count += 1
             reads = check.get("binding_reads", [])
+            if not isinstance(reads, list) or any(
+                not isinstance(read, dict) for read in reads
+            ):
+                raise QualificationFailure(
+                    "semantic_contract",
+                    "module_registry.binding_reads",
+                    "module registry binding reads require ordered member records",
+                    module=key,
+                    domain=domain,
+                    field="binding_reads",
+                )
             read_count += len(reads)
             if len(rows) >= _CHECKS:
                 continue
@@ -182,9 +223,55 @@ def _guard_details(checks):
 def registry_checks(module):
     """Bound the diagnostic projection; the exact comparisons remain in execution IR."""
     occurrences, variants, rows = set(), set(), {}
+    operations = Counter()
+    reads = Counter()
+    details = []
+    open_effect_count = 0
     guard_count = 0
     for owner, op in _import_operations(module):
-        if op["op"] != "module_import_preserves":
+        if (
+            op.get("operator_family") == "module_registry"
+            or op["op"] in _STATE_COMPARISONS
+        ):
+            operations[op["op"]] += 1
+            if op.get("external_effect") == "UNKNOWN":
+                open_effect_count += 1
+            if isinstance(op.get("reads"), list):
+                reads.update(key for key in op["reads"] if isinstance(key, str))
+            if len(details) < _GUARDS and op["op"] not in _STATE_COMPARISONS:
+                fields = _fields(
+                    op,
+                    (
+                        "occurrence",
+                        "site",
+                        "location",
+                        "capture",
+                        "producer_capture",
+                        "module",
+                        "member",
+                        "lookup",
+                        "semantics",
+                        "external_effect",
+                    ),
+                )
+                details.append(
+                    dict(
+                        owner=owner,
+                        operation=op["op"],
+                        **fields,
+                        **{
+                            key: op[key][:_CHECKS]
+                            for key in ("checks", "reads", "writes")
+                            if isinstance(op.get(key), list)
+                        },
+                        operand_counts={
+                            key: len(op[key])
+                            for key in ("checks", "reads", "writes")
+                            if isinstance(op.get(key), list)
+                        },
+                    )
+                )
+        if op["op"] not in _STATE_COMPARISONS:
             continue
         guard_count += 1
         identity = (owner, op.get("occurrence"))
@@ -207,6 +294,12 @@ def registry_checks(module):
             rows[key] = dict(
                 owner=owner,
                 occurrence=op.get("occurrence"),
+                operation=op["op"],
+                **(
+                    {"producer_capture": op["producer_capture"]}
+                    if "producer_capture" in op
+                    else {}
+                ),
                 module=op.get("module"),
                 site=op.get("site"),
                 location=op.get("location"),
@@ -216,7 +309,13 @@ def registry_checks(module):
             )
     reported = len({key[:2] for key in rows})
     return dict(
-        scope="executable module_import_preserves operands in function bodies and initializers",
+        scope="executable module state comparisons in function bodies and initializers",
+        operator_scope="executable module_registry operations in function bodies and initializers",
+        operator_counts=dict(sorted(operations.items())),
+        open_effect_count=open_effect_count,
+        required_read_domains=dict(sorted(reads.items())),
+        operator_examples=details,
+        omitted_operator_examples=sum(operations.values()) - guard_count - len(details),
         binding_reads_scope="explicit binding_reads; first_member and the full domain requirement are retained separately",
         limits=dict(
             guard_variants=_GUARDS,
@@ -379,16 +478,40 @@ def _run(argv):
 def _qualify_glibc(module, declaration):
     resources = module.get("resource_model", {})
     captured = resources.get("platform", {})
+    if not captured.get("provider") or not captured.get("architecture"):
+        raise QualificationFailure(
+            "semantic_contract",
+            "posix.source_platform",
+            "requires matching captured and deployment Linux CPU ABIs",
+            fields=[
+                "resource_model.platform.provider",
+                "resource_model.platform.architecture",
+            ],
+        )
     if (
         platform.system() != "Linux"
         or captured.get("provider") != "linux-proc-sysfs"
         or captured.get("architecture") != platform.machine()
     ):
-        raise ValueError("requires matching captured and deployment Linux CPU ABIs")
+        raise QualificationFailure(
+            "target_platform",
+            "posix.source_target_abi",
+            "requires matching captured and deployment Linux CPU ABIs",
+            source_platform=captured.get("provider"),
+            source_architecture=captured.get("architecture"),
+            deployment_platform=platform.system(),
+            deployment_architecture=platform.machine(),
+        )
     source_header = declaration.get("location", {}).get("file")
     expected = resources.get("software_headers", {}).get(source_header)
     if not expected:
-        raise ValueError("source system declaration has no captured SDK header receipt")
+        raise QualificationFailure(
+            "semantic_contract",
+            "posix.source_header_receipt",
+            "source system declaration has no captured SDK header receipt",
+            field="resource_model.software_headers",
+            header=source_header,
+        )
     compiler = shlex.split(os.environ.get("CXX") or "c++")
     cc = shutil.which(compiler[0]) if compiler else None
     if not cc:
@@ -540,7 +663,16 @@ def _system_site(module, owner, node, declaration):
             "external.state",
         }.issubset(node.get("writes", ()))
     ):
-        raise ValueError("missing external execution effect barrier")
+        raise QualificationFailure(
+            "external_effects",
+            "posix.system_effect_barrier",
+            "missing external execution effect barrier",
+            site=site,
+            external_effect=node.get("external_effect"),
+            effects=node.get("effects", []),
+            reads=node.get("reads", []),
+            writes=node.get("writes", []),
+        )
     return dict(
         interface="system",
         qualification="api_bound",
@@ -592,15 +724,32 @@ def qualify(module, *, probe=True):
                 if name not in external:
                     continue
                 try:
-                    if name != "system" or node["op"] != "call":
-                        raise ValueError(
-                            "external execution or dynamic loading requires a bound implementation for this call"
-                        )
-                    binding = _system_site(module, owner, node, external[name])
-                    if node["site"] in sites:
-                        raise ValueError("ambiguous runtime call site")
-                    sites[node["site"]] = binding
-                except ValueError as exc:
+                    with qualification_check(
+                        "semantic_contract",
+                        "posix.system_call_abi",
+                        symbol=name,
+                        site=node.get("site"),
+                        fields=[
+                            "runtime_boundary",
+                            "artifact_effect",
+                            "args",
+                            "externs",
+                        ],
+                    ):
+                        if name != "system" or node["op"] != "call":
+                            raise QualificationFailure(
+                                "external_effects",
+                                "posix.execution_interface",
+                                "external execution or dynamic loading requires a bound implementation for this call",
+                                symbol=name,
+                                operation=node["op"],
+                                site=node.get("site"),
+                            )
+                        binding = _system_site(module, owner, node, external[name])
+                        if node["site"] in sites:
+                            raise ValueError("ambiguous runtime call site")
+                        sites[node["site"]] = binding
+                except QualificationFailure as exc:
                     issues.append(
                         dict(
                             stage="B1",
@@ -610,13 +759,21 @@ def qualify(module, *, probe=True):
                             site=node.get("site"),
                             location=node.get("location"),
                             detail=str(exc),
+                            qualification=exc.qualification,
                         )
                     )
     if not sites or issues or not probe:
         return None, issues
     try:
-        deployment = _qualify_glibc(module, external["system"])
-    except (ValueError, OSError, subprocess.TimeoutExpired) as exc:
+        with qualification_check(
+            "target_platform",
+            "posix.system_deployment_abi",
+            provider="glibc",
+            interface="system",
+            header="stdlib.h",
+        ):
+            deployment = _qualify_glibc(module, external["system"])
+    except QualificationFailure as exc:
         return None, [
             dict(
                 stage="B1",
@@ -624,6 +781,7 @@ def qualify(module, *, probe=True):
                 symbol="system",
                 sites=sorted(sites),
                 detail=str(exc),
+                qualification=exc.qualification,
             )
         ]
     return (
@@ -632,6 +790,15 @@ def qualify(module, *, probe=True):
             profile=_PROFILE,
             qualification="api_bound",
             descendant_closure="open",
+            open_effects=dict(
+                stage="external_effects",
+                rule="posix.preserve_unknown_descendants",
+                evidence=dict(
+                    external_effect="UNKNOWN",
+                    unknown_fields=["expanded_argv", "tools", "cost"],
+                    sites=sorted(sites),
+                ),
+            ),
             declaration_sha256=digest(json_bytes(external["system"])),
             sites=sites,
             calling_contract=dict(

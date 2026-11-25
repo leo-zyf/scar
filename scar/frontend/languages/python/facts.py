@@ -6,14 +6,19 @@ from collections import defaultdict, deque
 from dataclasses import dataclass, field, replace
 import dis
 from functools import cache
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 import symtable
 import sys
 from types import CodeType
 import unicodedata
 
 from scar.contract import digest, json_bytes
-from .imports import Imports, numeric_wire_value, relative_module as _relative
+from .imports import (
+    Imports,
+    numeric_wire_value,
+    relative_module as _relative,
+    source_member,
+)
 
 
 @dataclass(frozen=True)
@@ -398,9 +403,14 @@ class ProjectCapture:
         self.snapshots = {}
 
     def _read(self, path, module, imports, provider):
-        external = provider["status"] == "verified_distribution"
+        external = provider["status"] != "project"
+        member = source_member(provider) if external else None
+        if external and not member:
+            raise ValueError(
+                f"selected provider has no verified Python source: {module}"
+            )
         relative = (
-            f"@python/{provider['provider_id']}/{provider['member']}"
+            f"@python/{provider['provider_id']}/{member}"
             if external
             else path.relative_to(self.root).as_posix()
         )
@@ -417,16 +427,15 @@ class ProjectCapture:
                     _imports=imports,
                     _source_key=relative,
                     _source_origin=(
-                        {
-                            k: provider[k]
-                            for k in (
-                                "module",
-                                "provider_id",
-                                "origin",
-                                "sha256",
-                                "member",
-                            )
-                        }
+                        dict(
+                            module=module,
+                            provider_id=provider["provider_id"],
+                            origin=provider["origin"],
+                            sha256=provider["sha256"],
+                            member=member,
+                            status=provider["status"],
+                            loader_kind=provider.get("loader_kind", provider["loader"]),
+                        )
                         if external
                         else None
                     ),
@@ -549,19 +558,18 @@ def _capture_project(entry, root, directory, imports, read) -> ParsedProject:
     pending = deque([entry_module])
     scheduled = {entry_module}
 
-    def enqueue(name, body=None):
+    def enqueue(name, *, requester, directly_requested, body=None):
         record = imports.record(name)
-        if record["status"] == "verified_distribution":
-            if (
-                record.get("source_interface")
-                or record["loader"] != "source"
-                or record["proof_scope"] != "installed_file_with_digest"
-            ):
-                return
-            member = PurePosixPath(record["member"])
-            if member.is_absolute() or ".." in member.parts or member.suffix != ".py":
-                return
-        elif record["status"] != "project":
+        if record["status"] != "project" and (
+            record.get("source_interface") or not source_member(record)
+        ):
+            return
+        # A verified standard-library source can contribute its complete F2
+        # unit on direct demand. Its own dependencies remain typed frontier
+        # records unless independently requested by project/distribution code.
+        if requester["status"] == "verified_stdlib" or (
+            record["status"] == "verified_stdlib" and not directly_requested
+        ):
             return
         changed = name not in origins
         origins.setdefault(name, record)
@@ -601,10 +609,15 @@ def _capture_project(entry, root, directory, imports, read) -> ParsedProject:
             "graph_backed": facts.tree is not None,
         }
         for name, record in facts.providers.items():
-            enqueue(name)
+            enqueue(name, requester=origin, directly_requested=True)
             if record.get("source_interface") or not record.get("exports"):
                 continue
-            enqueue(name, ("__getattr__", None))
+            enqueue(
+                name,
+                requester=origin,
+                directly_requested=True,
+                body=("__getattr__", None),
+            )
             for member, export in record["exports"].items():
                 # Executing `from pkg import f` inspects the binding. The
                 # implementation of f is demanded only when its value is used.
@@ -613,8 +626,29 @@ def _capture_project(entry, root, directory, imports, read) -> ParsedProject:
                 for candidate in export.get("candidates", ()):
                     if candidate.get("kind", "definition") == "definition":
                         enqueue(
-                            candidate["module"], (candidate["name"], candidate["line"])
+                            candidate["module"],
+                            requester=origin,
+                            directly_requested=candidate["module"] in facts.providers,
+                            body=(candidate["name"], candidate["line"]),
                         )
+
+    for name, facts in modules.items():
+        if origins[name]["status"] != "verified_stdlib":
+            continue
+        providers = dict(facts.providers)
+        for target, record in facts.providers.items():
+            if (
+                target not in modules
+                and not record.get("source_interface")
+                and (source_member(record) or record["status"] == "project")
+            ):
+                providers[target] = dict(
+                    record,
+                    source_expansion=dict(
+                        status="frontier", reason="stdlib_dependency", requested_by=name
+                    ),
+                )
+        modules[name] = replace(facts, providers=providers)
 
     def visible_modules(name):
         # Catalog membership is image-wide. A translation profile needs only

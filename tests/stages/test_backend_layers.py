@@ -144,6 +144,15 @@ def test_system_runtime_binding_preserves_wait_status_and_keeps_descendants_open
     )
     assert scheduled["runtime_boundaries"]["sites"] == [site]
     assert proof["expanded_argv"] == proof["tools"] == proof["cost"] == "unknown"
+    assert binding["open_effects"] == dict(
+        stage="external_effects",
+        rule="posix.preserve_unknown_descendants",
+        evidence=dict(
+            external_effect="UNKNOWN",
+            unknown_fields=["expanded_argv", "tools", "cost"],
+            sites=[site],
+        ),
+    )
     evidence = binding["deployment"]
     assert evidence["probe"]["calls_system"] is False and evidence["libc"]["sha256"]
     assert evidence["source_header"]["sha256"] in {
@@ -3226,3 +3235,129 @@ def test_ordered_mapping_views_and_fresh_construction_cross_native_layers(tmp_pa
         )
     subprocess.run([tmp_path / "project/bin/scar_entry"], check=True)
     assert (tmp_path / "project/include/scar/mapping.hpp").is_file()
+
+
+def test_b1_qualification_distinguishes_contract_profile_platform_and_open_effects(
+    tmp_path, monkeypatch
+):
+    from scar.backend.planning import schedule_ir
+    from scar.contract import read_member
+
+    monkeypatch.setenv("SCAR_CPU_SDK", str(tmp_path / "absent"))
+    ty = {"kind": "ndarray", "element": "f64", "rank": 1}
+    size = dict(
+        op="array_size",
+        type="i64",
+        value=dict(op="var", name="a", type=ty),
+        site="owner/7",
+    )
+    registry = dict(
+        op="module_import_preserves",
+        occurrence="import/2",
+        site="owner/8",
+        type="bool",
+        operator_family="module_registry",
+        checks={
+            "dep": {
+                "namespace": {
+                    "requires": "same_namespace_bindings_and_reachable_value_state",
+                    "binding_reads": [{"member": "distance", "site": "owner/9"}],
+                }
+            }
+        },
+    )
+    continuation = dict(
+        op="module_export_continuation_required",
+        type="void",
+        operator_family="module_registry",
+        member="distance",
+        site="owner/10",
+        reads=["source.continuation"],
+        semantics="resume_after_failed_match",
+        external_effect="UNKNOWN",
+    )
+    cases = [
+        (
+            [
+                dict(
+                    size,
+                    value=dict(
+                        size["value"], type={"kind": "ndarray", "element": "f64"}
+                    ),
+                )
+            ],
+            "ndarray",
+            "semantic_contract",
+            "ndarray.array_type",
+        ),
+        (
+            [dict(size, value=dict(size["value"], type=dict(ty, element="f32")))],
+            "ndarray",
+            "implementation_profile",
+            "ndarray.registered_elements",
+        ),
+        ([size], "ndarray", "target_platform", "ndarray.sdk_identity"),
+        (
+            [dict(op="example_call", operator_family="unregistered", site="owner/6")],
+            "unregistered",
+            "implementation_profile",
+            "operator_family.registered",
+        ),
+        (
+            [registry, continuation],
+            "module_registry",
+            "external_effects",
+            "module_registry.observable_semantics",
+        ),
+    ]
+    for i, (ops, family, stage, rule) in enumerate(cases):
+        root = tmp_path / str(i)
+        ir = root / "exec-ir.json"
+        fn = dict(
+            name="main",
+            params=[],
+            result="i32",
+            body=[dict(op="expr", value=op) for op in ops],
+        )
+        # An annotation mentioning a provider cannot create a native requirement.
+        fn["source_evidence"] = {"op": "omitted", "operator_family": "historical"}
+        write_json(
+            ir,
+            document(
+                IR,
+                status="READY",
+                module={"entry": "main"},
+                functions=[member(root, "functions", fn)],
+            ),
+        )
+        out = root / "schedule"
+        scheduled = json.loads(schedule_ir(ir, out, policy="serial").read_bytes())
+        physical = read_member(out, scheduled["physical"])
+        assert scheduled["status"] == physical["status"] == "INCOMPLETE"
+        assert scheduled["issues"] == physical["issues"]
+        (issue,) = physical["issues"]
+        assert (issue["code"], issue["requirement"]) == (
+            "missing_operator_binding",
+            family,
+        )
+        decision = issue["qualification"]
+        assert (decision["stage"], decision["rule"]) == (stage, rule)
+        evidence = decision["evidence"]
+        if rule == "ndarray.array_type":
+            assert evidence["site"] == "owner/7" and "rank" not in evidence["observed"]
+        elif rule == "ndarray.registered_elements":
+            assert evidence["elements"] == ["f32"]
+        elif rule == "ndarray.sdk_identity":
+            assert evidence["provider"] == "xtensor-cpu"
+        elif rule == "operator_family.registered":
+            assert evidence["observed_operations"] == ["example_call"]
+        else:
+            checks = issue[evidence["checks_field"]]
+            assert checks["occurrences"][0]["checks"][0]["binding_reads"] == [
+                {"member": "distance", "site": "owner/9"}
+            ]
+            assert (
+                checks["operator_examples"][0]["semantics"]
+                == "resume_after_failed_match"
+            )
+            assert evidence["required_read_domains"] == {"source.continuation": 1}

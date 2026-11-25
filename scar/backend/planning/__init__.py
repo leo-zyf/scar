@@ -26,6 +26,7 @@ from scar.contract import (
 )
 from scar.host import array_sdk
 from . import fourier, mpi, runtime, toolchain
+from .runtime import QualificationFailure, qualification_check
 
 _ARRAY_OPERATIONS = {
     "array_create",
@@ -175,19 +176,33 @@ def _observed_operators(module):
 
 
 def _mapping_binding(requirement, seen, nodes, module):
-    if (
-        not isinstance(requirement, dict)
-        or requirement.keys() != {"profile", "operations"}
-        or requirement.get("profile") != MAPPING_PROFILE
-    ):
-        raise ValueError("unsupported mapping profile")
+    if not isinstance(requirement, dict) or requirement.keys() != {
+        "profile",
+        "operations",
+    }:
+        raise ValueError("mapping requires a profile and operation list")
+    if requirement["profile"] != MAPPING_PROFILE:
+        raise QualificationFailure(
+            "implementation_profile",
+            "mapping.registered_profile",
+            "unsupported mapping profile",
+            profile=requirement["profile"],
+            supported=MAPPING_PROFILE,
+        )
     requested = requirement["operations"]
     if (
         not isinstance(requested, list)
         or any(not isinstance(op, str) for op in requested)
-        or not seen <= set(requested) <= _MAPPING_OPERATIONS
+        or not seen <= set(requested)
     ):
-        raise ValueError("unregistered mapping operation")
+        raise ValueError("mapping operation declarations must cover observed uses")
+    if missing := sorted(set(requested) - _MAPPING_OPERATIONS):
+        raise QualificationFailure(
+            "implementation_profile",
+            "mapping.registered_operations",
+            "unregistered mapping operation",
+            operations=missing,
+        )
     fresh_writes = set()
     for node in nodes:
         if "op" not in node:
@@ -208,8 +223,17 @@ def _mapping_binding(requirement, seen, nodes, module):
                 [structured, "text"],
                 ["text", structured],
             ):
-                raise ValueError(
-                    "only equality between a tagged value and text is qualified"
+                if None in ports or not isinstance(node.get("operator"), str):
+                    raise ValueError(
+                        "structured comparison requires typed operands and an operator"
+                    )
+                raise QualificationFailure(
+                    "implementation_profile",
+                    "mapping.comparison_profile",
+                    "only equality between a tagged value and text is qualified",
+                    operator=node["operator"],
+                    operand_types=ports,
+                    site=node.get("site"),
                 )
         if op == "mapping_get" and node.get("text_profile") not in module.get(
             "text_profiles", {}
@@ -262,13 +286,20 @@ def _ndarray_binding(requirement, observed, elements, nodes):
     if (
         not isinstance(requirement, dict)
         or requirement.keys() - {"device", "element", "elements", "operations"}
-        or requirement.get("device", "cpu") != "cpu"
         or "element" in requirement
         and "elements" in requirement
         or not isinstance(requirement.get("operations", []), list)
         or any(not isinstance(op, str) for op in requirement.get("operations", ()))
     ):
         raise ValueError("requires CPU arrays and registered array operations")
+    if requirement.get("device", "cpu") != "cpu":
+        raise QualificationFailure(
+            "implementation_profile",
+            "ndarray.registered_device",
+            "unregistered ndarray device",
+            device=requirement["device"],
+            supported="cpu",
+        )
     declared = requirement.get("elements")
     if "elements" not in requirement:
         declared = (
@@ -279,16 +310,36 @@ def _ndarray_binding(requirement, observed, elements, nodes):
     if (
         not isinstance(declared, list)
         or not declared
-        or any(t not in ("c128", "f64") for t in declared)
+        or any(not isinstance(t, str) or not t or t == "unspecified" for t in declared)
         or len(set(declared)) != len(declared)
         or not elements.issubset(declared)
     ):
-        raise ValueError("unsupported or undeclared CPU array element types")
+        raise QualificationFailure(
+            "semantic_contract",
+            "ndarray.element_contract",
+            "unsupported or undeclared CPU array element types",
+            declared=declared,
+            observed=sorted(elements),
+            fields=["type.element", "element", "elements"],
+        )
+    if missing_elements := sorted(set(declared) - {"f64", "c128"}):
+        raise QualificationFailure(
+            "implementation_profile",
+            "ndarray.registered_elements",
+            "unsupported CPU array element types",
+            elements=missing_elements,
+            supported=["c128", "f64"],
+        )
     missing = sorted(
         observed.union(requirement.get("operations", ())) - _ARRAY_OPERATIONS
     )
     if missing:
-        raise ValueError("unavailable CPU ndarray operations: " + ", ".join(missing))
+        raise QualificationFailure(
+            "implementation_profile",
+            "ndarray.registered_operations",
+            "unavailable CPU ndarray operations: " + ", ".join(missing),
+            operations=missing,
+        )
     qualified = {element: set() for element in declared}
     for node in nodes:
         op = node["op"]
@@ -296,31 +347,93 @@ def _ndarray_binding(requirement, observed, elements, nodes):
         # complex arithmetic and real-only operations on independent arrays.
         kinds = set()
         for port in _array_ports(node):
+            if port is None:
+                raise QualificationFailure(
+                    "semantic_contract",
+                    "ndarray.operand_type",
+                    f"{op} requires a typed operand",
+                    operation=op,
+                    site=node.get("site"),
+                    field="type",
+                )
             if isinstance(port, dict) and port.get("kind") == "ndarray":
+                with qualification_check(
+                    "semantic_contract",
+                    "ndarray.array_type",
+                    operation=op,
+                    site=node.get("site"),
+                    observed=port,
+                ):
+                    array_rank_domain(port)
                 kinds.add(port["element"])
             elif isinstance(port, str):
                 kinds.add(port)
         if len(kinds) != 1 or not kinds.issubset(qualified):
-            raise ValueError(f"{op} requires one declared operand/result element type")
+            raise QualificationFailure(
+                "semantic_contract",
+                "ndarray.operand_element",
+                f"{op} requires one declared operand/result element type",
+                operation=op,
+                site=node.get("site"),
+                observed_elements=sorted(kinds),
+                declared_elements=declared,
+            )
         element = next(iter(kinds))
         if element == "c128" and op in {"array_iota", "array_format"}:
-            raise ValueError(f"{op} is unavailable for c128")
+            raise QualificationFailure(
+                "implementation_profile",
+                "ndarray.operation_element",
+                f"{op} is unavailable for c128",
+                operation=op,
+                element=element,
+                site=node.get("site"),
+            )
         if op in _ARRAY_OPERATORS:
             operator = node.get("operator")
-            if (
-                not isinstance(operator, str)
-                or operator not in _ARRAY_OPERATORS[op][element]
-            ):
-                raise ValueError(f"{op}.{operator} is unavailable for {element}")
+            if not isinstance(operator, str):
+                raise QualificationFailure(
+                    "semantic_contract",
+                    "ndarray.operator_operand",
+                    f"{op} requires an operator",
+                    operation=op,
+                    site=node.get("site"),
+                    field="operator",
+                )
+            if operator not in _ARRAY_OPERATORS[op][element]:
+                raise QualificationFailure(
+                    "implementation_profile",
+                    "ndarray.operation_element",
+                    f"{op}.{operator} is unavailable for {element}",
+                    operation=op,
+                    element=element,
+                    operator=operator,
+                    site=node.get("site"),
+                )
             op = f"{op}.{operator}"
         qualified[element].add(op)
     if declared == ["c128"] and set(requirement.get("operations", ())) & {
         "array_iota",
         "array_format",
     }:
-        raise ValueError("c128 requires a registered complex array operation")
+        raise QualificationFailure(
+            "implementation_profile",
+            "ndarray.operation_element",
+            "c128 requires a registered complex array operation",
+            element="c128",
+            operations=sorted(
+                set(requirement["operations"]) & {"array_iota", "array_format"}
+            ),
+        )
+    with qualification_check(
+        "target_platform",
+        "ndarray.sdk_identity",
+        provider="xtensor-cpu",
+        device="cpu",
+        packages=["xtensor", "xtl"],
+    ):
+        sdk = array_sdk(required=True)
     return dict(
-        array_sdk(required=True),
+        sdk,
         device="cpu",
         elements=sorted(qualified),
         operations_by_element={k: sorted(v) for k, v in qualified.items()},
@@ -336,19 +449,34 @@ def _text_array_binding(requirement, observed, module):
     if (
         not isinstance(requirement, dict)
         or requirement.keys() - {"operations", "profile"}
-        or requirement.get("profile", profile) != profile
         or not isinstance(requirement.get("operations", []), list)
-        or observed.union(requirement.get("operations", ())) - {"array_text_read"}
+        or any(not isinstance(op, str) for op in requirement.get("operations", ()))
     ):
         raise ValueError("requires the registered whitespace binary64 text parser")
+    operations = sorted(observed.union(requirement.get("operations", ())))
+    if requirement.get("profile", profile) != profile or set(operations) - {
+        "array_text_read"
+    }:
+        raise QualificationFailure(
+            "implementation_profile",
+            "text_input.registered_profile",
+            "requires the registered whitespace binary64 text parser",
+            profile=requirement.get("profile", profile),
+            operations=operations,
+        )
     for node in walk_operations(
         [module.get(key, ()) for key in ("functions", "globals", "records")]
     ):
         if node["op"] != "array_text_read":
             continue
         if node.get("source_origin") != {"kind": "named_text_file"}:
-            raise ValueError(
-                "text input requires a proven borrowed named UTF-8 file stream; unresolved source/diagnostic identity cannot select this provider"
+            raise QualificationFailure(
+                "semantic_contract",
+                "text_input.stream_origin",
+                "text input requires a proven borrowed named UTF-8 file stream; unresolved source/diagnostic identity cannot select this provider",
+                site=node.get("site"),
+                source_origin=node.get("source_origin"),
+                required={"kind": "named_text_file"},
             )
         parser = node.get("parser", {})
         if (
@@ -379,12 +507,29 @@ def _text_array_binding(requirement, observed, module):
         ):
             raise ValueError("text input requires its captured warning site and line")
     if platform.system() != "Linux":
-        raise ValueError("the registered text parser requires Linux locale APIs")
-    library = ctypes.CDLL(None)
-    if any(
-        not hasattr(library, name) for name in ("strtod_l", "newlocale", "freelocale")
+        raise QualificationFailure(
+            "target_platform",
+            "text_input.platform",
+            "the registered text parser requires Linux locale APIs",
+            platform=platform.system(),
+            required="Linux",
+        )
+    symbols = ("strtod_l", "newlocale", "freelocale")
+    with qualification_check(
+        "target_platform",
+        "text_input.libc_symbols",
+        library="libc",
+        symbols=list(symbols),
     ):
-        raise ValueError("native C-locale number conversion is unavailable")
+        library = ctypes.CDLL(None)
+        if missing := [name for name in symbols if not hasattr(library, name)]:
+            raise QualificationFailure(
+                "target_platform",
+                "text_input.libc_symbols",
+                "native C-locale number conversion is unavailable",
+                library="libc",
+                missing=missing,
+            )
     return dict(
         provider="scar-cpu-text-input",
         profile=profile,
@@ -398,14 +543,6 @@ def _process_binding(requirement, observed, module, context):
     import ctypes
     import platform
 
-    if platform.system() != "Linux" or not Path("/proc/self/exe").is_file():
-        raise ValueError("image processes require the Linux executable namespace")
-    try:
-        getattr(ctypes.CDLL(None), "posix_spawn_file_actions_addclosefrom_np")
-    except (OSError, AttributeError) as exc:
-        raise ValueError(
-            "process deployment lacks the required native spawn file actions"
-        ) from exc
     if (
         not isinstance(requirement, dict)
         or requirement.keys() - {"operations", "binding"}
@@ -413,10 +550,18 @@ def _process_binding(requirement, observed, module, context):
         not in ("declared_images", "explicit_targets")
         or not isinstance(requirement.get("operations", []), list)
         or any(not isinstance(op, str) for op in requirement.get("operations", ()))
-        or observed.union(requirement.get("operations", ()))
-        - {"process_spawn", "host_call"}
     ):
         raise ValueError("requires declared image process operations")
+    if missing := sorted(
+        observed.union(requirement.get("operations", ()))
+        - {"process_spawn", "host_call"}
+    ):
+        raise QualificationFailure(
+            "implementation_profile",
+            "process.registered_operations",
+            "requires declared image process operations",
+            operations=missing,
+        )
     if not context:
         raise ValueError("process targets require the enclosing sealed image bundle")
     images = context["images"]
@@ -460,14 +605,39 @@ def _process_binding(requirement, observed, module, context):
                 launches[site] = binding
                 node["launch_binding"] = site
             elif node.get("shell", False) is not False or "source_command" in node:
-                raise ValueError(
-                    "shell image launch requires an explicitly qualified launcher"
+                raise QualificationFailure(
+                    "external_effects",
+                    "process.launcher_binding",
+                    "shell image launch requires an explicitly qualified launcher",
+                    site=node.get("site"),
+                    image_id=image,
+                    fields=["launcher", "source_command"],
                 )
         elif node.get("operator_family") == "process" and (
             node["op"] != "host_call"
             or node.get("interface") not in {"process.stdout", "process.wait"}
         ):
-            raise ValueError("unregistered process interface")
+            raise QualificationFailure(
+                "implementation_profile",
+                "process.registered_interface",
+                "unregistered process interface",
+                interface=node.get("interface"),
+                operation=node["op"],
+            )
+    if platform.system() != "Linux" or not Path("/proc/self/exe").is_file():
+        raise QualificationFailure(
+            "target_platform",
+            "process.executable_namespace",
+            "image processes require the Linux executable namespace",
+            platform=platform.system(),
+            required_path="/proc/self/exe",
+        )
+    symbol = "posix_spawn_file_actions_addclosefrom_np"
+    with qualification_check("target_platform", "process.spawn_abi", symbol=symbol):
+        if not hasattr(ctypes.CDLL(None), symbol):
+            raise ValueError(
+                "process deployment lacks the required native spawn file actions"
+            )
     return dict(
         provider="posix_spawn",
         target="linux-cxx20",
@@ -527,6 +697,16 @@ def _qualify(module, image_context=None):
                     site=request.get("site"),
                     location=request.get("location"),
                     binding_obligations=request.get("binding_obligations", []),
+                    qualification=dict(
+                        stage="external_effects",
+                        rule="process.executable_binding",
+                        evidence=dict(
+                            request_id=request.get("request_id"),
+                            site=request.get("site"),
+                            target_binding=request.get("target_binding"),
+                            binding_obligations=request.get("binding_obligations", []),
+                        ),
+                    ),
                     detail="logical process request requires a qualified executable target before physical scheduling",
                 )
             )
@@ -537,83 +717,90 @@ def _qualify(module, image_context=None):
             # Deployment cannot proceed. Report other unregistered families
             # below without probing any physical providers.
             continue
-        if family == "mpi":
-            try:
-                resolve_worker = (image_context or {}).get("qualify_mpi")
-                result = (
-                    resolve_worker(image_context["current_image"], module)
-                    if resolve_worker
-                    else mpi.qualify(
-                        module,
-                        requirement,
-                        explicit=family in module.get("operator_requirements", {}),
-                    )
-                )
-                requested[family], bindings[family] = result
-                continue
-            except ValueError as exc:
-                detail = str(exc)
-        elif family == "process":
-            try:
-                bindings[family] = _process_binding(
-                    requirement, observed.get(family, set()), module, image_context
-                )
-                continue
-            except ValueError as exc:
-                detail = str(exc)
-        elif family == "text_array_io":
-            try:
-                bindings[family] = _text_array_binding(
-                    requirement, observed.get(family, set()), module
-                )
-                continue
-            except ValueError as exc:
-                detail = str(exc)
-        elif family == "text_array_source":
-            detail = "NumPy path resolution includes local/compressed alternatives and URL caching; no qualified native resolver is registered"
-        elif family == "fourier":
-            try:
-                bindings[family] = fourier.qualify(
-                    requirement, fourier_nodes, requested
-                )
-                continue
-            except ValueError as exc:
-                detail = str(exc)
-        elif family == "builtin_scalar_mapping":
-            try:
-                bindings[family] = _mapping_binding(
-                    requirement, observed.get(family, set()), mapping_nodes, module
-                )
-                continue
-            except ValueError as exc:
-                detail = str(exc)
-        elif family == "ndarray":
-            try:
-                bindings[family] = _ndarray_binding(
-                    requirement,
-                    observed.get(family, set()),
-                    array_elements,
-                    array_nodes,
-                )
-                continue
-            except ValueError as exc:
-                detail = str(exc)
-        else:
-            detail = "no target implementation is registered for this operator family"
-        issues.append(
-            dict(
-                stage="B1",
-                code="missing_operator_binding",
-                requirement=family,
-                target="cpu-cxx20",
-                detail=detail,
-                **(
-                    {"registry_checks": runtime.registry_checks(module)}
-                    if family == "module_registry"
-                    else {}
-                ),
+        operators = observed.get(family, set())
+        evidence = dict(family=family, observed_operations=sorted(operators))
+        if isinstance(requirement, dict):
+            evidence.update(
+                {
+                    k: requirement[k]
+                    for k in ("profile", "binding", "api", "device", "operations")
+                    if k in requirement
+                }
             )
-        )
+        checks = None
+        try:
+            with qualification_check(
+                "semantic_contract", family + ".ir_contract", **evidence
+            ):
+                if family == "mpi":
+                    resolve_worker = (image_context or {}).get("qualify_mpi")
+                    requested[family], bindings[family] = (
+                        resolve_worker(image_context["current_image"], module)
+                        if resolve_worker
+                        else mpi.qualify(
+                            module,
+                            requirement,
+                            explicit=family in module.get("operator_requirements", {}),
+                        )
+                    )
+                elif family == "process":
+                    bindings[family] = _process_binding(
+                        requirement, operators, module, image_context
+                    )
+                elif family == "text_array_io":
+                    bindings[family] = _text_array_binding(
+                        requirement, operators, module
+                    )
+                elif family == "fourier":
+                    bindings[family] = fourier.qualify(
+                        requirement, fourier_nodes, requested
+                    )
+                elif family == "builtin_scalar_mapping":
+                    bindings[family] = _mapping_binding(
+                        requirement, operators, mapping_nodes, module
+                    )
+                elif family == "ndarray":
+                    bindings[family] = _ndarray_binding(
+                        requirement, operators, array_elements, array_nodes
+                    )
+                elif family == "text_array_source":
+                    raise QualificationFailure(
+                        "implementation_profile",
+                        "text_input.source_resolver",
+                        "NumPy path resolution includes local/compressed alternatives and URL caching; no qualified native resolver is registered",
+                        **evidence,
+                    )
+                else:
+                    if family == "module_registry":
+                        checks = runtime.registry_checks(module)
+                        if checks["guard_count"] or checks["open_effect_count"]:
+                            raise QualificationFailure(
+                                "external_effects",
+                                "module_registry.observable_semantics",
+                                "module registry lookup, source-visible state and continuations require an implementation",
+                                **evidence,
+                                operator_counts=checks["operator_counts"],
+                                required_read_domains=checks["required_read_domains"],
+                                checks_field="registry_checks",
+                            )
+                    raise QualificationFailure(
+                        "implementation_profile",
+                        "operator_family.registered",
+                        "no target implementation is registered for this operator family",
+                        **evidence,
+                    )
+        except QualificationFailure as error:
+            issues.append(
+                dict(
+                    stage="B1",
+                    code="missing_operator_binding",
+                    requirement=family,
+                    target="cpu-cxx20",
+                    detail=str(error),
+                    qualification=error.qualification,
+                    **({"registry_checks": checks} if checks is not None else {}),
+                )
+            )
     native, runtime_issues = runtime.qualify(module, probe=not issues)
     issues.extend(runtime_issues)
     if native:
@@ -851,10 +1038,23 @@ def schedule_ir(source, destination, *, policy="auto", workers=None):
                 )
                 qualified[image_id] = result, None
             except ValueError as exc:
-                qualified[image_id] = None, str(exc)
+                qualification = (
+                    exc.qualification
+                    if isinstance(exc, QualificationFailure)
+                    else dict(
+                        stage="semantic_contract", rule="mpi.ir_contract", evidence={}
+                    )
+                )
+                qualified[image_id] = None, (str(exc), qualification)
         result, error = qualified[image_id]
         if error is not None:
-            raise ValueError(f"MPI capability of image {image_id}: {error}")
+            detail, qualification = error
+            raise QualificationFailure(
+                qualification["stage"],
+                qualification["rule"],
+                f"MPI capability of image {image_id}: {detail}",
+                **{**qualification["evidence"], "image_id": image_id},
+            )
         return result
 
     for image, child in inputs:

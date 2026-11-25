@@ -388,6 +388,73 @@ def builtin(frame, node, name):
 _IMPORTLIB_PROFILE = "cpython-importlib-registry-v1"
 
 
+def import_effects(occurrence, *, origin=None):
+    """Describe an import's named ports separately from unconstrained callbacks.
+
+    Source identity qualifies which protocol is requested, never the application's
+    cache state or the absence of initializer, audit or attribute-hook effects.
+    """
+    module = occurrence["resolved_module"]
+    parts = module.split(".")
+    direct = [".".join(parts[:index]) for index in range(1, len(parts) + 1)]
+    conditional = [
+        module + "." + name
+        for name in occurrence["request"].get("fromlist", ())
+        if isinstance(name, str) and name.isidentifier()
+    ]
+    identity = dict(occurrence.get("import_effects", {}).get("source_identity", {}))
+    if origin is not None:
+        identity = {
+            "provider_id": python_provider_id(origin),
+            **{
+                key: origin[key]
+                for key in ("module", "status", "sha256", "proof_scope")
+                if key in origin
+            },
+        }
+    return dict(
+        semantics_version=1,
+        scope="source_import_occurrence",
+        occurrence=occurrence["id"],
+        module=module,
+        direct_registry_keys=direct,
+        conditional_registry_keys=list(dict.fromkeys(conditional)),
+        namespace_writes=dict(
+            direct=direct,
+            conditional=list(dict.fromkeys(conditional)),
+            other="UNKNOWN",
+        ),
+        other_registry_writes="UNKNOWN",
+        external_effect="UNKNOWN",
+        reads=[
+            "module.registry",
+            "module.namespace",
+            "process.import_hooks",
+            "process.audit_hooks",
+            "filesystem",
+        ],
+        writes=[
+            "requested_registry_entries",
+            "module.namespace",
+            "import.external_effects",
+        ],
+        source_effects=occurrence["source_effects"],
+        producer_sites=list(occurrence["producer_sites"]),
+        effect_coverage=occurrence["effect_coverage"],
+        source_identity=identity,
+        completion="normal_return_of_original_import_protocol",
+        obligations=list(occurrence["obligations"]),
+    )
+
+
+def _refresh_import_effects(occurrence, *, origin=None):
+    result = import_effects(occurrence, origin=origin)
+    shared = occurrence.setdefault("import_effects", {})
+    shared.clear()
+    shared.update(result)
+    return shared
+
+
 class ImportOccurrences:
     """One source IMPORT_NAME, its individual bindings and its effect producers."""
 
@@ -470,6 +537,10 @@ class ImportOccurrences:
             row["bindings"].append(binding)
         self.last[owner] = row
         self.nodes[key] = (node, row)
+        _refresh_import_effects(
+            row,
+            origin=node.get("import_resolution") or node.get("source_provider") or {},
+        )
         return row
 
     def begin(self, row, node, steps):
@@ -495,6 +566,7 @@ class ImportOccurrences:
         row["effect_coverage"] = "MODELED" if role == "source_import" else "PARTIAL"
         if role == "source_import":
             row["obligations"] = ["qualify_equivalent_source_import_on_target"]
+        operation["import_effects"] = _refresh_import_effects(row)
         for comparison in self.comparisons.get(row["id"], ()):
             comparison["occurrence_effect_coverage"] = row["effect_coverage"]
 
@@ -556,13 +628,7 @@ def registry_import(frame, node, origin, occurrence):
         and stored.get("sha256")
     ):
         return None
-    parts = name.split(".")
-    keys = [".".join(parts[:i]) for i in range(1, len(parts) + 1)]
-    conditional = [
-        name + "." + member
-        for member in occurrence["request"]["fromlist"]
-        if member.isidentifier()
-    ]
+    effects = _refresh_import_effects(occurrence, origin=origin)
     operation = dict(
         op="module_import_preserves",
         type="bool",
@@ -575,8 +641,9 @@ def registry_import(frame, node, origin, occurrence):
         request=node["request"],
         source_provider_id=stored["provider_id"],
         source_sha256=stored["sha256"],
-        direct_registry_keys=keys,
-        conditional_registry_keys=conditional,
+        direct_registry_keys=effects["direct_registry_keys"],
+        conditional_registry_keys=effects["conditional_registry_keys"],
+        import_effects=effects,
         effects=["CTRL", "STATE"],
         may_raise=False,
         reads=["occurrence.before", "occurrence.after"],

@@ -4979,6 +4979,23 @@ def test_import_state_snapshots_share_guards_and_keep_epochs_monotone():
     normal = state.join_snapshots([before, after])
     assert normal["registry"]["package"]["state"] == "unresolved"
     assert not normal["import_windows"]
+    guarded = state.copy_snapshot(after)
+    guarded["import_windows"]["package"] = [(marker, operation, proof, later_epoch)]
+    for paths in ([guarded, guarded], [before, guarded]):
+        joined = state.join_snapshots(paths)
+        assert joined["registry"]["package"]["state"] == "unresolved"
+        assert joined["import_windows"]["package"][0][1] is operation
+    assert not state.join_snapshots([guarded, after])["import_windows"]
+    mismatch = state.copy_snapshot(guarded)
+    mismatch["import_windows"]["package"] = [
+        (
+            marker,
+            operation,
+            dict(state="ready", initializer="replacement:init"),
+            later_epoch,
+        )
+    ]
+    assert not state.join_snapshots([guarded, mismatch])["import_windows"]
     exceptional = state.exceptional_prefix(before, before, may_write=True)
     assert set(exceptional["registry"]["package"]["possible_states"]) == {
         "absent",
@@ -4991,6 +5008,169 @@ def test_import_state_snapshots_share_guards_and_keep_epochs_monotone():
         state.exceptional_prefix(before, before, may_write=False)["registry"]
         == before["registry"]
     )
+    state.bind_registry("missing", dict(state="absent"))
+    latest = state.invalidate("entry", dict(site="next_opaque"))
+    assert state.registry_entry("missing")["state"] == "unresolved"
+    assert state.registry_entry("package")["epoch"] > changed["epoch"]
+    assert state.registry_entry("package")["site"] == "next_opaque"
+    assert state.registry_entry("package") is latest
+
+
+def test_captured_effects_retain_conditional_state_checks_without_reexecution():
+    from scar.middle.normalization.protocols import _Project, _Frame
+
+    function = dict(
+        name="entry",
+        params=[],
+        body=[],
+        result="void",
+        python_scope=dict(kind="module", module="entry", main=True),
+    )
+    project = _Project({"entry": function})
+    project.active.append("entry")
+    frame = _Frame(project, function, ())
+    proof = dict(state="ready", initializer="package:init")
+    project.imports.bind_registry("package", proof)
+    project.array_state.contents[1] = []
+    project.sequences.contents[1] = ()
+    steps = []
+    result = frame.effect(
+        dict(
+            op="captured_action",
+            capture="lookup/1",
+            writes=["import.external_effects"],
+            effects=["STATE", "OPAQUE"],
+            external_effect="UNKNOWN",
+        ),
+        "bool",
+        steps,
+    )
+    assert result.kind == "bool"
+    assert not project.array_state.contents and not project.sequences.contents
+    assert steps[0]["init"]["op"] == "captured_action"
+    assert steps[0]["init"]["registry_state_capture"]["identity"] == "lookup/1"
+    assert project.imports.registry_entry("package")["state"] == "unresolved"
+    assert len(project.imports.windows("package")) == 1
+    assert project.registry_entry("package", {}) == proof
+    assert steps[1]["condition"]["op"] == "module_state_preserves"
+    fallback = steps[1]["else"][0]["value"]
+    assert fallback["op"] == "state_effect_continuation_required"
+    assert fallback["producer_capture"] == "lookup/1"
+    assert (
+        fallback["resume"]
+        == "continue_after_original_action_with_captured_result_and_actual_post_state"
+    )
+    frame.effect(
+        dict(op="opaque_action", writes=["import.external_effects"]), "unit", [], True
+    )
+    assert not project.imports.windows("package")
+    assert project.imports.registry_entry("package")["state"] == "unresolved"
+
+
+def test_import_effect_summaries_keep_named_ports_and_unknown_callbacks():
+    from scar.middle.normalization.host_protocols import ImportOccurrences
+
+    node = dict(
+        op="python_import",
+        site="entry/import",
+        module="toolkit.worker",
+        request=dict(
+            form="from",
+            module="toolkit.worker",
+            level=0,
+            fromlist=["answer", "child", "answer", "*"],
+            binding_index=0,
+        ),
+        binding=dict(name="answer"),
+        member="answer",
+        effects=["CTRL", "STATE", "IO"],
+    )
+    ledger = ImportOccurrences({})
+    row = ledger.get("entry", node)
+    effect = row["import_effects"]
+    assert effect["direct_registry_keys"] == ["toolkit", "toolkit.worker"]
+    assert effect["conditional_registry_keys"] == [
+        "toolkit.worker.answer",
+        "toolkit.worker.child",
+    ]
+    assert effect["effect_coverage"] == "UNPROVEN"
+    producer = dict(op="module_namespace_initialize", operator_family="module_registry")
+    ledger.producer(row, producer, "source_import")
+    assert producer["import_effects"] is effect
+    assert producer["source_import_occurrence"] == row["id"]
+    assert effect["effect_coverage"] == "MODELED"
+    assert effect["external_effect"] == effect["other_registry_writes"] == "UNKNOWN"
+    assert effect["namespace_writes"]["other"] == "UNKNOWN"
+    assert effect["producer_sites"][0]["opcode"] == producer["op"]
+
+
+def test_exact_text_methods_preserve_binding_unicode_and_fresh_containers():
+    from types import SimpleNamespace
+    import unicodedata
+
+    from scar.middle.normalization import sequences, text, values
+
+    profile = dict(
+        interpreter="cpython 3.12.3", unicode_version=unicodedata.unidata_version
+    )
+    domain, steps = sequences.Domains({}, {}), []
+
+    def fail(node, field, detail):
+        raise ValueError(field)
+
+    def effect(op, kind, steps, *, facts):
+        steps.append(op)
+        return values.Value(kind, None, facts).at(f"v{len(steps)}")
+
+    frame = SimpleNamespace(
+        name="f",
+        scope={"text_profile": "source"},
+        fail=fail,
+        effect=effect,
+        project=SimpleNamespace(
+            text_profiles={"source": profile}, decisions=[], sequences=domain
+        ),
+    )
+
+    def invoke(s, method, *args, **kwargs):
+        node = {"site": "test"}
+        target = text.member(frame, node, values.literal(s), method)
+        return text.invoke(
+            frame,
+            node,
+            target,
+            [values.literal(x) for x in args],
+            {k: values.literal(v) for k, v in kwargs.items()},
+            steps,
+        )
+
+    first = invoke("a:b:c", "split", sep=":", maxsplit=1)
+    second = invoke("a:b:c", "split", sep=":", maxsplit=1)
+    assert first.value["name"] != second.value["name"]
+    assert [op["op"] for op in steps] == ["sequence_make", "sequence_make"]
+    assert [item["value"] for item in steps[0]["items"]] == ["a", "b:c"]
+    assert domain.resolve_kind(
+        invoke("", "split").kind, strict=True
+    ) == values.sequence_kind("text")
+    partition = invoke("a:b:c", "rpartition", ":")
+    assert values.product_members(partition.kind) == ("text", "text", "text")
+    assert steps[-1]["identity"] == {"kind": "fresh"} and [
+        r["value"] for r in steps[-1]["items"]
+    ] == ["a:b", ":", "c"]
+    assert (
+        invoke("Straße", "casefold").exact == "strasse"
+        and invoke("λ", "isalpha").exact is True
+    )
+    with pytest.raises(ValueError, match="text_intrinsic_arguments"):
+        invoke("abc", "replace", "a", "x", count=1)
+    profile["interpreter"] = "cpython 3.13.0"
+    assert invoke("aa", "replace", "a", "x", count=1).exact == "xa"
+    profile["unicode_version"] = "unknown"
+    with pytest.raises(ValueError, match="text_case_profile"):
+        invoke("\u2003", "strip")
+    assert invoke("λxλ", "rfind", "λ").exact == 2
+    with pytest.raises(ValueError, match="text_intrinsic_arguments"):
+        invoke("abc", "split", "")
 
 
 def test_mapping_domain_keeps_tags_shared_handles_and_live_iteration():
@@ -5266,3 +5446,79 @@ def test_function_defaults_capture_once_and_keep_managed_identity():
     frame.dynamic = 1
     with pytest.raises(ValueError, match="function_creation"):
         objects.bind_function_definition(frame, definition, [])
+
+
+def test_sequence_literal_initializers_follow_aliases_and_invalidation():
+    from types import SimpleNamespace
+
+    from scar.middle.normalization import sequences, values
+
+    domain, steps = sequences.Domains({}, {}), []
+
+    def effect(operation, kind, body, discard=False, *, facts=None):
+        body.append(operation)
+        if discard:
+            return values.literal(None)
+        return values.Value(kind, None, facts or {}).at(f"value{len(body)}")
+
+    def fail(node, field, detail):
+        raise ValueError(field)
+
+    frame = SimpleNamespace(
+        name="entry",
+        project=SimpleNamespace(sequences=domain),
+        effect=effect,
+        scalar=lambda value, node: value.value,
+        fail=fail,
+    )
+
+    def capture(items):
+        return sequences.capture(frame, {"site": "literal"}, items, steps)
+
+    def get(base, index):
+        result = sequences.get(frame, {}, base, values.literal(index))
+        assert result.value["op"] == "sequence_get"
+        assert result.value["may_raise"] is True
+        return result
+
+    def append(base, value):
+        return sequences.invoke(
+            frame,
+            {},
+            values.Value("sequence_method", (base, "append")),
+            [values.literal(value)],
+            {},
+            steps,
+            False,
+        )
+
+    first = capture([values.literal("a"), values.literal("b")])
+    alias = first.at("alias")
+    second = capture([values.literal("a"), values.literal("b")])
+    assert first.value != second.value
+    assert first.facts["sequence_state"] != second.facts["sequence_state"]
+    assert get(alias, 0).exact == "a" and get(alias, -1).exact == "b"
+    assert get(alias, 2).exact is values._UNKNOWN
+    assert append(alias, "c").exact is None
+    assert get(first, -1).exact is values._UNKNOWN
+    assert get(second, -1).exact == "b"
+    assert domain.safe(first) and domain.safe(second)
+
+    unknown = values.Value(second.kind, None).at("unknown_receiver")
+    append(unknown, "d")
+    assert get(second, 0).exact is values._UNKNOWN and not domain.contents
+    fresh = capture([values.literal(7)])
+    assert get(fresh, 0).exact == 7
+    domain.invalidate_contents()
+    assert get(fresh, 0).exact is values._UNKNOWN
+    ordered = capture([values.literal("x")])
+    domain.invalidate_contents()
+    assert domain.safe(ordered) and get(ordered, 0).exact is values._UNKNOWN
+    fresh = capture([values.literal(8)])
+    domain.invalidate()
+    assert get(fresh, 0).exact is values._UNKNOWN
+    bounded = capture([values.literal(i) for i in range(65)])
+    assert bounded.facts["sequence_state"] not in domain.contents
+    dynamic = capture([values.Value("text", None).at("runtime_text")])
+    assert dynamic.facts["sequence_state"] not in domain.contents
+    assert sum(operation["op"] == "sequence_make" for operation in steps) == 7

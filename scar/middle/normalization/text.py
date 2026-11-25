@@ -3,6 +3,7 @@
 import re
 import unicodedata
 
+from . import products, sequences
 from .values import (
     SCALARS,
     Value,
@@ -26,43 +27,121 @@ SCALAR_FORMAT = dict(
 )
 _CONVERSION = {-1: "none", ord("s"): "str", ord("r"): "repr", ord("a"): "ascii"}
 
+_TEXT_METHODS = {
+    fn.__name__: fn
+    for fn in (
+        str.lower,
+        str.upper,
+        str.casefold,
+        str.strip,
+        str.lstrip,
+        str.rstrip,
+        str.removeprefix,
+        str.removesuffix,
+        str.replace,
+        str.split,
+        str.rsplit,
+        str.splitlines,
+        str.partition,
+        str.rpartition,
+        str.startswith,
+        str.endswith,
+        str.find,
+        str.rfind,
+        str.count,
+        str.isalnum,
+        str.isalpha,
+        str.isascii,
+        str.isdecimal,
+        str.isdigit,
+        str.isidentifier,
+        str.islower,
+        str.isnumeric,
+        str.isprintable,
+        str.isspace,
+        str.istitle,
+        str.isupper,
+    )
+}
+_KEYWORDS = {
+    "split": {"sep", "maxsplit"},
+    "rsplit": {"sep", "maxsplit"},
+    "splitlines": {"keepends"},
+}
+_PRIMITIVES = {"text": str, "i64": int, "bool": bool, "unit": type(None)}
+
 
 def member(frame, node, base, name):
-    if base.kind == "text" and name in {"lower", "replace"}:
+    if base.kind == "text" and name in _TEXT_METHODS:
         return Value("literal_text_method", (base, name))
     return None
 
 
-def invoke(frame, node, target, args, kwargs):
+def invoke(frame, node, target, args, kwargs, steps):
     """Evaluate closed builtin text intrinsics, never an application callable."""
     if target.kind != "literal_text_method":
         return None
     base, method = target.value
-    if kwargs or type(base.exact) is not str:
-        frame.fail(
-            node, "text_intrinsic", "text intrinsic needs exact builtin operands"
+    if (
+        base.kind != "text"
+        or type(base.exact) is not str
+        or any(
+            _PRIMITIVES.get(item.kind) is not type(item.exact)
+            for item in (*args, *kwargs.values())
         )
-    if method == "lower" and not args:
-        if (
-            not base.exact.isascii()
-            and _profile(frame).get("unicode_version") != unicodedata.unidata_version
-        ):
+    ):
+        frame.fail(
+            node,
+            "text_intrinsic",
+            f"str.{method} requires exact builtin primitive operands",
+        )
+    positional = [item.exact for item in args]
+    named = {key: item.exact for key, item in kwargs.items()}
+    # CPython 3.13 added replace(count=...). Adapt the spelling after checking
+    # the source signature, so an older normalization host can evaluate it.
+    if method == "replace" and "count" in named:
+        if _interpreter(frame) < (3, 13) or len(positional) != 2:
             frame.fail(
                 node,
-                "text_case_profile",
-                "Unicode case conversion needs matching source tables",
+                "text_intrinsic_arguments",
+                "count keyword does not bind to this source str.replace call",
             )
-        result = str.lower(base.exact)
-    elif (
-        method == "replace"
-        and len(args) in {2, 3}
-        and all(value.kind == "text" and type(value.exact) is str for value in args[:2])
-        and (len(args) == 2 or args[2].kind == "i64" and type(args[2].exact) is int)
-    ):
-        result = str.replace(base.exact, *(value.exact for value in args))
-    else:
+        positional.append(named.pop("count"))
+    if named.keys() - _KEYWORDS.get(method, set()):
         frame.fail(
-            node, "text_intrinsic", "unsupported builtin text intrinsic operands"
+            node, "text_intrinsic_arguments", f"unsupported keyword for str.{method}"
+        )
+    implicit_set = (positional[0] if positional else named.get("sep")) is None
+    uses_unicode = (
+        method in {"upper", "lower", "casefold", "splitlines"}
+        or method.startswith("is")
+        and method != "isascii"
+        or implicit_set
+        and method in {"strip", "lstrip", "rstrip", "split", "rsplit"}
+    )
+    if (
+        uses_unicode
+        and not base.exact.isascii()
+        and (_profile(frame).get("unicode_version") != unicodedata.unidata_version)
+    ):
+        frame.fail(
+            node,
+            "text_case_profile",
+            f"str.{method} needs matching source Unicode tables",
+        )
+    if method in {"partition", "rpartition"} and not _interpreter(frame):
+        frame.fail(
+            node,
+            "text_intrinsic_identity",
+            "tuple-result allocation requires a captured CPython source profile",
+        )
+    try:
+        result = _TEXT_METHODS[method](base.exact, *positional, **named)
+    except (TypeError, ValueError, OverflowError) as error:
+        frame.fail(
+            node,
+            "text_intrinsic_arguments",
+            f"str.{method} raises {type(error).__name__} for these operands",
         )
     frame.project.decisions.append(
         dict(
@@ -72,6 +151,18 @@ def invoke(frame, node, target, args, kwargs):
             location=node.get("location"),
         )
     )
+    if type(result) is list:
+        value = sequences.capture(frame, node, [literal(s) for s in result], steps)
+        # Even an empty split result has a known item domain.
+        frame.project.sequences.constrain(value.kind, "text")
+        return value
+    if type(result) is tuple:
+        return products.make(
+            frame,
+            {**node, "identity": {"kind": "fresh"}},
+            [literal(s) for s in result],
+            steps,
+        )
     return literal(result)
 
 

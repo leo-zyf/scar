@@ -12,6 +12,33 @@ def _capture(frame, item, steps):
 
 def apply_binary(frame, node, operator, lhs, rhs, steps, discard=False):
     """Bind one operation after both operands have been evaluated in source order."""
+    if (
+        lhs.kind == rhs.kind == "text"
+        and type(lhs.exact) is type(rhs.exact) is str
+        and operator in {"in", "notin", "lt", "lte", "le", "gt", "gte", "ge"}
+    ):
+        left, right = lhs.exact, rhs.exact
+        if operator in {"in", "notin"}:
+            result = left in right
+            if operator == "notin":
+                result = not result
+        elif operator == "lt":
+            result = left < right
+        elif operator in {"le", "lte"}:
+            result = left <= right
+        elif operator == "gt":
+            result = left > right
+        else:
+            result = left >= right
+        frame.project.decisions.append(
+            dict(
+                code="exact_text_comparison",
+                operator=operator,
+                location=node.get("location"),
+                proof="exact immutable builtin text; codepoint ordering or containment is independent of character-class tables; operand effects remain in order",
+            )
+        )
+        return literal(result)
     if lhs.kind in {"mapping_ref", "structured_value"} or rhs.kind in {
         "mapping_ref",
         "structured_value",

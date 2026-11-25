@@ -7,6 +7,7 @@ import subprocess
 from tempfile import TemporaryDirectory
 
 from scar.contract import digest, walk_operations
+from ..runtime import QualificationFailure, qualification_check
 
 _IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 _INTERFACE = re.compile(r"P?MPI_[A-Za-z0-9_]+\Z")
@@ -294,7 +295,12 @@ def _probe(specs):
 
 
 def qualify(module, requested, *, explicit):
-    expected, uses, specs = _interfaces(module)
+    with qualification_check(
+        "semantic_contract",
+        "mpi.c_abi_interfaces",
+        fields=["externs", "records", "functions"],
+    ):
+        expected, uses, specs = _interfaces(module)
     if explicit and (
         not isinstance(requested, dict)
         or requested.keys() != expected.keys()
@@ -308,13 +314,20 @@ def qualify(module, requested, *, explicit):
             for k in ("operations", "interfaces")
         )
     ):
-        raise ValueError(
-            "MPI requirement differs from its bound C interfaces and operation sites"
+        raise QualificationFailure(
+            "semantic_contract",
+            "mpi.requirement_matches_interfaces",
+            "MPI requirement differs from its bound C interfaces and operation sites",
+            declared=requested,
+            observed=expected,
         )
-    try:
+    with qualification_check(
+        "target_platform",
+        "mpi.cxx_sdk",
+        target="MPI::MPI_CXX",
+        interfaces=expected["interfaces"],
+    ):
         binding = _probe(specs)
-    except (OSError, subprocess.SubprocessError) as exc:
-        raise ValueError(f"MPI C++20 qualification unavailable: {exc}") from exc
     # A legacy IR may lack source SDK hashes. Preserve this distinction even
     # when the deployment probe succeeded.
     source = module.get("resource_model", {}).get("software_headers", {})
@@ -338,8 +351,13 @@ def qualify(module, requested, *, explicit):
         if (stamp.get("sha256"), stamp.get("size")) not in expected_headers.get(
             path, set()
         ):
-            raise ValueError(
-                f"source MPI header differs from the qualified deployment SDK: {path}"
+            raise QualificationFailure(
+                "target_platform",
+                "mpi.header_identity",
+                f"source MPI header differs from the qualified deployment SDK: {path}",
+                path=path,
+                source_sha256=stamp.get("sha256"),
+                target_sha256=sorted(s for s, _ in expected_headers.get(path, set())),
             )
         checked.append(path)
     binding.update(

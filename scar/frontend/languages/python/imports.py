@@ -14,7 +14,7 @@ from io import BytesIO
 import locale
 from math import isfinite
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import sys
 import sysconfig
 import tokenize
@@ -22,6 +22,38 @@ import tokenize
 from scar.contract import python_provider_id
 from scar.source_contracts import python_source_boundary
 from .environment import interpreter_image
+
+_FILE_LOADERS = {
+    SourceFileLoader: "source",
+    SourcelessFileLoader: "bytecode",
+    ExtensionFileLoader: "extension",
+}
+
+
+def source_member(record):
+    """Logical member whose selected source loader and actual bytes were verified."""
+    if record.get("status") == "verified_stdlib":
+        if (
+            record.get("loader_kind") != "source"
+            or record.get("hash_basis") != "provider_file"
+            or record.get("proof_scope") != "resolved_module"
+        ):
+            return None
+        member = record.get("source_member")
+    elif (
+        record.get("status") == "verified_distribution"
+        and record.get("loader") == "source"
+        and record.get("proof_scope") == "installed_file_with_digest"
+    ):
+        member = record.get("member")
+    else:
+        return None
+    if not member:
+        return None
+    path = PurePosixPath(member)
+    if path.is_absolute() or ".." in path.parts or path.suffix != ".py":
+        return None
+    return path.as_posix()
 
 
 def _digest_file(path, algorithm="sha256"):
@@ -131,15 +163,17 @@ class Imports:
 
     def project_source(self, name):
         spec = self.find(name)
-        if spec and isinstance(spec.loader, SourceFileLoader):
+        if spec and type(spec.loader) is SourceFileLoader:
             source = Path(spec.origin).resolve()
             if source.is_relative_to(self.root):
                 return source
         return None
 
     def stdlib(self, name, spec):
+        member = None
         if spec.loader in (BuiltinImporter, FrozenImporter):
             loader = "builtin" if spec.loader is BuiltinImporter else "frozen"
+            kind = loader
             origin, digest, basis = (
                 spec.origin,
                 _interpreter_digest(self.compiler_id),
@@ -147,32 +181,34 @@ class Imports:
             )
         else:
             trusted = self.find(name, True)
-            source = Path(spec.origin).resolve(strict=True)
+            kind = _FILE_LOADERS.get(type(spec.loader))
             if (
-                not isinstance(
-                    spec.loader,
-                    (SourceFileLoader, ExtensionFileLoader, SourcelessFileLoader),
-                )
+                not kind
                 or not trusted
                 or not trusted.origin
-                or source != Path(trusted.origin).resolve(strict=True)
-                or not any(source.is_relative_to(r) for r in self.stdlib_path)
+                or type(trusted.loader) is not type(spec.loader)
             ):
                 return None
+            source = Path(spec.origin).resolve(strict=True)
+            directory = next(
+                (r for r in self.stdlib_path if source.is_relative_to(r)), None
+            )
+            if directory is None or source != Path(trusted.origin).resolve(strict=True):
+                return None
+            if kind == "source" and source.suffix == ".py":
+                member = source.relative_to(directory).as_posix()
             loader, origin, digest, basis = (
                 "path",
                 str(source),
-                (
-                    self.snapshot(source).sha256
-                    if isinstance(spec.loader, SourceFileLoader)
-                    else self.file_hash(source)
-                ),
+                (self.snapshot(source).sha256 if member else self.file_hash(source)),
                 "provider_file",
             )
         return dict(
             status="verified_stdlib",
             module=name,
             loader=loader,
+            loader_kind=kind,
+            **({"source_member": member} if member else {}),
             origin=origin,
             sha256=digest,
             hash_basis=basis,
@@ -334,13 +370,8 @@ class Imports:
                 origin=str(source),
                 file=source.relative_to(self.root).as_posix(),
             )
-        for loader, kind in (
-            (SourceFileLoader, "source"),
-            (SourcelessFileLoader, "bytecode"),
-            (ExtensionFileLoader, "extension"),
-        ):
-            if isinstance(spec.loader, loader):
-                return self.distribution_source(name, spec.origin, kind)
+        if kind := _FILE_LOADERS.get(type(spec.loader)):
+            return self.distribution_source(name, spec.origin, kind)
         return dict(
             status="unresolved",
             module=name,
@@ -353,7 +384,7 @@ class Imports:
         if name not in self.providers:
             try:
                 record = self.identify(name)
-                if record.get("status") == "verified_distribution":
+                if record.get("status") in {"verified_distribution", "verified_stdlib"}:
                     record["provider_id"] = python_provider_id(record)
                     if interface := python_source_boundary(record):
                         record["source_interface"] = interface
@@ -370,11 +401,9 @@ class Imports:
     def _module_imports(self, name):
         """Static finder evidence for direct, absolute imports in this module suite."""
         record = self.record(name)
-        if record.get("status") != "verified_stdlib" or record.get("loader") != "path":
+        if record.get("status") != "verified_stdlib" or not source_member(record):
             return None
         path = Path(record["origin"])
-        if path.suffix != ".py":
-            return None
         source, error = self.exports.read_file(path, record["sha256"])
         if source is None:
             return dict(scope="absolute_module_suite", error=error)
@@ -389,6 +418,8 @@ class Imports:
             "module",
             "status",
             "loader",
+            "loader_kind",
+            "source_member",
             "origin",
             "sha256",
             "hash_basis",
@@ -473,7 +504,10 @@ class Imports:
                 records[name] = dict(record, direct_imports=direct)
         additions = defaultdict(dict)
         for module, members in requests.items():
-            if records.get(module, {}).get("status") != "verified_distribution":
+            record = records.get(module, {})
+            if record.get("status") != "verified_distribution" and (
+                not source_member(record) or record.get("source_interface")
+            ):
                 continue
             for member in sorted(members):
                 evidence = self.exports.get(module, member)
@@ -499,7 +533,10 @@ class Imports:
                         )
                 additions[module][member] = evidence
                 root, _, tail = module.partition(".")
-                if tail and records[root].get("status") == "verified_distribution":
+                if tail and records[root].get("status") in {
+                    "verified_distribution",
+                    "verified_stdlib",
+                }:
                     # Retain the qualified spelling at the original import's root.
                     additions[root].setdefault(tail + "." + member, evidence)
         for name, exports in additions.items():
@@ -791,14 +828,16 @@ class ExportSources:
 
     def _source(self, module):
         record = self.imports.record(module)
-        if record.get("status") != "verified_distribution":
+        if record.get("status") not in {"verified_distribution", "verified_stdlib"}:
             return None, record.get("resolution", record["status"])
-        if record.get("proof_scope") != "installed_file_with_digest":
+        if (
+            record["status"] == "verified_distribution"
+            and record.get("proof_scope") != "installed_file_with_digest"
+        ):
             return None, "missing_distribution_file_digest"
-        path = Path(record["origin"])
-        if path.suffix != ".py":
+        if not source_member(record):
             return None, "no_python_source"
-        return self.read_file(path, record["sha256"])
+        return self.read_file(Path(record["origin"]), record["sha256"])
 
     def _read_file(self, path, expected):
         try:
@@ -1028,7 +1067,7 @@ class ExportSources:
                 step = dict(
                     module=owner,
                     sha256=record["sha256"],
-                    member=record["member"],
+                    member=source_member(record),
                     provider_id=record["provider_id"],
                     name=first,
                     line=node.lineno if node else None,
@@ -1087,15 +1126,16 @@ class ExportSources:
                         for k in (
                             "module",
                             "origin",
-                            "member",
                             "distribution",
                             "version",
                             "sha256",
                             "provider_id",
                         )
+                        if k in record
                     }
                     item.update(
                         kind=binding.kind,
+                        member=step["member"],
                         name=first,
                         line=node.lineno,
                         end_line=node.end_lineno,

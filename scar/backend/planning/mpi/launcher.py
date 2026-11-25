@@ -9,6 +9,7 @@ import socket
 import subprocess
 
 from scar.contract import digest, json_bytes
+from ..runtime import QualificationFailure, qualification_check
 
 _SHELL_LINE = re.compile(
     r"[ \t]*[A-Za-z0-9_./,:@%+=-]+(?:[ \t]+[A-Za-z0-9_./,:@%+=-]+)*[ \t]*\Z"
@@ -237,10 +238,20 @@ def _tools(reference, shell, sdk):
 
 def qualify_launcher(node, target, worker_mpi, cache):
     if not isinstance(worker_mpi, dict) or worker_mpi.get("provider") != "mpi-c":
-        raise ValueError(
-            "MPI launcher requires the sealed worker image's independently qualified C SDK"
+        raise QualificationFailure(
+            "target_platform",
+            "mpi.launcher_worker_sdk",
+            "MPI launcher requires the sealed worker image's independently qualified C SDK",
+            image_id=target["image_id"],
         )
-    reference, flag, ranks, shell = _command(node, target["output"])
+    with qualification_check(
+        "semantic_contract",
+        "mpi.launcher_command",
+        image_id=target["image_id"],
+        site=node.get("site"),
+        fields=["launcher", "source_command", "argv"],
+    ):
+        reference, flag, ranks, shell = _command(node, target["output"])
     revision = digest(json_bytes(worker_mpi))
     key = (
         worker_mpi.get("launcher_candidate", {}).get("path"),
@@ -249,12 +260,18 @@ def qualify_launcher(node, target, worker_mpi, cache):
         shell,
     )
     if key not in cache:
-        try:
-            cache[key] = _tools(reference, shell, worker_mpi)
-        except (OSError, subprocess.SubprocessError, AttributeError) as exc:
-            raise ValueError(
-                f"native MPI launcher qualification unavailable: {exc}"
-            ) from exc
+        with qualification_check(
+            "target_platform",
+            "mpi.launcher_identity",
+            source_reference=reference,
+            worker_mpi_sha256=revision,
+        ):
+            try:
+                cache[key] = _tools(reference, shell, worker_mpi)
+            except AttributeError as exc:
+                raise ValueError(
+                    f"native MPI launcher qualification unavailable: {exc}"
+                ) from exc
     tool, interpreter = cache[key]
     stamp = digest(json_bytes(node["source_command"]))
     site = node.get("site") or "command/" + digest(

@@ -409,11 +409,11 @@ class _Project:
             if self.functions[active]["python_scope"]["kind"] == "function":
                 self.registry_reads[active][name] = proof
 
-    def scoped_import(
+    def scoped_registry_effect(
         self, owner, node, operation, steps, *, before=None, completed=None
     ):
-        # Keep the effect at its original source position, including imports
-        # inside earlier initializers whose consumers are in another function.
+        # Compare around the original action without executing it again. A later
+        # consumer adds only the state ports it actually requires.
         marker = dict(op="block", body=[])
         pending = False
         baseline = self.imports.snapshot() if before is None else before
@@ -445,6 +445,36 @@ class _Project:
         if pending:
             self.import_markers.append(marker)
             steps.append(marker)
+
+    def captured_registry_effect(self, owner, node, steps, before):
+        capture = node["capture"]
+        node["registry_state_capture"] = dict(
+            identity=capture,
+            owner=owner,
+            scope="per_dynamic_execution_of_original_action",
+            before="immediately_before_original_action",
+            after="normal_return_before_any_later_action",
+            result="retain_original_captured_result_without_reexecution",
+        )
+        operation = dict(
+            op="module_state_preserves",
+            semantics_version=1,
+            type="bool",
+            operator_family="module_registry",
+            source_protocol="captured_effect_state_comparison",
+            occurrence="action/" + capture,
+            producer_capture=capture,
+            producer_owner=owner,
+            direct_registry_keys=[],
+            conditional_registry_keys=[],
+            effects=["CTRL", "STATE"],
+            reads=["captured_action.before", "captured_action.after"],
+            writes=[],
+            may_raise=False,
+            checks={},
+            **values.source_site(node),
+        )
+        self.scoped_registry_effect(owner, node, operation, steps, before=before)
 
     def registry_entry(self, name, node):
         """Use an earlier identity only on explicit successful comparison edges."""
@@ -530,8 +560,21 @@ class _Project:
                 # needed remains a separate obligation; do not call them pure.
                 requirement["value_state_projection"] = "unproven"
             if marker["op"] == "block":
-                for op in (operation["op"], "module_import_continuation_required"):
+                captured_effect = (
+                    operation.get("source_protocol")
+                    == "captured_effect_state_comparison"
+                )
+                continuation = (
+                    "state_effect_continuation_required"
+                    if captured_effect
+                    else "module_import_continuation_required"
+                )
+                for op in (operation["op"], continuation):
                     host_protocols.require_registry_operator(self, op)
+                if captured_effect:
+                    host_protocols.require_registry_operator(
+                        self, "capture_effect_state"
+                    )
                 marker.clear()
                 marker.update(
                     op="if",
@@ -542,12 +585,22 @@ class _Project:
                             dict(
                                 op="expr",
                                 value=dict(
-                                    op="module_import_continuation_required",
+                                    op=continuation,
                                     type="void",
                                     operator_family="module_registry",
                                     noreturn=True,
                                     effects=["CTRL", "OPAQUE"],
                                     semantics="transfer_to_source_equivalent_continuation_or_prove_edge_unreachable_before_delivery",
+                                    **(
+                                        dict(
+                                            producer_capture=operation[
+                                                "producer_capture"
+                                            ],
+                                            resume="continue_after_original_action_with_captured_result_and_actual_post_state",
+                                        )
+                                        if captured_effect
+                                        else {}
+                                    ),
                                     **values.source_site(operation),
                                 ),
                             )
@@ -829,8 +882,11 @@ class _Frame:
         )
         node = {**values.source_site(source or {}), **node}
         writes = node.get("writes", ())
+        before_effect = None
         if (
-            any(
+            node.get("external_effect") == "UNKNOWN"
+            or writes == "UNKNOWN"
+            or any(
                 port in writes
                 for port in (
                     "import.external_effects",
@@ -841,13 +897,21 @@ class _Frame:
             or "module.registry" in writes
             and node.get("source_protocol") != "python.import"
         ):
+            self.project.array_state.invalidate()
+            self.project.sequences.invalidate()
+            if isinstance(node.get("capture"), str) and node["capture"]:
+                before_effect = self.project.imports.snapshot()
             self.project.unknown_registry(self.name, node)
         if discard:
             steps.append(dict(op="expr", value=node))
-            return _literal(None)
-        name = self.temporary()
-        steps.append(dict(op="decl", name=name, type=values.wire(kind), init=node))
-        return _Value(kind, None, facts or {}).at(name)
+            result = _literal(None)
+        else:
+            name = self.temporary()
+            steps.append(dict(op="decl", name=name, type=values.wire(kind), init=node))
+            result = _Value(kind, None, facts or {}).at(name)
+        if before_effect is not None:
+            self.project.captured_registry_effect(self.name, node, steps, before_effect)
+        return result
 
     def global_value(self, name, value):
         self.project.global_read(
@@ -1500,6 +1564,8 @@ class _Frame:
         origin = self.import_origin(node)
         if origin is not None:
             before = self.project.imports.snapshot()
+            self.project.array_state.invalidate()
+            self.project.sequences.invalidate()
             if primary:
                 self.project.source_imports.begin(occurrence, node, steps)
             start = len(steps)
@@ -1546,7 +1612,7 @@ class _Frame:
                         if value.facts.get("namespace_instance")
                         else {}
                     )
-                    self.project.scoped_import(
+                    self.project.scoped_registry_effect(
                         self.name,
                         node,
                         scoped,
@@ -1988,7 +2054,7 @@ class _Frame:
         mapping_call = mappings.invoke(self, node, target, args, kwargs, steps, discard)
         if mapping_call is not None:
             return mapping_call
-        text_call = text.invoke(self, node, target, args, kwargs)
+        text_call = text.invoke(self, node, target, args, kwargs, steps)
         if text_call is not None:
             return text_call
         if target.kind == "builtin" and target.value == "bool":
@@ -2665,6 +2731,7 @@ class _Frame:
         return loop, iv, count, empty, nonempty, []
 
     def widen_loop(self, node, iv, count):
+        self.project.sequences.invalidate_contents()
         body = node["body"]
         writes = {}
         nested = False

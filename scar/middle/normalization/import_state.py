@@ -86,8 +86,9 @@ class ImportState:
         )
         self._windows.clear()
         for key, previous in self._registry.items():
-            if previous["state"] in {"ready", "initializing"}:
-                self._registry[key] = change
+            # Unknown contents still have a version. Another possible write
+            # advances it, including a previously absent registry entry.
+            self._registry[key] = change
             if (
                 previous["state"] != "absent"
                 and self.namespace_owner(key) in self._namespaces
@@ -162,7 +163,33 @@ class ImportState:
                 state["binding_versions"][name] for state in states
             )
         for name, proof in result["registry"].items():
-            if proof["state"] not in {"ready", "initializing"}:
+            candidates = [
+                before
+                for state in states
+                for _, _, before, _ in state["import_windows"].get(name, ())
+            ]
+            expected = (
+                proof
+                if proof["state"] in {"ready", "initializing"}
+                else (candidates[0] if candidates else None)
+            )
+            if expected is None or expected["state"] not in {"ready", "initializing"}:
+                continue
+            # Every incoming normal path must supply the same identity proof,
+            # or retain its own comparison at the original import occurrence.
+            # A plain unknown effect with no such continuation invalidates it.
+            if any(
+                state["registry"].get(name, {"state": "absent"}) != expected
+                and not (
+                    state["registry"].get(name, {}).get("state") == "unresolved"
+                    and state["import_windows"].get(name)
+                    and all(
+                        before == expected
+                        for _, _, before, _ in state["import_windows"][name]
+                    )
+                )
+                for state in states
+            ):
                 continue
             windows, seen = [], set()
             for state in states:
@@ -170,7 +197,7 @@ class ImportState:
                     name, ()
                 ):
                     key = (id(marker), id(operation), json_bytes(before), epoch)
-                    if before == proof and key not in seen:
+                    if before == expected and key not in seen:
                         seen.add(key)
                         windows.append((marker, operation, before, epoch))
             if windows:

@@ -25,6 +25,7 @@ class Domains:
             {},
         )
         self.functions, self.single_bind_globals = functions, single_bind_globals
+        self.contents = {}
         self.namespaces, self.callables = self._imports(functions, single_bind_globals)
         self.static_lists = self._static_uses(functions, single_bind_globals)
 
@@ -552,8 +553,19 @@ class Domains:
         return self.states.get(value.facts.get("sequence_state"), False)
 
     def invalidate(self):
+        self.invalidate_contents()
         for token in self.states:
             self.states[token] = False
+
+    def invalidate_contents(self):
+        self.contents.clear()
+
+    def forget_contents(self, value):
+        token = value.facts.get("sequence_state")
+        if token in self.states:
+            self.contents.pop(token, None)
+        else:
+            self.invalidate_contents()
 
 
 def _checked(frame, node, operation):
@@ -603,11 +615,26 @@ def capture(frame, node, items, steps):
         may_raise=True,
         **values.source_site(node),
     )
+    facts = domain.register(all(text_order_atom(item) for item in items))
+    primitive = {
+        "unit": type(None),
+        "bool": bool,
+        "i64": int,
+        "f64": float,
+        "text": str,
+    }
+    if len(items) <= 64 and all(
+        item.kind in primitive and type(item.exact) is primitive[item.kind]
+        for item in items
+    ):
+        domain.contents[facts["sequence_state"]] = tuple(
+            Value(item.kind, None, deepcopy(item.facts)) for item in items
+        )
     return frame.effect(
         operation,
         kind,
         steps,
-        facts=domain.register(all(text_order_atom(item) for item in items)),
+        facts=facts,
     )
 
 
@@ -685,7 +712,10 @@ def invoke(frame, node, target, args, keywords, steps, discard):
         base = target.value[0]
         _checked(frame, node, lambda: domain.constrain(base.kind, args[0].kind))
         token = base.facts.get("sequence_state")
-        if token in domain.states and not text_order_atom(args[0]):
+        domain.forget_contents(base)
+        if token not in domain.states:
+            domain.invalidate()
+        elif not text_order_atom(args[0]):
             domain.states[token] = False
         frame.effect(
             dict(
@@ -758,9 +788,22 @@ def size(value):
 
 
 def get(frame, node, base, index):
-    element = _checked(frame, node, lambda: frame.project.sequences.element(base.kind))
+    domain = frame.project.sequences
+    element = _checked(frame, node, lambda: domain.element(base.kind))
     if index.kind != "i64":
         frame.fail(node, "sequence_index", "a sequence index requires an i64 value")
+    facts = (
+        dict(text_order_atom=True) if element == "text" and domain.safe(base) else {}
+    )
+    contents = domain.contents.get(base.facts.get("sequence_state"))
+    position = index.exact
+    if (
+        contents is not None
+        and type(position) is int
+        and -len(contents) <= position < len(contents)
+        and contents[position].kind == element
+    ):
+        facts.update(deepcopy(contents[position].facts))
     return Value(
         element,
         dict(
@@ -774,11 +817,7 @@ def get(frame, node, base, index):
             reads=["sequence.state"],
             **values.source_site(node),
         ),
-        (
-            dict(text_order_atom=True)
-            if element == "text" and frame.project.sequences.safe(base)
-            else {}
-        ),
+        facts,
     )
 
 

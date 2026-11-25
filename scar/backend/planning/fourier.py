@@ -3,7 +3,8 @@
 import os
 from pathlib import Path
 
-from scar.contract import digest, json_bytes
+from scar.contract import array_rank_domain, digest, json_bytes
+from .runtime import QualificationFailure, qualification_check
 
 REVISION = "33ae5dc94c9cdc7f1c78346504a85de87cadaa12"
 REQUIRED_PROVIDER = {"name": "pocketfft", "revision": REVISION}
@@ -40,8 +41,49 @@ def _use(node, families):
         or node.get("required_provider") != REQUIRED_PROVIDER
         or {"n", "out", "axes", "workers", "in_place"}.intersection(node)
     ):
-        raise ValueError(
-            "requires a rank-one complex128 orthonormal DFT of the complete input"
+        for key, ty in (
+            ("input.type", source.get("type") if isinstance(source, dict) else None),
+            ("type", node.get("type")),
+        ):
+            with qualification_check(
+                "semantic_contract",
+                "fourier.array_type",
+                site=node.get("site"),
+                field=key,
+                observed=ty,
+            ):
+                domain = array_rank_domain(ty)
+                if domain is None or len(domain) != 1:
+                    raise ValueError("the Fourier provider requires a proven rank")
+        missing = [
+            key
+            for key in (
+                "axis",
+                "direction",
+                "normalization",
+                "required_provider",
+                "operator_family",
+                "may_raise",
+            )
+            if node.get(key) is None
+        ]
+        stage = (
+            "semantic_contract"
+            if missing or node.get("may_raise") is not True
+            else "implementation_profile"
+        )
+        raise QualificationFailure(
+            stage,
+            "fourier.c2c_signature",
+            "requires a rank-one complex128 orthonormal DFT of the complete input",
+            site=node.get("site"),
+            missing_fields=missing,
+            result_type=node.get("type"),
+            input_type=source.get("type"),
+            axis=node.get("axis"),
+            direction=direction,
+            normalization=node.get("normalization"),
+            provider=node.get("required_provider"),
         )
     policy = node.get("numeric_policy")
     effects = set(node.get("effects", ()))
@@ -65,15 +107,30 @@ def _use(node, families):
                 "Fourier warning policy requires the qualified diagnostic location and observable effects"
             )
     elif policy is not None or effects != {"MEM", "VAL"} or "warning" in node:
-        raise ValueError("unregistered Fourier numeric or diagnostic policy")
+        raise QualificationFailure(
+            "implementation_profile" if policy is not None else "semantic_contract",
+            "fourier.numeric_effect_policy",
+            "unregistered Fourier numeric or diagnostic policy",
+            numeric_policy=policy,
+            effects=sorted(effects),
+            site=node.get("site"),
+        )
     source_binding = node.get("source_binding")
     if source_binding is not None and (
         not isinstance(source_binding, dict)
         or not isinstance(source_binding.get("required_family"), str)
         or source_binding["required_family"] not in families
     ):
-        raise ValueError(
-            "Fourier source dispatch requires its separate operator binding"
+        raise QualificationFailure(
+            "external_effects",
+            "fourier.source_dispatch",
+            "Fourier source dispatch requires its separate operator binding",
+            required_family=(
+                source_binding.get("required_family")
+                if isinstance(source_binding, dict)
+                else None
+            ),
+            site=node.get("site"),
         )
     source = node.get("source_profile")
     if source is not None and not isinstance(source, dict):
@@ -103,7 +160,22 @@ def qualify(requirement, nodes, families):
         or requirement.get("operations") != ["array_fft"]
         or not nodes
     ):
-        raise ValueError("unregistered Fourier operation, profile or provider revision")
+        if (
+            not isinstance(requirement, dict)
+            or not nodes
+            or not isinstance(requirement.get("operations"), list)
+        ):
+            raise ValueError(
+                "Fourier requires a declared operation and typed execution occurrence"
+            )
+        raise QualificationFailure(
+            "implementation_profile",
+            "fourier.registered_profile",
+            "unregistered Fourier operation, profile or provider revision",
+            operations=requirement.get("operations"),
+            profile=requirement.get("profile", PROFILE),
+            required_provider=requirement.get("required_provider", REQUIRED_PROVIDER),
+        )
     uses = dict(_use(node, families) for node in nodes)
     default = Path.home() / ".local/share/scar/sdk" / ("pocketfft-" + REVISION)
     try:
@@ -121,9 +193,18 @@ def qualify(requirement, nodes, families):
                 or digest(path.read_bytes()) != identity["sha256"]
             ):
                 raise ValueError(f"pinned PocketFFT SDK member differs: {name}")
-    except OSError as error:
-        raise ValueError(
-            f"missing pinned native Fourier SDK; run tools/provision_fft_sdk.py: {error}"
+    except (ValueError, OSError) as error:
+        detail = (
+            str(error)
+            if isinstance(error, ValueError)
+            else f"missing pinned native Fourier SDK; run tools/provision_fft_sdk.py: {error}"
+        )
+        raise QualificationFailure(
+            "target_platform",
+            "fourier.sdk_identity",
+            detail,
+            provider=REQUIRED_PROVIDER,
+            required_files=FILES,
         ) from error
     return dict(
         provider="pocketfft-cpu",

@@ -1679,7 +1679,12 @@ def index(frame, node, steps, rhs=None, discard=False, *, evaluated_base=None):
                 "sequence_index",
                 "one list index is supported; indexed mutation needs a separate protocol",
             )
-        return sequences.get(frame, node, base, axes[0])
+        result = sequences.get(frame, node, base, axes[0])
+        # A reaching initializer can describe the result, but the source read
+        # (including its bounds failure) still happens at this exact point.
+        return frame.effect(
+            result.value, result.kind, steps, discard, facts=result.facts
+        )
     if products.is_sequence(base):
         if rhs is not None:
             frame.fail(

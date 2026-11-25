@@ -902,8 +902,12 @@ def test_external_import_facts_preserve_ownership_without_execution(
     tmp_path, monkeypatch
 ):
     from hashlib import sha256
+    import py_compile
+    import sys
 
-    from scar.contract import walk_operations
+    from scar.contract import python_provider_id, walk_operations
+    from scar.frontend.languages.python import normalize
+    from scar.frontend.languages.python.imports import Imports, source_member
 
     project = tmp_path / "project"
     installed = tmp_path / "installed"
@@ -931,11 +935,14 @@ def test_external_import_facts_preserve_ownership_without_execution(
     entry.write_text(
         "import scar_foreign.ops as operations\n"
         "from scar_foreign import ops\nimport scar_compat\n"
-        "import json.decoder\nimport scar_missing_package.part\n"
+        "from json.decoder import JSONDecoder\nfrom json import decoder\n"
+        "import sys, math, _frozen_importlib\n"
+        "import scar_missing_package.part\n"
     )
     capture = python.capture_project(entry, project)
-    assert set(capture.catalog) == {"entry"}
-    (facts,) = capture.units
+    units = {unit.abi["module"]: unit for unit in capture.units}
+    assert set(units) == {"entry", "json", "json.decoder"}
+    facts = units["entry"]
     for name, path in (
         ("scar_foreign", package / "__init__.py"),
         ("scar_foreign.ops", package / "ops.py"),
@@ -949,11 +956,71 @@ def test_external_import_facts_preserve_ownership_without_execution(
         )
         assert record["version"] == "1.2.3"
         assert record["sha256"] == sha256(path.read_bytes()).hexdigest()
-    assert facts.providers["json.decoder"]["status"] == "verified_stdlib"
+    decoder = units["json.decoder"]
+    origin = facts.providers["json.decoder"]
+    assert origin["status"] == "verified_stdlib"
+    assert (origin["loader"], origin["loader_kind"]) == ("path", "source")
+    assert origin["source_member"] == "json/decoder.py"
+    assert origin["provider_id"] == python_provider_id(
+        {k: v for k, v in origin.items() if k not in {"loader_kind", "source_member"}}
+    )
+    assert decoder.source_key == f"@python/{origin['provider_id']}/json/decoder.py"
+    assert decoder.source_origins[decoder.source_key]["sha256"] == decoder.source_hash
+    assert (
+        origin["exports"]["JSONDecoder"]["candidates"][0]["member"]
+        == origin["source_member"]
+    )
+    frontier = [
+        (name, r)
+        for name, r in decoder.providers.items()
+        if r.get("source_expansion", {}).get("status") == "frontier"
+    ]
+    assert frontier and all(
+        name not in units and source_member(r) for name, r in frontier
+    )
+    assert facts.providers["sys"]["loader_kind"] == "builtin"
+    assert facts.providers["_frozen_importlib"]["loader_kind"] == "frozen"
+    assert not source_member(facts.providers["sys"])
+    assert not source_member(facts.providers["_frozen_importlib"])
+    resolver = Imports(project, facts.compiler_id)
+    extension = next(
+        r
+        for name in ("math", "_struct", "_decimal", "_pickle", "_bz2", "zlib")
+        if (r := resolver.record(name)).get("loader_kind") == "extension"
+    )
+    assert extension["loader"] == "path" and source_member(extension) is None
+
+    # Give the controlled finder a stdlib root with an actual sourceless module.
+    # Its bytecode would raise if the capture invoked the loader.
+    binary_name = "fixture_bytecode_only"
+    path = installed / f"{binary_name}.py"
+    path.write_text("raise AssertionError('bytecode executed')\n")
+    bytecode = path.with_suffix(".pyc")
+    py_compile.compile(str(path), cfile=str(bytecode), doraise=True)
+    path.unlink()
+    monkeypatch.setattr(
+        sys, "stdlib_module_names", sys.stdlib_module_names | {binary_name}
+    )
+    resolver.stdlib_path.insert(0, str(installed))
+    sourceless = resolver.record(binary_name)
+    assert (
+        sourceless["status"] == "verified_stdlib"
+        and sourceless["loader_kind"] == "bytecode"
+    )
+    assert sourceless["sha256"] == sha256(bytecode.read_bytes()).hexdigest()
+    assert source_member(sourceless) is None
     assert facts.providers["scar_missing_package.part"]["status"] == "unresolved"
     entry.unlink()
     shutil.rmtree(installed)
-    neutral = _offline(monkeypatch, python, facts)
+    neutral = _offline(
+        monkeypatch, normalize, facts, (ast, "parse"), (builtins, "compile")
+    )
+    stdlib = _offline(
+        monkeypatch, normalize, decoder, (ast, "parse"), (builtins, "compile")
+    )
+    assert any(
+        fn["name"] == "py:json.decoder:JSONDecoder.decode" for fn in stdlib["functions"]
+    )
     imports = {
         n["module"]: n
         for function in neutral["functions"]
@@ -964,6 +1031,23 @@ def test_external_import_facts_preserve_ownership_without_execution(
     assert imported["source_provider"] == facts.providers["scar_foreign"]
     assert imported["import_resolution"] == facts.providers["scar_foreign.ops"]
     assert imported["initializers"] == [] and "IO" in imported["effects"]
+    assert imports["json.decoder"]["graph_backed"]
+    assert imports["json.decoder"]["initializers"] == [
+        "py:json:<init>",
+        "py:json.decoder:<init>",
+    ]
+    assert imports["json"]["initializers"] == ["py:json:<init>"]
+    assert imports["json"]["conditional_initializers"] == [
+        {
+            "module": "json.decoder",
+            "initializer": "py:json.decoder:<init>",
+            "when": {
+                "kind": "package_attribute_missing",
+                "module": "json",
+                "name": "decoder",
+            },
+        }
+    ]
 
 
 def test_distribution_source_units_share_capture_and_follow_requested_bodies(
