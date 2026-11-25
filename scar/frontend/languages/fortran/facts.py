@@ -5,6 +5,7 @@ from functools import lru_cache
 from hashlib import sha256
 from itertools import chain
 import json
+import os
 from pathlib import Path
 import re
 import shlex
@@ -13,6 +14,8 @@ import subprocess
 from tempfile import TemporaryDirectory
 from threading import Lock
 from time import time_ns
+
+from scar.contract import digest, json_bytes
 
 
 class Gap(ValueError):
@@ -1369,6 +1372,66 @@ def _intrinsic_bindings(dump):
     return result
 
 
+def _numeric_semantics_sha256(contract, temporary):
+    """Identify the selected semantics independently of this successful capture."""
+    capture = contract["semantic_capture"]
+    if (
+        capture["unresolved"]
+        or not capture["frontend_argv"]
+        or capture["coverage"]["source_includes"]
+        != "same_semantic_command_dependency_inventory"
+    ):
+        return None
+
+    def arguments(argv, *, frontend=False, compatibility=False):
+        values = list(argv)
+        for index, arg in enumerate(argv):
+            if index and argv[index - 1] == "-J" and arg == str(temporary):
+                values[index] = {"capture_output": "module_directory"}
+            elif (
+                index
+                and argv[index - 1] == "-MF"
+                and arg == str(temporary / "source.d")
+            ):
+                values[index] = {"capture_output": "dependency_file"}
+            elif frontend and arg.startswith("-cpp="):
+                generated = Path(arg.removeprefix("-cpp="))
+                if generated.parent == temporary:
+                    values[index] = {"capture_output": "gnu_preprocessor_output"}
+            elif (
+                compatibility
+                and index == len(argv) - 1
+                and arg
+                in {
+                    str(temporary / "syntax.f"),
+                    str(temporary / "syntax.f90"),
+                }
+            ):
+                values[index] = {"capture_input": Path(arg).name}
+        return values
+
+    # Verbose diagnostics contain GCC-generated filenames. The actual inputs,
+    # selected frontend/target/options, semantic dump and status remain in the key.
+    selected = dict(contract)
+    selected["validated_command"] = arguments(contract["validated_command"])
+    selected["semantic_capture"] = {
+        key: value
+        for key, value in capture.items()
+        if key not in {"started_ns", "finished_ns", "stderr_sha256"}
+    }
+    selected["semantic_capture"]["frontend_argv"] = arguments(
+        capture["frontend_argv"], frontend=True
+    )
+    if compatible := contract.get("syntax_compatibility"):
+        selected["syntax_compatibility"] = {
+            key: value for key, value in compatible.items() if key != "stderr_sha256"
+        }
+        selected["syntax_compatibility"]["command"] = arguments(
+            compatible["command"], compatibility=True
+        )
+    return digest(json_bytes(selected))
+
+
 def _compile_capture(path, root, flags, tmp):
     compiler = shutil.which("gfortran")
     if compiler is None:
@@ -1381,6 +1444,7 @@ def _compile_capture(path, root, flags, tmp):
         p = subprocess.run(
             command,
             cwd=root,
+            env={**os.environ, "TMPDIR": str(tmp)},
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             timeout=180,
@@ -1586,6 +1650,7 @@ class ParsedUnit:
     compiler_id: str | None = None
     source_digests: dict = field(default_factory=dict)
     source_numeric_contract: dict = field(default_factory=dict)
+    numeric_semantics_sha256: str | None = None
     intrinsic_bindings: dict = field(default_factory=dict)
     external_headers: dict = field(default_factory=dict)
     source_coverage: dict = field(default_factory=dict)
@@ -1683,6 +1748,7 @@ def _capture_unit(path, root, flags):
         compiler_id=f"GNU Fortran {identity['version']} ({identity['target']})",
         source_digests={**included_sources, relative: source_sha256},
         source_numeric_contract=numeric,
+        numeric_semantics_sha256=_numeric_semantics_sha256(numeric, tmp),
         intrinsic_bindings=_intrinsic_bindings(dump),
         external_headers=external_headers,
     )

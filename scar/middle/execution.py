@@ -458,11 +458,11 @@ def prepare(module, *, executable=True):
     )
 
 
-def seal(module, out, *, status, graph_sha256, contract):
+def seal(module, out, *, status, graph_sha256, contract, issues=()):
     require_program(module, "M4")
     if status not in {"READY", "INCOMPLETE"}:
         raise ValueError("invalid execution IR completion status")
-    if status == "READY" and not is_complete(module):
+    if status == "READY" and (issues or not is_complete(module)):
         raise ValueError("M4 cannot seal a partial program as executable")
     if status == "READY":
         for function in module["functions"]:
@@ -524,6 +524,7 @@ def seal(module, out, *, status, graph_sha256, contract):
         module=payload,
         functions=functions,
         logical_optimization=True,
+        **({"unresolved": member(out, "analysis", issues)} if issues else {}),
     )
     path = out / "exec-ir.json"
     write_json(path, product)

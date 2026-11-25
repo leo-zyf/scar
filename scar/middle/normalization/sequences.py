@@ -26,6 +26,7 @@ class Domains:
         )
         self.functions, self.single_bind_globals = functions, single_bind_globals
         self.contents = {}
+        self.sized_variables = set()
         self.namespaces, self.callables = self._imports(functions, single_bind_globals)
         self.static_lists = self._static_uses(functions, single_bind_globals)
 
@@ -520,6 +521,14 @@ class Domains:
         return node
 
     def freeze(self, project, *, partial=False):
+        if not partial:
+            # Every reachable initial item and append constrains its element
+            # cell. Only after all functions close can a still-empty list use
+            # tagged storage for a size read, without constraining later writes.
+            for variable in self.sized_variables:
+                root = self._root(variable)
+                if self.bindings[root] is None:
+                    self.bindings[root] = "structured_value"
         closed = {}
         for name, function in project.closed.items():
             try:
@@ -576,6 +585,21 @@ class Domains:
             self.contents.pop(token, None)
         else:
             self.invalidate_contents()
+
+    def size(self, value):
+        variable = values.sequence_variable_id(value.kind)
+        if variable is not None:
+            self.sized_variables.add(variable)
+        return Value(
+            "i64",
+            dict(
+                op="sequence_size",
+                type="i64",
+                base=value.value,
+                effects=["STATE"],
+                reads=["sequence.state"],
+            ),
+        )
 
 
 def _checked(frame, node, operation):
@@ -810,19 +834,6 @@ def invoke(frame, node, target, args, keywords, steps, discard):
     return None
 
 
-def size(value):
-    return Value(
-        "i64",
-        dict(
-            op="sequence_size",
-            type="i64",
-            base=value.value,
-            effects=["STATE"],
-            reads=["sequence.state"],
-        ),
-    )
-
-
 def get(frame, node, base, index):
     domain = frame.project.sequences
     element = _checked(frame, node, lambda: domain.element(base.kind))
@@ -891,7 +902,7 @@ def iteration(frame, node, domain, steps):
             operator="lt",
             type="bool",
             left=cursor.value,
-            right=size(captured).value,
+            right=frame.project.sequences.size(captured).value,
         ),
         step=dict(
             op="update",

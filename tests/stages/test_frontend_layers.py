@@ -1048,6 +1048,85 @@ def test_external_import_facts_preserve_ownership_without_execution(
             },
         }
     ]
+    (check,) = imports["json"]["fromlist_checks"]["items"]
+    assert check["child"] == dict(
+        module="json.decoder",
+        initializer="py:json.decoder:<init>",
+        provider_id=origin["provider_id"],
+        sha256=origin["sha256"],
+    )
+
+
+def test_fromlist_checks_precede_all_member_bindings(tmp_path, monkeypatch):
+    import dis
+
+    from scar.frontend.languages.python import normalize
+
+    package = tmp_path / "pkg"
+    package.mkdir()
+    (package / "child.py").write_text("")
+    statement = "from . import child as first, dynamic, child as second"
+    entry = package / "__init__.py"
+    entry.write_text(
+        f"{statement}\n"
+        "def __getattr__(name):\n    raise RuntimeError(name)\n"
+        "import math\nfrom . import *\n"
+    )
+    capture = python.capture_project(entry, tmp_path)
+    facts = next(u for u in capture.units if u.abi["module"] == "pkg")
+    unit = _offline(
+        monkeypatch, normalize, facts, (ast, "parse"), (builtins, "compile")
+    )
+    main = next(f for f in unit["functions"] if f["name"] == "__main__")
+    first, dynamic, second, plain, star = [
+        op for op in main["partial_body"] if op["op"] == "python_import"
+    ]
+    bytecode = [
+        (op.opname, op.argval)
+        for op in dis.get_instructions(compile(statement, "fixture", "exec"))
+        if op.opname.startswith("IMPORT_")
+    ]
+    assert bytecode == [
+        ("IMPORT_NAME", ""),
+        ("IMPORT_FROM", "child"),
+        ("IMPORT_FROM", "dynamic"),
+        ("IMPORT_FROM", "child"),
+    ]
+    checks = first["fromlist_checks"]
+    assert checks["phase"] == "during_IMPORT_NAME_before_IMPORT_FROM"
+    assert not any("fromlist_checks" in row for row in (dynamic, second, plain, star))
+    assert not any(
+        row["conditional_initializers"] for row in (dynamic, second, plain, star)
+    )
+    assert [row["alias"] for row in (first, dynamic, second)] == [
+        "first",
+        None,
+        "second",
+    ]
+    for index, (item, binding) in enumerate(
+        zip(checks["items"], (first, dynamic, second), strict=True)
+    ):
+        member = bytecode[index + 1][1]
+        assert binding["request"] == dict(
+            form="from",
+            module="",
+            level=1,
+            fromlist=["child", "dynamic", "child"],
+            binding_index=index,
+        )
+        when = dict(kind="package_attribute_missing", module="pkg", name=member)
+        expected = dict(
+            binding_index=index,
+            member=member,
+            when=when,
+            missing_attribute_hooks=[dict(symbol="py:pkg:__getattr__", when=when)],
+        )
+        if member == "child":
+            expected["child"] = dict(
+                module="pkg.child", initializer="py:pkg.child:<init>"
+            )
+        assert item == expected
+    assert {"py:pkg.child:<init>", "py:pkg:__getattr__"} <= set(main["calls"])
 
 
 def test_numpy_linspace_captures_selected_native_dependency_without_importing(

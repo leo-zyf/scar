@@ -465,6 +465,22 @@ class _ModuleGraph:
             if d["class"] == "function"
         ]
 
+    def fromlist_check(self, module, index, member, hooks):
+        child = module + "." + member
+        when = dict(kind="package_attribute_missing", module=module, name=member)
+        check = dict(binding_index=index, member=member, when=when)
+        source = self.origin(child) or {}
+        candidate = {
+            key: source[key] for key in ("provider_id", "sha256") if key in source
+        }
+        if self.graph_backed(child):
+            candidate["initializer"] = _function(child, "<init>")
+        if candidate:
+            check["child"] = dict(module=child, **candidate)
+        if hooks:
+            check["missing_attribute_hooks"] = hooks
+        return check
+
     def tuple_identity(self, node):
         fact = self.tuple_sites.get(tuple_position(node), {"kind": "unresolved"})
         if "unit" in fact:
@@ -612,12 +628,7 @@ class _Scope:
     def record(self, node, op, **fields):
         return {"op": op, "location": self.unit.location(node), **fields}
 
-    def attribute_hooks(self, module, *names):
-        hooks = [
-            hook
-            for name in dict.fromkeys(names)
-            for hook in self.unit.lookup_hooks(module, name)
-        ]
+    def attribute_hooks(self, hooks):
         self.calls.update(h["symbol"] for h in hooks)
         if len(hooks) == 1:
             return {"missing_attribute_hook": hooks[0]}
@@ -1011,7 +1022,9 @@ class _Scope:
                         }
                     f = _guarded(declared, member)
                     if isinstance(node.ctx, ast.Load) or read_target:
-                        hooks = self.attribute_hooks(module, name)
+                        hooks = self.attribute_hooks(
+                            self.unit.lookup_hooks(module, name)
+                        )
                 else:
                     f = {"external": sub}
             elif "external" in b:
@@ -1661,31 +1674,45 @@ class _Scope:
             steps = []
             from_import = isinstance(node, ast.ImportFrom)
             fromlist = [a.name for a in node.names] if from_import else []
+            member_hooks = {}
             for i, (module, bound, fact) in enumerate(self.unit.module_bindings(node)):
                 alias = node.names[i]
                 self.invalidate_shared()
                 deps = []
                 conditional = []
+                checks = {}
                 if not from_import or i == 0:
                     parts = module.split(".")
                     for depth in range(1, len(parts) + 1):
                         path = ".".join(parts[:depth])
                         if self.unit.graph_backed(path):
                             deps.append(_function(path, "<init>"))
-                    for member in fromlist:
-                        child = module + "." + member
-                        if self.unit.graph_backed(child):
-                            conditional.append(
-                                {
-                                    "module": child,
-                                    "initializer": _function(child, "<init>"),
-                                    "when": {
-                                        "kind": "package_attribute_missing",
-                                        "module": module,
-                                        "name": member,
-                                    },
-                                }
+                    member_hooks = {
+                        name: self.unit.lookup_hooks(module, name)
+                        for name in dict.fromkeys(fromlist)
+                    }
+                    if fromlist and module and "*" not in fromlist:
+                        # The standard importer may check every member before the
+                        # first binding. Neither the lookup nor its result is known here.
+                        items = [
+                            self.unit.fromlist_check(
+                                module, j, member, member_hooks[member]
                             )
+                            for j, member in enumerate(fromlist)
+                        ]
+                        checks["fromlist_checks"] = dict(
+                            phase="during_IMPORT_NAME_before_IMPORT_FROM", items=items
+                        )
+                        for item in items:
+                            child = item.get("child", {})
+                            if "initializer" in child:
+                                conditional.append(
+                                    dict(
+                                        module=child["module"],
+                                        initializer=child["initializer"],
+                                        when=item["when"],
+                                    )
+                                )
                 self.calls.update(deps)
                 self.calls.update(row["initializer"] for row in conditional)
                 origin = self.unit.origin(module)
@@ -1698,7 +1725,9 @@ class _Scope:
                 )
                 hooks = (
                     self.attribute_hooks(
-                        module, *(fromlist if i == 0 else (alias.name,))
+                        [hook for group in member_hooks.values() for hook in group]
+                        if i == 0
+                        else member_hooks[alias.name]
                     )
                     if from_import
                     else {}
@@ -1732,6 +1761,7 @@ class _Scope:
                         graph_backed=self.unit.graph_backed(module),
                         **({"source_provider": top} if top else {}),
                         **({"import_resolution": origin} if origin else {}),
+                        **checks,
                         **hooks,
                         **(
                             {

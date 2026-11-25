@@ -245,6 +245,8 @@ def test_external_source_modules_keep_lookup_order_and_offline_stage_products(tm
     )
     guarded = source / "guarded.py"
     guarded.write_text("from graph_source_fixture import missing\nprint(missing)\n")
+    ordinary = source / "ordinary.py"
+    ordinary.write_text(main.read_text().partition("from graph_source_fixture")[0])
     env = dict(
         os.environ,
         PYTHONPATH=os.pathsep.join((str(site), str(Path(scar.__file__).parents[1]))),
@@ -264,6 +266,8 @@ def test_external_source_modules_keep_lookup_order_and_offline_stage_products(tm
         check=True,
     ).stdout
     assert from_expected == b"package-init\nlookup missing\nlookup missing\n23\n"
+    ordinary_output = subprocess.check_output([sys.executable, "-B", ordinary], env=env)
+    assert ordinary_output == b"package-init\n17\nlookup missing\n23\n"
     command = """
 import sys
 phase, *args = sys.argv[1:]
@@ -290,7 +294,9 @@ raise SystemExit(main(args))
 
     graph = tmp_path / "graph"
     negative = tmp_path / "from-graph"
-    run("frontend", "build", "--entry", main, "--out", graph)
+    bound = tmp_path / "bound-graph"
+    run("frontend", "build", "--entry", main, "--out", bound)
+    run("frontend", "build", "--entry", ordinary, "--out", graph)
     run("frontend", "build", "--entry", guarded, "--out", negative)
     program = json.loads((graph / "graph.json").read_bytes())
     external = [u for u in program["units"] if u["path"].startswith("@python/")]
@@ -328,7 +334,17 @@ raise SystemExit(main(args))
     assert read_member(delivery, audit["ledger"]) == imports
     shutil.rmtree(plan)
     actual = subprocess.run([result["executable"]], capture_output=True, check=True)
-    assert actual.stdout == expected and not actual.stderr
+    assert actual.stdout == ordinary_output and not actual.stderr
+    bound_plan = tmp_path / "bound-plan"
+    run("middle", "plan", "--graph", bound, "--out", bound_plan, returncode=2)
+    [issue] = json.loads((bound_plan / "plan.json").read_bytes())["issues"]
+    assert issue["code"] == "python.module_attribute_state"
+    evidence = issue["source_evidence"]
+    assert evidence["member"] == "known" and evidence["graph_binding"] == "bound"
+    assert (
+        evidence["child_candidate"]["initializer"]
+        == "py:graph_source_fixture.known:<init>"
+    )
     rejected = tmp_path / "from-plan"
     assert (
         run("middle", "plan", "--graph", negative, "--out", rejected, returncode=2)[
@@ -342,6 +358,149 @@ raise SystemExit(main(args))
     assert not partial["functions"]
     assert read_member(rejected, partial["module"]["source_imports"])["occurrences"]
     assert report["source_imports"] == partial["module"]["source_imports"]
+
+
+def test_fromlist_keeps_bound_children_and_import_from_callbacks(tmp_path):
+    import shutil
+
+    from scar.contract import read_member
+    from scar.frontend import build
+    from scar.middle import plan
+
+    package = tmp_path / "pkg"
+    package.mkdir()
+    (package / "__init__.py").write_text("token = 11\nimport pkg.reader\n")
+    (package / "token.py").write_text("print('unexpected child initializer')\n")
+    (package / "reader.py").write_text(
+        "from . import token as first, token as second\nprint(first, second)\n"
+    )
+    entry = tmp_path / "entry.py"
+    entry.write_text("import pkg\n")
+    expected = subprocess.check_output([sys.executable, "-B", entry])
+    assert expected == b"11 11\n"
+    hooks = tmp_path / "hooks"
+    hooks.mkdir()
+    (hooks / "sitecustomize.py").write_text("""import builtins, os, sys
+original = builtins.__import__
+class Returned:
+    count = 0
+    @property
+    def token(self):
+        self.count += 1
+        return 90 + self.count
+def observed(name, globals=None, locals=None, fromlist=(), level=0):
+    if name == '' and level == 1 and fromlist == ('token','token') and globals.get('__name__') == 'pkg.reader':
+        package = sys.modules['pkg']
+        if os.environ['IMPORT_CASE'] == 'delete':
+            del package.token
+        elif os.environ['IMPORT_CASE'] == 'rebind':
+            package.token = 83
+        else:
+            original(name, globals, locals, fromlist, level)
+            return Returned()
+    return original(name, globals, locals, fromlist, level)
+builtins.__import__ = observed
+""")
+
+    def run_with_hook(case):
+        return subprocess.check_output(
+            [sys.executable, "-B", entry],
+            env=dict(os.environ, PYTHONPATH=str(hooks), IMPORT_CASE=case),
+        )
+
+    assert run_with_hook("rebind") == b"83 83\n"
+    assert run_with_hook("delete").startswith(
+        b"unexpected child initializer\n<module 'pkg.token'"
+    )
+    assert run_with_hook("replace_result") == b"91 92\n"
+    graph, ir = tmp_path / "graph", tmp_path / "ir"
+    build(entry, graph)
+    shutil.rmtree(package)
+    entry.unlink()
+    assert plan(graph, ir)["status"] == "INCOMPLETE"
+    report = json.loads((ir / "plan.json").read_bytes())
+    [issue] = report["issues"]
+    assert issue["code"] == "python.module_attribute_state"
+    evidence = issue["source_evidence"]
+    ledger = read_member(ir, report["source_imports"])
+    row = next(r for r in ledger["occurrences"] if r["id"] == evidence["occurrence"])
+    assert evidence["import_effects"] == row["import_effects"]
+    assert evidence["import_effects"]["effect_coverage"] == "UNPROVEN"
+    assert not evidence["import_effects"]["producer_sites"]
+    assert evidence["bindings"] == row["bindings"]
+    assert [b["name"] for b in evidence["bindings"]] == [
+        "py:pkg.reader:first",
+        "py:pkg.reader:second",
+    ]
+    assert [
+        (c["binding_index"], c["member"], c["graph_binding"])
+        for c in evidence["ordered_checks"]
+    ] == [(0, "token", "bound"), (1, "token", "bound")]
+    assert all(
+        c["child_candidate"]["initializer"] == "py:pkg.token:<init>"
+        for c in evidence["ordered_checks"]
+    )
+    assert not any(
+        e["target"] == "py:pkg.token:<init>"
+        for row in report["normalizations"]
+        for e in row.get("removed_edges", ())
+    )
+    assert not json.loads((ir / "exec-ir.json").read_bytes())["functions"]
+
+
+@pytest.mark.parametrize("hook", [False, True])
+def test_fromlist_keeps_current_import_callback_and_hook_outcomes(tmp_path, hook):
+    from scar.frontend import build
+    from scar.middle import plan
+
+    package = tmp_path / "pkg"
+    package.mkdir()
+    (package / "__init__.py").write_text(
+        "first = 3\n"
+        + ("def __getattr__(name):\n    return 'package hook'\n" if hook else "")
+        + "from . import first as known, child\nprint(known, child)\n"
+    )
+    (package / "child.py").write_text("print('child initializer')\n")
+    entry = tmp_path / "entry.py"
+    entry.write_text("import pkg\n")
+    normal = subprocess.check_output([sys.executable, "-B", entry])
+    if hook:
+        assert normal == b"3 package hook\n"
+    else:
+        assert normal.startswith(b"child initializer\n3 <module")
+    injected = """import builtins, runpy, sys
+original = builtins.__import__
+def tracked(name, globals=None, locals=None, fromlist=(), level=0):
+    if name == '' and level == 1 and fromlist == ('first','child') and globals.get('__name__') == 'pkg':
+        sys.modules['pkg'].child = 'injected'
+    return original(name, globals, locals, fromlist, level)
+builtins.__import__ = tracked
+runpy.run_path('entry.py', run_name='__main__')
+"""
+    assert (
+        subprocess.check_output([sys.executable, "-B", "-c", injected], cwd=tmp_path)
+        == b"3 injected\n"
+    )
+    graph, ir = tmp_path / "graph", tmp_path / "ir"
+    build(entry, graph)
+    assert plan(graph, ir)["status"] == "INCOMPLETE"
+    (issue,) = json.loads((ir / "plan.json").read_bytes())["issues"]
+    assert issue["code"] == "python.module_attribute_state"
+    evidence = issue["source_evidence"]
+    assert evidence["phase"] == "during_IMPORT_NAME_before_IMPORT_FROM"
+    assert evidence["member"] == "first" and evidence["binding_index"] == 0
+    first, child = evidence["ordered_checks"]
+    assert first["member"] == "first" and first["graph_binding"] == "bound"
+    assert child["member"] == "child" and child["graph_binding"] == "no_graph_binding"
+    assert evidence["registry_state"] == "initializing"
+    assert child["child_candidate"]["initializer"] == "py:pkg.child:<init>"
+    assert evidence["actual_lookup"] == "unproven_after_current_import_callbacks"
+    assert set(evidence["outcomes"]) == {
+        "present",
+        "attribute_error",
+        "other_exception",
+    }
+    assert evidence["hook_binding"] == ("bound" if hook else "no_graph_binding")
 
 
 def test_workflow_binds_entry_state_without_inventing_child_file_versions(tmp_path):

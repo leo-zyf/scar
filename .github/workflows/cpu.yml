@@ -81,7 +81,7 @@ jobs:
           verify="$RUNNER_TEMP/scar-verify/bin/python"
           cd "$RUNNER_TEMP"
           "$verify" -m scar --help
-          "$verify" -m pytest --import-mode=importlib -q --maxfail=1 "$GITHUB_WORKSPACE/tests/stages" \
+          "$verify" -m pytest --import-mode=importlib -q "$GITHUB_WORKSPACE/tests/stages" \
             --basetemp="$RUNNER_TEMP/scar-stages" \
             --junitxml="$RUNNER_TEMP/scar-gates.xml"
           "$verify" - "$RUNNER_TEMP/scar-gates.xml" <<'PY'

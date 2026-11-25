@@ -121,6 +121,8 @@ print(retain() == "before", retain() == "after")
 
 
 def test_selective_expressions_and_eager_comprehensions_preserve_effect_order(tmp_path):
+    from scar.contract import read_member, walk_operations
+
     entry = tmp_path / "entry.py"
     entry.write_text("""def probe(value):
     print(value)
@@ -143,6 +145,11 @@ pairs = [i if j else -i for i in range(3) for j in range(2) if i]
 for item in pairs:
     print(item)
 print(len([probe(i) for i in range(0)]))
+empty = [never_called() for i in range(0)]
+alias = empty
+print(len(empty))
+alias.append('tail')
+print(len(empty), empty[0])
 seen = -1
 observed = [(seen := i) for i in range(3)]
 print(len(observed), observed[0], observed[-1], seen)
@@ -159,6 +166,20 @@ if False:
     entry.unlink()
     planned = _stage(tmp_path, "middle", "plan", "--graph", graph, "--out", plan)
     assert planned["status"] == "READY"
+    ir = json.loads((plan / "exec-ir.json").read_bytes())
+    allocations = [
+        op
+        for ref in ir["functions"]
+        for op in walk_operations(read_member(plan, ref)["body"])
+        if op["op"] == "sequence_make" and not op["items"]
+    ]
+    assert any(
+        isinstance(op["type"]["element"], dict)
+        and op["type"]["element"]["kind"] == "structured_value"
+        and op["may_raise"]
+        for op in allocations
+    )
+    assert any(op["type"]["element"] == "text" for op in allocations)
     shutil.rmtree(graph)
     compiled = _stage(tmp_path, "backend", "compile", "--ir", plan, "--out", delivery)
     shutil.rmtree(plan)
@@ -168,6 +189,20 @@ if False:
         expected.stdout,
         expected.stderr,
     )
+
+    # Reading the length cannot authorize incompatible subsequent appends.
+    entry.write_text(
+        "empty = [i for i in range(0)]\n"
+        "print(len(empty))\nalias = empty\n"
+        "alias.append('text')\nempty.append(7)\n"
+    )
+    graph, plan = (tmp_path / name for name in ("mixed-graph", "mixed-plan"))
+    _stage(tmp_path, "frontend", "build", "--entry", entry, "--out", graph)
+    entry.unlink()
+    _stage(tmp_path, "middle", "plan", "--graph", graph, "--out", plan, returncode=2)
+    rejected = json.loads((plan / "plan.json").read_bytes())
+    assert rejected["issues"][0]["code"] == "python.sequence_element_type"
+    assert "heterogeneous sequence elements" in rejected["issues"][0]["detail"]
 
 
 def test_published_sequences_materialize_independent_typed_arrays(tmp_path):
@@ -1027,10 +1062,43 @@ print(snapshot[0] == 1.0)
         read_member(plan, flow_member), inventory["resources"]
     )
     copies = [node for node in flow["nodes"] if node["kind"] == "COPY"]
-    assert copies and all(node["opcode"] == "array_copy" for node in copies)
-    assert all(node["site"] for node in copies)
-    assert any(node["byte_count"] == dict(kind="constant", value=32) for node in copies)
-    assert all(node["destination_storage"] == "fresh" for node in copies)
+    functions = {}
+    for ref in execution["functions"]:
+        function = read_member(plan, ref)
+        functions[function["name"]] = function
+    nodes = {node["id"]: node for node in flow["nodes"]}
+    assert len(copies) == flow["coverage"]["copies"] == 2
+    assert {copy["opcode"] for copy in copies} == {"array_copy", "array_from_sequence"}
+    for copy in copies:
+        owner, path = copy["owner"], copy["path"]
+        operation = functions[owner]
+        for port in path:
+            operation = operation[port]
+        assert (operation["op"], operation["site"]) == (copy["opcode"], copy["site"])
+        source, target = nodes[copy["source"]], nodes[copy["target"]]
+        assert source["operand"] == dict(owner=owner, path=[*path, "value"])
+        assert target["operand"] == dict(owner=owner, path=path)
+        assert source["domain"] == target["domain"] == "host_memory"
+        assert source["region"]["storage"]["kind"] == "operand_storage"
+        assert target["region"]["storage"]["kind"] == "fresh_allocation"
+        assert copy["destination_storage"] == "fresh"
+        assert target["region"]["dtype"] == source["region"]["dtype"] == "f64"
+        if copy["opcode"] == "array_copy":
+            assert operation["location"]["source_line"] == "copied = np.array(a)"
+            assert source["region"]["shape"] == target["region"]["shape"] == [2, 2]
+            assert copy["byte_count"] == dict(kind="constant", value=32)
+            assert copy["value_relation"] == "equal_bytes"
+            relation = "same_as"
+        else:
+            assert operation["location"]["source_line"] == "snapshot = np.array(items)"
+            assert source["region"]["representation"] == "logical_sequence_elements"
+            assert target["region"]["strides_bytes"] == [8]
+            assert copy["byte_count"] == dict(kind="result_nbytes", **target["operand"])
+            assert copy["value_relation"] == "converted_elements"
+            relation = "conversion_of"
+        assert target["logical_value"] == dict(
+            kind=relation, materialization=source["id"]
+        )
     shutil.rmtree(graph)
     result = _stage(tmp_path, "backend", "compile", "--ir", plan, "--out", delivery)
     shutil.rmtree(plan)
@@ -1042,6 +1110,7 @@ print(snapshot[0] == 1.0)
     assert [h["output"] for h in target["sdk_headers"]] == [
         "include/scar/array.hpp",
         "include/scar/exceptions.hpp",
+        "include/scar/sequence.hpp",
     ]
 
 
@@ -1418,6 +1487,13 @@ def never_leaf():
 def never():
     return never_leaf()
 print(False and never(), True or never(), 3 < 2 < never())
+def mark():
+    print('definition-time')
+    return 1
+def with_default(x=mark()):
+    print('invoked-with-default')
+    return x
+print(False and with_default())
 for i in range(0):
     never()
 def transfer():
@@ -1439,6 +1515,8 @@ print(int(flag), float(flag), repr(flag and flag), repr(flag or flag))
 print([flag], (flag,))
 """)
     expected = _run([sys.executable, "-B", entry], tmp_path)
+    assert expected.count(b"definition-time\nFalse\n") == 1
+    assert b"invoked-with-default" not in expected
     graph, plan, delivery = (tmp_path / name for name in ("graph", "plan", "delivery"))
     _stage(tmp_path, "frontend", "build", "--entry", entry, "--out", graph)
     entry.unlink()
@@ -1489,7 +1567,6 @@ print([flag], (flag,))
     sources = {
         "union": "def choose(flag):\n    return flag and 7\nprint(choose(False))\n",
         "numpy_identity": "import numpy as np\nprint((np.array([1.0])[0] < 2.0) is True)\n",
-        "definition": "def mark():\n    print('definition')\n    return 1\ndef never(x=mark()):\n    return x\nprint(False and never())\n",
     }
     for name, source in sources.items():
         folder = tmp_path / name
@@ -1506,7 +1583,6 @@ print([flag], (flag,))
             == {
                 "union": "python.short_circuit_union",
                 "numpy_identity": "python.comparison_identity",
-                "definition": "python.function_creation",
             }[name]
         ), issue
 
@@ -2406,14 +2482,34 @@ plt.savefig('curves.pdf')
         and "STATE" in n["effects"]
         for n in contexts + plots + grids + saves
     )
-    assert set(ir["module"]["operator_requirements"]) == {"ndarray", "graphics"}
+    requirements = ir["module"]["operator_requirements"]
+    assert set(requirements) == {"ndarray", "graphics", "module_registry"}
+    guards = [n for n in operations if n["op"] == "module_import_preserves"]
+    continuations = [
+        n for n in operations if n["op"] == "module_import_continuation_required"
+    ]
+    assert sorted((n["module"], n["location"]["line"]) for n in guards) == [
+        ("matplotlib.pyplot", 2),
+        ("matplotlib.pyplot", 3),
+    ]
+    assert {n["site"] for n in continuations} == {n["site"] for n in guards}
     shutil.rmtree(graph)
     result = _stage(
         tmp_path, "backend", "compile", "--ir", plan, "--out", delivery, returncode=2
     )
     shutil.rmtree(plan)
     assert result["status"] == "INCOMPLETE" and "executable" not in result
-    assert {i["requirement"] for i in result["issues"]} == {"graphics"}
+    assert {i["requirement"] for i in result["issues"]} == {
+        "graphics",
+        "module_registry",
+    }
+    for issue in result["issues"]:
+        family = issue["requirement"]
+        assert issue["code"] == "missing_operator_binding" and issue["stage"] == "B1"
+        assert (
+            issue["qualification"]["evidence"]["observed_operations"]
+            == requirements[family]["operations"]
+        )
     assert not (delivery / "project").exists()
 
 
@@ -2485,10 +2581,27 @@ print(old_type().read(), Example().read())
 
 
 def test_import_closure_distinguishes_missing_sources_and_missing_semantics(tmp_path):
-    for module, code in (
-        ("scar_missing_package.part", "python.import_missing"),
-        ("json.decoder", "python.import_semantics"),
-        ("pytest", "python.import_semantics"),
+    from scar.contract import read_member
+
+    for module, resolution, owner, code in (
+        (
+            "scar_missing_package.part",
+            "unresolved",
+            "__main__",
+            "python.import_missing",
+        ),
+        (
+            "json.decoder",
+            "verified_stdlib",
+            "py:json.decoder:<init>",
+            "python.import_semantics",
+        ),
+        (
+            "pytest",
+            "verified_distribution",
+            "py:__future__:<init>",
+            "python.value_contract",
+        ),
     ):
         folder = tmp_path / module
         folder.mkdir()
@@ -2497,18 +2610,57 @@ def test_import_closure_distinguishes_missing_sources_and_missing_semantics(tmp_
         graph, plan = folder / "graph", folder / "plan"
         _stage(folder, "frontend", "build", "--entry", entry, "--out", graph)
         entry.unlink()
+        units = json.loads((graph / "graph.json").read_bytes())["units"]
+        entry_unit = next(u for u in units if u["path"] == "entry.py")
+        [request] = [
+            n
+            for f in read_member(graph, entry_unit["graph"])["functions"]
+            for n in f["nodes"]
+            if n["op"] == "python_import"
+        ]
+        assert request["import_resolution"]["status"] == resolution
+        assert request["module"] == module
+        if resolution == "unresolved":
+            assert not request["graph_backed"] and not request["initializers"]
+        else:
+            assert (
+                request["graph_backed"]
+                and f"py:{module}:<init>" in request["initializers"]
+            )
         report = _stage(
             folder, "middle", "plan", "--graph", graph, "--out", plan, returncode=2
         )
         assert report["status"] == "INCOMPLETE" and report["blockers"] >= 1
         product = json.loads((plan / "plan.json").read_bytes())
-        matching = [issue for issue in product["issues"] if issue["code"] == code]
-        assert matching
-        assert any(
-            module in issue["detail"]
-            or issue.get("symbol", "").startswith(f"py:{module}:")
-            for issue in matching
+        [issue] = [
+            i for i in product["issues"] if i["code"] == code and i["symbol"] == owner
+        ]
+        assert (
+            next(
+                layer for layer in product["layers"] if layer["layer"] == "M2_NORMALIZE"
+            )["status"]
+            == "INCOMPLETE"
         )
+        unit = next(u for u in units if u["path"] == issue["location"]["file"])
+        function = next(
+            f
+            for f in read_member(graph, unit["graph"])["functions"]
+            if f["signature"]["name"] == owner
+        )
+        function_id, port = issue["site"].split("/")
+        assert function_id == function["id"]
+        operation = function["nodes"][int(port)]
+        assert operation["location"] == issue["location"]
+        if resolution == "unresolved":
+            assert operation == request and module in issue["detail"]
+        elif module == "json.decoder":
+            assert operation["op"] == "python_import" and operation["module"] == "re"
+            evidence = issue["source_evidence"]["modules"]["re"]
+            assert evidence["status"] == "verified_stdlib"
+            assert evidence["sha256"] == operation["import_resolution"]["sha256"]
+        else:
+            assert request["import_resolution"]["distribution"] == "pytest"
+            assert operation["op"] == "binary" and operation["operator"] == "add"
         execution = json.loads((plan / "exec-ir.json").read_bytes())
         assert execution["status"] == "INCOMPLETE" and not execution["functions"]
 
@@ -2742,6 +2894,33 @@ def test_mixed_program_images_preserve_link_and_state_boundaries(tmp_path):
     assert rejected["status"] == "INCOMPLETE"
     child_states = json.loads((partial / "plan.json").read_bytes())["images"]
     assert [image["status"] for image in child_states] == ["INCOMPLETE", "READY"]
+    for logical_report in partial.rglob("plan.json"):
+        logical_report.unlink()
+    partial_delivery = tmp_path / "partial-delivery"
+    incomplete = _stage(
+        tmp_path,
+        "backend",
+        "compile",
+        "--ir",
+        partial,
+        "--out",
+        partial_delivery,
+        "--physical",
+        "serial",
+        returncode=2,
+    )
+    assert [image["status"] for image in incomplete["images"]] == [
+        "INCOMPLETE",
+        "READY",
+    ]
+    assert all(
+        issue["image_id"] == child_states[0]["id"] for issue in incomplete["issues"]
+    )
+    assert {issue["code"] for issue in incomplete["issues"]} == {
+        issue["code"] for issue in child_states[0]["issues"]
+    }
+    assert {issue["reported_by"] for issue in incomplete["issues"]} == {"M1"}
+    assert not (partial_delivery / "project").exists()
     shutil.rmtree(graph)
     plan = plan.rename(tmp_path / "relocated-plan")
     result = _stage(
@@ -2865,16 +3044,40 @@ outer()
     graph = tmp_path / "graph"
     _stage(tmp_path, "frontend", "build", "--entry", source, "--out", graph)
     document = json.loads((graph / "graph.json").read_bytes())
-    assert len(document["units"]) == 2
-    functions = [f for unit in _payloads(graph, document) for f in unit["functions"]]
+    assert {
+        u["path"] for u in document["units"] if not u["path"].startswith("@python/")
+    } == {"entry.py", "helper.py"}
+    functions = {
+        f["signature"]["name"]: f
+        for unit in _payloads(graph, document)
+        for f in unit["functions"]
+    }
     assert document["coverage"]["totals"]["definitions"] == len(functions)
     assert document["coverage"]["totals"]["qualified_definitions"] == 0
-    nodes = [n for f in functions for n in f["nodes"]]
+    main_imports = {
+        n["module"]: n
+        for n in functions["__main__"]["nodes"]
+        if n["op"] == "python_import"
+    }
+    pathlib_scope = functions["py:pathlib:<init>"]["signature"]["python_scope"]
+    assert pathlib_scope["source_provider"]["status"] == "verified_stdlib"
+    assert main_imports["pathlib"]["initializers"] == [pathlib_scope["initializer"]]
+    assert (
+        main_imports["pathlib"]["import_resolution"]["provider_id"]
+        == pathlib_scope["source_provider"]["provider_id"]
+    )
+    outer = functions["py:entry:outer"]
+    increment = functions["py:entry:outer.<locals>.increment"]
+    nodes = outer["nodes"]
     assert sum(n["op"] == "for" for n in nodes) == 1
     assert sum(n["op"] == "if" for n in nodes) == 1
-    assert any(
-        state["kind"] == "cell" for f in functions for state in f["states"].values()
-    )
+    [cell] = [
+        k
+        for k, v in outer["states"].items()
+        if v["kind"] == "cell" and v["name"] == "total"
+    ]
+    assert increment["states"][cell]["kind"] == "cell"
+    assert increment["calls"] == ["py:helper:choose"]
     assert not (tmp_path / "must-not-execute").exists()
     source.rename(tmp_path / "hidden-entry")
     result = _stage(
@@ -2888,6 +3091,13 @@ outer()
         returncode=2,
     )
     assert result["status"] == "INCOMPLETE"
+    planning = json.loads((tmp_path / "plan" / "plan.json").read_bytes())
+    assert any(
+        i["code"] == "python.import_semantics"
+        and i["symbol"] == pathlib_scope["initializer"]
+        and i["location"]["file"] == pathlib_scope["source_key"]
+        for i in planning["issues"]
+    )
     assert not (tmp_path / "must-not-execute").exists()
 
 
@@ -3428,6 +3638,60 @@ def test_conditional_copy_materialization_is_removed_through_all_stages(
     shutil.rmtree(plan)
     assert _run([result["executable"]], tmp_path) == expected
     assert _run([retained["executable"]], tmp_path) == expected
+
+
+def test_fortran_code_identity_retains_inputs_and_separates_capture_receipts(tmp_path):
+    from scar.contract import digest, json_bytes, validate_numeric_contract
+
+    source = tmp_path / "constants.F90"
+    source.write_text(
+        "integer function value()\n"
+        '#include "factor.inc"\n'
+        "value=FACTOR * SCALE\nend function\n"
+    )
+    header = tmp_path / "factor.inc"
+    header.write_text("#define FACTOR 2\n")
+    request = tmp_path / "request.json"
+
+    def capture(label, flags):
+        request.write_text(
+            json.dumps(
+                dict(
+                    language="fortran",
+                    source_root=str(tmp_path),
+                    entry="value_",
+                    units=[dict(path=source.name, flags=flags)],
+                )
+            )
+        )
+        directory = tmp_path / label
+        _stage(tmp_path, "frontend", "build", "--manifest", request, "--out", directory)
+        doc = json.loads((directory / "graph.json").read_bytes())
+        index = doc["units"][0]
+        assert not index["diagnostics"]
+        function = _payloads(directory, doc)[0]["functions"][0]
+        signature = function["signature"]
+        numeric = signature["source_numeric_contract"]
+        assert index["source_facts"]["source_numeric_contract"] == numeric
+        assert validate_numeric_contract(signature)["source_contract_sha256"] == digest(
+            json_bytes(numeric)
+        )
+        return (
+            (index["revision"], index["numeric_semantics_sha256"], function["id"]),
+            (index["graph"]["sha256"], numeric["semantic_capture"]["started_ns"]),
+        )
+
+    flags = ["-DSCALE=3"]
+    first, receipt = capture("first", flags)
+    repeated, second_receipt = capture("second", flags)
+    assert first == repeated
+    assert all(a != b for a, b in zip(receipt, second_receipt, strict=True))
+    changed_macro, _ = capture("changed_macro", ["-DSCALE=4"])
+    changed_policy, _ = capture("changed_policy", [*flags, "-ffast-math"])
+    header.write_text("#define FACTOR 7\n")
+    changed_header, _ = capture("changed_header", flags)
+    for changed in (changed_macro, changed_policy, changed_header):
+        assert all(a != b for a, b in zip(first, changed, strict=True))
 
 
 def test_fortran_numeric_facts_preserve_source_kinds_and_selected_policy(tmp_path):

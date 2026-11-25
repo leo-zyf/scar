@@ -46,7 +46,6 @@ def _plan_image(graph, folder, revision, out, *, shape, trip_count):
     module, normalized_issues = normalize(module)
     issues.extend(normalized_issues)
     status = "INCOMPLETE" if issues else "READY"
-    lowering_facts = {}
     module, changes = rewrite(module)
     module, lowering_facts = prepare(module, executable=not issues)
     ir_path = seal(
@@ -55,18 +54,20 @@ def _plan_image(graph, folder, revision, out, *, shape, trip_count):
         status=status,
         graph_sha256=revision,
         contract=graph["contract"],
+        issues=[
+            {**issue, "reported_by": "M1" if index < binding_issues else "M2"}
+            for index, issue in enumerate(issues)
+        ],
     )
     import_analysis = {}
     if "python_entry_environment" in module:
         import_analysis["python_entry_environment"] = member(
             out, "analysis", module["python_entry_environment"]
         )
-    if "source_imports" in module:
+    sealed_fields = module.keys() & {"source_imports", "source_obligations"}
+    if sealed_fields:
         _, _, product = open_product(ir_path, "exec-ir.json", IR)
-        import_analysis["source_imports"] = product["module"]["source_imports"]
-    if "source_obligations" in module:
-        _, _, product = open_product(ir_path, "exec-ir.json", IR)
-        import_analysis["source_obligations"] = product["module"]["source_obligations"]
+        import_analysis.update({key: product["module"][key] for key in sealed_fields})
     artifact_analysis = module.get("artifact_analysis")
     if artifact_analysis is not None:
         artifact_analysis = {

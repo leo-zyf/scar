@@ -1562,6 +1562,147 @@ class _Frame:
         )
         return _Value("module", namespace)
 
+    def package_fromlist(self, node, occurrence):
+        """Keep the package and member candidates at this IMPORT_NAME occurrence."""
+        module = node["module"]
+        members = node["request"].get("fromlist", ())
+        phase = "during_IMPORT_NAME_before_IMPORT_FROM"
+        checks = node.get("fromlist_checks")
+        children = {}
+        for child in node.get("conditional_initializers", ()):
+            name = child["when"].get("name")
+            if (
+                name not in members
+                or child["when"]
+                != dict(kind="package_attribute_missing", module=module, name=name)
+                or child["module"] != module + "." + name
+                or child["initializer"]
+                != self.project.initializers.get(child["module"])
+            ):
+                self.fail(
+                    node,
+                    "import_guard",
+                    "conditional child does not match the package request",
+                )
+            children[name] = child
+        if checks is not None and (
+            not isinstance(checks, dict)
+            or checks.get("phase") != phase
+            or not isinstance(checks.get("items"), list)
+            or len(checks["items"]) != len(members)
+            or any(not isinstance(item, dict) for item in checks["items"])
+        ):
+            self.fail(
+                node,
+                "import_guard",
+                "fromlist checks do not cover the source request in order",
+            )
+
+        if not members:
+            self.fail(node, "import_guard", "package from-import has no fromlist")
+        ordered_checks = []
+        hook_slot = namespace_slot(module, "__getattr__")
+        hook = self.project.names.get(hook_slot)
+        for index, member in enumerate(members):
+            when = dict(kind="package_attribute_missing", module=module, name=member)
+            child = children.get(member)
+            item = checks["items"][index] if checks is not None else {}
+            supplied_child = item.get("child", {})
+            if checks is not None and (
+                item.get("binding_index") != index
+                or item.get("member") != member
+                or item.get("when") != when
+                or not isinstance(supplied_child, dict)
+                or (
+                    supplied_child
+                    and supplied_child.get("module") != module + "." + member
+                )
+                or supplied_child.get("initializer") != (child or {}).get("initializer")
+            ):
+                self.fail(
+                    node,
+                    "import_guard",
+                    "fromlist member or conditional initializer differs from its source edge",
+                )
+            slot = namespace_slot(module, member)
+            candidate = item.get("child") or (
+                {"module": child["module"], "initializer": child["initializer"]}
+                if child
+                else None
+            )
+            check = dict(
+                binding_index=index,
+                member=member,
+                child_candidate=candidate,
+                graph_binding=(
+                    "bound" if slot in self.project.names else "no_graph_binding"
+                ),
+                binding_epoch=self.project.imports.binding_version(slot),
+                declared_binding=slot in self.project.shadow,
+            )
+            hooks = item.get("missing_attribute_hooks") or [
+                h
+                for h in [
+                    *node.get("missing_attribute_hooks", ()),
+                    node.get("missing_attribute_hook"),
+                ]
+                if h and h.get("when") == when
+            ]
+            if hooks:
+                check["hook_candidates"] = [h["symbol"] for h in hooks]
+            if candidate:
+                check["child_registry_state"] = self.project.imports.registry_entry(
+                    candidate["module"]
+                ).get("state", "no_graph_initialization")
+            ordered_checks.append(check)
+
+        # A graph initializer models its body, not the calling __import__.
+        # It may change even an already bound member, raise, or return another
+        # object whose successive IMPORT_FROM lookups produce distinct values.
+        first = ordered_checks[0]
+        evidence = dict(
+            **first,
+            occurrence=occurrence["id"],
+            phase=phase,
+            package=module,
+            ordered_checks=ordered_checks,
+            registry_state=self.project.imports.registry_entry(module).get("state"),
+            hook_binding=(
+                "bound"
+                if hook is not None
+                else (
+                    "unresolved"
+                    if hook_slot in self.project.shadow
+                    else "no_graph_binding"
+                )
+            ),
+            actual_lookup="unproven_after_current_import_callbacks",
+            import_effects=occurrence["import_effects"],
+            outcomes=dict(
+                present="skip_child_initialization_then_continue_fromlist",
+                attribute_error="attempt_child_import_with_current_registry_loader_and_missing_submodule_handling",
+                other_exception="propagate_at_this_source_check",
+            ),
+            import_result="retain_actual_IMPORT_NAME_result_or_propagate_exception_before_binding",
+            subsequent_bindings="separate_IMPORT_FROM_lookups_on_returned_object_in_source_order",
+            bindings=occurrence["bindings"],
+        )
+        if change := self.project.imports.namespace_change(
+            self.project.imports.registry_key(module)
+        ):
+            evidence["last_namespace_change"] = change
+        self.fail(
+            node,
+            (
+                "import_from_hook"
+                if hook is not None and first["graph_binding"] != "bound"
+                else "module_attribute_state"
+            ),
+            f"the package fromlist lookup of {module}.{first['member']} has no proven "
+            "outcome after the original import callbacks",
+            source_evidence=evidence,
+        )
+
     def imported(self, node, steps):
         req = node.get("request", {})
         occurrence = self.project.source_imports.get(self.name, node)
@@ -1764,54 +1905,16 @@ class _Frame:
             self.fail(
                 node, "import_initializer", f"incomplete or circular import of {mod}"
             )
-        if req["form"] == "from" and req.get("binding_index", 0) == 0:
-            # A package's fromlist check precedes all IMPORT_FROM bindings.
-            # AttributeError suppression and conditional child loading require
-            # an exception/cache-state join, not an unconditional hook call.
+        if req["form"] == "from" and primary:
             scope = self.project.functions[self.project.initializers[mod]][
                 "python_scope"
             ]
             if scope.get("package"):
-                for member in req.get("fromlist", ()):
-                    if namespace_slot(mod, member) in self.project.names:
-                        self.module_member(node, mod, member, steps)
-                    elif namespace_slot(mod, "__getattr__") in self.project.names:
-                        self.fail(
-                            node,
-                            "import_from_hook",
-                            "package fromlist lookup requires its AttributeError and module-cache contract",
-                        )
-        for optional in node.get("conditional_initializers", ()):
-            when = optional["when"]
-            if when.get("kind") != "package_attribute_missing":
-                self.fail(
-                    node, "import_guard", "unsupported conditional submodule binding"
-                )
-            if namespace_slot(when["module"], when["name"]) not in self.project.names:
-                if namespace_slot(when["module"], when["name"]) in self.project.shadow:
-                    self.fail(
-                        node,
-                        "module_attribute_state",
-                        "conditional import has an unresolved existing member binding",
-                    )
-                if namespace_slot(when["module"], "__getattr__") in self.project.names:
-                    self.fail(
-                        node,
-                        "import_guard",
-                        "package implements dynamic attribute lookup",
-                    )
-                initialize(optional["initializer"])
-            else:
-                self.skip_activation(
-                    node,
-                    optional["initializer"],
-                    "conditional_import",
-                    when,
-                    dict(
-                        rule="module_member_bound",
-                        slot=namespace_slot(when["module"], when["name"]),
-                    ),
-                )
+                self.package_fromlist(node, occurrence)
+        elif node.get("fromlist_checks") or node.get("conditional_initializers"):
+            self.fail(
+                node, "import_guard", "only IMPORT_NAME may carry fromlist prechecks"
+            )
         if req["form"] == "import":
             value = _Value("module", mod if node.get("alias") else mod.split(".")[0])
         else:
@@ -2135,7 +2238,7 @@ class _Frame:
             if not kwargs and len(args) == 1 and args[0].kind == "mapping_ref":
                 return mappings.size(self, node, args[0])
             if not kwargs and len(args) == 1 and values.is_sequence(args[0].kind):
-                return sequences.size(args[0])
+                return self.project.sequences.size(args[0])
             if kwargs or len(args) != 1 or not products.is_sequence(args[0]):
                 self.fail(node, "length_contract", "len requires one closed sequence")
             return _literal(
@@ -2402,7 +2505,7 @@ class _Frame:
                     op="binary",
                     operator="ne",
                     type="bool",
-                    left=sequences.size(value).value,
+                    left=self.project.sequences.size(value).value,
                     right=_literal(0).value,
                 ),
             )

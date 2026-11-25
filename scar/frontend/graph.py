@@ -52,9 +52,10 @@ def _reference(spec):
     return isinstance(spec, dict) and spec.get("kind") in {"ref", "rref"}
 
 
-def function_graph(function, revision):
+def function_graph(function, revision, *, identity_fields=None):
     name = function["name"]
-    identity = digest(json_bytes([revision, name, function]))[:32]
+    fields = function if identity_fields is None else identity_fields
+    identity = digest(json_bytes([revision, name, fields]))[:32]
     nodes, accesses, calls, domains = [], [], set(function.get("calls", [])), {}
     objects, dispatch = set(), []
 
@@ -398,7 +399,7 @@ def function_graph(function, revision):
     )
 
 
-def unit_graph(unit, revision):
+def unit_graph(unit, revision, *, numeric_semantics=None):
     """F3: form hierarchical graphs from neutral declarations without mutating F2."""
     payload = {
         key: deepcopy(unit.get(key, []))
@@ -447,7 +448,28 @@ def unit_graph(unit, revision):
         ),
         revision,
     )
-    payload["functions"] = [
-        function_graph(function, revision) for function in unit.get("functions", [])
-    ]
+    source_contract = unit.get("source_numeric_contract")
+    source_receipt = digest(json_bytes(source_contract)) if numeric_semantics else None
+    payload["functions"] = []
+    for function in unit.get("functions", []):
+        fields = None
+        permissions = function.get("numeric_contract", {})
+        if (
+            numeric_semantics is not None
+            and function.get("source_numeric_contract") == source_contract
+            and permissions.get("source_contract_sha256") == source_receipt
+        ):
+            # The signature keeps the complete receipt for downstream validation.
+            # Only identity uses the independently captured semantic fingerprint.
+            fields = {
+                **function,
+                "source_numeric_contract": numeric_semantics,
+                "numeric_contract": {
+                    **permissions,
+                    "source_contract_sha256": numeric_semantics,
+                },
+            }
+        payload["functions"].append(
+            function_graph(function, revision, identity_fields=fields)
+        )
     return payload

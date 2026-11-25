@@ -637,6 +637,14 @@ def _process_binding(requirement, observed, module, context):
                     "process launch references an undeclared or unsealed image"
                 )
             image = node["image_id"]
+            if image in context.get("unavailable", ()):
+                raise QualificationFailure(
+                    "semantic_contract",
+                    "process.image_completion",
+                    "process launch requires a complete execution IR for its target",
+                    image_id=image,
+                    site=node.get("site"),
+                )
             references.add(image)
             if "launcher" in node:
                 qualify_worker = context.get("qualify_mpi")
@@ -886,6 +894,42 @@ def _load_module(path, ir):
 def _schedule_image(
     path, revision, ir, destination, policy, workers, image_context=None
 ):
+    if ir["status"] == "INCOMPLETE":
+        if ir.get("functions"):
+            raise ValueError("incomplete execution IR contains executable functions")
+        issues = []
+        if "unresolved" in ir:
+            records = read_member(path.parent, ir["unresolved"])
+            if (
+                not isinstance(records, list)
+                or not records
+                or not all(
+                    isinstance(record, dict) and isinstance(record.get("code"), str)
+                    for record in records
+                )
+            ):
+                raise ValueError("invalid unresolved execution IR diagnostics")
+            issues = records
+        if not issues:
+            # Older IR packages only recorded the completion status.
+            issues.append(
+                dict(
+                    code="incomplete_execution_ir",
+                    reported_by="M4",
+                    detail="input image was sealed without an executable body",
+                )
+            )
+        fields = dict(
+            stage="B1", status="INCOMPLETE", ir_sha256=revision, issues=issues
+        )
+        return _seal_schedule(
+            destination,
+            fields,
+            document(PHYSICAL, target="cpu-cxx20"),
+            dict(entry=ir["module"]["entry"]),
+        )
+    if "unresolved" in ir:
+        raise ValueError("ready execution IR contains unresolved diagnostics")
     module = _load_module(path, ir)
     inventory = dict(module.get("resource_model", {}))
     if "artifact_flow" in inventory:
@@ -929,7 +973,7 @@ def _schedule_image(
     fields = dict(stage="B1", status=status, ir_sha256=revision)
     if issues:
         fields["issues"] = issues
-        physical = document(PHYSICAL, target="cpu-cxx20", **fields)
+        physical = document(PHYSICAL, target="cpu-cxx20")
         scheduled = dict(entry=module["entry"])
         if "artifact_flow" in inventory:
             scheduled["module"] = dict(
@@ -966,7 +1010,6 @@ def _schedule_image(
                 caller_limit=workers,
                 reason="rank_placement_and_provided_thread_level_unverified",
             )
-        physical.update(fields)
         physical["compilation"] = compilation
         if access:
             physical["parameter_access"] = access
@@ -1030,6 +1073,11 @@ def _schedule_image(
             physical["resource_flow"] = member(
                 destination, "resources", inventory["resource_flow"]
             )
+    return _seal_schedule(destination, fields, physical, scheduled)
+
+
+def _seal_schedule(destination, fields, physical, scheduled):
+    physical.update(fields)
     physical_member = member(destination, "scheduled-units", physical)
     write_json(destination / "physical-plan.json", physical)
     package = document(
@@ -1040,15 +1088,15 @@ def _schedule_image(
     )
     path = destination / "scheduled-ir.json"
     write_json(path, package)
-    return path, status, issues
+    return path, fields["status"], fields.get("issues", [])
 
 
 def schedule_ir(source, destination, *, policy="auto", workers=None):
     if workers is not None and (type(workers) is not int or workers < 1):
         raise ValueError("worker_limit must be a positive integer")
     path, revision, ir = open_product(source, "exec-ir.json", IR)
-    if ir.get("status") != "READY":
-        raise ValueError("incomplete execution IR; consult its logical plan")
+    if ir.get("status") not in {"READY", "INCOMPLETE"}:
+        raise ValueError("invalid execution IR status")
     destination = Path(destination).resolve()
     if ir.get("kind") != "image_bundle":
         scheduled, _, _ = _schedule_image(
@@ -1068,12 +1116,22 @@ def schedule_ir(source, destination, *, policy="auto", workers=None):
         child = read_image_product(path.parent, image, "ir", "exec-ir.json", IR)
         child_ir = child[2]
         if (
-            child_ir.get("status") != "READY"
+            child_ir.get("status") not in {"READY", "INCOMPLETE"}
             or child_ir.get("kind") == "image_bundle"
             or child_ir.get("module", {}).get("entry") != image["entry"]
         ):
-            raise ValueError(f"image {image['id']} requires a ready IR for its entry")
+            raise ValueError(
+                f"image {image['id']} requires an execution IR for its declared entry"
+            )
         inputs.append((image, child))
+
+    unavailable = {
+        image["id"] for image, child in inputs if child[2]["status"] == "INCOMPLETE"
+    }
+    if bool(unavailable) != (ir["status"] == "INCOMPLETE"):
+        raise ValueError(
+            "bundle completion status disagrees with sealed image statuses"
+        )
 
     scheduled, plans, issues = [], [], []
     catalog = [
@@ -1127,6 +1185,7 @@ def schedule_ir(source, destination, *, policy="auto", workers=None):
             image_context=dict(
                 current_image=image["id"],
                 images=catalog,
+                unavailable=unavailable,
                 qualify_mpi=qualify_mpi,
                 launcher_cache=launcher_cache,
                 compiler_features=compiler_features,

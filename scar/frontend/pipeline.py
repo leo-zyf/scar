@@ -85,8 +85,12 @@ def _unit(job):
         source_facts["external_headers"] = dict(external_headers)
     if source_compiler := profile.get("source_compiler"):
         source_facts["source_compiler"] = source_compiler
-    revision = digest(json_bytes([revision, source_facts]))
-    payload = unit_graph(unit, revision)
+    identity_facts = source_facts
+    numeric_semantics = getattr(parsed, "numeric_semantics_sha256", None)
+    if numeric_semantics is not None:
+        identity_facts = {**source_facts, "source_numeric_contract": numeric_semantics}
+    revision = digest(json_bytes([revision, identity_facts]))
+    payload = unit_graph(unit, revision, numeric_semantics=numeric_semantics)
     functions, initializers = payload["functions"], payload["global_graph"]
     # F4 consumes the complete F3 graph without accessing language parsers.
     state_graphs = [initializers, *functions]
@@ -111,6 +115,9 @@ def _unit(job):
         compilation_profile_sha256=digest(json_bytes(profile)),
         revision=revision,
         source_facts=source_facts,
+        **(
+            {"numeric_semantics_sha256": numeric_semantics} if numeric_semantics else {}
+        ),
         **(
             {"source_coverage": unit["source_coverage"]}
             if "source_coverage" in unit
