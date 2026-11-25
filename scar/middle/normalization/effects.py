@@ -1,6 +1,7 @@
 """M2 caller-visible storage writes derived from a closed canonical call graph."""
 
 from scar.contract import walk_operations
+from scar.middle.contracts import has_open_effect
 
 FRESH_ARRAYS = frozenset(
     {
@@ -19,34 +20,6 @@ _MUTATIONS = {
     "array_store": ("arrays", "base"),
     "sequence_append": ("sequences", "base"),
 }
-
-
-def has_open_effect(operation):
-    """A callback or an unspecified write may change caller-visible state."""
-    writes = operation.get("writes", ())
-    effects = operation.get("effects", ())
-    return (
-        operation.get("pending_import_effect") is True
-        or operation.get("external_effect") == "UNKNOWN"
-        or "UNKNOWN" in writes
-        or "UNKNOWN" in effects
-        or "OPAQUE" in effects
-        or bool(
-            {
-                "import.external_effects",
-                "audit_hook.external_effects",
-                "process.import_hooks",
-            }.intersection(writes)
-        )
-        or operation["op"]
-        in {
-            "indirect_call",
-            "library_call",
-            "python_invoke",
-            "object_dispatch",
-            "python_import",
-        }
-    )
 
 
 def _write_origins(expression, parameters, assignments):

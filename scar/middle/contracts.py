@@ -11,6 +11,34 @@ _SCHEMA = "scar.middle-program"
 _PHASES = {"M1", "M2", "M3", "M4"}
 
 
+def has_open_effect(operation):
+    """A callback or an unspecified write may change caller-visible state."""
+    writes = operation.get("writes", ())
+    effects = operation.get("effects", ())
+    return (
+        operation.get("pending_import_effect") is True
+        or operation.get("external_effect") == "UNKNOWN"
+        or "UNKNOWN" in writes
+        or "UNKNOWN" in effects
+        or "OPAQUE" in effects
+        or bool(
+            {
+                "import.external_effects",
+                "audit_hook.external_effects",
+                "process.import_hooks",
+            }.intersection(writes)
+        )
+        or operation["op"]
+        in {
+            "indirect_call",
+            "library_call",
+            "python_invoke",
+            "object_dispatch",
+            "python_import",
+        }
+    )
+
+
 def require_program(module, phase):
     """Reject a missing, misordered or structurally invalid pass input."""
     if phase not in _PHASES or not isinstance(module, dict):

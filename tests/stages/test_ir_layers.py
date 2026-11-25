@@ -3381,6 +3381,40 @@ def test_resource_flow_preserves_local_product_fields_without_call_aliases():
             init=dict(op="call", callee="unknown", args=[], type=product),
         ),
         copy(get(variable("returned")), "call"),
+        dict(op="assign", target=variable("a", array), value=create()),
+        dict(op="module_namespace_initialize", writes=["UNKNOWN"]),
+        copy(variable("a", array), "after-open-write"),
+        dict(op="assign", target=variable("a", array), value=create()),
+        dict(
+            op="while",
+            condition=variable("flag", "bool"),
+            body=[
+                copy(variable("a", array), "preceding-next-iteration"),
+                dict(op="module_global_delete", effects=["STATE", "OPAQUE"]),
+            ],
+        ),
+        dict(op="assign", target=variable("a", array), value=create()),
+        dict(
+            op="decl",
+            name="formed",
+            type=dict(kind="product_ref", items=[array, "unit"]),
+            init=dict(
+                op="product_make",
+                type=dict(kind="product_ref", items=[array, "unit"]),
+                items=[
+                    variable("a", array),
+                    dict(
+                        op="module_fromlist_publish",
+                        type="unit",
+                        external_effect="UNKNOWN",
+                    ),
+                ],
+            ),
+        ),
+        copy(
+            get(variable("formed", dict(kind="product_ref", items=[array, "unit"]))),
+            "during-build",
+        ),
     ]
     flow = _layer(
         "execution",
@@ -3408,10 +3442,19 @@ print(json.dumps(flow))
             None if site == "branch" else origin
         )
         assert "_members" not in source["region"]
-    for site in ("parameter", "rebound", "loop", "after-loop", "call"):
+    for site in (
+        "parameter",
+        "rebound",
+        "loop",
+        "after-loop",
+        "call",
+        "after-open-write",
+        "preceding-next-iteration",
+        "during-build",
+    ):
         assert copies[site]["byte_count"]["kind"] == "operand_nbytes"
         assert nodes[copies[site]["source"]]["region"]["storage"]["origin"] is None
-    assert len(copies) == 9 and copies["loop"]["scope"][0]["kind"] == "while"
+    assert len(copies) == 12 and copies["loop"]["scope"][0]["kind"] == "while"
 
 
 def test_file_versions_preserve_stable_aliases_and_closed_writer_returns():

@@ -9,6 +9,7 @@ from copy import deepcopy
 from math import prod
 
 from scar.contract import digest, json_bytes, semantic_form, walk_operations
+from scar.middle.contracts import has_open_effect
 
 _LOOPS = {"for", "while", "do_while", "map", "each"}
 _BRANCHES = {"if", "select"}
@@ -34,6 +35,17 @@ _DOMAINS = {
     "device_memory": {"DEVICE_MEMORY", "HBM"},
     "filesystem": {"STORAGE_MOUNT"},
 }
+
+
+def _invalidates_regions(node):
+    """An open write or indirect mutation can invalidate shape and storage facts."""
+    op = node.get("op")
+    return op is not None and (
+        op in _CALLS
+        or op == "store_bytes"
+        or op.startswith("object_")
+        or has_open_effect(node)
+    )
 
 
 def _integer(value):
@@ -331,9 +343,7 @@ def analyze(module, *, partial=False):
                     for index, item in enumerate(value["items"])
                 ]
                 if any(
-                    child["op"] in _CALLS
-                    or child["op"] == "store_bytes"
-                    or child["op"].startswith("object_")
+                    _invalidates_regions(child)
                     for child in walk_operations(value["items"])
                 ):
                     members = [_region(item) for item in value["items"]]
@@ -388,11 +398,7 @@ def analyze(module, *, partial=False):
                             written.add(slot)
                         else:
                             opaque = True
-                    opaque |= (
-                        child["op"] in _CALLS
-                        or child["op"] == "store_bytes"
-                        or child["op"].startswith("object_")
-                    )
+                    opaque |= _invalidates_regions(child)
 
                 def havoc():
                     if opaque:
@@ -690,12 +696,7 @@ def analyze(module, *, partial=False):
                         ),
                     ],
                 )
-            if (
-                op in _CALLS
-                or op in {"update", "store_bytes"}
-                or op
-                and op.startswith("object_")
-            ):
+            if op == "update" or _invalidates_regions(value):
                 environment.clear()
             return region
 
