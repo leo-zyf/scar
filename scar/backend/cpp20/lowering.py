@@ -2198,6 +2198,8 @@ class Lowerer:
         else:
             if abi.get("kind") != "binary_f64_arrays":
                 raise ValueError("unsupported executable ABI")
+            if abi.get("entry", entry) != entry:
+                raise ValueError("array ABI names a different executable entry")
             shape, inputs, count = abi["shape"], abi["inputs"], abi["count"]
             if (
                 not isinstance(shape, list)

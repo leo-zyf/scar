@@ -90,6 +90,13 @@ class Unit:
 
 _NODE_TYPES = {t.__name__: t for t in (Type, Expr, Stmt, Attribute, Decl, Unit)}
 _FIELDS = {cls: {f.name: f for f in fields(cls)} for cls in _NODE_TYPES.values()}
+_WIRE_KEYS = {
+    cls: (
+        frozenset(("node", *members)),
+        frozenset(name for name, field in members.items() if field.default is MISSING),
+    )
+    for cls, members in _FIELDS.items()
+}
 _IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z_0-9]*\Z")
 _NUMBER = re.compile(
     r"[+-]?(?:(?:0[xX][0-9a-fA-F]+(?:\.[0-9a-fA-F]*)?[pP][+-]?[0-9]+"
@@ -833,10 +840,11 @@ def from_data(value):
     cls = _NODE_TYPES.get(tag) if isinstance(tag, str) else None
     if cls is None:
         raise ValueError(f"unknown C++ target node {tag!r}")
-    allowed = _FIELDS[cls]
-    if set(value) - {"node"} - allowed.keys():
+    allowed, required = _WIRE_KEYS[cls]
+    keys = value.keys()
+    if not keys <= allowed:
         raise ValueError(f"unknown fields in {cls.__name__}")
-    if any(f.default is MISSING and f.name not in value for f in allowed.values()):
+    if not keys >= required:
         raise ValueError(f"missing required field in {cls.__name__}")
     return cls(**{k: from_data(v) for k, v in value.items() if k != "node"})
 

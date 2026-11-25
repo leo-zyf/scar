@@ -525,6 +525,30 @@ def test_file_graph_and_workflow_members_survive_schedule_relocation(
         )
 
 
+def test_binary_array_adapter_matches_the_declared_entry():
+    from scar.backend.cpp20.lowering import Lowerer
+
+    read = {"kind": "ptr", "to": {"kind": "const", "of": "f64"}}
+    write = {"kind": "ptr", "to": "f64"}
+    params = [
+        dict(name="size", type="i64"),
+        dict(name="count", type="i64"),
+        dict(name="input", type=read),
+        dict(name="output", type=write),
+    ]
+    fn = dict(name="evaluate", result="void", params=params, body=[])
+    abi = dict(kind="binary_f64_arrays", shape=[5], count=2, inputs=1)
+    module = dict(entry="evaluate", functions=[fn], entry_abi=abi)
+    wrapper = Lowerer(module, {}).entry_wrapper()
+    abi["entry"] = "evaluate"
+    assert Lowerer(module, {}).entry_wrapper() == wrapper
+    abi["entry"] = "different"
+    with pytest.raises(
+        ValueError, match="array ABI names a different executable entry"
+    ):
+        Lowerer(module, {}).entry_wrapper()
+
+
 def test_backend_products_replay_and_reject_changed_bytes(tmp_path):
     from dataclasses import replace
 
@@ -542,6 +566,13 @@ def test_backend_products_replay_and_reject_changed_bytes(tmp_path):
         unit_from_data,
     )
     from scar.contract import read_member
+
+    for declaration, expected in (
+        ({"node": "Decl", "name": "f"}, "missing required field in Decl"),
+        ({"node": "Decl", "kind": "function", "typo": 0}, "unknown fields in Decl"),
+    ):
+        with pytest.raises(ValueError, match=expected):
+            unit_from_data({"node": "Unit", "declarations": [declaration]})
 
     def run(layer, source, out, expected=None):
         env = dict(
