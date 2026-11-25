@@ -33,6 +33,7 @@ MODULE_REGISTRY_OPERATIONS = frozenset(
         "module_global_store",
         "module_import_continuation_required",
         "module_import_preserves",
+        "module_import_publish",
         "module_name_load",
         "module_namespace_initialize",
         "module_object_expression",
@@ -44,6 +45,29 @@ MODULE_REGISTRY_OPERATIONS = frozenset(
         "state_effect_continuation_required",
     }
 )
+
+
+def external_math_declaration(declaration):
+    """Identify the resolved source interface independently of target math permissions."""
+    provider = declaration.get("provider")
+    if provider != "libm" and (provider, declaration.get("header")) != (
+        "libc",
+        "math.h",
+    ):
+        return None
+    parameters = declaration.get("params")
+    return dict(
+        symbol=declaration["name"],
+        provider=provider,
+        declaration_sha256=digest(json_bytes(declaration)),
+        parameter_types=(
+            [parameter["type"] for parameter in parameters]
+            if parameters is not None
+            else None
+        ),
+        result=declaration.get("result"),
+        variadic=declaration.get("variadic", False),
+    )
 
 
 def validate_python_entry_declaration(declaration):
