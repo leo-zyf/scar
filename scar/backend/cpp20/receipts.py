@@ -81,7 +81,7 @@ def gmp_files(binding):
         or abi.get("api") != "gmp-mpz-c"
     ):
         raise ValueError("GMP SDK lacks its qualified static ABI")
-    return identities
+    return files
 
 
 _POCKETFFT_REVISION = "33ae5dc94c9cdc7f1c78346504a85de87cadaa12"
@@ -119,7 +119,7 @@ def pocketfft_files(binding):
         )
     ):
         raise ValueError("target requires the fixed qualified PocketFFT SDK")
-    return _POCKETFFT_FILES
+    return binding["files"]
 
 
 def xtensor_headers(receipt):

@@ -66,6 +66,16 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 """
 
 
+def _publish_blob(destination, group, data, sha, suffix=""):
+    """Seal the bytes already fingerprinted by this producer."""
+    directory = destination / group
+    if not directory.resolve().is_relative_to(destination):
+        raise ValueError(f"target member directory escapes its package: {group}")
+    relative = f"{group}/{sha}{suffix}"
+    publish(destination / relative, data)
+    return dict(path=relative, sha256=sha, size=len(data))
+
+
 def _seal_xtensor(destination, binding):
     # Consume exactly the installation selected by B1. Its location is not
     # needed by B2b or by the delivered project's native build.
@@ -75,7 +85,8 @@ def _seal_xtensor(destination, binding):
         raise ValueError("missing scheduled native operator SDK identity")
     prefix = Path(binding["prefix"]).resolve(strict=True)
     raw = (prefix / "scar-sdk.json").read_bytes()
-    if digest(raw) != binding.get("receipt_sha256"):
+    receipt_sha = digest(raw)
+    if receipt_sha != binding.get("receipt_sha256"):
         raise ValueError("installed operator SDK differs from its scheduled receipt")
     receipt = json.loads(raw)
     if receipt.get("packages") != binding.get("packages") or len(
@@ -85,12 +96,6 @@ def _seal_xtensor(destination, binding):
             "scheduled operator SDK package contract differs from its receipt"
         )
 
-    def seal(data):
-        sha = digest(data)
-        path = f"operator-sdk/{sha}"
-        publish(destination / path, data)
-        return dict(path=path, sha256=sha, size=len(data))
-
     headers = {}
     for name, sha in xtensor_headers(receipt).items():
         path = (prefix / name).resolve(strict=True)
@@ -99,13 +104,22 @@ def _seal_xtensor(destination, binding):
         data = path.read_bytes()
         if digest(data) != sha:
             raise ValueError(f"operator SDK header changed since scheduling: {name}")
-        headers[name] = seal(data)
+        headers[name] = _publish_blob(destination, "operator-sdk", data, sha)
     return dict(
         provider="xtensor-cpu",
-        receipt=seal(raw),
+        receipt=_publish_blob(destination, "operator-sdk", raw, receipt_sha),
         headers=headers,
-        notice=seal(_XTENSOR_NOTICE),
+        notice=_publish_blob(
+            destination, "operator-sdk", _XTENSOR_NOTICE, digest(_XTENSOR_NOTICE)
+        ),
     )
+
+
+def _seal_sdk_file(destination, source, expected):
+    data = source.read_bytes()
+    if len(data) != expected["size"] or digest(data) != expected["sha256"]:
+        raise ValueError(f"SDK member changed since physical qualification: {source}")
+    return _publish_blob(destination, "operator-sdk", data, expected["sha256"])
 
 
 def _seal_pocketfft(destination, binding):
@@ -118,12 +132,7 @@ def _seal_pocketfft(destination, binding):
         path = (prefix / name).resolve(strict=True)
         if not path.is_relative_to(prefix):
             raise ValueError("PocketFFT source escapes its selected installation")
-        data = path.read_bytes()
-        if len(data) != expected["size"] or digest(data) != expected["sha256"]:
-            raise ValueError("PocketFFT source changed since qualification")
-        output = destination / "operator-sdk" / expected["sha256"]
-        publish(output, data)
-        sealed[name] = file_receipt(destination, output)
+        sealed[name] = _seal_sdk_file(destination, path, expected)
     return {
         **{
             key: binding[key]
@@ -143,15 +152,10 @@ def _seal_gmp(destination, binding):
     files = gmp_files(binding)
     sealed = {}
     for name, expected in files.items():
-        path = Path(binding["files"][name].get("path", ""))
+        path = Path(expected.get("path", ""))
         if not path.is_absolute():
             raise ValueError("GMP schedule lacks the selected absolute SDK member")
-        data = path.read_bytes()
-        if len(data) != expected["size"] or digest(data) != expected["sha256"]:
-            raise ValueError("GMP SDK changed after physical qualification")
-        output = destination / "operator-sdk" / expected["sha256"]
-        publish(output, data)
-        sealed[name] = file_receipt(destination, output)
+        sealed[name] = _seal_sdk_file(destination, path, expected)
     return {
         **{
             key: binding[key]
@@ -489,8 +493,7 @@ def _lower_image(path, revision, scheduled, destination):
         for name, unit in units.items()
     ]
     support = Path(__file__).with_name("runtime.hpp").read_bytes()
-    runtime = destination / "runtime" / (digest(support) + ".hpp")
-    publish(runtime, support)
+    runtime = _publish_blob(destination, "runtime", support, digest(support), ".hpp")
     headers = []
     lowerer.used_sdk_headers.add("exceptions.hpp")
     if "mapping.hpp" in lowerer.used_sdk_headers:
@@ -507,11 +510,8 @@ def _lower_image(path, revision, scheduled, destination):
         if name not in SDK_HEADERS:
             raise ValueError(f"unregistered target SDK header {name!r}")
         data = Path(__file__).with_name(name).read_bytes()
-        sealed = destination / "runtime" / (digest(data) + ".hpp")
-        publish(sealed, data)
-        headers.append(
-            dict(output=SDK_HEADERS[name], blob=file_receipt(destination, sealed))
-        )
+        blob = _publish_blob(destination, "runtime", data, digest(data), ".hpp")
+        headers.append(dict(output=SDK_HEADERS[name], blob=blob))
     operator_sdks = {}
     mpi = physical.get("operator_backends", {}).get("mpi")
     if mpi is not None or "MPI" in lowerer.libraries.links:
@@ -555,8 +555,8 @@ def _lower_image(path, revision, scheduled, destination):
         scheduled_ir_sha256=revision,
         units=members,
         ir_sha256=physical.get("ir_sha256"),
-        runtime_sha256=digest(support),
-        runtime=file_receipt(destination, runtime),
+        runtime_sha256=runtime["sha256"],
+        runtime=runtime,
         sdk_headers=headers,
         **metadata,
     )

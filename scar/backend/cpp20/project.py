@@ -98,27 +98,9 @@ def _install_xtensor(folder, directory, binding):
     (vendor / "LICENSE").write_bytes(read_blob(folder, binding["notice"]))
 
 
-def _install_pocketfft(folder, directory, binding):
-    files = pocketfft_files(binding)
-    for name, expected in files.items():
-        receipt = binding["files"][name]
-        if (
-            receipt.get("size") != expected["size"]
-            or receipt.get("sha256") != expected["sha256"]
-        ):
-            raise ValueError("sealed PocketFFT member differs from its selected SDK")
-        data = read_blob(folder, receipt)
-        output = directory / "vendor" / "pocketfft" / name
-        output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_bytes(data)
-
-
-def _install_gmp(folder, directory, binding):
-    for name, expected in gmp_files(binding).items():
-        receipt = binding["files"][name]
-        if any(receipt.get(key) != value for key, value in expected.items()):
-            raise ValueError("sealed GMP member differs from its selected SDK")
-        output = directory / "vendor" / "gmp" / name
+def _install_sdk_files(folder, vendor, files):
+    for name, receipt in files.items():
+        output = vendor / name
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_bytes(read_blob(folder, receipt))
 
@@ -328,7 +310,7 @@ def _numeric_target_compiler(product, actual):
     return compiler
 
 
-def _print_image(path, product, directory, runtime, jobs, image=None):
+def _print_image(path, product, directory, jobs, image=None):
     from .model import (
         build_options,
         from_data,
@@ -344,9 +326,11 @@ def _print_image(path, product, directory, runtime, jobs, image=None):
     )
     if "runtime" in product:
         runtime = read_blob(path.parent, product["runtime"])
-    elif runtime is None:
+        runtime_sha = product["runtime"]["sha256"]
+    else:
         runtime = Path(__file__).with_name("runtime.hpp").read_bytes()
-    if product.get("kind") == "image_bundle" or digest(runtime) != product.get(
+        runtime_sha = digest(runtime)
+    if product.get("kind") == "image_bundle" or runtime_sha != product.get(
         "runtime_sha256"
     ):
         raise ValueError("target image requires a matching C++20 runtime revision")
@@ -413,11 +397,17 @@ def _print_image(path, product, directory, runtime, jobs, image=None):
     if "scar/fourier.hpp" in local_headers and "PocketFFT" not in libraries:
         raise ValueError("target Fourier header requires a sealed PocketFFT SDK")
     if "PocketFFT" in libraries:
-        _install_pocketfft(path.parent, directory, bindings.get("PocketFFT"))
+        _install_sdk_files(
+            path.parent,
+            directory / "vendor/pocketfft",
+            pocketfft_files(bindings.get("PocketFFT")),
+        )
     if "scar/integer.hpp" in local_headers and "GMP" not in libraries:
         raise ValueError("target integer header requires a sealed GMP SDK")
     if "GMP" in libraries:
-        _install_gmp(path.parent, directory, bindings.get("GMP"))
+        _install_sdk_files(
+            path.parent, directory / "vendor/gmp", gmp_files(bindings.get("GMP"))
+        )
     mpi = None
     if "MPI" in libraries:
         if "MPI" not in bindings:
@@ -500,7 +490,6 @@ def print_target(target, destination, *, jobs=4):
     project = destination / "project"
     if project.exists():
         raise ValueError(f"output project already exists at {project}")
-    runtime = None
     manifest = destination / "cpp20.json"
     with TemporaryDirectory(prefix=".scar-project-", dir=destination) as tmp:
         staging = Path(tmp) / "project"
@@ -521,7 +510,7 @@ def print_target(target, destination, *, jobs=4):
                 )
                 directory = Path("images") / image["id"]
                 sources, options = _print_image(
-                    child, data, staging / directory, runtime, jobs, image
+                    child, data, staging / directory, jobs, image
                 )
                 cmake.append(f"add_subdirectory({directory.as_posix()})")
                 projects.append(
@@ -567,7 +556,7 @@ def print_target(target, destination, *, jobs=4):
                 ir_sha256=product["ir_sha256"],
             )
         else:
-            sources, options = _print_image(path, product, staging, runtime, jobs)
+            sources, options = _print_image(path, product, staging, jobs)
             header, first_source = _HEADER, sources[0]
             image = dict(product, build_options=options)
             metadata = {key: image[key] for key in _METADATA}
