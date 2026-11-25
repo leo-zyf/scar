@@ -86,6 +86,7 @@ class ParsedUnit:
     import_stores: dict = field(default_factory=dict)
     statement_expressions: dict = field(default_factory=dict)
     definition_sites: dict = field(default_factory=dict)
+    function_expression_sites: dict = field(default_factory=dict)
     exception_handlers: dict = field(default_factory=dict)
 
     @property
@@ -215,20 +216,26 @@ def _constant_store_sites(
     return stores, document
 
 
+_FAST_READS = {"LOAD_FAST", "LOAD_FAST_CHECK", "LOAD_FAST_BORROW"}
+
+
 def _name_load_sites(program, instructions, names):
     """Pair a module-frame read with its unique lexical name and instruction."""
     sites = {}
     for ins in instructions:
         opcode = getattr(ins, "baseopname", ins.opname)
         span = ins.positions
-        if opcode not in {"LOAD_NAME", "LOAD_GLOBAL"} or span not in names:
+        if (
+            opcode not in _FAST_READS and opcode not in {"LOAD_NAME", "LOAD_GLOBAL"}
+        ) or span not in names:
             continue
         # Since CPython 3.11 the low LOAD_GLOBAL argument bit is a call flag.
         index = ins.arg >> 1 if opcode == "LOAD_GLOBAL" else ins.arg
+        table = program.co_varnames if opcode in _FAST_READS else program.co_names
         if (
             span in sites
-            or not 0 <= index < len(program.co_names)
-            or program.co_names[index] != ins.argval
+            or not 0 <= index < len(table)
+            or table[index] != ins.argval
             or ins.argval != names[span]
         ):
             sites[span] = None
@@ -365,7 +372,8 @@ def _import_store_sites(program, instructions, imports, handlers):
 _STATEMENT_END = {
     ast.Call: {"POP_TOP"},
     ast.Raise: {"RAISE_VARARGS"},
-    ast.Assign: {"STORE_NAME", "STORE_GLOBAL"},
+    ast.Return: {"RETURN_VALUE", "RETURN_CONST"},
+    ast.Assign: {"STORE_NAME", "STORE_GLOBAL", "STORE_FAST"},
     ast.Delete: {"DELETE_NAME", "DELETE_GLOBAL"},
     ast.If: {"POP_JUMP_IF_TRUE", "POP_JUMP_IF_FALSE"},
     ast.For: {"GET_ITER"},
@@ -401,7 +409,8 @@ def _expression_instruction(program, ins, parts, keywords):
     row = dict(opcode=opcode, offset=ins.offset, position=list(span))
     if arg is not None:
         row["oparg"] = arg
-    if opcode in {
+    if opcode in _FAST_READS or opcode in {
+        "STORE_FAST",
         "LOAD_NAME",
         "LOAD_GLOBAL",
         "LOAD_ATTR",
@@ -411,12 +420,14 @@ def _expression_instruction(program, ins, parts, keywords):
         "DELETE_GLOBAL",
     }:
         index = arg >> 1 if opcode in {"LOAD_GLOBAL", "LOAD_ATTR"} else arg
-        if (
-            not 0 <= index < len(program.co_names)
-            or program.co_names[index] != ins.argval
-        ):
+        table = (
+            program.co_varnames
+            if opcode in _FAST_READS or opcode == "STORE_FAST"
+            else program.co_names
+        )
+        if not 0 <= index < len(table) or table[index] != ins.argval:
             return None
-        name = program.co_names[index]
+        name = table[index]
         kind, field = (
             (ast.Attribute, "attr") if opcode == "LOAD_ATTR" else (ast.Name, "id")
         )
@@ -431,7 +442,7 @@ def _expression_instruction(program, ins, parts, keywords):
         ):
             return None
         row.update(index=index, name=name)
-    elif opcode in {"LOAD_CONST", "LOAD_SMALL_INT", "KW_NAMES"}:
+    elif opcode in {"LOAD_CONST", "LOAD_SMALL_INT", "KW_NAMES", "RETURN_CONST"}:
         value = arg if opcode == "LOAD_SMALL_INT" else program.co_consts[arg]
         if opcode != "LOAD_SMALL_INT":
             row["index"] = arg
@@ -517,6 +528,8 @@ def _expression_instruction(program, ins, parts, keywords):
             return None
         if opcode != "TO_BOOL":
             row["target"] = ins.argval
+    elif opcode == "RETURN_VALUE":
+        pass
     elif opcode == "GET_ITER":
         if not any(isinstance(n, ast.For) for n in parts):
             return None
@@ -722,7 +735,9 @@ _JUMP_OPCODES = frozenset(
 )
 
 
-def _statement_expression(program, instructions, root, end, handlers):
+def _statement_expression(
+    program, instructions, root, end, handlers, *, function_frame=False
+):
     """Capture source operands and the terminal operation consuming them."""
     expr = root
     if isinstance(root, ast.If):
@@ -732,7 +747,7 @@ def _statement_expression(program, instructions, root, end, handlers):
     span = tuple_position(expr)
     parts, keywords = defaultdict(list), defaultdict(list)
     discarded_call = isinstance(root, ast.Call)
-    needs_object_ports = not discarded_call
+    needs_object_ports = function_frame or not discarded_call
     for node in ast.walk(expr):
         if isinstance(node, (ast.Load, ast.Store, ast.Del, ast.keyword, ast.operator)):
             continue
@@ -742,6 +757,7 @@ def _statement_expression(program, instructions, root, end, handlers):
                 ast.Call,
                 ast.BinOp,
                 ast.Raise,
+                ast.Return,
                 ast.List,
                 ast.Tuple,
                 ast.Assign,
@@ -805,7 +821,18 @@ def _statement_expression(program, instructions, root, end, handlers):
         )
         if row is None:
             return None
-        depth += dis.stack_effect(ins.opcode, ins.arg)
+        if (
+            isinstance(root, ast.Return)
+            and index == end
+            and ins.opname == "RETURN_VALUE"
+        ):
+            # The return consumes the sole source result. CPython 3.14 reports
+            # its frame-exit stack effect as zero.
+            if depth != 1:
+                return None
+            depth = 0
+        else:
+            depth += dis.stack_effect(ins.opcode, ins.arg)
         if depth < 0:
             return None
         rows.append(row)
@@ -828,7 +855,14 @@ def _statement_expression(program, instructions, root, end, handlers):
 
 
 def _statement_expression_sites(
-    program, instructions, expressions, handlers, stores, following
+    program,
+    instructions,
+    expressions,
+    handlers,
+    stores,
+    following,
+    *,
+    function_frame=False,
 ):
     # Multiple compiled copies of a finally suite have the same source span.
     ends = defaultdict(list)
@@ -846,7 +880,12 @@ def _statement_expression_sites(
         span = tuple_position(root)
         if len(matches) == 1 and span not in stores:
             receipt = _statement_expression(
-                program, instructions, root, matches[0], handlers
+                program,
+                instructions,
+                root,
+                matches[0],
+                handlers,
+                function_frame=function_frame,
             )
             if receipt is not None:
                 if isinstance(root, ast.If):
@@ -1119,6 +1158,69 @@ def _exception_handler_sites(instructions, entries, tries, loads):
     return sites
 
 
+def _code_parameters(code):
+    names = code.co_varnames
+    positional, keyword = code.co_argcount, code.co_argcount + code.co_kwonlyargcount
+    params = [
+        ["posonly" if i < code.co_posonlyargcount else "positional", name]
+        for i, name in enumerate(names[:positional])
+    ]
+    variadic = bool(code.co_flags & inspect.CO_VARARGS)
+    if variadic:
+        params.append(["varargs", names[keyword]])
+    params.extend(["keywordonly", name] for name in names[positional:keyword])
+    if code.co_flags & inspect.CO_VARKEYWORDS:
+        params.append(["kwargs", names[keyword + variadic]])
+    return params
+
+
+def _function_expression_sites(program, node):
+    """Capture single local stores and discarded calls within this code object."""
+    expressions = {}
+    for stmt in scope_nodes(node.body):
+        if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call):
+            expressions[tuple_position(stmt.value)] = stmt.value
+        elif isinstance(stmt, ast.Return) and stmt.value is not None:
+            expressions[tuple_position(stmt)] = stmt
+            expressions[tuple_position(stmt.value)] = stmt
+        elif (
+            isinstance(stmt, ast.Assign)
+            and len(stmt.targets) == 1
+            and isinstance(stmt.targets[0], ast.Name)
+        ):
+            expressions[tuple_position(stmt.targets[0])] = stmt
+    if not expressions:
+        return {}, {}
+    instructions = list(dis.get_instructions(program))
+    handlers = {entry.target for entry in dis.Bytecode(program).exception_entries}
+    regions = _statement_expression_sites(
+        program, instructions, expressions, handlers, {}, {}, function_frame=True
+    )
+    regions = {
+        span: proof
+        for span, proof in regions.items()
+        if proof["instructions"][-1]["opcode"]
+        in {"STORE_FAST", "POP_TOP", "RETURN_VALUE", "RETURN_CONST"}
+    }
+    names = {
+        tuple(row["position"]): row["name"]
+        for proof in regions.values()
+        for row in proof["instructions"]
+        if row["opcode"] in _FAST_READS or row["opcode"] == "LOAD_GLOBAL"
+    }
+    loads = _name_load_sites(program, instructions, names)
+    regions = {
+        span: proof
+        for span, proof in regions.items()
+        if all(
+            loads.get(tuple(row["position"]), {}).get("offset") == row["offset"]
+            for row in proof["instructions"]
+            if row["opcode"] in _FAST_READS or row["opcode"] == "LOAD_GLOBAL"
+        )
+    }
+    return regions, loads
+
+
 def _definition_sites(program, instructions, definitions, handlers):
     """Plain module definitions whose code object is loaded, constructed and stored."""
     found, repeated = {}, set()
@@ -1176,6 +1278,8 @@ def _definition_sites(program, instructions, definitions, handlers):
                 qualname=child.co_qualname,
                 first_line=child.co_firstlineno,
                 code_sha256=code_digest(child),
+                parameters=_code_parameters(child),
+                varnames=list(child.co_varnames),
             ),
         )
     return {k: v for k, v in found.items() if k not in repeated}
@@ -1407,6 +1511,12 @@ def _compiler_sites(tree, path, relative, source_hash):
         import_stores=import_stores,
         statement_expressions=statement_expressions,
         definition_sites=definition_sites,
+        function_expression_sites={
+            span: _function_expression_sites(
+                program.co_consts[proof["instructions"][0]["index"]], definitions[span]
+            )
+            for span, proof in definition_sites.items()
+        },
         exception_handlers=exception_handlers,
     )
 

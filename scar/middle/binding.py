@@ -761,8 +761,14 @@ def bind(graph, folder):
                 if not (
                     isinstance(code, dict)
                     and unit.get("language") == "python"
-                    and scope.get("kind") == code.get("kind") == "module"
-                    and name == scope.get("initializer")
+                    and scope.get("kind") == code.get("kind")
+                    and (
+                        code["kind"] == "module"
+                        and name == scope.get("initializer")
+                        or code["kind"] == "function"
+                        and code.get("code_sha256")
+                        == scope.get("definition_code", {}).get("code_sha256")
+                    )
                     and code.get("source_key")
                     == scope.get("source_key")
                     == unit["path"]
@@ -958,8 +964,29 @@ def bind(graph, folder):
         if covered.isdisjoint(function_names):
             continue
         payload = read_member(folder, unit["graph"])
+        publications = {
+            node["symbol"]: node["source_definition"]["child"]
+            for owner in payload["functions"]
+            if owner["signature"]["name"] in covered
+            for node in owner["nodes"]
+            if node["op"] == "python_define" and "source_definition" in node
+        }
         for fn in payload["functions"]:
             name = fn["signature"]["name"]
+            if name in publications:
+                descriptor = python_definitions[name]
+                child = fn["signature"]["python_scope"].get("definition_code")
+                if child != publications[name] or child != descriptor[
+                    "python_scope"
+                ].get("definition_code"):
+                    raise ValueError(
+                        "published child code disagrees with its source body"
+                    )
+                descriptor["source_body"] = dict(
+                    graph_id=fn["id"], code_sha256=child["code_sha256"]
+                )
+                if name not in covered:
+                    descriptor["body"] = _definition(fn, python_definitions)["body"]
             if name not in covered:
                 continue
             if "result" in fn["signature"] and "params" in fn["signature"]:

@@ -4,12 +4,18 @@ import ast
 from pathlib import Path
 import shlex
 
-from scar.contract import digest, json_bytes, python_constant_rhs_sha256
+from scar.contract import (
+    digest,
+    json_bytes,
+    python_constant_rhs_sha256,
+    walk_operations,
+)
 
 from . import io as io_effects
 from .imports import numeric_wire_value
 from .facts import (
     _function,
+    _FAST_READS,
     _literal_fact,
     _relative,
     assigned_names,
@@ -431,6 +437,7 @@ class _ModuleGraph:
         self.import_stores = parsed.import_stores
         self.statement_expressions = parsed.statement_expressions
         self.definition_sites = parsed.definition_sites
+        self.function_expression_sites = parsed.function_expression_sites
         self.exception_handlers = parsed.exception_handlers
         self.source_lines = parsed.source_text.splitlines()
         self.diagnostic_file = str(parsed.path)
@@ -620,6 +627,9 @@ class _Scope:
         self.qualified = qualified
         self.definition_path = qualified if definition_path is None else definition_path
         self.module_scope = globals_only
+        self.code = unit.source_code if globals_only else {}
+        self.expression_sites = unit.statement_expressions if globals_only else {}
+        self.load_sites = unit.name_loads if globals_only else {}
         self.class_scope = class_scope
         self.table = table
         self.parent = parent
@@ -680,25 +690,32 @@ class _Scope:
             }
         return {"op": "var", "name": name}
 
-    def source_expression(self, node):
-        if self.symbol == self.unit.root_symbol and (
-            receipt := self.unit.statement_expressions.get(tuple_position(node))
-        ):
+    def source_expression(self, node, operands=None):
+        if receipt := self.expression_sites.get(tuple_position(node)):
+            if self.code.get("kind") == "function":
+                fast = {
+                    row["offset"]
+                    for row in receipt["instructions"]
+                    if row["opcode"] in _FAST_READS
+                }
+                if fast and not fast.issubset(
+                    load["offset"]
+                    for operand in walk_operations(operands)
+                    if operand["op"] == "var"
+                    and (load := operand.get("source_name_load"))
+                ):
+                    return {}
             return {
-                "source_expression": dict(
-                    receipt, code_sha256=self.unit.source_code["code_sha256"]
-                )
+                "source_expression": dict(receipt, code_sha256=self.code["code_sha256"])
             }
         return {}
 
     def source_name_load(self, node):
-        if self.symbol == self.unit.root_symbol and (
-            load := self.unit.name_loads.get(tuple_position(node))
-        ):
+        if load := self.load_sites.get(tuple_position(node)):
             return {
                 "source_name_load": {
                     **load,
-                    "code_sha256": self.unit.source_code["code_sha256"],
+                    "code_sha256": self.code["code_sha256"],
                 }
             }
         return {}
@@ -832,11 +849,7 @@ class _Scope:
                     or self.unit.origin(self.unit.module)
                 ),
                 graph_backed=True,
-                **(
-                    {"source_code": self.unit.source_code}
-                    if self.module_scope and self.unit.source_code
-                    else {}
-                ),
+                **({"source_code": self.code} if self.code else {}),
                 **(
                     {"text_profile": self.unit.text_profile}
                     if self.unit.text_profile
@@ -947,7 +960,10 @@ class _Scope:
         if isinstance(node, ast.Name):
             f = self.fact(node.id)
             record = self.variable(node.id)
-            if f.get("external", "").startswith("builtins."):
+            if f.get("external", "").startswith("builtins.") and not (
+                self.load_sites.get(tuple_position(node), {}).get("opcode")
+                in _FAST_READS
+            ):
                 record = {"op": "python_builtin", "name": node.id}
                 if f["external"] in {"builtins.open", "builtins.input"}:
                     record["source_runtime"] = self.unit.runtime
@@ -1114,7 +1130,7 @@ class _Scope:
             keys = [{"name": key, "value": v} for key, (v, _) in key_items]
             key_facts = {key: f for key, (_, f) in key_items}
             fields = dict(target=target, args=args, keywords=keys)
-            fields.update(self.source_expression(node))
+            fields.update(self.source_expression(node, fields))
             if t.get("guards") or t.get("maybe_unbound"):
                 fields["binding_guard"] = dict(
                     status="conditional",
@@ -1988,12 +2004,21 @@ class _Scope:
             nested = _Scope(
                 self.unit, symbol, qual, table, parent=self, definition_path=link
             )
-            definition = nested.definition(node, node.body, params, facts)
             receipt = (
                 self.unit.definition_sites.get(tuple_position(node))
                 if self.module_scope
                 else None
             )
+            if receipt:
+                nested.code = dict(
+                    self.code,
+                    kind="function",
+                    code_sha256=receipt["child"]["code_sha256"],
+                )
+                nested.expression_sites, nested.load_sites = (
+                    self.unit.function_expression_sites[tuple_position(node)]
+                )
+            definition = nested.definition(node, node.body, params, facts)
             if receipt:
                 definition["python_scope"]["definition_code"] = receipt["child"]
                 creation["source_definition"] = dict(
@@ -2084,7 +2109,7 @@ class _Scope:
                                 }
                             }
                             if receipt
-                            else self.source_expression(node)
+                            else self.source_expression(node, value)
                         ),
                     )
                 ]
@@ -2300,7 +2325,10 @@ class _Scope:
                 )
             ]
         if isinstance(node, ast.Return):
-            return [R(node, "return", value=self.expr(node.value)[0])]
+            value = self.expr(node.value)[0]
+            return [
+                R(node, "return", value=value, **self.source_expression(node, value))
+            ]
         if isinstance(node, ast.Raise):
             return [
                 R(

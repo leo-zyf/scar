@@ -731,7 +731,9 @@ def test_module_constant_stores_bind_source_bytecode_and_graph(tmp_path, monkeyp
                 assert port["name"] == code.co_names[ins.arg]
                 assert arg["name"] == "py:bindings:" + port["name"]
     assert all(
-        "source_code" not in f["signature"]["python_scope"]
+        f["signature"]["python_scope"]["source_code"]["kind"] == "function"
+        and f["signature"]["python_scope"]["source_code"]["code_sha256"]
+        != scope["source_code"]["code_sha256"]
         and all("source_constant_store" not in n for n in f["nodes"])
         for f in unit["functions"]
         if f is not root
@@ -1273,6 +1275,92 @@ def test_module_iteration_joins_iterable_store_backedge_and_exhaustion(tmp_path)
             _definition(altered)
 
 
+def test_published_child_body_is_bound_to_compiled_signature_and_local_slots(tmp_path):
+    from copy import deepcopy
+    import dis
+    import pytest
+
+    from scar.contract import read_member, walk_operations
+    from scar.frontend import build
+    from scar.frontend.languages.python.environment import code_digest
+    from scar.middle.binding import bind, _definition
+
+    entry = tmp_path / "publish.py"
+    source = (
+        "def called(value): return value\ncalled(1)\n"
+        "def latent(head, /, *tail, flag, **rest):\n    report('entered')\n"
+        "    saved = helper(head)\n    alias = print\n    alias(saved)\n    return saved\n"
+    )
+    entry.write_text(source)
+    program = compile(source, str(entry), "exec", dont_inherit=True)
+    child = next(
+        c for c in program.co_consts if getattr(c, "co_name", None) == "latent"
+    )
+    folder = tmp_path / "graph"
+    build(entry, folder)
+    index = json.loads((folder / "graph.json").read_bytes())
+    fragment = read_member(folder, index["units"][0]["graph"])
+    entry.unlink()
+    module, _, _ = bind(index, folder)
+    module = json.loads(json.dumps(module))
+    main = {f["name"]: f for f in module["functions"]}
+    descriptors = module["python_definitions"]
+    candidates = {
+        d["source_body"]["code_sha256"]: d
+        for d in descriptors.values()
+        if "source_body" in d
+    }
+    candidate = candidates[code_digest(child)]
+    assert candidate["name"] == "py:publish:latent" and candidate["name"] not in main
+    active = descriptors["py:publish:called"]
+    assert "body" not in active and main[active["name"]]["body"]
+    graph = next(
+        f for f in fragment["functions"] if f["signature"]["name"] == candidate["name"]
+    )
+    assert candidate["source_body"]["graph_id"] == graph["id"]
+    identity = candidate["python_scope"]["definition_code"]
+    assert (
+        identity["parameters"]
+        == [[r["binding"], r["name"]] for r in candidate["params"]]
+        == [
+            ["posonly", "head"],
+            ["varargs", "tail"],
+            ["keywordonly", "flag"],
+            ["kwargs", "rest"],
+        ]
+    )
+    assert identity["varnames"] == list(child.co_varnames)
+    actual = {i.offset: i for i in dis.get_instructions(child)}
+    regions = [
+        node["source_expression"]
+        for node in walk_operations(candidate["body"])
+        if "source_expression" in node
+    ]
+    assert {r["instructions"][-1]["opcode"] for r in regions} == {
+        "POP_TOP",
+        "STORE_FAST",
+        "RETURN_VALUE",
+    }
+    for proof in regions:
+        assert proof["code_sha256"] == code_digest(child)
+        for row in proof["instructions"]:
+            ins = actual[row["offset"]]
+            assert row["opcode"] == ins.opname and row["position"] == list(
+                ins.positions
+            )
+            if ins.opname.startswith(("STORE_FAST", "LOAD_FAST")):
+                assert child.co_varnames[row["index"]] == row["name"]
+    wrong = deepcopy(graph)
+    store = next(
+        n["source_expression"]["instructions"][-1]
+        for n in wrong["nodes"]
+        if n["op"] == "assign"
+    )
+    store["index"] = store["oparg"] = 0
+    with pytest.raises(ValueError, match="fast local"):
+        _definition(wrong)
+
+
 def test_module_name_loads_follow_actual_callee_and_argument_ports(tmp_path):
     import dis
     import sys
@@ -1350,11 +1438,17 @@ def test_module_name_loads_follow_actual_callee_and_argument_ports(tmp_path):
         i.offset for i in instructions if i.positions.lineno == 2
     )
     assert ports[4]["op"] == "python_builtin"
+    [child] = [f for f in unit["functions"] if f is not root]
+    child_code = next(
+        v for v in code.co_consts if getattr(v, "co_name", None) == "inner"
+    )
+    child_loads = [
+        n["source_name_load"] for n in child["nodes"] if "source_name_load" in n
+    ]
+    assert {v["name"] for v in child_loads} == {"action", "arg"}
     assert all(
-        "source_name_load" not in n
-        for f in unit["functions"]
-        if f is not root
-        for n in f["nodes"]
+        v["code_sha256"] == code_digest(child_code) != code_digest(code)
+        for v in child_loads
     )
 
 
@@ -1608,7 +1702,13 @@ def test_module_call_expression_seals_ordered_operands_once(tmp_path, monkeypatc
         assert expressions == []
         return
     assert counter == {"compile": 1, "decode": 1}
-    [call] = expressions
+    root = next(f for f in unit["functions"] if f["signature"]["name"] == "__main__")
+    [call] = [n for n in root["nodes"] if "source_expression" in n]
+    [nested_call] = [n for n in expressions if n is not call]
+    assert (
+        nested_call["source_expression"]["code_sha256"]
+        != call["source_expression"]["code_sha256"]
+    )
     assert call["location"]["line"] == 1 and [k["name"] for k in call["keywords"]] == [
         "stacklevel"
     ]

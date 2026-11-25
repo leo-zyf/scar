@@ -322,6 +322,16 @@ def _bind_iteration_edges(node, proof, scope, successor):
         raise ValueError("source iteration lacks the implicit module return")
 
 
+def _fast_operand(row, node, code):
+    return (
+        node.get("op") == "var"
+        and not node.get("scope")
+        and not node.get("cell")
+        and node.get("name") == row["name"]
+        and _graph_position(node, code) == row["position"]
+    )
+
+
 def bind_source_expression(node, scope, successor=None):
     """Bind positioned instruction evidence; M2 verifies semantic evaluation order."""
     proof, code = node["source_expression"], scope.get("source_code") or {}
@@ -331,7 +341,8 @@ def bind_source_expression(node, scope, successor=None):
         isinstance(proof, dict)
         and type(proof.get("semantics_version")) is int
         and proof["semantics_version"] == 1
-        and code.get("kind") == "module"
+        and code.get("kind") == scope.get("kind")
+        and code["kind"] in {"function", "module"}
         and proof.get("code_sha256") == code.get("code_sha256")
         and loc.get("file") == code.get("source_key")
         and proof.get("position") == position
@@ -357,7 +368,7 @@ def bind_source_expression(node, scope, successor=None):
                 "value": None,
             }:
                 raise ValueError("source raise omits an evaluated operand")
-    elif operation not in {"assign", "unbind", "if", "for"} and not (
+    elif operation not in {"assign", "unbind", "if", "for", "return"} and not (
         isinstance(node.get("target"), dict)
         and isinstance(node.get("args"), list)
         and isinstance(node.get("keywords"), list)
@@ -367,7 +378,7 @@ def bind_source_expression(node, scope, successor=None):
     last = position[1], position[3]
     previous = -1
     sequences = None
-    binary_ports = None
+    binary_ports = fast_reads = None
     for instruction in proof["instructions"]:
         if not isinstance(instruction, dict):
             raise ValueError("invalid source instruction in call region")
@@ -468,6 +479,33 @@ def bind_source_expression(node, scope, successor=None):
                     "source sequence instruction disagrees with its display operands"
                 )
             continue
+        if opcode in {"LOAD_FAST", "LOAD_FAST_CHECK", "LOAD_FAST_BORROW", "STORE_FAST"}:
+            index = instruction.get("index")
+            slots = scope.get("definition_code", {}).get("varnames", ())
+            if (
+                code["kind"] != "function"
+                or type(index) is not int
+                or instruction.get("oparg") != index
+                or not 0 <= index < len(slots)
+                or slots[index] != instruction.get("name")
+            ):
+                raise ValueError("source fast local disagrees with its function slot")
+            if opcode != "STORE_FAST":
+                if fast_reads is None:
+                    fast_reads = {
+                        tuple(_graph_position(v, code) or ()): v
+                        for v in walk_operations(node)
+                        if v["op"] == "var" and v.get("source_name_load")
+                    }
+                operand = fast_reads.get(tuple(span), {})
+                if not _fast_operand(instruction, operand, code) or operand.get(
+                    "source_name_load"
+                ) != dict(
+                    instruction, semantics_version=1, code_sha256=code["code_sha256"]
+                ):
+                    raise ValueError(
+                        "source fast local disagrees with its lexical operand"
+                    )
         if opcode in {
             "LOAD_NAME",
             "LOAD_ATTR",
@@ -485,7 +523,7 @@ def bind_source_expression(node, scope, successor=None):
                 == (arg >> 1 if opcode in {"LOAD_GLOBAL", "LOAD_ATTR"} else arg)
             ):
                 raise ValueError("source call name operand disagrees with its index")
-        elif opcode in {"LOAD_CONST", "KW_NAMES", "LOAD_SMALL_INT"}:
+        elif opcode in {"LOAD_CONST", "KW_NAMES", "LOAD_SMALL_INT", "RETURN_CONST"}:
             immediate = opcode == "LOAD_SMALL_INT"
             arg = instruction.get("oparg")
             index_matches = (
@@ -524,12 +562,33 @@ def bind_source_expression(node, scope, successor=None):
             raise ValueError(
                 "source raise terminator disagrees with its operand count or position"
             )
+    elif operation == "return":
+        value = node.get("value", {})
+        if not (
+            code["kind"] == "function"
+            and last["position"] in (position, _graph_position(value, code))
+            and (
+                last["opcode"] == "RETURN_VALUE"
+                and len(proof["instructions"]) > 1
+                or last["opcode"] == "RETURN_CONST"
+                and len(proof["instructions"]) == 1
+                and value.get("op") == "literal"
+                and value.get("type", {}).get("class") == last.get("type")
+                and digest(json_bytes(value.get("value"))) == last.get("value_sha256")
+            )
+        ):
+            raise ValueError("source return disagrees with its function operand")
     elif operation == "assign":
         if not (
             isinstance(node.get("value"), dict)
             and len(proof["instructions"]) > 1
-            and last["opcode"] in {"STORE_NAME", "STORE_GLOBAL"}
-            and _namespace_target(last, node.get("target"), scope)
+            and (
+                _namespace_target(last, node.get("target"), scope)
+                and last["opcode"] in {"STORE_NAME", "STORE_GLOBAL"}
+                if code["kind"] == "module"
+                else last["opcode"] == "STORE_FAST"
+                and _fast_operand(last, node.get("target", {}), code)
+            )
         ):
             raise ValueError("source expression store disagrees with its target")
     elif operation == "unbind":
@@ -589,6 +648,29 @@ def bind_source_definition(node, scope, declarations):
         raise ValueError(
             "source definition disagrees with its child code or declaration"
         )
+    if "parameters" in child:
+        parameters = [[p.get("binding"), p.get("name")] for p in declared["params"]]
+        frame_args = [
+            name
+            for kinds in (
+                {"posonly", "positional"},
+                {"keywordonly"},
+                {"varargs"},
+                {"kwargs"},
+            )
+            for kind, name in parameters
+            if kind in kinds
+        ]
+        if not (
+            child["parameters"] == parameters
+            and isinstance(child.get("varnames"), list)
+            and child["varnames"][: len(parameters)] == frame_args
+            and nested.get("source_code")
+            == dict(parent, kind="function", code_sha256=child["code_sha256"])
+        ):
+            raise ValueError(
+                "published child code disagrees with its parameters or compilation unit"
+            )
     rows = proof.get("instructions")
     if not (
         isinstance(rows, list)
