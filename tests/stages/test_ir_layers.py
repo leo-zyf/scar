@@ -279,6 +279,7 @@ def test_binding_preserves_unit_scoped_provider_and_export_evidence(
     from base64 import urlsafe_b64encode
     from hashlib import sha256
 
+    from scar.contract import walk_operations
     from scar.frontend import build
 
     source, installed, graph = (tmp_path / n for n in ("source", "installed", "graph"))
@@ -293,7 +294,9 @@ def test_binding_preserves_unit_scoped_provider_and_export_evidence(
     )
     (package / "ops.py").write_text("from .kernel import apply, reduce\n")
     kernel = package / "kernel.py"
-    kernel.write_text("def apply(x): return x\ndef reduce(x): return x\n")
+    kernel.write_text(
+        "def apply(x): return x\ndef reduce(x): return x\nprint('kernel-init')\nmarker = 42\n"
+    )
     kernel_hash = sha256(kernel.read_bytes()).hexdigest()
     metadata = installed / "provider_sample-1.0.dist-info"
     metadata.mkdir()
@@ -315,20 +318,34 @@ def test_binding_preserves_unit_scoped_provider_and_export_evidence(
         "import provider_sample\ndef run(): return provider_sample.ops.reduce(2)\n"
     )
     build(entry, graph)
+    cached = source / "cached.py"
+    cached.write_text(
+        "import importlib as lib\nfrom importlib import import_module as lookup\n"
+        "import provider_sample.kernel\n"
+        "def read(): return lookup('provider_sample.kernel').marker\n"
+        "before = read()\n"
+        "print(read(), lib.import_module('.kernel', package='provider_sample').marker, before)\n"
+    )
+    cached_graph = tmp_path / "cached-graph"
+    build(cached, cached_graph)
+    reference = subprocess.run(
+        [sys.executable, "-B", str(cached)],
+        env={**os.environ, "PYTHONPATH": str(installed)},
+        check=True,
+        capture_output=True,
+    )
+    assert reference.stdout == b"kernel-init\n42 42 42\n"
     source.rename(tmp_path / "hidden-source")
     installed.rename(tmp_path / "hidden-provider")
-    bound = _layer(
-        "binding",
-        """from pathlib import Path
+    script = """from pathlib import Path
 from scar.contract import GRAPH, open_product
 from scar.middle.binding import bind
 path, _, graph = open_product(Path(data), "graph.json", GRAPH)
 program, issues, _ = bind(graph, path.parent)
 assert not issues
 print(json.dumps(program))
-""",
-        str(graph),
-    )
+"""
+    bound = _layer("binding", script, str(graph))
     functions = {fn["name"]: fn for fn in bound["functions"]}
     root = functions["__main__"]["python_scope"]["provider_sources"]
     caller = functions["py:sibling:run"]["python_scope"]
@@ -351,23 +368,73 @@ print(json.dumps(issue))
 """,
         bound,
     )
-    assert issue["code"] == "python.import_semantics"
-    summary = issue["source_evidence"]["modules"]
-    assert summary["provider_sample"]["exports"]["ops.apply"]["unresolved"] == [
-        "unbound"
-    ]
-    scoped = summary["provider_sample.ops"]
-    assert scoped["provider_id"] == root["provider_sample.ops"]["provider_id"]
-    export = scoped["exports"]["apply"]
+    assert issue["code"] == "python.import_module_cache"
+    assert issue["source_evidence"]["module"] == "provider_sample.ops"
+    assert issue["source_evidence"]["registry_state"] == "no_scheduled_initialization"
+    export = root["provider_sample.ops"]["exports"]["apply"]
     assert not export["unresolved"]
     (definition,) = export["candidates"]
-    assert definition == dict(
-        module="provider_sample.kernel",
-        member="provider_sample/kernel.py",
-        name="apply",
-        line=1,
-        sha256=kernel_hash,
+    assert (definition["module"], definition["line"], definition["sha256"]) == (
+        "provider_sample.kernel",
+        1,
+        kernel_hash,
     )
+
+    bound_cached = _layer("binding", script, str(cached_graph))
+    result, decisions, issues = _layer(
+        "normalization",
+        "from scar.middle.normalization.protocols import normalize_protocols\nprint(json.dumps(normalize_protocols(data)))",
+        bound_cached,
+    )
+    assert not issues and result["protocol_analysis"]["status"] == "READY"
+    requirement = result["operator_requirements"]["module_registry"]
+    assert requirement["operations"] == ["module_namespace_initialize"]
+    assert (
+        requirement["entry_contract"]["initial_cache"] == "unobserved_by_static_capture"
+    )
+    ops = list(walk_operations(result["functions"]))
+    init = "py:provider_sample.kernel:<init>"
+    assert sum(n.get("callee") == init for n in ops) == 1
+    namespace = next(n for n in ops if n["op"] == "module_namespace_initialize")
+    assert namespace["may_raise"] and "process.import_hooks" in namespace["reads"]
+    hits = [d for d in decisions if d["code"] == "module_registry_hit"]
+    assert {d["owner"] for d in hits} == {"py:cached:read", "__main__"}
+    assert all(
+        d["initialized_by"]["initializer"] == init and d["initialized_by"]["site"]
+        for d in hits
+    )
+
+    # The same compiled bodies cease to prove a cache hit when a later
+    # effectful namespace import can mutate the registry through hooks.
+    body = next(f["body"] for f in bound_cached["functions"] if f["name"] == "__main__")
+    again = next(
+        n
+        for n in body
+        if n.get("op") == "python_import" and n["request"]["form"] == "from"
+    )
+    target = next(n for n in body if n.get("module") == "provider_sample.kernel")
+
+    def after_registry_write(position, *, repeat_target=False):
+        body[position:position] = [again, target] if repeat_target else [again]
+        try:
+            return _layer(
+                "normalization",
+                "from scar.middle.normalization.protocols import normalize_protocols\n_,_,(issue,) = normalize_protocols(data)\nprint(json.dumps(issue))",
+                bound_cached,
+            )
+        finally:
+            del body[position : position + (2 if repeat_target else 1)]
+
+    issue = after_registry_write(body.index(target) + 1)
+    assert issue["code"] == "python.import_module_cache"
+    assert issue["source_evidence"]["registry_state"] == "unresolved"
+    ordinary = after_registry_write(body.index(target) + 1, repeat_target=True)
+    assert ordinary["code"] == "python.import_initializer_state"
+    assert ordinary["source_evidence"]["registry_state"] == "unresolved"
+    before = next(n for n in body if n["op"] == "assign")
+    cached_call = after_registry_write(body.index(before) + 1)
+    assert cached_call["code"] == "python.import_module_cache"
+    assert cached_call["source_evidence"]["required"]["initializer"] == init
 
 
 def test_execution_scopes_automatic_for_initializers_before_sealing():

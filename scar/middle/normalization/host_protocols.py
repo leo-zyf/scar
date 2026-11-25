@@ -2,6 +2,7 @@
 
 import math
 
+from scar.contract import python_provider_id
 from . import scalars, sequences, text
 from .values import Value, argument_evidence, literal, sequence_kind, source_site, wire
 
@@ -78,6 +79,7 @@ _METHODS = {
 }
 _MEMBERS = {
     "glob": {"glob"},
+    "importlib": {"import_module"},
     "os": {"path", "mkdir", "makedirs", "chdir", "getcwd"},
     "os.path": {"join", "exists", "isfile", "isdir"},
     "shutil": {"rmtree", "copyfile", "copy", "copy2", "copytree"},
@@ -375,6 +377,155 @@ def builtin(frame, node, name):
     return None
 
 
+_IMPORTLIB_PROFILE = "cpython-importlib-registry-v1"
+
+
+def _importlib_namespace(frame, node, source, steps):
+    stored = frame.provider_sources.get("importlib", {})
+    if not (
+        source.get("interpreter", "").startswith("cpython 3.")
+        and source.get("proof_scope") == "resolved_module"
+        and source.get("loader") == "path"
+        and source.get("hash_basis") == "provider_file"
+        and source.get("origin")
+        and stored.get("sha256") == source["sha256"]
+        and stored.get("origin") == source["origin"]
+        and stored.get("provider_id") == python_provider_id(source)
+    ):
+        frame.fail(
+            node,
+            "importlib_source",
+            "importlib requires a sealed CPython standard-library source and matching unit provenance",
+        )
+    family, operation = "module_registry", "module_namespace_initialize"
+    previous = frame.project.registry.get("importlib", {})
+    known = (
+        previous.get("state") == "ready"
+        and previous.get("source_provider_id") == stored["provider_id"]
+    )
+    frame.project.require_operator(
+        family,
+        operation,
+        profile=_IMPORTLIB_PROFILE,
+        scope="process_module_registry",
+        entry_contract={
+            "initial_cache": "unobserved_by_static_capture",
+            "graph_module_first_import": "require_absent_entry_before_each_scheduled_graph_initializer",
+            "hooks": "preserve_import_callbacks_audit_and_failures",
+            "interference": "exclude_unmodelled_registry_replacement_across_each_folded_lookup",
+            "bound_callable": "qualify_the_recorded_source_revision_and_unmodified_CPython_import_module_cache_path",
+        },
+    )
+    frame.effect(
+        dict(
+            op=operation,
+            operator_family=family,
+            type="unit",
+            semantics_version=1,
+            source_protocol="python.import",
+            scope="process_module_registry",
+            module="importlib",
+            source_provider_id=stored["provider_id"],
+            source_sha256=source["sha256"],
+            interpreter=source["interpreter"],
+            request=node["request"],
+            effects=list(
+                dict.fromkeys(
+                    [*node.get("effects", ["UNKNOWN"]), "CTRL", "STATE", "IO", "MEM"]
+                )
+            ),
+            reads=[
+                "module.registry",
+                "process.import_hooks",
+                "process.audit_hooks",
+                "filesystem",
+            ],
+            writes=[
+                "module.registry",
+                "process.audit_events",
+                "import.external_effects",
+            ],
+            may_raise=True,
+            allocates="UNKNOWN",
+            frees="UNKNOWN",
+            aliases="UNKNOWN",
+            escapes="UNKNOWN",
+            rng_effect="UNKNOWN",
+            external_effect="UNKNOWN",
+            ordering_effect="UNKNOWN",
+            initialization=dict(
+                policy="reuse_or_initialize_once_on_success",
+                entry_state="inspect_runtime_cache",
+                cold="preserve_source_initializer_dependencies_hooks_and_failures",
+                cached="preserve_import_request_and_current_module_identity",
+                qualified_export="unmodified_cpython_import_module_and_bootstrap",
+                unproven_binding="requires_equivalent_import_protocol",
+                **({"expected_instance": previous} if known else {}),
+            ),
+            **source_site(node),
+        ),
+        "unit",
+        steps,
+        True,
+    )
+    proof = (
+        previous
+        if known
+        else dict(
+            state="ready",
+            source_provider_id=stored["provider_id"],
+            owner=frame.name,
+            **source_site(node),
+        )
+    )
+    frame.project.registry["importlib"] = proof
+    return proof
+
+
+def _import_module(frame, node, target, args, keywords):
+    name, package = _bind(
+        frame,
+        node,
+        args,
+        keywords,
+        [("name", "text", _REQUIRED), ("package", ("unit", "text"), None)],
+    )
+    if type(name.exact) is not str:
+        frame.fail(
+            node,
+            "import_module_name",
+            "a dynamic module name requires runtime import dispatch and registry lookup",
+        )
+    module = name.exact
+    if not module:
+        frame.fail(
+            node,
+            "import_module_name",
+            "an empty module name requires the source ValueError contract",
+        )
+    if module.startswith("."):
+        anchor = package.exact
+        suffix = module.lstrip(".")
+        level = len(module) - len(suffix)
+        if type(anchor) is not str or not anchor or level > len(anchor.split(".")):
+            frame.fail(
+                node,
+                "import_module_package",
+                "relative import needs a known package and a valid parent, or its source exception contract",
+            )
+        parent = anchor.rsplit(".", level - 1)[0] if level > 1 else anchor
+        module = ".".join((parent, suffix)) if suffix else parent
+    proof = frame.project.registry.get("importlib", {})
+    if proof.get("state") != "ready" or proof != target.facts.get("namespace_instance"):
+        frame.fail(
+            node,
+            "import_module_binding",
+            "importlib's qualified namespace and bootstrap availability are no longer proven",
+        )
+    frame.project.read_registry("importlib", proof)
+    return frame.cached_module(node, module)
+
+
 def import_provider(frame, node, steps):
     source = node.get("source_provider", {})
     module = node["module"]
@@ -408,6 +559,12 @@ def import_provider(frame, node, steps):
                 "one program resolves conflicting glob dependencies",
             )
         _glob_import(frame, node, source, steps)
+    namespace_facts = source
+    if module == "importlib":
+        namespace_facts = {
+            **source,
+            "namespace_instance": _importlib_namespace(frame, node, source, steps),
+        }
     if module == "os.path":
         _path_identity(frame, node, source)
     frame.project.providers[key] = dict(
@@ -415,10 +572,14 @@ def import_provider(frame, node, steps):
         contract=(
             _GLOB_PROFILE
             if module == "glob"
-            else "closed host APIs with explicit resource effects"
+            else (
+                _IMPORTLIB_PROFILE
+                if module == "importlib"
+                else "closed host APIs with explicit resource effects"
+            )
         ),
     )
-    namespace = Value("host_namespace", module, source)
+    namespace = Value("host_namespace", module, namespace_facts)
     if node["request"]["form"] == "from":
         return member(frame, node, namespace, node["member"])
     if module == "os.path" and not node.get("alias"):
@@ -610,6 +771,8 @@ def invoke(frame, node, target, args, keywords, steps, discard):
     if target.kind != "host_callable":
         return None
     name = target.value
+    if name == "importlib.import_module":
+        return _import_module(frame, node, target, args, keywords)
     if name == "glob.glob":
         return _glob(frame, node, args, keywords, steps, discard)
     if name.startswith("math."):

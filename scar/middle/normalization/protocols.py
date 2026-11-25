@@ -239,6 +239,9 @@ class _Project:
         self.actual_calls = set()
         self.active = []
         self.global_reads = {}
+        self.registry = {}
+        self.registry_reads = {}
+        self.registry_writes = {}
         self.shadow, self.single_bind_globals = _global_bindings(functions)
         self.sequences = sequences.Domains(functions, self.single_bind_globals)
 
@@ -260,6 +263,21 @@ class _Project:
         for active in self.active:
             if self.functions[active]["python_scope"]["kind"] == "function":
                 self.global_reads[active][name] = (value.kind, value.value)
+
+    def read_registry(self, name, proof):
+        for active in self.active:
+            if self.functions[active]["python_scope"]["kind"] == "function":
+                self.registry_reads[active][name] = proof
+
+    def unknown_registry(self, owner, node):
+        """An external import can invoke hooks and replace existing entries."""
+        change = dict(state="unresolved", owner=owner, **values.source_site(node))
+        for active in self.active:
+            if self.functions[active]["python_scope"]["kind"] == "function":
+                self.registry_writes[active] = change
+        for name, previous in self.registry.items():
+            if previous["state"] == "ready":
+                self.registry[name] = change
 
     def inactive_bodies(self, activation):
         """Only proven edge removal can turn a required body into an inactive body."""
@@ -335,6 +353,27 @@ class _Project:
                         f"cached function requires initialized binding {slot} at this call",
                     )
                 self.global_read(slot, current)
+            for module, proof in self.registry_reads.get(name, {}).items():
+                if self.registry.get(module) != proof:
+                    error = _Unclosed(
+                        name,
+                        source or fn,
+                        "import_module_cache",
+                        f"the preceding initialization proof for {module} no longer holds at this call",
+                    )
+                    current = self.registry.get(module, {})
+                    error.issue["source_evidence"] = dict(
+                        module=module,
+                        required=proof,
+                        registry_state=current.get(
+                            "state", "no_scheduled_initialization"
+                        ),
+                        last_change=current,
+                    )
+                    raise error
+                self.read_registry(module, proof)
+            if write := self.registry_writes.get(name):
+                self.unknown_registry(write["owner"], write)
             return self.closed[name]
         scope = fn.get("python_scope", {})
         kind = scope.get("kind")
@@ -362,6 +401,8 @@ class _Project:
             )
         self.active.append(name)
         self.global_reads[name] = {}
+        self.registry_reads[name] = {}
+        registry_prefix = self.registry.copy() if kind == "module" else None
         saved_contents = self.array_state.contents if kind == "function" else None
         if saved_contents is not None:
             self.array_state.contents = {}
@@ -370,6 +411,10 @@ class _Project:
             try:
                 result = frame.lower()
             except _Unclosed:
+                if registry_prefix is not None:
+                    # No caller may use a proof that required the failed
+                    # initializer to return. Its executed prefix is reported.
+                    self.registry = registry_prefix
                 self.prefixes.append(frame.prefix_fragment())
                 raise
             self.types[name] = types
@@ -443,6 +488,16 @@ class _Frame:
             self.region.current if self.region is not None else None
         )
         node = {**values.source_site(source or {}), **node}
+        if any(
+            domain in node.get("writes", ())
+            for domain in (
+                "module.registry",
+                "process.import_hooks",
+                "import.external_effects",
+                "audit_hook.external_effects",
+            )
+        ):
+            self.project.unknown_registry(self.name, node)
         if discard:
             steps.append(dict(op="expr", value=node))
             return _literal(None)
@@ -964,6 +1019,43 @@ class _Frame:
             return None
         self.fail(node, "attribute", f"unbound module attribute {module}.{member}")
 
+    def cached_module(self, node, module):
+        """Prove the graph-owned module instance from its preceding activation."""
+        symbol = self.project.initializers.get(module)
+        row = self.project.registry.get(module, {})
+        if (
+            row.get("state") != "ready"
+            or not symbol
+            or row.get("initializer") != symbol
+        ):
+            state = row.get("state", "no_scheduled_initialization")
+            if symbol and symbol in self.project.active:
+                state = "initializing"
+            self.fail(
+                node,
+                "import_module_cache",
+                f"{module!r} has no proven completed module-registry entry ({state}); cold loading, import hooks and loader failures require a runtime contract",
+                source_evidence={
+                    "module": module,
+                    "registry_state": state,
+                    "initializer": symbol,
+                    "scope": "process_module_registry",
+                    **({"last_change": row} if row else {}),
+                },
+            )
+        self.project.read_registry(module, row)
+        self.project.decisions.append(
+            dict(
+                code="module_registry_hit",
+                scope="process_module_registry",
+                module=module,
+                owner=self.name,
+                initialized_by=row,
+                **values.source_site(node),
+            )
+        )
+        return _Value("module", module)
+
     def imported(self, node, steps):
         req = node.get("request", {})
         mod = node["module"]
@@ -1020,6 +1112,10 @@ class _Frame:
                     f"{mod} resolves to {identity} at {origin.get('origin')}. Its initialization, effects and exported bindings have no execution contract.",
                     source_evidence=self._import_evidence(mod),
                 )
+            if not value.facts.get("namespace_instance"):
+                # A pinned provider identifies the code, but its import hooks
+                # can write process state even when the bound export is pure.
+                self.project.unknown_registry(self.name, node)
             self.store(node["binding"], value, steps)
             return
 
@@ -1031,8 +1127,34 @@ class _Frame:
                 self.fail(
                     node, "import_initializer", f"missing module initializer {symbol}"
                 )
-            if symbol not in self.project.closed:
-                self.project.compile(symbol, (), source=node)
+            name = scope["module"]
+            previous = self.project.registry.get(name)
+            if previous is not None and previous.get("state") != "ready":
+                self.fail(
+                    node,
+                    "import_initializer_state",
+                    f"an earlier import effect left the registry binding of {name} unresolved",
+                    source_evidence=dict(
+                        module=name,
+                        initializer=symbol,
+                        registry_state=previous["state"],
+                        last_change=previous,
+                    ),
+                )
+            if previous is not None and previous.get("initializer") != symbol:
+                self.fail(
+                    node,
+                    "import_initializer_identity",
+                    f"the current entry for {name} does not match its graph initializer",
+                )
+            if previous is None:
+                fn = self.project.compile(symbol, (), source=node)
+                if fn.get("noreturn"):
+                    self.fail(
+                        node,
+                        "import_initializer_completion",
+                        f"the initializer for {name} has no proven normal continuation",
+                    )
                 steps.append(
                     dict(
                         op="expr",
@@ -1043,6 +1165,14 @@ class _Frame:
                             **values.source_site(node),
                         ),
                     )
+                )
+                # Only the continuation of this emitted call has an initialized
+                # module. Merely compiling or finding a cached body proves less.
+                self.project.registry[name] = dict(
+                    state="ready",
+                    initializer=symbol,
+                    owner=self.name,
+                    **values.source_site(node),
                 )
             parent, _, leaf = scope["module"].rpartition(".")
             if parent:
@@ -1058,7 +1188,7 @@ class _Frame:
 
         for symbol in node["initializers"]:
             initialize(symbol)
-        if self.project.initializers.get(mod) not in self.project.closed:
+        if self.project.registry.get(mod, {}).get("state") != "ready":
             self.fail(
                 node, "import_initializer", f"incomplete or circular import of {mod}"
             )

@@ -2079,10 +2079,15 @@ def test_import_closure_distinguishes_missing_sources_and_missing_semantics(tmp_
         report = _stage(
             folder, "middle", "plan", "--graph", graph, "--out", plan, returncode=2
         )
-        assert report["status"] == "INCOMPLETE" and report["blockers"] == 1
+        assert report["status"] == "INCOMPLETE" and report["blockers"] >= 1
         product = json.loads((plan / "plan.json").read_bytes())
-        assert product["issues"][0]["code"] == code
-        assert module in product["issues"][0]["detail"]
+        matching = [issue for issue in product["issues"] if issue["code"] == code]
+        assert matching
+        assert any(
+            module in issue["detail"]
+            or issue.get("symbol", "").startswith(f"py:{module}:")
+            for issue in matching
+        )
         execution = json.loads((plan / "exec-ir.json").read_bytes())
         assert execution["status"] == "INCOMPLETE" and not execution["functions"]
 
@@ -3065,8 +3070,12 @@ def test_fortran_numeric_facts_preserve_source_kinds_and_selected_policy(tmp_pat
             errno="unproven", fenv="unproven"
         )
         assert contract["runtime_fp_environment"] == "unobserved"
-        assert contract["applicability"]["include_contents"] == "not_fingerprinted"
+        assert (
+            contract["applicability"]["include_contents"]
+            == "selected_semantic_inputs_fingerprinted_with_coverage"
+        )
         assert "-Q" not in contract["validated_command"]
+        assert "-v" in contract["validated_command"]
         assert contract["option_query"]["command"][-1] == str(source)
         assert contract["option_query"]["returncode"] == 0
         for tool in ("driver", "frontend"):
@@ -3110,12 +3119,90 @@ def test_fortran_numeric_facts_preserve_source_kinds_and_selected_policy(tmp_pat
             for c in calls
         )
         assert {"__log_r8", "__sqrt_r8"} <= set(signature["source_intrinsic_bindings"])
+        semantic = contract["semantic_capture"]
+        assert semantic["returncode"] == 0
+        assert semantic["started_ns"] <= semantic["finished_ns"]
+        assert Path(semantic["frontend_argv"][0]).resolve() == Path(
+            contract["compiler"]["frontend"]["path"]
+        )
+        selected = [
+            file
+            for file in semantic["inputs"]
+            if file["evidence"] == "gnu_semantic_preinclude"
+        ]
+        assert selected
+        for file in selected:
+            raw = Path(file["path"]).read_bytes()
+            assert file["sha256"] == sha256(raw).hexdigest()
+            assert file["size"] == len(raw)
+            assert facts["external_headers"][file["path"]] == {
+                k: file[k] for k in ("sha256", "size", "evidence")
+            }
+        interfaces = contract["source_math_interfaces"]
+        assert any(
+            i["interface"] == "pow"
+            and i["attributes"]["simd"]["branch"] == "notinbranch"
+            for i in interfaces
+        )
+        for interface in interfaces:
+            assert interface["execution"] == "not_observed"
+            evidence = interface["evidence"]
+            assert (
+                evidence["sha256"]
+                == facts["external_headers"][evidence["file"]]["sha256"]
+            )
+            assert evidence["line"] > 0
+            if interface["target_condition"] is not None:
+                assert interface["target_condition"]["evaluation"] == "unresolved"
+        assert (
+            semantic["coverage"]["source_includes"]
+            == "unresolved_without_preprocessor_dependency_inventory"
+        )
         assert any(
             n.get("op") == "binary"
             and n.get("operator") == "gt"
             and n["type"] == "bool"
             for n in nodes
         )
+
+    selected_include = tmp_path / "selected include.inc"
+    selected_include.write_text("integer, parameter :: selected_constant=7\n")
+    (tmp_path / "unselected.inc").write_text("not valid Fortran\n")
+    cpp_data = data.replace(
+        b"real(8), intent(in)",
+        b'#if 0\n#include "unselected.inc"\n#endif\n#include "selected include.inc"\nreal(8), intent(in)',
+        1,
+    )
+    source.write_bytes(cpp_data)
+    request.write_text(
+        json.dumps(
+            dict(
+                language="fortran",
+                source_root=str(tmp_path),
+                entry="typed_",
+                units=[dict(path=source.name, flags=["-O3", "-cpp"])],
+            )
+        )
+    )
+    graph = tmp_path / "graph-cpp"
+    _stage(tmp_path, "frontend", "build", "--manifest", request, "--out", graph)
+    document = json.loads((graph / "graph.json").read_bytes())
+    assert not document["units"][0]["diagnostics"]
+    facts = document["units"][0]["source_facts"]
+    assert facts["files"] == {
+        source.name: sha256(cpp_data).hexdigest(),
+        selected_include.name: sha256(selected_include.read_bytes()).hexdigest(),
+    }
+    unit = _payloads(graph, document)[0]
+    signature = next(
+        f["signature"] for f in unit["functions"] if f["signature"]["name"] == "typed_"
+    )
+    assert (
+        signature["source_numeric_contract"]["semantic_capture"]["coverage"][
+            "source_includes"
+        ]
+        == "same_semantic_command_dependency_inventory"
+    )
 
 
 def test_fixed_form_program_emits_cpp20(tmp_path):

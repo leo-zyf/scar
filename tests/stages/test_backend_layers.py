@@ -404,6 +404,23 @@ def test_file_graph_and_workflow_members_survive_schedule_relocation(
 
 
 def test_backend_products_replay_and_reject_changed_bytes(tmp_path):
+    from dataclasses import replace
+
+    from scar.backend.cpp20.model import (
+        Attribute,
+        Decl,
+        Expr,
+        Stmt,
+        Type,
+        Unit,
+        call,
+        encode_unit,
+        named,
+        to_data,
+        unit_from_data,
+    )
+    from scar.contract import read_member
+
     def run(layer, source, out, expected=None):
         env = dict(
             os.environ,
@@ -452,6 +469,12 @@ def test_backend_products_replay_and_reject_changed_bytes(tmp_path):
                     args=[dict(op="string", value="sealed project")],
                 ),
             ),
+            dict(
+                op="expr",
+                value=dict(
+                    op="call", callee="puts", args=[dict(op="string", value="ordinary")]
+                ),
+            ),
             dict(op="return", value=dict(op="literal", type="i32", value=0)),
         ],
     )
@@ -481,22 +504,79 @@ def test_backend_products_replay_and_reject_changed_bytes(tmp_path):
     incoming.rename(tmp_path / "hidden-physical-input")
     run("B2a", b1 / "scheduled-ir.json", b2a)
     b1.rename(tmp_path / "hidden-schedule")
-    run("B2b", b2a / "target-ir.json", b2b)
     target = json.loads((b2a / "target-ir.json").read_bytes())
+    # Exercise both target spellings of the same sealed libc binding.
+    alias = Decl(
+        "function",
+        name="line_writer",
+        type=named("int"),
+        linkage="C",
+        params=(
+            Decl(
+                "param", type=Type("ptr", element=Type("const", element=named("char")))
+            ),
+        ),
+        qualifiers=("noexcept(false)",),
+        asm_label="puts",
+    )
+    for invalid in (
+        replace(alias, asm_label='puts");'),
+        replace(alias, asm_label="std::puts"),
+        replace(alias, linkage=None),
+        replace(alias, body=()),
+        replace(alias, definition="delete"),
+        replace(alias, storage=("static",)),
+        replace(alias, qualifiers=("const",)),
+        replace(
+            alias,
+            attributes=(
+                Attribute("__gnu__::__alias__", (Expr("string", value="local"),)),
+            ),
+        ),
+        Decl("variable", name="data", type=named("int"), asm_label="puts"),
+        Decl("record", name="Holder", members=(alias,)),
+        Decl(
+            "function",
+            name="outer",
+            type=named("void"),
+            body=(Stmt("declaration", decl=alias),),
+        ),
+    ):
+        with pytest.raises(ValueError):
+            encode_unit(Unit(declarations=(invalid,)))
+
+    text = Expr("string", value="sealed project")
+    old_call, new_call = (
+        to_data(call(symbol, text)) for symbol in ("::puts", alias.name)
+    )
+
+    def bind_call(node):
+        if node == old_call:
+            return new_call
+        if isinstance(node, dict):
+            return {key: bind_call(value) for key, value in node.items()}
+        if isinstance(node, list):
+            return [bind_call(value) for value in node]
+        return node
+
+    for part in target["units"]:
+        unit = unit_from_data(bind_call(read_member(b2a, part["tree"])))
+        if part["output"] == "include/scar/program.hpp":
+            unit = replace(unit, declarations=(*unit.declarations, alias))
+        part["tree"] = member(b2a, "target-units", encode_unit(unit))
+    sealed = b2a / "alias-target.json"
+    write_json(sealed, target)
+    run("B2b", sealed, b2b)
+    cpp = b2b / "project"
+    header = "".join((cpp / "include/scar/program.hpp").read_text().split())
+    assert 'noexcept(false)asm("puts");' in header
+    code = (cpp / "src/program.cpp").read_text()
+    assert 'line_writer("sealed project")' in code and '::puts("ordinary")' in code
     assert target["operator_sdks"]["XTensor"]["provider"] == "xtensor-cpu"
     cmake = (b2b / "project/CMakeLists.txt").read_text()
     assert "vendor/xtensor-cpu/include" in cmake
     assert "SCAR_CPU_SDK" not in cmake and "find_package(xtensor" not in cmake
     source_tree = b2a / target["units"][0]["tree"]["path"]
-    from scar.backend.cpp20.model import (
-        Decl,
-        Expr,
-        Stmt,
-        Unit,
-        encode_unit,
-        named,
-        to_data,
-    )
 
     wrong_arity = Expr("binary", operator="+", args=(Expr("literal", value=1),))
     invalid = Unit(
@@ -521,12 +601,12 @@ def test_backend_products_replay_and_reject_changed_bytes(tmp_path):
     run("B2b", corrupt, tmp_path / "invalid-tree", expected)
     assert not (tmp_path / "invalid-tree/project").exists()
     source_tree.write_bytes(source_tree.read_bytes() + b" ")
-    run("B2b", b2a / "target-ir.json", tmp_path / "changed-tree", "checksum mismatch")
+    run("B2b", sealed, tmp_path / "changed-tree", "checksum mismatch")
     assert not (tmp_path / "changed-tree/project").exists()
     b2a.rename(tmp_path / "hidden-target")
     run("B3", b2b / "cpp20.json", b2b)
     native = b2b / "project/bin/scar_entry"
-    assert subprocess.check_output([native]) == b"sealed project\n"
+    assert subprocess.check_output([native]) == b"sealed project\nordinary\n"
     success = json.loads((b2b / "build.json").read_bytes())
     assert success["stage"] == "B3" and success["warnings"] == 0
     assert 1 <= success["build_workers"] <= success["execution_host"]["worker_budget"]

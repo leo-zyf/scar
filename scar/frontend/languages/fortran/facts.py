@@ -7,10 +7,12 @@ from itertools import chain
 import json
 from pathlib import Path
 import re
+import shlex
 import shutil
 import subprocess
 from tempfile import TemporaryDirectory
 from threading import Lock
+from time import time_ns
 
 
 class Gap(ValueError):
@@ -704,6 +706,175 @@ def _compiler_receipt(driver, frontend, identities):
     }
 
 
+def _dependency_inputs(text):
+    text = text.replace("\\\n", "")
+    if not re.match(r"scar-fortran-source(?=[:\s])", text):
+        raise ValueError("unexpected GNU dependency target")
+    index = len("scar-fortran-source")
+    while index < len(text) and text[index] != ":":
+        index += 2 if text[index] == "\\" else 1
+    if index == len(text):
+        raise ValueError("missing GNU dependency separator")
+    words, word, index = [], [], index + 1
+    while index < len(text):
+        char = text[index]
+        index += 1
+        if char.isspace():
+            if word:
+                words.append("".join(word))
+                word = []
+        elif char == "\\" and index < len(text):
+            word.append(text[index])
+            index += 1
+        elif char == "$" and text[index : index + 1] == "$":
+            word.append("$")
+            index += 1
+        elif char in "$#:":
+            raise ValueError("unsupported GNU dependency escaping")
+        else:
+            word.append(char)
+    if word:
+        words.append("".join(word))
+    return words
+
+
+def _math_interfaces(content, path, revision):
+    records, unresolved = [], []
+    grammar = re.compile(
+        r"^\s*!gcc\$\s+builtin\s*\(\s*([a-z_]\w*)\s*\)\s+"
+        r"attributes\s+simd\s*\(\s*(inbranch|notinbranch)\s*\)\s*"
+        r"(?:if\s*\(\s*(['\"])([^'\"]+)\3\s*\))?\s*$",
+        re.I,
+    )
+    for line, source in enumerate(content.decode(errors="replace").splitlines(), 1):
+        if not re.match(r"^\s*!gcc\$", source, re.I):
+            continue
+        evidence = {"file": path, "sha256": revision, "line": line}
+        match = grammar.fullmatch(source)
+        if match is None:
+            unresolved.append({"reason": "unsupported_builtin_directive", **evidence})
+            continue
+        records.append(
+            {
+                "semantics_version": 1,
+                "interface": match[1].lower(),
+                "declaration": "gnu_builtin",
+                "attributes": {"simd": {"branch": match[2].lower()}},
+                "target_condition": (
+                    {"selector": match[4], "evaluation": "unresolved"}
+                    if match[4]
+                    else None
+                ),
+                "evidence": {"provider": "gnu_semantic_preinclude", **evidence},
+                "execution": "not_observed",
+            }
+        )
+    return records, unresolved
+
+
+def _semantic_inputs(capture, root, frontend):
+    invocations = []
+    for line in capture["semantic_stderr"].decode(errors="replace").splitlines():
+        try:
+            words = shlex.split(line)
+        except ValueError:
+            continue
+        if (
+            words
+            and Path(words[0]).is_absolute()
+            and Path(words[0]).resolve() == frontend
+        ):
+            invocations.append(words)
+    inputs, unresolved, records = {}, [], []
+    if len(invocations) != 1:
+        unresolved.append({"reason": "unique_frontend_invocation_unavailable"})
+    else:
+        args = iter(invocations[0][1:])
+        for arg in args:
+            if arg == "-fpre-include":
+                selected = next(args, "")
+            elif arg.startswith("-fpre-include="):
+                selected = arg.partition("=")[2]
+            else:
+                continue
+            if selected:
+                inputs[selected] = "gnu_semantic_preinclude"
+    dependency_inventory = False
+    if capture.get("dependencies") is not None:
+        try:
+            for selected in _dependency_inputs(capture["dependencies"]):
+                inputs.setdefault(selected, "gnu_semantic_dependency")
+            dependency_inventory = True
+        except ValueError as error:
+            unresolved.append(
+                {"reason": "dependency_inventory_unavailable", "detail": str(error)}
+            )
+    headers, sources, interfaces = {}, {}, []
+    for selected, evidence in inputs.items():
+        path = (root / selected).resolve()
+        try:
+            before = path.stat()
+            if (
+                max(before.st_mtime_ns, before.st_ctime_ns)
+                > capture["semantic_started_ns"]
+            ):
+                raise ValueError(
+                    "selected input modified during or after semantic capture"
+                )
+            content = path.read_bytes()
+            after = path.stat()
+            stamp = lambda value: (
+                value.st_dev,
+                value.st_ino,
+                value.st_size,
+                value.st_mtime_ns,
+                value.st_ctime_ns,
+            )
+            if stamp(before) != stamp(after):
+                raise ValueError("selected input changed while fingerprinting")
+        except (OSError, ValueError) as error:
+            unresolved.append(
+                {
+                    "reason": "selected_input_snapshot_unavailable",
+                    "path": str(path),
+                    "detail": str(error),
+                }
+            )
+            continue
+        revision = sha256(content).hexdigest()
+        receipt = {"sha256": revision, "size": len(content), "evidence": evidence}
+        records.append({"path": str(path), **receipt})
+        if path.is_relative_to(root):
+            sources[path.relative_to(root).as_posix()] = revision
+        else:
+            headers[str(path)] = receipt
+        if evidence == "gnu_semantic_preinclude":
+            declarations, missing = _math_interfaces(content, str(path), revision)
+            interfaces.extend(declarations)
+            unresolved.extend(missing)
+    return {
+        "frontend_argv": invocations[0] if len(invocations) == 1 else None,
+        "files": records,
+        "external_headers": headers,
+        "source_digests": sources,
+        "source_math_interfaces": interfaces,
+        "unresolved": unresolved,
+        "coverage": {
+            "automatic_preincludes": "selected_frontend_arguments",
+            "source_includes": (
+                "same_semantic_command_dependency_inventory"
+                if dependency_inventory
+                else (
+                    "unresolved_dependency_inventory"
+                    if capture.get("dependencies") is not None
+                    else "unresolved_without_preprocessor_dependency_inventory"
+                )
+            ),
+            "snapshot": "stable_read_after_successful_semantic_capture",
+        },
+    }
+
+
 def _numeric_contract(path, root, flags, capture, source_sha256):
     compiler = capture["compiler"]
     selected = _logical_flags(flags)
@@ -722,6 +893,7 @@ def _numeric_contract(path, root, flags, capture, source_sha256):
         for stat in (Path(driver).stat(), frontend.stat())
     )
     identity = _compiler_receipt(driver, str(frontend), identities)
+    inputs = _semantic_inputs(capture, root, frontend)
     # --help exits before parsing: this query observes f951 option selection.
     # The separate semantic command validated the same real source and flags.
     command = [
@@ -753,7 +925,7 @@ def _numeric_contract(path, root, flags, capture, source_sha256):
             unresolved.append(
                 {"field": name, "reason": "option_query_has_no_explicit_value"}
             )
-    return {
+    contract = {
         "semantics_version": 1,
         "scope": "compilation_unit",
         "provider": "gnu_fortran",
@@ -761,6 +933,20 @@ def _numeric_contract(path, root, flags, capture, source_sha256):
         "source": {"path": str(path), "sha256": source_sha256},
         "source_flags": list(flags),
         "validated_command": capture["semantic_command"],
+        "semantic_capture": {
+            "cwd": str(root),
+            "returncode": capture["semantic_returncode"],
+            "stdout_sha256": capture["semantic_stdout_sha256"],
+            "stderr_sha256": sha256(capture["semantic_stderr"]).hexdigest(),
+            "dependency_sha256": capture.get("dependency_sha256"),
+            "started_ns": capture["semantic_started_ns"],
+            "finished_ns": capture["semantic_finished_ns"],
+            "frontend_argv": inputs["frontend_argv"],
+            "inputs": inputs["files"],
+            "coverage": inputs["coverage"],
+            "unresolved": inputs["unresolved"],
+        },
+        "source_math_interfaces": inputs["source_math_interfaces"],
         "option_query": {
             "command": command,
             "cwd": str(root),
@@ -775,12 +961,13 @@ def _numeric_contract(path, root, flags, capture, source_sha256):
         "applicability": {
             "evidence": "inferred_same_selected_frontend_and_flags_as_validated_source",
             "source_contents": "raw_file_digest",
-            "include_contents": "not_fingerprinted",
-            "warning": "The option query exits before parsing; it does not independently validate source or preinclude contents.",
+            "include_contents": "selected_semantic_inputs_fingerprinted_with_coverage",
+            "warning": "The option query exits before parsing; source acceptance and selected input evidence come from the separate semantic capture.",
         },
         "caller_observations": {"errno": "unproven", "fenv": "unproven"},
         "runtime_fp_environment": "unobserved",
     }
+    return contract, inputs["external_headers"], inputs["source_digests"]
 
 
 def _intrinsic_bindings(dump):
@@ -813,9 +1000,11 @@ def _compile_capture(path, root, flags, tmp):
         raise Gap("compiler", "gfortran is required")
     flags = _logical_flags(flags)
 
-    def capture(args):
+    def capture(args, receipt=None):
+        command = [compiler, *flags, *args]
+        started = time_ns()
         p = subprocess.run(
-            [compiler, *flags, *args],
+            command,
             cwd=root,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -823,10 +1012,17 @@ def _compile_capture(path, root, flags, tmp):
         )
         if p.returncode:
             raise Gap("compiler", p.stderr.decode(errors="replace").strip()[:3000])
+        if receipt is not None:
+            receipt.update(
+                semantic_command=command,
+                semantic_returncode=p.returncode,
+                semantic_stdout_sha256=sha256(p.stdout).hexdigest(),
+                semantic_stderr=p.stderr,
+                semantic_started_ns=started,
+                semantic_finished_ns=time_ns(),
+            )
         return p.stdout.decode("utf-8", errors="replace")
 
-    semantic_flags = ["-J", str(tmp), "-fsyntax-only", "-fdump-fortran-original"]
-    dump = capture([*semantic_flags, str(path)])
     fixed = path.suffix.lower() in {".for", ".f", ".ftn", ".f77"}
     language = None
     for i, flag in enumerate(flags):
@@ -843,6 +1039,23 @@ def _compile_capture(path, root, flags, tmp):
         "-nocpp",
         path.suffix != path.suffix.lower()
         or bool(language and language.endswith("-cpp-input")),
+    )
+    semantic_flags = ["-J", str(tmp), "-v", "-fsyntax-only", "-fdump-fortran-original"]
+    dependencies = tmp / "source.d"
+    if preprocess:
+        semantic_flags.extend(
+            ["-MD", "-MF", str(dependencies), "-MT", "scar-fortran-source"]
+        )
+    receipt = {"compiler": compiler}
+    dump = capture([*semantic_flags, str(path)], receipt)
+    dependency_bytes = dependencies.read_bytes() if dependencies.exists() else None
+    receipt["dependencies"] = (
+        dependency_bytes.decode("utf-8", errors="surrogateescape")
+        if dependency_bytes is not None
+        else None
+    )
+    receipt["dependency_sha256"] = (
+        sha256(dependency_bytes).hexdigest() if dependency_bytes is not None else None
     )
     source = (
         capture(["-E", str(path)])
@@ -885,10 +1098,7 @@ def _compile_capture(path, root, flags, tmp):
         dump,
         capture,
         semantic_flags,
-        {
-            "compiler": compiler,
-            "semantic_command": [compiler, *flags, *semantic_flags, str(path)],
-        },
+        receipt,
     )
 
 
@@ -996,6 +1206,7 @@ class ParsedUnit:
     source_digests: dict = field(default_factory=dict)
     source_numeric_contract: dict = field(default_factory=dict)
     intrinsic_bindings: dict = field(default_factory=dict)
+    external_headers: dict = field(default_factory=dict)
 
     def location(self, node):
         original = node
@@ -1036,7 +1247,9 @@ def _capture_unit(path, root, flags):
         text, locations, fixed, dump, capture, semantic_flags, commands = (
             _compile_capture(path, root, flags, tmp)
         )
-        numeric = _numeric_contract(path, root, flags, commands, source_sha256)
+        numeric, external_headers, included_sources = _numeric_contract(
+            path, root, flags, commands, source_sha256
+        )
         try:
             tree = _syntax(text, fixed, root, path, flags)
         except FortranSyntaxError as exc:
@@ -1074,9 +1287,10 @@ def _capture_unit(path, root, flags):
         defaults,
         tuple(locations),
         compiler_id=f"GNU Fortran {identity['version']} ({identity['target']})",
-        source_digests={relative: source_sha256},
+        source_digests={**included_sources, relative: source_sha256},
         source_numeric_contract=numeric,
         intrinsic_bindings=_intrinsic_bindings(dump),
+        external_headers=external_headers,
     )
     programs = list(_programs(tree))
     bindings = {}

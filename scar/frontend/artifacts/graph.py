@@ -112,7 +112,7 @@ def artifact_graph(units, payloads, build, images, root):
                 "READS_CAPTURED_VERSION",
                 reader,
                 version,
-                evidence="parser_owned_buffer",
+                evidence=receipt.get("evidence", "parser_owned_buffer"),
             )
         functions = [payload["global_graph"], *payload["functions"]]
         functions.extend(

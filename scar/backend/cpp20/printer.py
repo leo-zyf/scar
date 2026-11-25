@@ -354,6 +354,8 @@ def _declaration(node, parameter=False):
         )
         if node.qualifiers:
             text += " " + " ".join(node.qualifiers)
+        if node.asm_label is not None:
+            text += " asm(" + _quoted(node.asm_label) + ")"
         if node.definition is not None:
             suffix = FUNCTION_DEFINITIONS[node.definition]
             return text + " = " + suffix + ";"

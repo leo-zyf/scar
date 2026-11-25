@@ -529,7 +529,12 @@ def bind(graph, folder):
         for source, receipt in (
             unit.get("source_facts", {}).get("external_headers", {}).items()
         ):
-            if software_headers.setdefault(source, receipt) != receipt:
+            previous = software_headers.setdefault(source, dict(receipt))
+            if previous.get("sha256") != receipt.get("sha256") or (
+                previous.get("size") is not None
+                and receipt.get("size") is not None
+                and previous["size"] != receipt["size"]
+            ):
                 all_issues.append(
                     dict(
                         code="source_header_revision",
@@ -537,6 +542,18 @@ def bind(graph, folder):
                         file=source,
                     )
                 )
+            else:
+                if previous.get("size") is None and receipt.get("size") is not None:
+                    previous["size"] = receipt["size"]
+                modes = set(
+                    previous.get(
+                        "evidence_sources",
+                        [previous.get("evidence", "parser_owned_buffer")],
+                    )
+                )
+                modes.add(receipt.get("evidence", "parser_owned_buffer"))
+                if len(modes) > 1:
+                    previous["evidence_sources"] = sorted(modes)
         for identity, profile in validate_text_profiles(
             unit.get("source_facts", {}).get("text_profiles", {})
         ).items():

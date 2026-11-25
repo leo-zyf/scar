@@ -78,6 +78,7 @@ class Decl:
     definition: str | None = None
     alignment: int | None = None
     attributes: tuple[Attribute, ...] = ()
+    asm_label: str | None = None
 
 
 @dataclass(frozen=True)
@@ -156,6 +157,20 @@ def identifier(value):
             continue
         raise ValueError(f"invalid C++ identifier {value!r}")
     return value
+
+
+def _link_symbol(value):
+    _require(
+        isinstance(value, str) and _IDENTIFIER.fullmatch(value),
+        "expected a single ASCII link symbol",
+    )
+
+
+def _defines_symbol(attribute):
+    namespace, _, name = attribute.name.removeprefix("::").partition("::")
+    if name.startswith("__") and name.endswith("__"):
+        name = name[2:-2]
+    return namespace in {"gnu", "__gnu__"} and name in {"alias", "ifunc", "weakref"}
 
 
 def _type_identifier(value):
@@ -378,13 +393,12 @@ _function_storage = _sequence(
         "extern", "static", "inline", "constexpr", "consteval", "virtual", "explicit"
     )
 )
+_EXCEPTION_SPECS = ("noexcept", "noexcept(true)", "noexcept(false)")
 _qualifiers = _sequence(
     _choices(
         "const",
         "volatile",
-        "noexcept",
-        "noexcept(true)",
-        "noexcept(false)",
+        *_EXCEPTION_SPECS,
         "override",
         "final",
         "&",
@@ -575,6 +589,7 @@ _GRAMMAR = {
                 qualifiers=_qualifiers,
                 definition=_optional(_choices(*FUNCTION_DEFINITIONS)),
                 initializers=_sequence(_tuple(identifier, _expressions)),
+                asm_label=_optional(_link_symbol),
             ),
             "namespace": dict(name=identifier, members=_sequence(_global)),
         },
@@ -657,6 +672,24 @@ def _validate(node):
                         "restrict requires an object pointer parameter",
                     )
         if kind == "function":
+            if node.asm_label is not None:
+                _require(
+                    node.linkage == "C"
+                    and node.type is not None
+                    and _IDENTIFIER.fullmatch(node.name)
+                    and not node.storage
+                    and node.body is None
+                    and node.definition is None
+                    and not node.initializers
+                    and not any(_defines_symbol(attr) for attr in node.attributes),
+                    "asm_label requires an external C-linkage function declaration",
+                )
+                _require(
+                    not node.qualifiers
+                    or len(node.qualifiers) == 1
+                    and node.qualifiers[0] in _EXCEPTION_SPECS,
+                    "asm_label permits only an exception specification",
+                )
             if node.definition:
                 _require(
                     node.body is None and not node.initializers,
