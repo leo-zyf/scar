@@ -924,6 +924,96 @@ def test_module_import_store_matches_cpython_stack_and_source_span(tmp_path):
     )
 
 
+def test_module_call_expression_seals_ordered_operands_once(tmp_path, monkeypatch):
+    import dis
+    import sys
+    from collections import Counter
+
+    from scar.contract import digest, json_bytes, read_member
+    from scar.frontend import build
+
+    if sys.implementation.name != "cpython" or sys.version_info[:2] not in {
+        (3, 12),
+        (3, 14),
+    }:
+        import pytest
+
+        pytest.skip("this test compares the CPython 3.12 and 3.14 call encodings")
+
+    entry = tmp_path / "notice.py"
+    source = (
+        'report.warn(f"before {left} and {right!r:>{width}}", category, stacklevel=2)\n'
+        "plain(thing)\nreport.warn(*args, **kwargs)\n"
+        "try:\n    probe()\nfinally:\n    report.note(1)\n"
+        "if False:\n    report.note(2)\n"
+        "def nested():\n    report.note(3)\n"
+    )
+    entry.write_text(source)
+    code = compile(source, str(entry), "exec", dont_inherit=True)
+    instructions = [i for i in dis.get_instructions(code) if i.positions.lineno == 1]
+    counter = Counter()
+    compile_ast, decode = builtins.compile, dis.get_instructions
+
+    def count_compile(src, filename, *args, **kw):
+        if isinstance(src, ast.Module) and filename == str(entry):
+            counter["compile"] += 1
+        return compile_ast(src, filename, *args, **kw)
+
+    def count_decode(obj, *args, **kw):
+        if obj.co_filename == str(entry) and obj.co_name == "<module>":
+            counter["decode"] += 1
+        return decode(obj, *args, **kw)
+
+    out = tmp_path / "graph"
+    with monkeypatch.context() as patch:
+        patch.setattr(builtins, "compile", count_compile)
+        patch.setattr(dis, "get_instructions", count_decode)
+        build(entry, out)
+    graph = json.loads((out / "graph.json").read_bytes())
+    unit = read_member(out, graph["units"][0]["graph"])
+    expressions = [
+        n for f in unit["functions"] for n in f["nodes"] if "source_expression" in n
+    ]
+    if not any(i.positions.col_offset is not None for i in instructions):
+        assert expressions == []
+        return
+    assert counter == {"compile": 1, "decode": 1}
+    [call] = expressions
+    assert call["location"]["line"] == 1 and [k["name"] for k in call["keywords"]] == [
+        "stacklevel"
+    ]
+    root = next(f for f in unit["functions"] if f["signature"]["name"] == "__main__")
+    receipt = call["source_expression"]
+    assert (
+        receipt["code_sha256"]
+        == root["signature"]["python_scope"]["source_code"]["code_sha256"]
+    )
+    rows = receipt["instructions"]
+    assert (
+        rows[-1]["opcode"] == "POP_TOP" and rows[-1]["position"] == receipt["position"]
+    )
+    for row, ins in zip(rows, instructions, strict=True):
+        assert (row["opcode"], row["offset"], row["position"], row.get("oparg")) == (
+            ins.opname,
+            ins.offset,
+            list(ins.positions),
+            ins.arg,
+        )
+        if "name" in row:
+            assert row["name"] == ins.argval == code.co_names[row["index"]]
+        if "names" in row:
+            assert list(code.co_consts[row["index"]]) == row["names"] == ["stacklevel"]
+        if "value_sha256" in row:
+            value = (
+                ins.arg
+                if ins.opname == "LOAD_SMALL_INT"
+                else code.co_consts[row["index"]]
+            )
+            assert row["type"] == type(value).__name__ and row[
+                "value_sha256"
+            ] == digest(json_bytes(value))
+
+
 def test_scalar_annotation_contract_uses_captured_compiler_semantics(
     tmp_path, monkeypatch
 ):

@@ -428,6 +428,7 @@ class _ModuleGraph:
         self.source_code = parsed.source_code
         self.name_loads = parsed.name_loads
         self.import_stores = parsed.import_stores
+        self.call_expressions = parsed.call_expressions
         self.source_lines = parsed.source_text.splitlines()
         self.diagnostic_file = str(parsed.path)
 
@@ -1099,6 +1100,13 @@ class _Scope:
             keys = [{"name": key, "value": v} for key, (v, _) in key_items]
             key_facts = {key: f for key, (_, f) in key_items}
             fields = dict(target=target, args=args, keywords=keys)
+            if self.module_scope and (
+                receipt := self.unit.call_expressions.get(tuple_position(node))
+            ):
+                fields["source_expression"] = {
+                    **receipt,
+                    "code_sha256": self.unit.source_code["code_sha256"],
+                }
             if t.get("guards") or t.get("maybe_unbound"):
                 fields["binding_guard"] = dict(
                     status="conditional",
