@@ -120,9 +120,13 @@ jobs:
           find "$RUNNER_TEMP/scar-stages" -type f \( -name '*.cpp' -o -name '*.hpp' \) \
             -path '*/delivery/project/*' ! -path '*/project/vendor/*' \
             -exec clang-format-18 --dry-run --Werror --style=file {} +
-          tar -czf "$RUNNER_TEMP/scar-mixed-stages.tar.gz" \
-            -C "$RUNNER_TEMP/scar-stages/test_compiler/test_locked_mixed_target_three0" \
-            hidden-frontend relocated-plan delivery
+          root="$RUNNER_TEMP/scar-stages/test_compiler"
+          for trial in "$root"/test_locked_mixed_target_three[0-9]*; do
+            suffix=${trial##*three}
+            archive=scar-mixed-stages
+            if [[ "$suffix" != 0 ]]; then archive="$archive-$suffix"; fi
+            tar -czf "$RUNNER_TEMP/$archive.tar.gz" -C "$trial" hidden-frontend relocated-plan delivery
+          done
       - name: Upload packages and stage results
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
@@ -131,4 +135,4 @@ jobs:
           path: |
             ${{ runner.temp }}/scar-packages/*
             ${{ runner.temp }}/scar-gates/*.xml
-            ${{ runner.temp }}/scar-mixed-stages.tar.gz
+            ${{ runner.temp }}/scar-mixed-stages*.tar.gz
