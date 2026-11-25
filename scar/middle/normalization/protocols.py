@@ -3392,8 +3392,9 @@ class _Frame:
             if op == "expr":
                 self.evaluate(node["value"], steps, discard=True)
             elif op == "assign":
-                if not namespace_operations.store_open_module_constant(
-                    self, node, steps
+                if not (
+                    namespace_operations.store_open_module_constant(self, node, steps)
+                    or namespace_operations.open_object_statement(self, node, steps)
                 ):
                     self.store(
                         node["target"], self.evaluate(node["value"], steps), steps
@@ -3432,25 +3433,13 @@ class _Frame:
                             occurrence=occurrence["id"], **binding
                         )
                     next_statement = index + len(bindings)
-            elif (
-                op == "unbind"
-                and self.project.imports.open_namespace
-                and namespace_operations.global_delete_slots(self, node)
-            ):
-                namespace_operations.namespace_effect(
-                    self,
-                    node,
-                    steps,
-                    "module_global_delete",
-                    names=[t["name"].rsplit(":", 1)[1] for t in node["targets"]],
-                    targets=[
-                        dict(slot=t["name"], **values.source_site(t))
-                        for t in node["targets"]
-                    ],
-                    deletion="DELETE_NAME_in_current_frame_globals_in_source_order",
-                    missing="raise_NameError_at_first_missing_name",
-                    release="release_each_removed_binding_with_reentry_and_unraisable_finalizer_errors",
-                )
+            elif op == "unbind" and self.project.imports.open_namespace:
+                if not namespace_operations.open_object_statement(self, node, steps):
+                    self.fail(
+                        node,
+                        "source_delete_evidence",
+                        "deletion in the open namespace requires each source mapping, name and ordered DELETE instruction",
+                    )
             elif op == "python_define_class":
                 self.store(
                     node["target"],

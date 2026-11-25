@@ -83,6 +83,52 @@ def test_binding_checks_import_result_against_its_source_publication(tmp_path):
         bind(graph, folder)
 
 
+def test_binding_matches_stack_consumers_to_sealed_graph_ports(tmp_path):
+    from scar.contract import read_member
+    from scar.frontend import build
+    from scar.middle.binding import bind
+
+    entry = tmp_path / "entry.py"
+    entry.write_text(
+        'label = "left" + "right"\n'
+        "value = factory(label)\n"
+        "del value, label\n"
+        "raise failure() from cause\n"
+    )
+    folder = tmp_path / "graph"
+    build(entry, folder)
+    graph = json.loads((folder / "graph.json").read_bytes())
+    unit = graph["units"][0]
+    payload = read_member(folder, unit["graph"])
+    nodes = next(
+        fn["nodes"]
+        for fn in payload["functions"]
+        if fn["signature"].get("python_scope", {}).get("kind") == "module"
+    )
+    entry.unlink()
+    bind(graph, folder)
+    folded = next(n for n in nodes if "source_constant_store" in n)
+    root = nodes[folded["value"]["port"]]
+    leaf = nodes[root["left"]["port"]]
+    rows = {
+        n["op"]: n["source_expression"]["instructions"]
+        for n in nodes
+        if "source_expression" in n
+    }
+    for record, field, changed, error in (
+        (leaf, "value", "changed", "folded constant"),
+        (rows["assign"][-1], "name", "label", "expression store"),
+        (rows["unbind"][0], "name", "label", "ordered targets"),
+        (rows["raise"][-1], "oparg", 1, "raise terminator"),
+    ):
+        original = record[field]
+        record[field] = changed
+        unit["graph"] = member(folder, "units", payload)
+        with pytest.raises(ValueError, match=error):
+            bind(graph, folder)
+        record[field] = original
+
+
 def test_binding_rejects_exception_edge_to_a_different_handler(tmp_path):
     from scar.contract import read_member
     from scar.frontend import build
@@ -626,7 +672,7 @@ def test_package_fromlist_publication_and_deletion_retain_order_and_callbacks(tm
     package.mkdir()
     (package / "__init__.py").write_text(
         "from . import child as first, child as second\ndel first, second\n"
-        "from other.library import action as first, action as second\nfirst(second)\nboundary = 1\n"
+        "from other.library import action as first, action as second\nfirst(second)\nboundary = 0 or 1\n"
     )
     (package / "child.py").write_text("print('child')\n")
     other = tmp_path / "other"
@@ -7240,7 +7286,7 @@ def test_open_module_literal_store_uses_active_code_and_source_mapping(tmp_path)
     source.write_text(
         "from . import child as disposable\ndel disposable\n"
         "message = 'same string !'\nalternate = 'same string !'\n"
-        "last = 123\ndef declaration():\n    global alternate\n"
+        "last = 0 or 123\ndef declaration():\n    global alternate\n"
     )
     (pkg / "child.py").write_text("pass\n")
     entry = tmp_path / "main.py"
@@ -7334,10 +7380,16 @@ def test_open_module_literal_store_uses_active_code_and_source_mapping(tmp_path)
         unit["graph"] = member(graph, "units", payload)
         path = graph / (label + ".json")
         write_json(path, index)
-        assert [n["op"] for n in prefix(path, 3)] == [
-            "module_fromlist_publish",
-            "module_global_delete",
-        ]
+        if label == "foreign":
+            with pytest.raises(
+                ValueError, match="source constant store disagrees with its module"
+            ):
+                plan(path, tmp_path / "plan-foreign")
+        else:
+            assert [n["op"] for n in prefix(path, 3)] == [
+                "module_fromlist_publish",
+                "module_global_delete",
+            ]
 
     # A READY replay through B1 still needs a provider if family metadata is absent.
     untagged = dict(stores[0])
@@ -7381,7 +7433,7 @@ def test_open_object_expression_connects_live_callees_arguments_comparisons_and_
     source.write_text(
         "from . import child as gone\ndel gone\n"
         "if outer(inner(arg)) < right(bound) or outer(arg) >= right(limit):\n    pass\n"
-        "boundary = 1\ndef declaration():\n    global limit\n"
+        "boundary = 0 or 1\ndef declaration():\n    global limit\n"
     )
     (pkg / "child.py").write_text("pass\n")
     entry = tmp_path / "entry.py"
@@ -7594,7 +7646,7 @@ def test_conditional_plain_import_consumes_actual_result_at_its_source_store(
         "try:\n    if enabled:\n        import offered\n        seen(offered)\n"
         "except:\n    audit(offered)\n    raise\nfinally:\n    pass\n"
         "audit(offered)\nimport cleanup\n"
-        "done(cleanup)\nboundary = 1\ndef declaration():\n    global cleanup\n"
+        "done(cleanup)\nboundary = 0 or 1\ndef declaration():\n    global cleanup\n"
     )
     for module in (
         package / "child.py",
@@ -7797,7 +7849,7 @@ def test_open_source_call_preserves_descriptor_format_and_keyword_order(tmp_path
         "from . import child as gone\ndel gone\n"
         "receiver.dispatch(f'<{value!r:{width}}/{other!a}/{value!s}>', "
         "UserWarning, tag=keyword(), literal='distinct token!')\n"
-        "receiver.method(receiver.member)\nboundary = 1\n"
+        "receiver.method(receiver.member)\nboundary = 0 or 1\n"
     )
     (pkg / "child.py").write_text("pass\n")
     entry = tmp_path / "main.py"
@@ -8034,7 +8086,7 @@ def test_open_named_exception_arms_dispatch_and_release_the_actual_exception(tmp
         "from . import child as unused\ndel unused\n"
         "try:\n    operation()\nexcept First:\n    first()\n"
         "except Second as caught:\n    selected(caught)\n"
-        "try:\n    other()\nexcept Second as pending:\n    boundary = 37\n"
+        "try:\n    other()\nexcept Second as pending:\n    boundary = 0 or 37\n"
         "tail = 1\n"
     )
     (pkg / "child.py").write_text("pass\n")
@@ -8247,3 +8299,326 @@ def test_open_named_exception_arms_dispatch_and_release_the_actual_exception(tmp
     assert plan(old, prior)["status"] == "INCOMPLETE"
     [gap] = json.loads((prior / "plan.json").read_bytes())["issues"]
     assert gap["location"]["line"] == 5 and gap["code"] == "python.name_binding"
+
+
+def test_open_module_raise_consumes_folded_constant_and_actual_cause(tmp_path):
+    from types import SimpleNamespace
+
+    from scar.contract import read_member
+    from scar.frontend import build
+    from scar.middle import plan
+
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    source = pkg / "__init__.py"
+    source.write_text(
+        "from . import child as unused\ndel unused\n"
+        "try:\n    run()\nexcept Match as caught:\n"
+        "    message = 'owned ' + 'constant!'\n"
+        "    raise make(message) from cause(caught)\n"
+        "try:\n    run()\nexcept Match:\n    raise replacement\n"
+        "try:\n    run()\nexcept Match:\n    raise\n"
+        "tail = 0 or 37\n"
+    )
+    (pkg / "child.py").write_text("pass\n")
+    entry = tmp_path / "main.py"
+    entry.write_text("import pkg\n")
+    code = compile(source.read_bytes(), str(source), "exec")
+    graph, out = tmp_path / "graph", tmp_path / "plan"
+    build(entry, graph)
+    source.unlink()
+    assert plan(graph, out)["status"] == "INCOMPLETE"
+    report = json.loads((out / "plan.json").read_bytes())
+    [issue] = report["issues"]
+    assert (issue["code"], issue["location"]["line"]) == (
+        "python.global_store_after_callback",
+        16,
+    )
+    row = next(
+        r
+        for r in report["protocol_analysis"]["prefix_fragments"]
+        if r["symbol"] == "py:pkg:<init>"
+    )
+    blocks = [n for n in read_member(out, row["fragment"])["body"] if n["op"] == "try"]
+    assert len(blocks) == 3
+    arms = [block["handlers"][0] for block in blocks]
+    store = arms[0]["body"][0]["value"]
+    port = store["source_constant_store"]
+    assert store["op"] == "module_global_store" and port["rhs_sha256"]
+    constant = code.co_consts[port["load"]["index"]]
+    assert constant == "owned constant!"
+    for arity, arm in zip((2, 1, 0), arms):
+        action = arm["body"][-1]["value"]
+        assert action["op"] == "source_exception_raise" and action["noreturn"]
+        assert action["external_effect"] == "UNKNOWN" and action["may_raise"]
+        assert (
+            action["instruction"]
+            == arm["match"]["source_exception_handler"]["body_raise"]
+        )
+        assert action["instruction"]["oparg"] == arity
+        assert (action["cause"] is not None) == (arity == 2)
+        assert (action["exception"] is not None) == (arity != 0)
+        assert "before_first" in action["on_code_mismatch"]
+
+    def run(mode, use_ir):
+        seen = []
+        original = LookupError("original")
+        new = ValueError("new")
+        replacement = RuntimeError("replacement")
+        marker = object()
+        loc = dict(Match=LookupError)
+
+        def protect():
+            seen.append("run")
+            if seen.count("run") == {"single": 2, "bare": 3, "normal": 0}.get(mode, 1):
+                raise original
+
+        def make(value):
+            seen.append(("make", value is constant, sys.exception() is original))
+            if mode == "factory_failure":
+                raise new
+            loc["caught"] = marker
+            return {"invalid_exception": 7, "exception_class": ValueError}.get(
+                mode, new
+            )
+
+        def cause(value):
+            seen.append(("cause", value is marker))
+            if mode == "cause_failure":
+                raise replacement
+            return {"invalid_cause": 7, "none": None, "cause_class": RuntimeError}.get(
+                mode, replacement
+            )
+
+        loc.update(run=protect, make=make, cause=cause, replacement=replacement)
+        globals_ = {
+            "__builtins__": {"__import__": lambda *args: SimpleNamespace(child=0)}
+        }
+
+        def dispatch(transfer):
+            stack = {}
+
+            def operand(ref):
+                return stack[ref["from_offset"]]
+
+            for instruction in transfer["evaluation"]:
+                if instruction["op"] == "module_name_load":
+                    result = loc[instruction["instruction"]["name"]]
+                else:
+                    assert instruction["op"] == "source_object_call"
+                    result = operand(instruction["target"])(
+                        *[operand(a) for a in instruction["args"]]
+                    )
+                stack[instruction["offset"]] = result
+            if transfer["exception"] is None:
+                raise
+            if transfer["cause"] is None:
+                raise operand(transfer["exception"])
+            raise operand(transfer["exception"]) from operand(transfer["cause"])
+
+        try:
+            if use_ir:
+                for arm in arms:
+                    try:
+                        protect()
+                    except loc[arm["match"]["matcher"]["instruction"]["name"]] as error:
+                        transfer = arm["body"][-1]["value"]
+                        if not arm["on_match"]:
+                            dispatch(transfer)
+                        alias = arm["on_match"][0]["value"]["name"]
+                        loc[alias] = error
+                        try:
+                            loc[port["store"]["name"]] = constant
+                            dispatch(transfer)
+                        finally:
+                            loc[alias] = None
+                            del loc[alias]
+            else:
+                exec(code, globals_, loc)
+        except BaseException as raised:
+            seen.append(
+                (
+                    type(raised),
+                    str(raised),
+                    raised is new,
+                    type(raised.__cause__),
+                    raised.__cause__ is replacement,
+                    raised.__context__ is original,
+                    raised.__suppress_context__,
+                )
+            )
+        return seen, "caught" in loc
+
+    for mode in (
+        "ordinary",
+        "exception_class",
+        "invalid_exception",
+        "invalid_cause",
+        "none",
+        "cause_class",
+        "factory_failure",
+        "cause_failure",
+    ):
+        actual = run(mode, False)
+        assert run(mode, True) == actual
+        assert actual[0][1] == ("make", True, True)
+        assert (("cause", True) in actual[0]) == (mode != "factory_failure")
+        assert not actual[1]
+
+    for mode, error in (("single", RuntimeError), ("bare", LookupError)):
+        actual = run(mode, False)
+        assert run(mode, True) == actual and actual[0][-1][0] is error
+    assert run("normal", True) == run("normal", False) == (["run"] * 3, False)
+
+    index = json.loads((graph / "graph.json").read_bytes())
+    unit = next(u for u in index["units"] if u["path"] == "pkg/__init__.py")
+    definition = read_member(graph, unit["graph"])
+    raised = next(
+        n
+        for f in definition["functions"]
+        for n in f["nodes"]
+        if n["op"] == "raise" and n["has_cause"]
+    )
+    del raised["source_expression"]
+    unit["graph"] = member(graph, "units", definition)
+    old = graph / "old.json"
+    write_json(old, index)
+    prior = tmp_path / "old-plan"
+    assert plan(old, prior)["status"] == "INCOMPLETE"
+    [gap] = json.loads((prior / "plan.json").read_bytes())["issues"]
+    assert (gap["code"], gap["location"]["line"]) == ("python.source_raise_evidence", 7)
+
+
+def test_open_module_store_and_delete_use_actual_operands_and_mappings(tmp_path):
+    from types import SimpleNamespace
+
+    from scar.contract import read_member
+    from scar.frontend import build
+    from scar.middle import plan
+
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    source = pkg / "__init__.py"
+    source.write_text(
+        "from . import child as gone\ndel gone\n"
+        "first = receiver.build(arg)\nother = first\n"
+        "del first, other, first\n"
+        "boundary = 0 or 1\ndef declare():\n    global other\n"
+    )
+    (pkg / "child.py").write_text("pass\n")
+    entry = tmp_path / "main.py"
+    entry.write_text("import pkg\n")
+    code = compile(source.read_bytes(), str(source), "exec")
+    graph, out = tmp_path / "graph", tmp_path / "plan"
+    build(entry, graph)
+    source.unlink()
+    assert plan(graph, out)["status"] == "INCOMPLETE"
+    report = json.loads((out / "plan.json").read_bytes())
+    [issue] = report["issues"]
+    assert (issue["code"], issue["location"]["line"]) == (
+        "python.global_store_after_callback",
+        6,
+    )
+    prefix = next(
+        p
+        for p in report["protocol_analysis"]["prefix_fragments"]
+        if p["symbol"] == "py:pkg:<init>"
+    )
+    first, second, deletion = [
+        s["value"] for s in read_member(out, prefix["fragment"])["body"][2:]
+    ]
+    assert [s["store_opcode"] for s in (first, second)] == [
+        "STORE_NAME",
+        "STORE_GLOBAL",
+    ]
+    assert [s["op"] for s in first["evaluation"]] == [
+        "module_name_load",
+        "source_object_attribute",
+        "module_name_load",
+        "source_object_call",
+    ]
+    assert all(
+        s["value"] == {"from_offset": s["evaluation"][-1]["offset"]}
+        for s in (first, second)
+    )
+    assert [(t["instruction"]["opcode"], t["name"]) for t in deletion["targets"]] == [
+        ("DELETE_NAME", "first"),
+        ("DELETE_GLOBAL", "other"),
+        ("DELETE_NAME", "first"),
+    ]
+    assert deletion["evaluation"] == [] and "completed_effects" in deletion["unwind"]
+
+    def run(mode, from_ir):
+        log = []
+        token, rebound = object(), object()
+        globals_ = {"__builtins__": {"__import__": lambda *a: SimpleNamespace(child=0)}}
+
+        class Receiver:
+            @property
+            def build(self):
+                log.append("descriptor")
+
+                def invoke(arg):
+                    log.append(("call", arg is token))
+                    return arg
+
+                return invoke
+
+        class Locals(dict):
+            def __setitem__(self, k, v):
+                if k == "first":
+                    log.append(("store", v is token))
+                    if mode == "rejected_store":
+                        raise LookupError("reject")
+                super().__setitem__(k, v)
+
+            def __delitem__(self, k):
+                if k == "first":
+                    log.append(
+                        ("delete", self.get(k) is token, globals_.get("other") is token)
+                    )
+                    if self.get(k) is token:
+                        super().__delitem__(k)
+                        if mode == "reenter":
+                            globals_.pop("other")
+                        elif mode == "replace":
+                            super().__setitem__("first", rebound)
+                        return
+                super().__delitem__(k)
+
+        loc = Locals(receiver=Receiver(), arg=token)
+        try:
+            if from_ir:
+                mappings = {"frame.locals": loc, "frame.globals": globals_}
+                for store in (first, second):
+                    stack = {}
+                    for op in store["evaluation"]:
+                        if op["op"] == "module_name_load":
+                            v = loc[op["instruction"]["name"]]
+                        elif op["op"] == "source_object_attribute":
+                            v = getattr(stack[op["base"]["from_offset"]], op["name"])
+                        else:
+                            v = stack[op["target"]["from_offset"]](
+                                *[stack[a["from_offset"]] for a in op["args"]]
+                            )
+                        stack[op["offset"]] = v
+                    mappings[store["namespace"]][store["name"]] = stack[
+                        store["value"]["from_offset"]
+                    ]
+                for t in deletion["targets"]:
+                    try:
+                        del mappings[t["namespace"]][t["name"]]
+                    except KeyError:
+                        raise NameError(t["name"])
+            else:
+                exec(code, globals_, loc)
+        except (LookupError, NameError) as error:
+            log.append(type(error).__name__)
+        return log, "first" in loc, "other" in globals_
+
+    for mode in ("missing", "replace", "reenter", "rejected_store"):
+        actual = run(mode, False)
+        assert run(mode, True) == actual
+        assert actual[0][:3] == ["descriptor", ("call", True), ("store", True)]
+    assert run("reenter", False)[0][-2:] == [("delete", True, True), "NameError"]
+    assert run("rejected_store", False)[0][-1] == "LookupError"

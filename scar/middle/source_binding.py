@@ -1,5 +1,7 @@
 """M1 validation of optional source instruction evidence against graph ports."""
 
+from scar.contract import digest, json_bytes, python_constant_rhs_sha256
+
 
 def _source_position(location):
     return [
@@ -10,7 +12,82 @@ def _source_position(location):
     ]
 
 
-def bind_call_expression(node, scope):
+def _namespace_target(instruction, target, scope):
+    name = instruction.get("name")
+    location = target.get("location") if isinstance(target, dict) else None
+    return (
+        isinstance(name, str)
+        and name.isidentifier()
+        and isinstance(location, dict)
+        and location.get("file") == scope["source_code"]["source_key"]
+        and instruction.get("position") == _source_position(location)
+        and target.get("op") == "var"
+        and target.get("scope") == "global"
+        and not target.get("cell")
+        and target.get("name") == f"py:{scope['module']}:{name}"
+    )
+
+
+def bind_constant_store(node, scope):
+    """Match the constant load, its expression and its publication in the module."""
+    proof = node["source_constant_store"]
+    code = scope.get("source_code") or {}
+    target, value = node.get("target", {}), node.get("value", {})
+    if not (
+        isinstance(proof, dict)
+        and type(proof.get("semantics_version")) is int
+        and proof["semantics_version"] == 1
+        and code.get("kind") == "module"
+        and proof.get("code") == code
+        and node["op"] == "assign"
+        and node["location"]["file"] == code["source_key"]
+    ):
+        raise ValueError("source constant store disagrees with its module")
+    load, store = proof.get("load"), proof.get("store")
+    for operand, instruction in ((value, load), (target, store)):
+        if not (
+            isinstance(instruction, dict)
+            and operand.get("location", {}).get("file") == code["source_key"]
+            and instruction.get("position") == _source_position(operand["location"])
+            and all(
+                type(instruction.get(k)) is int and instruction[k] >= 0
+                for k in ("offset", "index")
+            )
+        ):
+            raise ValueError(
+                "source constant store disagrees with its positioned operand"
+            )
+    if not (
+        load.get("opcode") == "LOAD_CONST"
+        and store.get("opcode") in {"STORE_NAME", "STORE_GLOBAL"}
+        and load["offset"] < store["offset"]
+        and _namespace_target(store, target, scope)
+    ):
+        raise ValueError("source constant store disagrees with its destination")
+    if "rhs_sha256" in proof:
+        fingerprint = python_constant_rhs_sha256(value)
+        content = load.get("value_sha256")
+        if (
+            value.get("op") not in {"binary", "unary"}
+            or fingerprint is None
+            or fingerprint != proof["rhs_sha256"]
+            or load.get("type") not in {"int", "float", "str", "bool", "NoneType"}
+            or not isinstance(content, str)
+            or len(content) != 64
+            or any(c not in "0123456789abcdef" for c in content)
+        ):
+            raise ValueError("source folded constant disagrees with its expression")
+    elif not (
+        value.get("op") == "literal"
+        and value.get("type") == {"kind": "python_object", "class": "str"}
+        and type(value.get("value")) is str
+        and load.get("type") == "str"
+        and load.get("value_sha256") == digest(json_bytes(value["value"]))
+    ):
+        raise ValueError("source constant load disagrees with its literal")
+
+
+def bind_source_expression(node, scope):
     """Bind positioned instruction evidence; M2 verifies semantic evaluation order."""
     proof, code = node["source_expression"], scope.get("source_code") or {}
     loc = node["location"]
@@ -20,16 +97,37 @@ def bind_call_expression(node, scope):
         and type(proof.get("semantics_version")) is int
         and proof["semantics_version"] == 1
         and code.get("kind") == "module"
-        and isinstance(node.get("target"), dict)
-        and isinstance(node.get("args"), list)
-        and isinstance(node.get("keywords"), list)
         and proof.get("code_sha256") == code.get("code_sha256")
         and loc.get("file") == code.get("source_key")
         and proof.get("position") == position
         and isinstance(proof.get("instructions"), list)
         and proof["instructions"]
     ):
-        raise ValueError("source call region disagrees with its module and call port")
+        raise ValueError("source expression region disagrees with its module")
+    operation = node["op"]
+    if operation == "raise":
+        present, cause = node.get("has_exception"), node.get("has_cause")
+        if not (
+            type(present) is bool
+            and type(cause) is bool
+            and (present or not cause)
+            and all(isinstance(node.get(k), dict) for k in ("value", "cause"))
+        ):
+            raise ValueError("source raise disagrees with its operand ports")
+        for supplied, key in ((present, "value"), (cause, "cause")):
+            operand = node[key]
+            if not supplied and operand != {
+                "op": "literal",
+                "type": {"kind": "python_object", "class": "NoneType"},
+                "value": None,
+            }:
+                raise ValueError("source raise omits an evaluated operand")
+    elif operation not in {"assign", "unbind"} and not (
+        isinstance(node.get("target"), dict)
+        and isinstance(node.get("args"), list)
+        and isinstance(node.get("keywords"), list)
+    ):
+        raise ValueError("source call region disagrees with its call port")
     first = position[0], position[2]
     last = position[1], position[3]
     previous = -1
@@ -55,13 +153,21 @@ def bind_call_expression(node, scope):
         ):
             raise ValueError("invalid source instruction position or operand")
         previous = offset
-        if opcode in {"LOAD_NAME", "LOAD_ATTR", "LOAD_GLOBAL"}:
+        if opcode in {
+            "LOAD_NAME",
+            "LOAD_ATTR",
+            "LOAD_GLOBAL",
+            "STORE_NAME",
+            "STORE_GLOBAL",
+            "DELETE_NAME",
+            "DELETE_GLOBAL",
+        }:
             arg = instruction.get("oparg")
             if not (
                 type(arg) is int
                 and isinstance(instruction.get("name"), str)
                 and instruction.get("index")
-                == (arg if opcode == "LOAD_NAME" else arg >> 1)
+                == (arg >> 1 if opcode in {"LOAD_GLOBAL", "LOAD_ATTR"} else arg)
             ):
                 raise ValueError("source call name operand disagrees with its index")
         elif opcode in {"LOAD_CONST", "KW_NAMES", "LOAD_SMALL_INT"}:
@@ -93,7 +199,37 @@ def bind_call_expression(node, scope):
                     or any(c not in "0123456789abcdef" for c in fingerprint)
                 ):
                     raise ValueError("missing literal identity in source call")
-    if proof["instructions"][-1]["opcode"] != "POP_TOP":
+    last = proof["instructions"][-1]
+    if operation == "raise":
+        if not (
+            last["opcode"] == "RAISE_VARARGS"
+            and last.get("oparg") == int(present) + int(cause)
+            and last.get("position") == position
+        ):
+            raise ValueError(
+                "source raise terminator disagrees with its operand count or position"
+            )
+    elif operation == "assign":
+        if not (
+            isinstance(node.get("value"), dict)
+            and len(proof["instructions"]) > 1
+            and last["opcode"] in {"STORE_NAME", "STORE_GLOBAL"}
+            and _namespace_target(last, node.get("target"), scope)
+        ):
+            raise ValueError("source expression store disagrees with its target")
+    elif operation == "unbind":
+        targets = node.get("targets")
+        if not (
+            isinstance(targets, list)
+            and len(targets) == len(proof["instructions"])
+            and all(
+                ins["opcode"] in {"DELETE_NAME", "DELETE_GLOBAL"}
+                and _namespace_target(ins, target, scope)
+                for ins, target in zip(proof["instructions"], targets)
+            )
+        ):
+            raise ValueError("source deletion disagrees with its ordered targets")
+    elif last["opcode"] != "POP_TOP":
         raise ValueError("source call region has no final result discard")
 
 

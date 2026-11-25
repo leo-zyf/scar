@@ -749,6 +749,195 @@ def test_module_constant_stores_bind_source_bytecode_and_graph(tmp_path, monkeyp
     assert sorted(receipts, key=lambda r: r["store"]["offset"]) == rows
 
 
+def test_compiled_module_fold_and_raise_use_complete_source_operands(tmp_path):
+    import dis
+    import sys
+
+    from scar.contract import digest, json_bytes, read_member
+    from scar.frontend import build
+
+    source = (
+        'message = ("first" +\n           "second")\n'
+        "factor = -(1.5 + 2.25)\n"
+        "effect = touch() + 1\n"
+        "choice = 340 if touch() else 340\n"
+        "runtime = 1 / 0\n"
+        "try:\n    perform()\nexcept Error as cause:\n    raise new(message) from cause\n"
+        "if flag:\n    raise single\n"
+        "try:\n    perform()\nexcept Other:\n    raise\n"
+        "try:\n    perform()\nfinally:\n    repeated = 100 * 200\n"
+        "    raise uncertain() from cause\n"
+    )
+    path = tmp_path / "operations.py"
+    path.write_text(source)
+    code = compile(source, str(path), "exec", dont_inherit=True)
+    out = tmp_path / "graph"
+    build(path, out)
+    unit = read_member(
+        out, json.loads((out / "graph.json").read_bytes())["units"][0]["graph"]
+    )
+    fn = next(f for f in unit["functions"] if f["signature"]["name"] == "__main__")
+    rows = {i.offset: i for i in dis.get_instructions(code)}
+    stores = [n for n in fn["nodes"] if "source_constant_store" in n]
+    raises = [n for n in fn["nodes"] if "source_expression" in n]
+    if sys.implementation.name != "cpython" or not any(
+        i.positions.col_offset is not None for i in rows.values()
+    ):
+        assert not stores and not raises
+        return
+    assert [n["source_constant_store"]["store"]["name"] for n in stores] == [
+        "message",
+        "factor",
+    ]
+    leaves = [
+        ["binary", "add", ["literal", "str", "first"], ["literal", "str", "second"]],
+        [
+            "unary",
+            "usub",
+            ["binary", "add", ["literal", "float", 1.5], ["literal", "float", 2.25]],
+        ],
+    ]
+    code_sha = fn["signature"]["python_scope"]["source_code"]["code_sha256"]
+    for n, shape in zip(stores, leaves, strict=True):
+        fact = n["source_constant_store"]
+        load, store = fact["load"], fact["store"]
+        assert (
+            fact["rhs_sha256"] == digest(json_bytes(shape))
+            and fact["code"]["code_sha256"] == code_sha
+        )
+        assert fn["nodes"][n["value"]["port"]]["op"] == shape[0]
+        assert load["opcode"] == rows[load["offset"]].opname == "LOAD_CONST"
+        value = code.co_consts[load["index"]]
+        assert load["type"] == type(value).__name__ and load["value_sha256"] == digest(
+            json_bytes(value)
+        )
+        assert (
+            rows[store["offset"]].argval == store["name"]
+            and store["opcode"] == "STORE_NAME"
+        )
+    assert [n["location"]["line"] for n in raises] == [10, 12, 16]
+    for n in raises:
+        receipt = n["source_expression"]
+        native = [
+            i for i in rows.values() if i.positions.lineno == n["location"]["line"]
+        ]
+        last = next(i for i in native if i.opname == "RAISE_VARARGS")
+        assert n["op"] == "raise" and receipt["code_sha256"] == code_sha
+        operands = receipt["instructions"]
+        assert operands[-1]["position"] == receipt["position"] == list(last.positions)
+        assert (operands[-1]["opcode"], operands[-1]["oparg"]) == (
+            "RAISE_VARARGS",
+            int(n["has_exception"]) + int(n["has_cause"]),
+        )
+        assert [
+            (row["opcode"], row["offset"], row["position"]) for row in operands
+        ] == [
+            (i.opname, i.offset, list(i.positions))
+            for i in native
+            if i.offset <= last.offset
+        ]
+    assert [
+        r.get("name")
+        for r in raises[0]["source_expression"]["instructions"]
+        if "name" in r
+    ] == ["new", "message", "cause"]
+
+
+def test_module_assign_and_delete_use_the_actual_named_slots(tmp_path):
+    import dis
+    import sys
+
+    from scar.contract import read_member
+    from scar.frontend import build
+
+    path = tmp_path / "slots.py"
+    source = (
+        "global saved\n"
+        "saved = record.format(value, digits=2)\n"
+        "alias = saved\n"
+        "method = record.format\n"
+        "number = 2\n"
+        "literal = 'old'\n"
+        "folded = 'o' + 'ld'\n"
+        "del saved, alias, alias\n"
+        "del method\n"
+        "record.attr = value\n"
+        "left = right = value\n"
+        "del (number, method)\n"
+        "del record.attr\n"
+        "try:\n    probe()\nfinally:\n    repeated = callback()\n    del repeated\n"
+    )
+    path.write_text(source)
+    program = compile(source, str(path), "exec", dont_inherit=True)
+    out = tmp_path / "graph"
+    build(path, out)
+    unit = read_member(
+        out, json.loads((out / "graph.json").read_bytes())["units"][0]["graph"]
+    )
+    fn = next(f for f in unit["functions"] if f["signature"]["name"] == "__main__")
+    actual = {i.offset: i for i in dis.get_instructions(program)}
+    operations = [n for n in fn["nodes"] if "source_expression" in n]
+    if sys.implementation.name != "cpython" or not any(
+        i.positions.col_offset is not None for i in actual.values()
+    ):
+        assert not operations
+        return
+    assert [(n["location"]["line"], n["op"]) for n in operations] == [
+        (2, "assign"),
+        (3, "assign"),
+        (4, "assign"),
+        (5, "assign"),
+        (8, "unbind"),
+        (9, "unbind"),
+    ]
+    assert [
+        n["location"]["line"] for n in fn["nodes"] if "source_constant_store" in n
+    ] == [6, 7]
+    for n in operations:
+        receipt = n["source_expression"]
+        rows = receipt["instructions"]
+        assert (
+            receipt["code_sha256"]
+            == fn["signature"]["python_scope"]["source_code"]["code_sha256"]
+        )
+        loc = n["location"]
+        assert receipt["position"] == [
+            loc["line"],
+            loc["end_line"],
+            loc["column"] - 1,
+            loc["end_column"] - 1,
+        ]
+        # The final return may share the last binding's line; the source operation
+        # itself ends at the captured write or delete.
+        native = [
+            i
+            for i in actual.values()
+            if i.positions.lineno == loc["line"] and i.offset <= rows[-1]["offset"]
+        ]
+        assert [(r["opcode"], r["offset"], r["position"]) for r in rows] == [
+            (i.opname, i.offset, list(i.positions)) for i in native
+        ]
+        targets = [n["target"]] if n["op"] == "assign" else n["targets"]
+        for encoded, row in zip(targets, rows[-len(targets) :], strict=True):
+            target = fn["nodes"][encoded["port"]]
+            name = target["name"].rsplit(":", 1)[1]
+            assert row["opcode"] == ("STORE" if n["op"] == "assign" else "DELETE") + (
+                "_GLOBAL" if name == "saved" else "_NAME"
+            )
+            assert (
+                row["oparg"] == row["index"]
+                and program.co_names[row["index"]] == row["name"] == name
+            )
+    assert [
+        (r["opcode"], r["name"])
+        for r in operations[4]["source_expression"]["instructions"]
+    ] == [
+        ("DELETE_GLOBAL", "saved"),
+        ("DELETE_NAME", "alias"),
+        ("DELETE_NAME", "alias"),
+    ]
+
+
 def test_module_name_loads_follow_actual_callee_and_argument_ports(tmp_path):
     import dis
     import sys

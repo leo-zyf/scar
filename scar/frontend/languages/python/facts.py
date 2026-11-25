@@ -3,7 +3,7 @@
 import ast
 import builtins
 from bisect import bisect_right
-from collections import defaultdict, deque
+from collections import Counter, defaultdict, deque
 from dataclasses import dataclass, field, replace
 import dis
 from functools import cache
@@ -80,7 +80,7 @@ class ParsedUnit:
     source_code: dict = field(default_factory=dict)
     name_loads: dict = field(default_factory=dict)
     import_stores: dict = field(default_factory=dict)
-    call_expressions: dict = field(default_factory=dict)
+    statement_expressions: dict = field(default_factory=dict)
     exception_handlers: dict = field(default_factory=dict)
 
     @property
@@ -94,12 +94,38 @@ def tuple_position(node):
     return node.lineno, node.end_lineno, node.col_offset, node.end_col_offset
 
 
+def _constant_store_rhs(value):
+    if isinstance(value, ast.Constant):
+        return type(value.value) is str
+    return isinstance(value, (ast.UnaryOp, ast.BinOp)) and all(
+        isinstance(node, (ast.UnaryOp, ast.BinOp, ast.unaryop, ast.operator))
+        or isinstance(node, ast.Constant)
+        and type(node.value) in (str, int, float, bool, type(None))
+        for node in ast.walk(value)
+    )
+
+
 def _constant_store_sites(program, instructions, assignments, handler_targets):
     """Identify a single source LOAD_CONST feeding the precise module store."""
     by_target = {tuple_position(node.targets[0]): node for node in assignments}
+    # Single-target assignments have disjoint RHS ranges. Count every positioned
+    # instruction in each folded RHS, including instructions before its last load.
+    folded = sorted(
+        (v.lineno, v.col_offset, v.end_lineno, v.end_col_offset)
+        for a in assignments
+        if not isinstance(v := a.value, ast.Constant)
+    )
+    starts = [(line, col) for line, col, _, _ in folded]
+    counts = Counter()
     sites = {}
     load = None
     for instruction in instructions:
+        pos = instruction.positions
+        if folded and None not in pos:
+            start = pos.lineno, pos.col_offset
+            ix = bisect_right(starts, start) - 1
+            if ix >= 0 and start < folded[ix][2:]:
+                counts[folded[ix]] += 1
         opcode = getattr(instruction, "baseopname", instruction.opname)
         if instruction.is_jump_target or instruction.offset in handler_targets:
             load = None
@@ -115,8 +141,13 @@ def _constant_store_sites(program, instructions, assignments, handler_targets):
             elif (
                 load is not None
                 and load.positions == tuple_position(node.value)
-                and type(program.co_consts[load.arg]) is str
-                and program.co_consts[load.arg] == node.value.value
+                and type(value := program.co_consts[load.arg])
+                in (str, int, float, bool, type(None))
+                and (
+                    not isinstance(node.value, ast.Constant)
+                    or type(value) is str
+                    and value == node.value.value
+                )
                 and program.co_names[instruction.arg] == node.targets[0].id
             ):
                 sites[span] = dict(
@@ -126,8 +157,8 @@ def _constant_store_sites(program, instructions, assignments, handler_targets):
                         index=load.arg,
                         offset=load.offset,
                         position=list(load.positions),
-                        type="str",
-                        value_sha256=digest(json_bytes(node.value.value)),
+                        type=type(value).__name__,
+                        value_sha256=digest(json_bytes(numeric_wire_value(value))),
                     ),
                     store=dict(
                         opcode=opcode,
@@ -140,6 +171,14 @@ def _constant_store_sites(program, instructions, assignments, handler_targets):
             else:
                 sites[span] = None
         load = instruction if opcode == "LOAD_CONST" else None
+    for a in assignments:
+        rhs = a.value
+        if (
+            not isinstance(rhs, ast.Constant)
+            and counts[(rhs.lineno, rhs.col_offset, rhs.end_lineno, rhs.end_col_offset)]
+            != 1
+        ):
+            sites.pop(tuple_position(a), None)
     return {span: receipt for span, receipt in sites.items() if receipt is not None}
 
 
@@ -247,14 +286,30 @@ def _import_store_sites(program, instructions, imports, handlers):
     return {span: site for span, site in sites.items() if occurrences[span] == 1}
 
 
-def _call_instruction(program, ins, parts, keywords):
+_STATEMENT_END = {
+    ast.Call: {"POP_TOP"},
+    ast.Raise: {"RAISE_VARARGS"},
+    ast.Assign: {"STORE_NAME", "STORE_GLOBAL"},
+    ast.Delete: {"DELETE_NAME", "DELETE_GLOBAL"},
+}
+
+
+def _expression_instruction(program, ins, parts, keywords):
     opcode = getattr(ins, "baseopname", ins.opname)
     arg, span = ins.arg, ins.positions
     row = dict(opcode=opcode, offset=ins.offset, position=list(span))
     if arg is not None:
         row["oparg"] = arg
-    if opcode in {"LOAD_NAME", "LOAD_GLOBAL", "LOAD_ATTR"}:
-        index = arg if opcode == "LOAD_NAME" else arg >> 1
+    if opcode in {
+        "LOAD_NAME",
+        "LOAD_GLOBAL",
+        "LOAD_ATTR",
+        "STORE_NAME",
+        "STORE_GLOBAL",
+        "DELETE_NAME",
+        "DELETE_GLOBAL",
+    }:
+        index = arg >> 1 if opcode in {"LOAD_GLOBAL", "LOAD_ATTR"} else arg
         if (
             not 0 <= index < len(program.co_names)
             or program.co_names[index] != ins.argval
@@ -264,7 +319,15 @@ def _call_instruction(program, ins, parts, keywords):
         kind, field = (
             (ast.Attribute, "attr") if opcode == "LOAD_ATTR" else (ast.Name, "id")
         )
-        if not any(isinstance(n, kind) and getattr(n, field) == name for n in parts):
+        ctx = (
+            ast.Store
+            if opcode.startswith("STORE_")
+            else ast.Del if opcode.startswith("DELETE_") else ast.Load
+        )
+        if not any(
+            isinstance(n, kind) and isinstance(n.ctx, ctx) and getattr(n, field) == name
+            for n in parts
+        ):
             return None
         row.update(index=index, name=name)
     elif opcode in {"LOAD_CONST", "LOAD_SMALL_INT", "KW_NAMES"}:
@@ -302,23 +365,34 @@ def _call_instruction(program, ins, parts, keywords):
     elif opcode == "BUILD_STRING":
         if not any(isinstance(n, ast.JoinedStr) for n in parts):
             return None
+    elif opcode == "RAISE_VARARGS":
+        if not any(
+            isinstance(n, ast.Raise)
+            and arg == int(n.exc is not None) + int(n.cause is not None)
+            for n in parts
+        ):
+            return None
     elif opcode not in {"PUSH_NULL", "POP_TOP"}:
         return None
     return row
 
 
-def _call_expression(program, instructions, call, end, handlers):
-    """Capture a straight-line expression through the discard of its actual result."""
-    span = tuple_position(call)
+def _statement_expression(program, instructions, root, end, handlers):
+    """Capture source operands and the terminal operation consuming them."""
+    span = tuple_position(root)
     parts, keywords = defaultdict(list), defaultdict(list)
-    needs_object_ports = False
-    for node in ast.walk(call):
-        if isinstance(node, (ast.Load, ast.keyword)):
+    discarded_call = isinstance(root, ast.Call)
+    needs_object_ports = not discarded_call
+    for node in ast.walk(root):
+        if isinstance(node, (ast.Load, ast.Store, ast.Del, ast.keyword)):
             continue
         if not isinstance(
             node,
             (
                 ast.Call,
+                ast.Raise,
+                ast.Assign,
+                ast.Delete,
                 ast.Name,
                 ast.Attribute,
                 ast.Constant,
@@ -367,7 +441,7 @@ def _call_expression(program, instructions, call, end, handlers):
             and (ins.is_jump_target or ins.offset in handlers)
         ):
             return None
-        row = _call_instruction(
+        row = _expression_instruction(
             program, ins, parts[ins.positions], keywords.get(ins.positions, ())
         )
         if row is None:
@@ -376,27 +450,36 @@ def _call_expression(program, instructions, call, end, handlers):
         if depth < 0:
             return None
         rows.append(row)
-    if (
-        depth
-        or len(rows) < 2
-        or rows[-2]["opcode"] not in {"CALL", "CALL_KW"}
-        or rows[-2]["position"] != list(span)
+    if isinstance(root, ast.Delete) and [row["position"] for row in rows] != [
+        list(tuple_position(target)) for target in root.targets
+    ]:
+        return None
+    if depth or (
+        discarded_call
+        and (
+            len(rows) < 2
+            or rows[-2]["opcode"] not in {"CALL", "CALL_KW"}
+            or rows[-2]["position"] != list(span)
+        )
     ):
         return None
     return dict(semantics_version=1, position=list(span), instructions=rows)
 
 
-def _call_expression_sites(program, instructions, calls, handlers):
+def _statement_expression_sites(program, instructions, expressions, handlers, stores):
     # Multiple compiled copies of a finally suite have the same source span.
     ends = defaultdict(list)
     for index, ins in enumerate(instructions):
-        if ins.opname == "POP_TOP" and ins.positions in calls:
+        root = expressions.get(ins.positions)
+        if root is not None and ins.opname in _STATEMENT_END[type(root)]:
             ends[ins.positions].append(index)
     sites = {}
-    for span, matches in ends.items():
-        if len(matches) == 1:
-            receipt = _call_expression(
-                program, instructions, calls[span], matches[0], handlers
+    for end_span, matches in ends.items():
+        root = expressions[end_span]
+        span = tuple_position(root)
+        if len(matches) == 1 and span not in stores:
+            receipt = _statement_expression(
+                program, instructions, root, matches[0], handlers
             )
             if receipt is not None:
                 sites[span] = receipt
@@ -663,16 +746,20 @@ def _compiler_sites(tree, path, relative, source_hash):
             and not any(isinstance(e, ast.Starred) for e in node.elts)
         ):
             nodes[tuple_position(node)] = node
-    assignments, names, imports, calls, tries = [], {}, {}, {}, []
+    assignments, names, imports, expressions, tries = [], {}, {}, {}, []
     for node in scope_nodes(tree.body):
         if (
             isinstance(node, ast.Assign)
             and len(node.targets) == 1
             and isinstance(node.targets[0], ast.Name)
-            and isinstance(node.value, ast.Constant)
-            and type(node.value.value) is str
         ):
-            assignments.append(node)
+            expressions[tuple_position(node.targets[0])] = node
+            if _constant_store_rhs(node.value):
+                assignments.append(node)
+        elif isinstance(node, ast.Delete) and all(
+            isinstance(t, ast.Name) for t in node.targets
+        ):
+            expressions[tuple_position(node.targets[-1])] = node
         elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
             names[tuple_position(node)] = node.id
         elif isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name):
@@ -681,21 +768,23 @@ def _compiler_sites(tree, path, relative, source_hash):
             imports[tuple_position(node)] = node.names[0]
         elif isinstance(node, ast.Try) and node.handlers:
             tries.append(node)
+        elif isinstance(node, ast.Raise):
+            expressions[tuple_position(node)] = node
         elif isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
-            calls[tuple_position(node.value)] = node.value
-    if not (nodes or mappings or assignments or names or imports or calls):
+            expressions[tuple_position(node.value)] = node.value
+    if not (nodes or mappings or assignments or names or imports or expressions):
         return {}
     optimize = sys.flags.optimize
     program = compile(tree, str(path), "exec", dont_inherit=True, optimize=optimize)
     unit = digest(json_bytes([relative, source_hash, ParsedUnit.compiler_id, optimize]))
     instructions = (
         list(dis.get_instructions(program))
-        if assignments or names or imports or calls
+        if assignments or names or imports or expressions
         else None
     )
     entries = (
         dis.Bytecode(program).exception_entries
-        if assignments or imports or calls or tries
+        if assignments or imports or expressions or tries
         else ()
     )
     handlers = {e.target for e in entries}
@@ -708,8 +797,12 @@ def _compiler_sites(tree, path, relative, source_hash):
     import_stores = (
         _import_store_sites(program, instructions, imports, handlers) if imports else {}
     )
-    call_expressions = (
-        _call_expression_sites(program, instructions, calls, handlers) if calls else {}
+    statement_expressions = (
+        _statement_expression_sites(
+            program, instructions, expressions, handlers, stores
+        )
+        if expressions
+        else {}
     )
     exception_handlers = (
         _exception_handler_sites(instructions, entries, tries, loads)
@@ -725,7 +818,7 @@ def _compiler_sites(tree, path, relative, source_hash):
             compiler=ParsedUnit.compiler_id,
             optimize=optimize,
         )
-        if stores or loads or import_stores or call_expressions
+        if stores or loads or import_stores or statement_expressions
         else {}
     )
     fresh, conflict = object(), object()
@@ -795,7 +888,7 @@ def _compiler_sites(tree, path, relative, source_hash):
         source_code=source_code,
         name_loads=loads,
         import_stores=import_stores,
-        call_expressions=call_expressions,
+        statement_expressions=statement_expressions,
         exception_handlers=exception_handlers,
     )
 

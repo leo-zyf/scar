@@ -4,7 +4,7 @@ import ast
 from pathlib import Path
 import shlex
 
-from scar.contract import digest, json_bytes
+from scar.contract import digest, json_bytes, python_constant_rhs_sha256
 
 from . import io as io_effects
 from .imports import numeric_wire_value
@@ -428,7 +428,7 @@ class _ModuleGraph:
         self.source_code = parsed.source_code
         self.name_loads = parsed.name_loads
         self.import_stores = parsed.import_stores
-        self.call_expressions = parsed.call_expressions
+        self.statement_expressions = parsed.statement_expressions
         self.exception_handlers = parsed.exception_handlers
         self.source_lines = parsed.source_text.splitlines()
         self.diagnostic_file = str(parsed.path)
@@ -677,6 +677,17 @@ class _Scope:
                 "scope": "global",
             }
         return {"op": "var", "name": name}
+
+    def source_expression(self, node):
+        if self.symbol == self.unit.root_symbol and (
+            receipt := self.unit.statement_expressions.get(tuple_position(node))
+        ):
+            return {
+                "source_expression": dict(
+                    receipt, code_sha256=self.unit.source_code["code_sha256"]
+                )
+            }
+        return {}
 
     def source_name_load(self, node):
         if self.symbol == self.unit.root_symbol and (
@@ -1101,13 +1112,7 @@ class _Scope:
             keys = [{"name": key, "value": v} for key, (v, _) in key_items]
             key_facts = {key: f for key, (_, f) in key_items}
             fields = dict(target=target, args=args, keywords=keys)
-            if self.module_scope and (
-                receipt := self.unit.call_expressions.get(tuple_position(node))
-            ):
-                fields["source_expression"] = {
-                    **receipt,
-                    "code_sha256": self.unit.source_code["code_sha256"],
-                }
+            fields.update(self.source_expression(node))
             if t.get("guards") or t.get("maybe_unbound"):
                 fields["binding_guard"] = dict(
                     status="conditional",
@@ -2017,6 +2022,11 @@ class _Scope:
                     if self.module_scope
                     else None
                 )
+                if receipt and not isinstance(node.value, ast.Constant):
+                    fingerprint = python_constant_rhs_sha256(value)
+                    receipt = (
+                        dict(receipt, rhs_sha256=fingerprint) if fingerprint else None
+                    )
                 return [
                     R(
                         node,
@@ -2031,7 +2041,7 @@ class _Scope:
                                 }
                             }
                             if receipt
-                            else {}
+                            else self.source_expression(node)
                         ),
                     )
                 ]
@@ -2237,6 +2247,7 @@ class _Scope:
                     "raise",
                     has_exception=node.exc is not None,
                     has_cause=node.cause is not None,
+                    **self.source_expression(node),
                     value=self.expr(node.exc)[0],
                     cause=self.expr(node.cause)[0],
                 )
@@ -2250,6 +2261,7 @@ class _Scope:
                         self.destination(t, {"maybe_unbound": True})
                         for t in node.targets
                     ],
+                    **self.source_expression(node),
                 )
             ]
         if isinstance(node, (ast.Break, ast.Continue, ast.Pass)):

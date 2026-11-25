@@ -998,7 +998,9 @@ def _schedule_image(
         module["compilation_binding_sha256"] = digest(json_bytes(compilation))
         mpi = bindings.get("mpi", {})
         uses_mpi = bool(mpi.get("called_or_possible") or mpi.get("address_taken"))
-        selected, physical = schedule(module, policy, 1 if uses_mpi else workers)
+        selected, physical = schedule(
+            module, policy, 1 if uses_mpi else workers, consume_functions=True
+        )
         if uses_mpi:
             # No rank placement or guaranteed MPI thread level is sealed yet.
             # The cap applies to SCAR's generated teams, including calibration.

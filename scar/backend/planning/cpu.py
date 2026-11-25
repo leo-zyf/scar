@@ -581,7 +581,13 @@ def _structural_layout(bodies):
     )
 
 
-def schedule(module, mode, worker_limit=None):
+def schedule(module, mode, worker_limit=None, *, consume_functions=False):
+    """Schedule a module, preserving caller data unless B1 owns its decoded bodies.
+
+    With ownership, function bodies can be updated in place. The output gets its
+    own module-level bindings so sealing a member cannot overwrite the original
+    resource inventory. Other nested metadata is shared read-only in this mode.
+    """
     inventory = module.get("resource_model", {})
     movement = None
     if "resource_flow" in inventory:
@@ -595,7 +601,7 @@ def schedule(module, mode, worker_limit=None):
     if mode == "serial":
         caps["serial_worker_limit"] = 1
     limit = min(caps.values())
-    selected = deepcopy(module)
+    selected = dict(module) if consume_functions else deepcopy(module)
     maps, has_fusion = _collect(selected)
     report = document(
         PHYSICAL,

@@ -102,9 +102,17 @@ def throw(frame, node, steps):
             "raise_form",
             "a throw requires the explicit exception and cause presence flags",
         )
+    if node["has_cause"] and not node["has_exception"]:
+        frame.fail(node, "raise_form", "an explicit cause requires an exception")
+    if frame.initializing and frame.project.imports.open_namespace:
+        if not namespace_operations.open_object_statement(frame, node, steps):
+            frame.fail(
+                node,
+                "source_raise_evidence",
+                "the open module raise requires its current code, ordered operands and RAISE_VARARGS",
+            )
+        return
     if not node["has_exception"]:
-        if node["has_cause"]:
-            frame.fail(node, "raise_form", "an explicit cause requires an exception")
         if not frame.handler_depth:
             frame.fail(node, "rethrow_scope", "no lexically active exception handler")
         steps.append(dict(op="rethrow"))
@@ -250,6 +258,19 @@ def _handler(frame, node, exceptional, index, count):
     finally:
         frame.leave_control()
         frame.handler_depth -= 1
+    if dynamic and (
+        body_raise := header["match"]["source_exception_handler"].get("body_raise")
+    ):
+        terminal = code[-1].get("value", {}) if code else {}
+        if (
+            terminal.get("op") != "source_exception_raise"
+            or terminal.get("instruction") != body_raise
+        ):
+            frame.fail(
+                node,
+                "handler_raise",
+                "the handler's terminating raise differs from its sealed exception dispatch",
+            )
     if (
         dynamic
         and falls

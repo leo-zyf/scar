@@ -2,7 +2,12 @@
 
 from collections import defaultdict
 from .contracts import publish_program
-from .source_binding import bind_call_expression, bind_exception_arms, bind_import_store
+from .source_binding import (
+    bind_constant_store,
+    bind_exception_arms,
+    bind_import_store,
+    bind_source_expression,
+)
 from scar.contract import (
     digest,
     json_bytes,
@@ -130,8 +135,12 @@ def _definition(graph):
             result = read(nodes[port])
             if result["op"] == "python_import" and "source_import_store" in result:
                 bind_import_store(result, graph["signature"].get("python_scope", {}))
+            if "source_constant_store" in result:
+                bind_constant_store(result, graph["signature"].get("python_scope", {}))
             if "source_expression" in result:
-                bind_call_expression(result, graph["signature"].get("python_scope", {}))
+                bind_source_expression(
+                    result, graph["signature"].get("python_scope", {})
+                )
             if result["op"] == "try":
                 bind_exception_arms(result, graph["signature"].get("python_scope", {}))
             if result["op"] in _SITE_OPERATIONS or "source_name_load" in result:

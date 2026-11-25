@@ -3786,7 +3786,7 @@ def test_private_buffer_placement_respects_proof_budget_and_heap_fallback(
         params=[dict(name="n", type="i64")],
         body=[buffer("x"), buffer("y"), buffer("escaped", False), buffer("z")],
     )
-    module = dict(functions=[fn], globals=[])
+    module = dict(functions=[fn], globals=[], resource_model={"resources": []})
     monkeypatch.setattr(cpu, "_scratch_geometry", lambda: None)
     fallback, _ = cpu.schedule(module, "serial")
     assert all("inline_capacity" not in op for op in fallback["functions"][0]["body"])
@@ -3795,6 +3795,12 @@ def test_private_buffer_placement_respects_proof_budget_and_heap_fallback(
     ops = scheduled["functions"][0]["body"]
     assert [s.get("inline_capacity") for s in ops] == [4, 4, None, None]
     assert {a["name"] for a in physical["allocations"]} == {"x", "y"}
+    assert all("inline_capacity" not in op for op in fn["body"])
+    owned, owned_plan = cpu.schedule(module, "serial", consume_functions=True)
+    assert owned == scheduled and owned_plan == physical
+    assert owned["functions"][0] is fn
+    owned["resource_model"] = {"path": "sealed-inventory"}
+    assert module["resource_model"] == {"resources": []}
     lower = Lowerer(scheduled, physical)
     rendered = "\n".join(statement(s) for s in lower.statement(ops[0]))
     assert "scar::small_buffer" in rendered

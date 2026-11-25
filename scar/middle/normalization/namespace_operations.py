@@ -6,6 +6,7 @@ from scar.contract import (
     MODULE_REGISTRY_OPERATIONS,
     digest,
     json_bytes,
+    python_constant_rhs_sha256,
     walk_operations,
 )
 from .values import literal, source_site
@@ -304,13 +305,24 @@ def store_open_module_constant(frame, node, steps):
     if not isinstance(load, dict) or not isinstance(store, dict):
         return False
     value, target = node["value"], node["target"]
+    if "rhs_sha256" in port:
+        fingerprint = python_constant_rhs_sha256(value)
+        if (
+            not fingerprint
+            or value.get("op") not in {"binary", "unary"}
+            or port["rhs_sha256"] != fingerprint
+        ):
+            return False
+    elif not (
+        load.get("type") == "str"
+        and value.get("op") == "literal"
+        and value.get("type") == {"kind": "python_object", "class": "str"}
+        and type(value.get("value")) is str
+        and load.get("value_sha256") == digest(json_bytes(value["value"]))
+    ):
+        return False
     if (
         load.get("opcode") != "LOAD_CONST"
-        or load.get("type") != "str"
-        or value.get("op") != "literal"
-        or value.get("type") != {"kind": "python_object", "class": "str"}
-        or type(value.get("value")) is not str
-        or load.get("value_sha256") != digest(json_bytes(value["value"]))
         or store.get("opcode") not in ("STORE_NAME", "STORE_GLOBAL")
         or not isinstance(store.get("name"), str)
         or not store["name"].isidentifier()
@@ -439,10 +451,12 @@ def _object_operand(frame, node, code):
     return None
 
 
-class _SourceCallRegion:
+class _SourceExpressionRegion:
     """Consume the graph operands and the sealed instructions in lockstep."""
 
     def __init__(self, frame, code, receipt):
+        if receipt["code_sha256"] != code["code_sha256"]:
+            raise ValueError("source expression belongs to another code object")
         self.frame = frame
         self.code = code
         self.instructions = receipt["instructions"]
@@ -673,8 +687,7 @@ class _SourceCallRegion:
         value = self.call(node)
         ins = self.take("POP_TOP", source=node)
         self.emit(ins, "source_object_discard", node, value=value)
-        if self.index != len(self.instructions):
-            raise ValueError("unexpected instruction after call result release")
+        self.finish()
         return dict(
             op="source_object_region",
             type="unit",
@@ -683,6 +696,120 @@ class _SourceCallRegion:
             tracing="preserve_all_source_instruction_events_including_call_stack_setup",
             **source_site(node),
         )
+
+    def finish(self):
+        if self.index != len(self.instructions):
+            raise ValueError(
+                "unexpected instruction after source expression terminator"
+            )
+
+    def target(self, target, *opcodes):
+        instruction = self.take(*opcodes, source=target)
+        name = instruction["name"]
+        if (
+            target.get("op") != "var"
+            or target.get("scope") != "global"
+            or target.get("cell")
+            or target.get("name") != f"py:{self.frame.module}:{name}"
+        ):
+            raise ValueError("source mapping target disagrees with graph binding")
+        namespace = (
+            "frame.locals"
+            if instruction["opcode"].endswith("_NAME")
+            else "frame.globals"
+        )
+        return dict(
+            slot=target["name"],
+            name=name,
+            namespace=namespace,
+            instruction=instruction,
+            **source_site(target),
+        )
+
+    def statement(self, node):
+        if node["op"] == "raise":
+            exception = self.value(node["value"]) if node["has_exception"] else None
+            cause = self.value(node["cause"]) if node["has_cause"] else None
+            instruction = self.take("RAISE_VARARGS", source=node)
+            if instruction["oparg"] != int(node["has_exception"]) + int(
+                node["has_cause"]
+            ):
+                raise ValueError(
+                    "RAISE_VARARGS operand count disagrees with source raise"
+                )
+            opcode = "source_exception_raise"
+            ports = dict(
+                exception=exception,
+                cause=cause,
+                instruction=instruction,
+                noreturn=True,
+                writes=["python.exception_state"],
+                dispatch="source_RAISE_VARARGS_normalize_actual_exception_then_explicit_cause_using_source_class_instance_None_and_invalid_operand_rules",
+                reraise="zero_operands_reraises_actual_handled_exception_with_existing_traceback_or_raises_RuntimeError_if_absent",
+                exception_state="preserve_traceback_cause_context_suppression_and_handled_exception_at_source_transfer",
+            )
+        elif node["op"] == "assign":
+            value = self.value(node["value"])
+            target = self.target(node["target"], "STORE_NAME", "STORE_GLOBAL")
+            opcode = "module_global_store"
+            ports = dict(
+                slot=target["slot"],
+                name=target["name"],
+                namespace=target["namespace"],
+                target=target,
+                value=value,
+                store_opcode=target["instruction"]["opcode"],
+                writes=[target["namespace"]],
+                publication="consume_actual_rhs_object_with_source_store_and_current_co_names_key",
+            )
+        elif node["op"] == "unbind" and node["targets"]:
+            targets = [
+                self.target(t, "DELETE_NAME", "DELETE_GLOBAL") for t in node["targets"]
+            ]
+            opcode = "module_global_delete"
+            ports = dict(
+                targets=targets,
+                names=[t["name"] for t in targets],
+                writes=list(dict.fromkeys(t["namespace"] for t in targets)),
+                deletion="execute_each_sealed_mapping_delete_and_release_in_source_order",
+                missing="propagate_source_delete_opcode_failure_after_completed_prefix",
+            )
+        else:
+            raise ValueError("unrecognized source statement termination")
+        self.finish()
+        return opcode, ports
+
+
+def open_object_statement(frame, node, steps):
+    """Consume a complete source evaluation stack at its actual store, delete or raise."""
+    code = _open_module_code(frame)
+    receipt = node.get("source_expression")
+    if not code or not receipt:
+        return False
+    try:
+        region = _SourceExpressionRegion(frame, code, receipt)
+        opcode, ports = region.statement(node)
+    except (ValueError, IndexError, KeyError, TypeError) as error:
+        frame.fail(node, "source_expression_operands", str(error))
+    _register_expression(frame, region.steps)
+    namespace_effect(
+        frame,
+        node,
+        steps,
+        opcode,
+        source_code=code,
+        source_expression=receipt,
+        evaluation=region.steps,
+        **ports,
+        reads=("frame.code", "frame.locals", "python.exception_state"),
+        code_match="qualify_current_activation_code_instruction_stack_and_exception_table_before_first_source_instruction",
+        on_code_mismatch="resume_source_equivalent_execution_before_first_instruction_with_original_stack_and_exception_state",
+        ownership="retain_each_owned_operand_until_consumed_at_its_source_opcode",
+        release="preserve_replaced_or_deleted_values_release_reentry_and_unraisable_finalizer_errors",
+        unwind="on_failure_unwind_at_failing_opcode_follow_source_exception_table_and_preserve_completed_effects",
+        callbacks="preserve_instruction_tracing_reentry_and_release_of_live_source_stack_references",
+    )
+    return True
 
 
 def _object_truth(frame, node, code):
@@ -738,9 +865,7 @@ def open_object_expression(frame, node, steps, *, truth_context, discard):
     )
     if receipt is not None:
         try:
-            if receipt["code_sha256"] != code["code_sha256"]:
-                raise ValueError("source expression belongs to another code object")
-            expression = _SourceCallRegion(frame, code, receipt).discard(node)
+            expression = _SourceExpressionRegion(frame, code, receipt).discard(node)
         except (ValueError, IndexError, KeyError, TypeError) as error:
             frame.fail(node, "source_expression_operands", str(error))
     elif truth_context:
@@ -822,6 +947,11 @@ def _namespace_operation(
 
 def _open_namespace_after(frame, action):
     frame.project.names.clear()
+    if action["op"] == "module_global_store":
+        frame.project.imports.publications.pop(action["slot"], None)
+    elif action["op"] == "module_global_delete":
+        for target in action["targets"]:
+            frame.project.imports.publications.pop(target["slot"], None)
     frame.project.imports.open_namespace = dict(
         owner=frame.name, operation=action["op"], **source_site(action)
     )

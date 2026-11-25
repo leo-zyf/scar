@@ -40,6 +40,7 @@ MODULE_REGISTRY_OPERATIONS = frozenset(
         "source_exception_match",
         "source_exception_bind",
         "source_exception_clear",
+        "source_exception_raise",
         "source_object_region",
         "source_object_attribute",
         "source_object_constant",
@@ -399,6 +400,35 @@ def json_bytes(value):
         if encoded is not value:
             text = _json_text(encoded)
     return text.encode("ascii") + b"\n"
+
+
+def python_constant_rhs_sha256(node):
+    """Identify a closed scalar expression by its ordered graph operands."""
+
+    def project(expr):
+        if not isinstance(expr, dict):
+            return None
+        op = expr.get("op")
+        if op == "literal":
+            kind = expr.get("type")
+            if not isinstance(kind, dict) or kind.get("kind") != "python_object":
+                return None
+            if (
+                kind.get("class") not in {"str", "int", "float", "bool", "NoneType"}
+                or "value" not in expr
+            ):
+                return None
+            return [op, kind["class"], expr["value"]]
+        if op not in {"binary", "unary"} or not isinstance(expr.get("operator"), str):
+            return None
+        ports = ("left", "right") if op == "binary" else ("value",)
+        operands = [project(expr.get(port)) for port in ports]
+        if any(value is None for value in operands):
+            return None
+        return [op, expr["operator"], *operands]
+
+    result = project(node)
+    return digest(json_bytes(result)) if result is not None else None
 
 
 def _wire_object(pairs):
