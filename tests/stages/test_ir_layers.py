@@ -10275,3 +10275,53 @@ def test_source_dispatch_replays_closed_graph_imports_together_and_retains_sourc
     assert (
         loader["function"]["completion"] == "prefix" and not loader["function"]["body"]
     )
+
+
+def test_conditional_frame_joins_branches_and_retains_one_iterator_body(tmp_path):
+    from scar.contract import read_member
+    from scar.frontend import build
+    from scar.middle import plan
+
+    package = tmp_path / "lib"
+    package.mkdir()
+    (package / "child.py").write_text("pass\n")
+    (package / "__init__.py").write_text(
+        "from . import child as old\ndel old\n"
+        "def choose(flag, grid):\n"
+        "    if flag == 0:\n        data = grid[:, 0]\n"
+        "    else:\n        data = grid[:, 1]\n"
+        "    for item in data:\n        publish(item)\n"
+        "    return data\ncallback()\n"
+    )
+    entry = tmp_path / "entry.py"
+    entry.write_text("import lib\nlib.choose(get_flag(), get_grid())\n")
+    graph, out = tmp_path / "graph", tmp_path / "plan"
+    build(entry, graph)
+    plan(graph / "graph.json", out)
+    ir = json.loads((out / "exec-ir.json").read_bytes())
+    index = read_member(out, ir["module"]["source_dispatch"])
+    [callee] = index["callees"]
+    assert callee["completion"] == "conditional_source_body"
+    branch, loop, exit_ = read_member(out, callee["function"])["body"]
+    assert branch["op"] == "source_frame_if"
+    assert (
+        branch["branch"]["then_exit"]["target"]
+        == branch["branch"]["else_exit"]["fallthrough"]
+        == branch["branch"]["join"]["offset"]
+    )
+    assert [s["op"] for s in branch["steps"]].count("source_object_compare") == 1
+    data_slot = exit_["steps"][0]["slot"]
+    for arm in ("then", "else"):
+        [region] = branch[arm]
+        assert region["steps"][-2]["op"] == "source_object_getitem"
+        assert region["steps"][-1]["slot"] == data_slot
+    assert loop["op"] == "source_frame_for" and loop["steps"][0]["slot"] == data_slot
+    assert loop["advance"]["iterator"] == loop["acquire"]["result"]
+    assert loop["target"]["value"] == loop["advance"]["item"]
+    assert (
+        loop["edges"]["backedge"]["target"] == loop["advance"]["instruction"]["offset"]
+    )
+    [visit] = loop["body"]
+    assert any(op.get("slot") == loop["target"]["slot"] for op in visit["steps"])
+    assert exit_["steps"][-1]["op"] == "frame_return"
+    assert not ir["functions"]

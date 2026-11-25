@@ -220,6 +220,30 @@ def _bind_condition_edges(node, proof, code, successor):
             )
     elif not _source_return(other, operand_pos):
         raise ValueError("source condition lacks the module's implicit return")
+    if any(key in branch for key in ("join", "then_exit", "else_exit")):
+        destination = branch.get("join", {})
+        yes, no = branch.get("then_exit", {}), branch.get("else_exit", {})
+        if not (
+            node.get("else")
+            and successor
+            and _edge_enters(destination, successor, "continuation", code)
+            and _inside_source(
+                _graph_position(node["then"][-1], code), yes.get("position")
+            )
+            and _inside_source(
+                _graph_position(node["else"][-1], code), no.get("position")
+            )
+            and yes.get("opcode") == "JUMP_FORWARD"
+            and yes.get("target") == no.get("fallthrough") == destination.get("offset")
+            and then["offset"]
+            <= yes["offset"]
+            < other["offset"]
+            <= no["offset"]
+            < destination["offset"]
+        ):
+            raise ValueError(
+                "source branch exits disagree with the normal continuation"
+            )
 
 
 def _bind_iteration_edges(node, proof, scope, successor):
@@ -230,7 +254,7 @@ def _bind_iteration_edges(node, proof, scope, successor):
         isinstance(loop, dict)
         and all(
             isinstance(loop.get(k), dict)
-            for k in ("next", "store", "body", "backedge", "exhausted")
+            for k in ("next", "store", "body", "exhausted")
         )
         and isinstance(loop.get("cleanup"), list)
         and node.get("protocol") == "iterator"
@@ -244,13 +268,23 @@ def _bind_iteration_edges(node, proof, scope, successor):
         )
     ):
         raise ValueError("source iteration lacks its ordinary target or control ports")
-    step, store, entry, back, exit_edge = (
-        loop[k] for k in ("next", "store", "body", "backedge", "exhausted")
+    step, store, entry, exit_edge = (
+        loop[k] for k in ("next", "store", "body", "exhausted")
     )
     acquire = proof["instructions"][-1]
     iterable_pos = _graph_position(node.get("range"), code)
     pos = acquire["position"]
     cleanup = loop["cleanup"]
+    backedges = [loop["backedge"]] if "backedge" in loop else loop.get("backedges")
+    prefixes = loop.get("next_prefix", [])
+    if not (
+        isinstance(backedges, list)
+        and backedges
+        and not ("backedge" in loop and "backedges" in loop)
+        and isinstance(prefixes, list)
+        and all(isinstance(r, dict) for r in [*prefixes, *backedges])
+    ):
+        raise ValueError("source iteration lacks unique backedge records")
     if not (
         acquire["opcode"] == "GET_ITER"
         and pos in (proof["position"], iterable_pos)
@@ -266,43 +300,69 @@ def _bind_iteration_edges(node, proof, scope, successor):
             type(r.get("offset")) is int
             and r["offset"] >= 0
             and isinstance(r.get("opcode"), str)
-            for r in (step, store, entry, back, *cleanup, exit_edge)
+            for r in (*prefixes, step, store, entry, *backedges, *cleanup, exit_edge)
         )
         and all(
             type(r.get("target")) is int
             and type(r.get("oparg")) is int
             and r["oparg"] >= 0
-            for r in (step, back)
+            for r in (step, *backedges)
         )
     ):
         raise ValueError(
             "source iteration disagrees with its iterable or cleanup instructions"
         )
+    slots = scope.get("definition_code", {}).get("varnames", ())
+    target = node["target"]
+    local = (
+        code["kind"] == "function"
+        and store["opcode"] == "STORE_FAST"
+        and type(store.get("index")) is int
+        and 0 <= store["index"] < len(slots)
+        and slots[store["index"]] == store.get("name")
+        and _fast_operand(store, target, code)
+    )
+    mapping = store["opcode"] in {"STORE_NAME", "STORE_GLOBAL"} and _namespace_target(
+        store, target, scope
+    )
+    head = (prefixes or [step])[0]["offset"]
+    back_width = cleanup[0]["offset"] - backedges[-1]["offset"]
     if not (
         step["opcode"] == "FOR_ITER"
         and step.get("position") == pos
-        and store["opcode"] in {"STORE_NAME", "STORE_GLOBAL"}
+        and (local or mapping)
         and type(store.get("oparg")) is int
         and type(store.get("index")) is int
         and store["oparg"] == store["index"] >= 0
-        and _namespace_target(store, node.get("target"), scope)
-        and back["opcode"] == "JUMP_BACKWARD"
-        and back["target"] == step["offset"]
+        and all(
+            p["opcode"] == "EXTENDED_ARG"
+            and p["offset"] == head + 2 * i
+            and p.get("oparg") == step["oparg"] >> (8 * (len(prefixes) - i))
+            and p.get("position") == pos
+            for i, p in enumerate(prefixes)
+        )
+        and step["offset"] == head + 2 * len(prefixes)
+        and back_width in (2, 4)
+        and [b["offset"] for b in backedges] == sorted({b["offset"] for b in backedges})
+        and all(
+            b["opcode"] == "JUMP_BACKWARD"
+            and b["target"] == head
+            and b["offset"] + back_width - 2 * b["oparg"] == head
+            and _inside_source(proof["position"], b.get("position"))
+            for b in backedges
+        )
         and step["target"] == cleanup[0]["offset"]
         and step["target"] == store["offset"] + 2 * step["oparg"]
-        and back["target"] == cleanup[0]["offset"] - 2 * back["oparg"]
-        and acquire["offset"] + 2
-        == step["offset"]
-        < store["offset"]
-        < entry["offset"]
-        <= back["offset"]
-        < cleanup[0]["offset"]
+        and acquire["offset"] + 2 == head
+        and step["offset"] < store["offset"] < entry["offset"] <= backedges[0]["offset"]
         and all(
             b["offset"] == a["offset"] + 2
             for a, b in zip(cleanup, [*cleanup[1:], exit_edge])
         )
         and _edge_enters(entry, body[0], "suite", code)
-        and _inside_source(_graph_position(body[-1], code), back.get("position"))
+        and _inside_source(
+            _graph_position(body[-1], code), backedges[-1].get("position")
+        )
     ):
         raise ValueError(
             "source iteration disagrees with its target, loop body or backedge"
@@ -368,6 +428,14 @@ def bind_source_expression(node, scope, successor=None):
                 "value": None,
             }:
                 raise ValueError("source raise omits an evaluated operand")
+    elif operation == "literal":
+        if not (
+            code["kind"] == "function"
+            and len(proof["instructions"]) == 1
+            and proof["instructions"][0].get("opcode") == "NOP"
+            and proof["instructions"][0].get("position") == position
+        ):
+            raise ValueError("discarded literal lacks its source line instruction")
     elif operation not in {"assign", "unbind", "if", "for", "return"} and not (
         isinstance(node.get("target"), dict)
         and isinstance(node.get("args"), list)
@@ -411,6 +479,22 @@ def bind_source_expression(node, scope, successor=None):
         pool_aggregate = instruction.get("type") == "tuple" and (
             "item_count" in instruction or "items_sha256" in instruction
         )
+        if opcode in {
+            "BINARY_SUBSCR",
+            "STORE_SUBSCR",
+            "BINARY_SLICE",
+            "STORE_SLICE",
+        } or (opcode == "BINARY_OP" and instruction.get("operator") == "subscript"):
+            if opcode == "BINARY_OP" and instruction.get("oparg") != 26:
+                raise ValueError("source subscription has invalid binary opcode")
+            if not any(
+                item["op"] == "index"
+                and item.get("protocol") == "python_subscription"
+                and _graph_position(item, code) == span
+                for item in walk_operations(node, exclude_fields={"source_expression"})
+            ):
+                raise ValueError("source subscription lacks its matching graph port")
+            continue
         if opcode == "BINARY_OP":
             if binary_ports is None:
                 binary_ports = {}
@@ -533,7 +617,15 @@ def bind_source_expression(node, scope, successor=None):
             )
             if type(arg) is not int or not index_matches:
                 raise ValueError("source call literal operand disagrees with its index")
-            if instruction.get("type") == "tuple":
+            if "constant_key" in instruction:
+                if not (
+                    opcode == "LOAD_CONST"
+                    and instruction.get("type") in {"tuple", "slice"}
+                    and isinstance(instruction["constant_key"], dict)
+                    and instruction["constant_key"].get("kind") == instruction["type"]
+                ):
+                    raise ValueError("invalid source subscription constant")
+            elif instruction.get("type") == "tuple":
                 names = instruction.get("names")
                 if (
                     immediate
@@ -579,15 +671,19 @@ def bind_source_expression(node, scope, successor=None):
         ):
             raise ValueError("source return disagrees with its function operand")
     elif operation == "assign":
+        target = node.get("target", {})
         if not (
             isinstance(node.get("value"), dict)
             and len(proof["instructions"]) > 1
             and (
-                _namespace_target(last, node.get("target"), scope)
-                and last["opcode"] in {"STORE_NAME", "STORE_GLOBAL"}
-                if code["kind"] == "module"
-                else last["opcode"] == "STORE_FAST"
-                and _fast_operand(last, node.get("target", {}), code)
+                last["opcode"] in {"STORE_NAME", "STORE_GLOBAL"}
+                and _namespace_target(last, target, scope)
+                or last["opcode"] == "STORE_FAST"
+                and _fast_operand(last, target, code)
+                or last["opcode"] in {"STORE_SUBSCR", "STORE_SLICE"}
+                and target.get("op") == "index"
+                and target.get("protocol") == "python_subscription"
+                and _graph_position(target, code) == last["position"]
             )
         ):
             raise ValueError("source expression store disagrees with its target")
@@ -607,7 +703,7 @@ def bind_source_expression(node, scope, successor=None):
         _bind_iteration_edges(node, proof, scope, successor)
     elif operation == "if":
         _bind_condition_edges(node, proof, code, successor)
-    elif last["opcode"] != "POP_TOP":
+    elif operation != "literal" and last["opcode"] != "POP_TOP":
         raise ValueError("source call region has no final result discard")
 
 

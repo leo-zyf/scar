@@ -278,6 +278,121 @@ class SourceExpressionRegion:
         if old is not value and json_bytes(old) != json_bytes(value):
             raise ValueError("one code constant slot has conflicting typed values")
 
+    def compiled_key(self, node):
+        """Read a compiler-folded slice or tuple from the owning code object's pool."""
+
+        def describe(part):
+            if part["op"] == "literal":
+                return dict(kind=part["type"]["class"], value=part["value"])
+            if part["op"] == "slice":
+                return dict(
+                    kind="slice",
+                    **{k: describe(part[k]) for k in ("lower", "upper", "step")},
+                )
+            if part["op"] == "aggregate" and part["kind"] == "tuple":
+                return dict(
+                    kind="tuple", items=[describe(item) for item in part["items"]]
+                )
+            raise ValueError("nonconstant operand in a compiled subscription key")
+
+        ins = self.take("LOAD_CONST", source=node)
+        value = describe(node)
+        if ins.get("type") != value["kind"] or json_bytes(
+            ins.get("constant_key")
+        ) != json_bytes(value):
+            raise ValueError("compiled subscription key disagrees with graph operands")
+        if self.constants is not None:
+            self.record_constant(ins["index"], value)
+        return self.emit(
+            ins,
+            "source_object_constant",
+            node,
+            source="current_frame_co_consts",
+            operand=ins["index"],
+        )
+
+    def slice_bounds(self, node):
+        bounds = []
+        for key in ("lower", "upper", "step"):
+            child = node[key]
+            omitted = (
+                child["op"] == "literal"
+                and child.get("value") is None
+                and not child.get("location")
+            )
+            if key == "step" and omitted:
+                break
+            if omitted:
+                ins = self.take("LOAD_CONST", source=node)
+                self.check_literal(child, ins)
+                bounds.append(
+                    self.emit(
+                        ins,
+                        "source_object_constant",
+                        node,
+                        source="current_frame_co_consts",
+                        operand=ins["index"],
+                    )
+                )
+            else:
+                bounds.append(self.value(child))
+        return bounds
+
+    def build_slice(self, node, bounds):
+        ins = self.take("BUILD_SLICE", source=node)
+        if ins["oparg"] != len(bounds) or len(bounds) not in (2, 3):
+            raise ValueError("compiled slice arity disagrees with source bounds")
+        return self.emit(
+            ins, "source_object_build_slice", node, bounds=bounds, may_raise=True
+        )
+
+    def subscription(self, node, *, stored=None):
+        if node.get("protocol") != "python_subscription" or len(node["indices"]) != 1:
+            raise ValueError("subscription requires its original single key expression")
+        base = self.value(node["base"])
+        key = node["indices"][0]
+        if key["op"] == "slice" and not self.instructions[self.index].get(
+            "constant_key"
+        ):
+            bounds = self.slice_bounds(key)
+            if self.next_opcode() in {"BINARY_SLICE", "STORE_SLICE"}:
+                ins = self.take(
+                    "BINARY_SLICE" if stored is None else "STORE_SLICE", source=node
+                )
+                if len(bounds) != 2:
+                    raise ValueError("direct slice requires lower and upper operands")
+                operands = dict(bounds=bounds)
+            else:
+                item = self.build_slice(key, bounds)
+                operands = dict(key=item)
+                ins = self.subscription_opcode(node, stored)
+        else:
+            operands = dict(key=self.value(key))
+            ins = self.subscription_opcode(node, stored)
+        if stored is not None:
+            operands["value"] = stored
+        return self.emit(
+            ins,
+            "source_object_getitem" if stored is None else "source_object_setitem",
+            node,
+            opcode=ins["opcode"],
+            base=base,
+            **operands,
+            may_raise=True,
+        )
+
+    def subscription_opcode(self, node, stored):
+        if stored is not None:
+            return self.take("STORE_SUBSCR", source=node)
+        ins = self.take(
+            "BINARY_OP" if self.minor >= 14 else "BINARY_SUBSCR", source=node
+        )
+        if ins["opcode"] == "BINARY_OP" and (
+            ins.get("oparg") != 26 or ins.get("operator") != "subscript"
+        ):
+            raise ValueError("binary operation does not implement source subscription")
+        return ins
+
     def return_value(self, node):
         if self.next_opcode() == "RETURN_CONST":
             ins = self.take("RETURN_CONST")
@@ -405,6 +520,54 @@ class SourceExpressionRegion:
         if not isinstance(node, dict):
             raise ValueError("missing source expression operand")
         op = node.get("op")
+        if (
+            op in {"aggregate", "slice"}
+            and self.instructions[self.index].get("constant_key")
+            and matches_position(
+                self.instructions[self.index], node, self.code["source_key"]
+            )
+        ):
+            return self.compiled_key(node), None
+        if op == "slice":
+            return (
+                self.build_slice(node, self.slice_bounds(node)),
+                None,
+            )
+        if op == "index":
+            return self.subscription(node), None
+        if (
+            op == "compare_chain"
+            and len(node["operands"]) == len(node["operators"]) == 1
+        ):
+            left = self.value(node["left"])
+            right = self.value(node["operands"][0])
+            ins = self.take("COMPARE_OP", source=node)
+            operator = node["operators"][0]
+            operations = ("lt", "lte", "eq", "noteq", "gt", "gte")
+            arg = ins["oparg"]
+            boolean = self.minor >= 13 and bool(arg & 16)
+            if (
+                operator not in operations
+                or operations.index(operator) != arg >> (4 if self.minor == 12 else 5)
+                or ins.get("operator") != operator
+                or ins.get("force_bool") is not boolean
+            ):
+                raise ValueError(
+                    "comparison disagrees with compiled operation or truth conversion"
+                )
+            return (
+                self.emit(
+                    ins,
+                    "source_object_compare",
+                    node,
+                    left=left,
+                    right=right,
+                    operator=operator,
+                    force_bool=boolean,
+                    opcode=ins["opcode"],
+                ),
+                None,
+            )
         if op in {"var", "python_builtin"}:
             return self.name(node, callee)
         if op == "member":
@@ -614,13 +777,85 @@ class SourceExpressionRegion:
             **source_site(node),
         )
 
+    def iteration(self, node, ports):
+        """Bind one acquired iterator to the loop's repeat, item and exit ports."""
+        if node.get("protocol") != "iterator" or node.get("init"):
+            raise ValueError("source loop requires the graph's iterator protocol")
+        iterable = self.value(node["range"])
+        acquire = self.take("GET_ITER")
+        self.finish()
+        store = ports["store"]
+        dest = node["target"]
+        if not matches_position(store, dest, self.code["source_key"]):
+            raise ValueError("source iterator item has no matching target")
+        if store["opcode"] == "STORE_FAST":
+            target = dict(
+                **self.fast_local(dest, store), instruction=store, **source_site(dest)
+            )
+            on_item = "consume_this_visits_owned_item_at_frame_slot_before_body"
+        elif store["opcode"] in {"STORE_NAME", "STORE_GLOBAL"}:
+            target = self.mapping_target(dest, store)
+            on_item = "consume_this_visits_owned_item_at_mapping_store_before_body"
+        else:
+            raise ValueError("unsupported source iterator target")
+        advance = ports["next"]
+        prefixes = ports.get("next_prefix", [])
+        backedges = ports.get("backedges") or [ports["backedge"]]
+        if (
+            advance["opcode"] != "FOR_ITER"
+            or any(p["opcode"] != "EXTENDED_ARG" for p in prefixes)
+            or any(
+                back["opcode"] != "JUMP_BACKWARD"
+                or back["target"] != (prefixes or [advance])[0]["offset"]
+                for back in backedges
+            )
+            or not ports["cleanup"]
+            or ports["cleanup"][0]["opcode"] != "END_FOR"
+            or advance["target"] != ports["cleanup"][0]["offset"]
+        ):
+            raise ValueError(
+                "source iterator edges disagree with the verified header or exit"
+            )
+        iterator = {"from_offset": acquire["offset"]}
+        item = {"from_offset": advance["offset"]}
+        return dict(
+            evaluation=self.steps,
+            acquire=dict(
+                instruction=acquire,
+                iterable=iterable,
+                result=iterator,
+                dispatch="apply_source_GET_ITER_once_and_release_consumed_iterable",
+            ),
+            advance=dict(
+                instruction=advance,
+                iterator=iterator,
+                item=item,
+                dispatch="apply_source_FOR_ITER_to_retained_iterator_on_each_header_visit",
+                on_item=on_item,
+                on_exhaustion="release_iterator_once_then_enter_else",
+                on_other_exception="unwind_and_propagate_without_store_body_or_else",
+            ),
+            target=dict(target, value=item),
+            edges={
+                k: ports[k]
+                for k in (
+                    "body",
+                    "backedge",
+                    "backedges",
+                    "next_prefix",
+                    "cleanup",
+                    "exhausted",
+                )
+                if k in ports
+            },
+        )
+
     def condition(self, node, ports):
         condition = node["condition"]
         negated = condition["op"] == "unary" and condition.get("operator") == "not"
         operand = condition["value"] if negated else condition
         if (
-            operand["op"] not in {"call", "python_invoke", "library_call"}
-            or ports.get("negated") is not negated
+            ports.get("negated") is not negated
             or not matches_position(
                 {"position": ports.get("condition_position")},
                 condition,
@@ -636,21 +871,34 @@ class SourceExpressionRegion:
                 "condition and branch operands disagree with the source graph"
             )
         value = self.value(operand)
-        conversion = self.take("TO_BOOL", source=operand) if self.minor >= 13 else None
+        already_bool = self.steps[-1].get("force_bool") is True
+        conversion = (
+            self.take("TO_BOOL", source=operand)
+            if self.minor >= 13 and not already_bool
+            else None
+        )
         jump = self.take(
             "POP_JUMP_IF_TRUE" if negated else "POP_JUMP_IF_FALSE", source=operand
         )
         self.finish()
         if jump["target"] != ports["else"]["offset"]:
             raise ValueError("conditional jump does not enter the sealed alternative")
-        truth = self.emit(
-            conversion or jump,
-            "source_object_truth",
-            operand,
-            type="bool",
-            value=value,
-            opcode=(conversion or jump)["opcode"],
-            dispatch="consume_actual_call_result_at_source_truth_instruction_including_bool_or_len_and_release",
+        truth = (
+            value
+            if already_bool
+            else self.emit(
+                conversion or jump,
+                "source_object_truth",
+                operand,
+                type="bool",
+                value=value,
+                opcode=(conversion or jump)["opcode"],
+                dispatch=(
+                    "consume_actual_call_result_at_source_truth_instruction_including_bool_or_len_and_release"
+                    if operand["op"] in {"call", "python_invoke", "library_call"}
+                    else "apply_source_truth_to_actual_operand_including_bool_or_len_and_release"
+                ),
+            )
         )
         return dict(
             op="source_object_region",
@@ -820,120 +1068,3 @@ class SourceExpressionRegion:
             raise ValueError("unrecognized source statement termination")
         self.finish()
         return opcode, ports
-
-
-def conditional_function_body(definition, descriptor):
-    """Read a matched callee from the bound graph, starting after argument binding."""
-    scope = definition["python_scope"]
-    symbol = definition["name"]
-    code = scope.get("source_code", {})
-    child = scope.get("definition_code", {})
-    body_id = descriptor.get("source_body", {})
-    regions = []
-    constants = {}
-    result = dict(
-        symbol=symbol,
-        completion="conditional_source_prefix",
-        function=dict(symbol=symbol, body=regions, constants=constants),
-    )
-
-    def stop(node, reason):
-        result["frontier"] = dict(
-            operator=node.get("op", "frame_entry"),
-            requirement=reason,
-            **source_site(node),
-        )
-        for role in ("value", "condition", "range"):
-            operand = node.get(role)
-            if isinstance(operand, dict) and "op" in operand:
-                result["frontier"][role] = dict(
-                    operator=operand["op"], **source_site(operand)
-                )
-        return result
-
-    if not (
-        definition.get("call_protocol", {}).get("kind") == "regular"
-        and scope.get("kind") == code.get("kind") == "function"
-        and body_id.get("graph_id")
-        and code.get("code_sha256")
-        and code["code_sha256"]
-        == child.get("code_sha256")
-        == body_id.get("code_sha256")
-        and code.get("source_key") == scope.get("source_key")
-        and isinstance(child.get("varnames"), list)
-        and isinstance(definition.get("body"), list)
-    ):
-        return stop(definition, "bound_function_body_and_matching_frame_layout")
-    slots = {name: i for i, name in enumerate(child["varnames"])}
-    params = definition["params"]
-    if [[p["binding"], p["name"]] for p in params] != child.get("parameters") or any(
-        p["name"] not in slots for p in params
-    ):
-        return stop(definition, "formal_parameter_to_compiled_frame_slot")
-    result["entry"] = dict(
-        graph=body_id,
-        code=code,
-        timing="after_actual_dispatch_and_successful_source_argument_binding",
-        inputs=["selected_function", "active_frame", "frame.globals", "frame.builtins"],
-        parameters=[
-            dict(name=p["name"], binding=p["binding"], slot=slots[p["name"]])
-            for p in params
-        ],
-        state="read_bound_arguments_from_this_activation_without_rebinding_or_reloading_caller_operands",
-        exceptional_exit="propagate_at_source_instruction_with_its_live_stack_and_completed_effects",
-    )
-    for node in definition["body"]:
-        if (
-            node["op"] == "decl"
-            and node.get("initial_binding") == "unbound"
-            and "init" not in node
-        ):
-            continue
-        expr = node.get("value", {}) if node["op"] == "expr" else node
-        receipt = expr.get("source_expression")
-        if not receipt:
-            return stop(node, "instruction_region_for_current_function_statement")
-        try:
-            # Publish only the pool entries owned by a fully decoded statement.
-            used = {}
-            region = SourceExpressionRegion(scope, receipt, constants=used)
-            if node["op"] == "expr" and expr["op"] in {
-                "call",
-                "python_invoke",
-                "library_call",
-            }:
-                region.discard(expr)
-            elif node["op"] == "assign":
-                value = region.value(node["value"])
-                target = node["target"]
-                ins = region.take("STORE_FAST", source=target)
-                region.emit(
-                    ins,
-                    "frame_local_store",
-                    target,
-                    **region.fast_local(target, ins),
-                    value=value,
-                    ownership="install_result_before_releasing_previous_slot_object",
-                )
-                region.finish()
-            elif node["op"] == "return":
-                region.return_value(node)
-            else:
-                return stop(node, "source_function_statement_or_control_transfer")
-            for index, value in used.items():
-                if index in constants and json_bytes(constants[index]) != json_bytes(
-                    value
-                ):
-                    raise ValueError(
-                        "function statements disagree on one code constant"
-                    )
-        except (ValueError, IndexError, KeyError, TypeError) as error:
-            return stop(node, str(error))
-        constants.update(used)
-        regions.append(
-            dict(op="source_object_region", steps=region.steps, **source_site(node))
-        )
-        if node["op"] == "return":
-            result["completion"] = "conditional_source_body"
-            return result
-    return stop(definition, "source_return_and_frame_exit")

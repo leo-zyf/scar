@@ -24,7 +24,7 @@ from . import (
     products,
     scalars,
     sequences,
-    source_frames,
+    function_regions,
     text,
     values,
 )
@@ -3917,7 +3917,9 @@ def _conditional_activations(project):
     for symbol in sorted(symbols):
         descriptor = project.function_definitions.get(symbol, {})
         definition = project.functions.get(symbol, descriptor)
-        callees.append(source_frames.conditional_function_body(definition, descriptor))
+        callees.append(
+            function_regions.conditional_function_body(definition, descriptor)
+        )
     return loaders, callees
 
 

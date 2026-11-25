@@ -603,33 +603,12 @@ def open_object_loop(frame, node, steps):
                 "source iterator needs verified straight-line suites and exits"
             )
         region = _source_region(frame, receipt)
-        iterable = region.value(node["range"])
-        get = region.take("GET_ITER")
-        region.finish()
-        store = ports["store"]
-        if store["opcode"] not in {
-            "STORE_NAME",
-            "STORE_GLOBAL",
-        } or not source_frames.matches_position(
-            store, node["target"], code["source_key"]
-        ):
-            raise ValueError("source iterator item has no matching mapping store")
-        target = region.mapping_target(node["target"], store)
-        advance = ports["next"]
-        if (
-            advance["opcode"] != "FOR_ITER"
-            or ports["backedge"]["target"] != advance["offset"]
-            or advance["target"] != ports["cleanup"][0]["offset"]
-        ):
-            raise ValueError(
-                "source iterator edges disagree with the verified header or exit"
-            )
+        iterator = region.iteration(node, ports)
+        target = iterator["target"]
     except (ValueError, IndexError, KeyError, TypeError) as error:
         frame.fail(node, "source_iteration_operands", str(error))
 
     _register_expression(frame, region.steps)
-    iterator = {"from_offset": get["offset"]}
-    item = {"from_offset": advance["offset"]}
     action = _namespace_operation(
         frame,
         node,
@@ -638,29 +617,7 @@ def open_object_loop(frame, node, steps):
         source_expression=receipt,
         reads=("frame.code", "frame.locals", "python.iterator"),
         writes=(target["namespace"],),
-        evaluation=region.steps,
-        acquire=dict(
-            instruction=get,
-            iterable=iterable,
-            result=iterator,
-            dispatch="apply_source_GET_ITER_once_and_release_consumed_iterable",
-        ),
-        advance=dict(
-            instruction=advance,
-            iterator=iterator,
-            item=item,
-            dispatch="apply_source_FOR_ITER_to_retained_iterator_on_each_header_visit",
-            on_item="consume_this_visits_owned_item_at_mapping_store_before_body",
-            on_exhaustion="release_iterator_once_then_enter_else",
-            on_other_exception="unwind_and_propagate_without_store_body_or_else",
-        ),
-        target=dict(target, value=item),
-        edges=dict(
-            body=ports["body"],
-            backedge=ports["backedge"],
-            cleanup=ports["cleanup"],
-            exhausted=ports["exhausted"],
-        ),
+        **iterator,
         body=[],
         **{"else": []},
         code_match="require_active_code_and_iteration_operands_and_edges_before_first_operand",
