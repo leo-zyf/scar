@@ -48,7 +48,9 @@ Python 的受支持文件、目录、文本流、结构化循环及异常／清�
 
 真实 CXSparse 的所选构建已通过 C++20 输出对照。AMSS 的 ABE 单步演化在 Xeon E5-2680 v4 上使用 16 个固定 MPI rank，每个 rank 单线程。每个程序预热一次，交错测量三次。第一轮中，上游原版、上一版 C++20、消除有界循环取余后的 C++20 中位时间分别为 51.85、74.30、61.01 秒。第二轮中端还保留了常量乘积的轴顺序，使后端可以生成等价的多维遍历。此轮原版为 51.39 秒，生成版为 53.23 秒，相对原版加速比 0.965×。两轮共 20 次运行，每次 156 个二进制场逐字节一致，7 个文本输出规范化创建日期后也一致。逐次计时、代码版本和产物摘要见 `artifacts/current/native-performance/abe/cpu-schedule.json`。
 
-对完整 Python 驱动建图后，中端现已能规范化网格坐标生成、数组索引和整数网格参数的文本写出。进程启动后的 Python 模块绑定及其异常路径仍有未闭合的效果合同，完整约 30 分钟工况尚未验收。当前三阶段状态见 `artifacts/current/verification.json`。
+在相同 16 个 rank 上单独采集 MPI 调用时间，两版每个 rank 都调用了 2612 次 `MPI_Allreduce`。生成版各 rank 在这项调用内的累计时间中位数为 22.01 秒，原版为 20.23 秒；生成版的 rank 5 只用了 0.96 秒。在另一对插桩运行中，按序对齐全部归约后，从各次归约最后一个 rank 进入到最后一个 rank 退出的累计时间仅相差 0.005 秒。相邻归约间从上次最后退出到下次最后进入的累计间隔相差 1.63 秒，其中仍可能包含计算和其他通信。按 rank 的测量见 `artifacts/current/native-performance/abe/rank-profile.json`。
+
+对完整 Python 驱动建图后，中端现已能规范化网格坐标生成、数组索引和整数网格参数的文本写出。当前整图计划停在 `generate_TwoPuncture_input.py:14` 的再次导入。中端需要证明第二次启动构建进程后模块注册项仍指向原实例，或表达绑定改变时的执行路径。完整约 30 分钟工况尚未验收。当前三阶段状态见 `artifacts/current/verification.json`。
 
 层间接口见 [架构](docs/ARCHITECTURE.md)，图和 IR 形式见 [模型](docs/MODEL.md)。`tests/stages` 通过禁止跨阶段导入及移走上游源码、图和报告，检查阶段独立性。GitHub Actions 从安装后的 wheel 执行同一检查。
 
