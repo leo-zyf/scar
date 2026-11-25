@@ -828,7 +828,9 @@ print(json.dumps(issue))
     guarded = next(
         n
         for n in ops
-        if n["op"] == "if" and n["condition"]["op"] == "module_import_preserves"
+        if n["op"] == "if"
+        and n["condition"]["op"] == "module_import_preserves"
+        and n["condition"]["module"] == "math"
     )
     transition = guarded["condition"]
     rows = result["source_imports"]["occurrences"]
@@ -879,30 +881,93 @@ print(json.dumps(issue))
     )
     target = next(n for n in body if n.get("module") == "provider_sample.kernel")
 
-    def after_registry_write(position, *, repeat_target=False):
+    def after_registry_write(position, *, repeat_target=False, expect_issue=True):
         body[position:position] = [again, target] if repeat_target else [again]
         try:
             return _layer(
                 "normalization",
-                "from scar.middle.normalization.protocols import normalize_protocols\n_,_,(issue,) = normalize_protocols(data)\nprint(json.dumps(issue))",
+                "from scar.middle.normalization.protocols import normalize_protocols\n"
+                + (
+                    "_,_,(issue,) = normalize_protocols(data)\nprint(json.dumps(issue))"
+                    if expect_issue
+                    else "print(json.dumps(normalize_protocols(data)))"
+                ),
                 bound_cached,
             )
         finally:
             del body[position : position + (2 if repeat_target else 1)]
 
     issue = after_registry_write(body.index(target) + 1)
-    assert issue["code"] == "python.import_module_cache"
+    repeated_import = next(
+        n
+        for n in body[body.index(target) + 1 :]
+        if n.get("op") == "python_import" and n.get("module") == target["module"]
+    )
+    assert issue["code"] == "python.import_initializer_state"
+    assert issue["source_evidence"]["module"] == "provider_sample"
+    assert issue["source_evidence"]["initializer"] == target["initializers"][0]
     assert issue["source_evidence"]["registry_state"] == "unresolved"
+    assert issue["site"] == repeated_import["site"]
+    assert issue["source_evidence"]["last_change"]["site"] == again["site"]
     ordinary = after_registry_write(body.index(target) + 1, repeat_target=True)
     assert ordinary["code"] == "python.import_initializer_state"
+    assert ordinary["source_evidence"]["module"] == "provider_sample"
+    assert ordinary["source_evidence"]["initializer"] == target["initializers"][0]
     assert ordinary["source_evidence"]["registry_state"] == "unresolved"
+    assert ordinary["site"] == target["site"]
+    assert ordinary["source_evidence"]["last_change"]["site"] == again["site"]
     before = next(n for n in body if n["op"] == "assign")
     cached_call = after_registry_write(body.index(before) + 1)
     assert cached_call["code"] == "python.import_module_cache"
+    assert cached_call["source_evidence"]["module"] == target["module"]
     assert cached_call["source_evidence"]["required"]["initializer"] == init
-    old_alias = after_registry_write(len(body) - 1)
-    assert old_alias["code"] == "python.module_namespace_after_effect"
-    assert old_alias["source_evidence"]["member"] == "marker"
+    assert cached_call["source_evidence"]["registry_state"] == "unresolved"
+    assert cached_call["source_evidence"]["last_change"]["site"] == again["site"]
+    assert cached_call["symbol"] == before["value"]["target"]["name"]
+    assert cached_call["site"] == next(
+        op["site"]
+        for op in walk_operations(body[body.index(before) + 1])
+        if op["op"] == "call"
+        and op["target"].get("name") == before["value"]["target"]["name"]
+    )
+    old_alias, _, alias_issues = after_registry_write(len(body) - 1, expect_issue=False)
+    assert not alias_issues
+    # The retained alias is usable only through the explicit normal comparison
+    # edge. Its failed edge still requires a source-equivalent continuation.
+    alias_read = body[-1]["value"]
+    alias_guard = next(
+        n
+        for n in walk_operations(old_alias["functions"])
+        if n["op"] == "if"
+        and n["condition"]["op"] == "module_import_preserves"
+        and n["condition"]["module"] == "importlib"
+        and n["condition"]["site"] == again["site"]
+        and target["module"] in n["condition"]["checks"]
+        and n["condition"]["checks"][target["module"]]["namespace"]["first_member"]
+        == alias_read["field"]
+    )
+    namespace_check = alias_guard["condition"]["checks"][target["module"]]
+    assert namespace_check["before"]["initializer"] == init
+    assert namespace_check["namespace"]["requires"] == (
+        "same_namespace_bindings_and_reachable_value_state"
+    )
+    assert any(
+        read["member"] == alias_read["field"]
+        and read["site"] == alias_read["site"]
+        and read["consumer"] == "__main__"
+        for read in namespace_check["namespace"]["binding_reads"]
+    )
+    root_check = alias_guard["condition"]["checks"]["__main__"]["namespace"]
+    assert root_check["first_member"] == alias_read["base"]["name"].rsplit(":", 1)[-1]
+    assert root_check["lexical_namespace"] == "cached"
+    failure = alias_guard["else"][0]["value"]
+    assert failure["op"] == "module_import_continuation_required"
+    assert failure["operator_family"] == "module_registry"
+    assert failure["site"] == again["site"]
+    assert failure["noreturn"] and set(failure["effects"]) == {"CTRL", "OPAQUE"}
+    assert failure["semantics"] == (
+        "transfer_to_source_equivalent_continuation_or_prove_edge_unreachable_before_delivery"
+    )
 
 
 def test_execution_scopes_automatic_for_initializers_before_sealing():
