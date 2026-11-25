@@ -12,7 +12,7 @@ from scar.contract import (
 )
 from scar.source_contracts import python_binary_operator
 from . import objects
-from .values import literal, source_site
+from .values import literal, source_site, written_targets
 
 REGISTRY_PROFILE = "cpython-importlib-registry-v1"
 
@@ -1024,7 +1024,9 @@ class _SourceExpressionRegion:
             )
 
     def target(self, target, *opcodes):
-        instruction = self.take(*opcodes, source=target)
+        return self.mapping_target(target, self.take(*opcodes, source=target))
+
+    def mapping_target(self, target, instruction):
         name = instruction["name"]
         if (
             target.get("op") != "var"
@@ -1249,6 +1251,128 @@ def _register_expression(frame, expression):
         if item.get("site") is not None:
             frame.project.normalized_sites.add((frame.name, item["site"]))
             frame.project.live_sites.add((frame.name, item["site"]))
+
+
+def open_object_loop(frame, node, steps):
+    """A live source iterator owns its item, exhaustion and exceptional edges."""
+    receipt = node.get("source_expression")
+    if not (
+        receipt and node.get("protocol") == "iterator" and (code := _module_code(frame))
+    ):
+        return None
+    ports = receipt.get("iteration")
+    try:
+        if not ports or any(
+            part["op"]
+            in {
+                "break",
+                "continue",
+                "return",
+                "try",
+                "while",
+                "for",
+                "if",
+                "with_context",
+            }
+            for part in walk_operations([node["body"], node.get("else", [])])
+        ):
+            raise ValueError(
+                "source iterator needs verified straight-line suites and exits"
+            )
+        region = _SourceExpressionRegion(frame, code, receipt)
+        iterable = region.value(node["range"])
+        get = region.take("GET_ITER")
+        region.finish()
+        store = ports["store"]
+        if store["opcode"] not in {
+            "STORE_NAME",
+            "STORE_GLOBAL",
+        } or not _matches_position(store, node["target"], code["source_key"]):
+            raise ValueError("source iterator item has no matching mapping store")
+        target = region.mapping_target(node["target"], store)
+        advance = ports["next"]
+        if (
+            advance["opcode"] != "FOR_ITER"
+            or ports["backedge"]["target"] != advance["offset"]
+            or advance["target"] != ports["cleanup"][0]["offset"]
+        ):
+            raise ValueError(
+                "source iterator edges disagree with the verified header or exit"
+            )
+    except (ValueError, IndexError, KeyError, TypeError) as error:
+        frame.fail(node, "source_iteration_operands", str(error))
+
+    _register_expression(frame, region.steps)
+    iterator = {"from_offset": get["offset"]}
+    item = {"from_offset": advance["offset"]}
+    action = _namespace_operation(
+        frame,
+        node,
+        "module_object_for",
+        source_code=code,
+        source_expression=receipt,
+        reads=("frame.code", "frame.locals", "python.iterator"),
+        writes=(target["namespace"],),
+        evaluation=region.steps,
+        acquire=dict(
+            instruction=get,
+            iterable=iterable,
+            result=iterator,
+            dispatch="apply_source_GET_ITER_once_and_release_consumed_iterable",
+        ),
+        advance=dict(
+            instruction=advance,
+            iterator=iterator,
+            item=item,
+            dispatch="apply_source_FOR_ITER_to_retained_iterator_on_each_header_visit",
+            on_item="consume_this_visits_owned_item_at_mapping_store_before_body",
+            on_exhaustion="release_iterator_once_then_enter_else",
+            on_other_exception="unwind_and_propagate_without_store_body_or_else",
+        ),
+        target=dict(target, value=item),
+        edges=dict(
+            body=ports["body"],
+            backedge=ports["backedge"],
+            cleanup=ports["cleanup"],
+            exhausted=ports["exhausted"],
+        ),
+        body=[],
+        **{"else": []},
+        code_match="require_active_code_and_iteration_operands_and_edges_before_first_operand",
+        on_code_mismatch="resume_source_equivalent_execution_before_first_iterable_operand",
+        ownership="retain_source_stack_per_visit_and_release_at_source_edges_including_store_replacement_and_reentry",
+        unwind="propagate_failures_of_preparation_store_or_body_with_completed_effects_and_source_stack_unwind",
+        tracing="preserve_source_control_events_including_version_specific_exhaustion_cleanup",
+    )
+    # Keep a failed body or else normalization attached to its actual control region.
+    steps.append(action)
+    observe_handler_effect(frame, action)
+    zero_visits = frame.snapshot()
+    allocation = frame.project.array_state.enter_loop(frame, node)
+    frame.widen_loop(node, None, None)
+    # The body may follow earlier visits. A publication overwritten on one of
+    # them cannot serve as unconditional historical evidence for a later read.
+    publications = frame.project.imports.publications
+    publications.pop(target["slot"], None)
+    for part in walk_operations(node["body"]):
+        for dest in written_targets(part):
+            if dest.get("op") == "var" and dest.get("scope") == "global":
+                publications.pop(dest["name"], None)
+    frame.dynamic += 1
+    frame.enter_control("loop", node)
+    try:
+        falls = frame.sequence(node["body"], action["body"])
+    finally:
+        frame.leave_control()
+        frame.dynamic -= 1
+        frame.project.array_state.leave_loop(allocation)
+    exits = [zero_visits]
+    if falls:
+        exits.append(frame.snapshot())
+    frame.merge(exits)
+    # The final advance and iterator disposal may reenter on every normal path.
+    observe_handler_effect(frame, action)
+    return frame.sequence(node.get("else", []), action["else"])
 
 
 def open_object_expression(frame, node, steps, *, truth_context, discard):

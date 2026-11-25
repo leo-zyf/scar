@@ -9700,3 +9700,202 @@ def test_named_fromlist_retains_receiver_and_interleaves_each_mapping_store(tmp_
             assert "first" not in glob and "second" not in local
         assert ("third" in local) == (mode == "success")
         assert events == expected
+
+
+def test_module_for_uses_actual_callable_iterator_mapping_and_exhaustion(tmp_path):
+    from scar.contract import walk_operations
+    from scar.frontend import build
+    from scar.middle.binding import bind
+    from scar.middle.normalization.namespace_operations import publish_plain_import
+    from scar.middle.normalization.protocols import _Frame, _Project, _Unclosed
+
+    def prepare(name, body, *, prefix=""):
+        source = tmp_path / f"{name}.py"
+        source.write_text(prefix + "import math as item\n" + body)
+        code = compile(source.read_bytes(), str(source), "exec")
+        folder = tmp_path / name
+        build(source, folder)
+        source.unlink()
+        module, issues, _ = bind(
+            json.loads((folder / "graph.json").read_bytes()), folder
+        )
+        assert not issues
+        functions = {fn["name"]: fn for fn in module["functions"]}
+        entry = functions[module["entry"]]
+        project = _Project(functions)
+        frame = _Frame(project, entry, ())
+        project.active.append(frame.name)
+        nodes = entry["body"]
+        imp = next(n for n in nodes if n["op"] == "python_import")
+        assert publish_plain_import(
+            frame,
+            imp,
+            project.source_imports.get(frame.name, imp),
+            [],
+            source_code=frame.scope["source_code"],
+        )
+        return code, frame, nodes[nodes.index(imp) + 1 :]
+
+    code, frame, nodes = prepare(
+        "main",
+        "for item in range(settings.count):\n    consume(item)\nelse:\n    ended()\nafter(item)\n",
+    )
+    body = []
+    assert frame.sequence(nodes, body)
+    loop, after = body
+    assert loop["op"] == "module_object_for" and loop["external_effect"] == "UNKNOWN"
+    assert (
+        loop["source_code"] == frame.scope["source_code"]
+        and "source_equivalent" in loop["on_code_mismatch"]
+    )
+    evaluation = loop["evaluation"]
+    assert [e["op"] for e in evaluation] == [
+        "module_name_load",
+        "module_name_load",
+        "source_object_attribute",
+        "source_object_call",
+    ]
+    assert evaluation[0]["instruction"]["name"] == "range"
+    assert loop["acquire"]["iterable"] == {"from_offset": evaluation[-1]["offset"]}
+    assert loop["advance"]["iterator"] == loop["acquire"]["result"]
+    assert (
+        loop["target"]["value"] == loop["advance"]["item"]
+        and loop["target"]["namespace"] == "frame.locals"
+    )
+    assert (
+        loop["edges"]["backedge"]["target"] == loop["advance"]["instruction"]["offset"]
+    )
+    assert (
+        loop["advance"]["instruction"]["target"]
+        == loop["edges"]["cleanup"][0]["offset"]
+    )
+    assert len(loop["body"]) == len(loop["else"]) == 1
+    assert loop["edges"]["exhausted"]["kind"] == "suite"
+    [read] = [
+        n
+        for n in walk_operations(after)
+        if n["op"] == "module_name_load" and n["instruction"]["name"] == "item"
+    ]
+    assert "source_evidence" not in read
+
+    _, partial, tail = prepare(
+        "partial",
+        "for item_slot in range(settings.count):\n    consume(item_slot)\n    boundary = 0 or 37\nafter()\n",
+        prefix="global item_slot\n",
+    )
+    with pytest.raises(_Unclosed) as failure:
+        partial.sequence(tail, [])
+    assert failure.value.issue["code"] == "python.global_store_after_callback"
+    frontier = partial.prefix_fragment()["frontier"]
+    assert frontier["iteration"]["target"]["namespace"] == "frame.globals"
+    [arm] = frontier["regions"]
+    assert arm["path"] == ["body"] and len(arm["body"]) == 1
+    assert arm["frontier"]["location"]["line"] == 5
+
+    _, unproved, tail = prepare(
+        "early_break", "for item in range(settings.count):\n    break\nafter()\n"
+    )
+    original = next(n for n in tail if n["op"] == "for")
+    assert "source_expression" not in original
+    with pytest.raises(_Unclosed) as gap:
+        unproved.sequence(tail, [])
+    assert gap.value.issue["code"] == "python.builtin_after_callback"
+
+    old, yielded, changed = object(), object(), object()
+    for mode in (
+        "empty",
+        "normal",
+        "acquire_error",
+        "advance_error",
+        "store_error",
+        "body_stop",
+        "release_reentry",
+    ):
+        events = []
+
+        class Locals(dict):
+            def __setitem__(self, name, value):
+                super().__setitem__(name, value)
+                if name == "item" and value is yielded:
+                    events.append("store")
+                    if mode == "store_error":
+                        raise LookupError("store")
+
+        class Settings:
+            @property
+            def count(self):
+                events.append("argument")
+                local["range"] = lambda arg: pytest.fail("reloaded target")
+                return old
+
+        class Iterator:
+            used = False
+
+            def __next__(self):
+                events.append("next")
+                if mode == "advance_error":
+                    raise RuntimeError("next")
+                if self.used or mode == "empty":
+                    raise StopIteration
+                self.used = True
+                return yielded
+
+            def __del__(self):
+                events.append("release")
+                if mode == "release_reentry":
+                    local["item"] = changed
+
+        class Iterable:
+            def __iter__(self):
+                events.append("iter")
+                if mode == "acquire_error":
+                    raise StopIteration("acquire")
+                return Iterator()
+
+        def make(arg):
+            assert arg is old
+            events.append("call")
+            return Iterable()
+
+        def consume(value):
+            assert value is yielded
+            events.append("body")
+            if mode == "body_stop":
+                raise StopIteration("body")
+
+        local = Locals(
+            range=make,
+            settings=Settings(),
+            consume=consume,
+            ended=lambda: events.append("else"),
+            after=lambda v: events.append(("after", v)),
+        )
+        env = {"__builtins__": {"__import__": lambda *args: old}}
+        if mode in {"empty", "normal", "release_reentry"}:
+            exec(code, env, local)
+            expected = (
+                old
+                if mode == "empty"
+                else changed if mode == "release_reentry" else yielded
+            )
+            assert events[-3:] == ["release", "else", ("after", expected)]
+        else:
+            with pytest.raises(
+                {
+                    "acquire_error": StopIteration,
+                    "advance_error": RuntimeError,
+                    "store_error": LookupError,
+                    "body_stop": StopIteration,
+                }[mode]
+            ):
+                exec(code, env, local)
+            assert "else" not in events and not any(
+                isinstance(e, tuple) for e in events
+            )
+        assert events[:3] == ["argument", "call", "iter"] and events.count("call") == 1
+        assert events.count("store") == int(
+            mode not in {"empty", "acquire_error", "advance_error"}
+        )
+        assert events.count("body") == int(
+            mode in {"normal", "body_stop", "release_reentry"}
+        )

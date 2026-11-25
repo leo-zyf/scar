@@ -192,6 +192,11 @@ class _Region:
         )
         setup = []
         for statement in self.steps[self.end : before_child]:
+            if statement["op"] == "module_object_for" and node["op"] == "for":
+                frontier["iteration"] = {
+                    k: v for k, v in statement.items() if k not in {"body", "else"}
+                }
+                break
             if statement["op"] not in {"decl", "assign", "expr"} and not statement.get(
                 "pending_import_effect"
             ):
@@ -3306,6 +3311,9 @@ class _Frame:
     def loop(self, node, steps):
         counted = node["op"] == "for"
         if counted:
+            source_falls = namespace_operations.open_object_loop(self, node, steps)
+            if source_falls is not None:
+                return source_falls
             loop, iv, count, empty, nonempty, test_setup = self.range_loop(node, steps)
             if empty and not test_setup:
                 # Iterator evaluation is complete, but no target binding or
