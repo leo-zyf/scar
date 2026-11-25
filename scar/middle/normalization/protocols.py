@@ -3467,39 +3467,13 @@ class _Frame:
                         node["target"], self.evaluate(node["value"], steps), steps
                     )
             elif op == "python_import":
-                group = namespace_operations.global_fromlist(self, body, index)
-                if group is None:
-                    self.imported(node, steps)
+                consumed = namespace_operations.publish_fromlist(
+                    self, body, index, steps
+                )
+                if consumed:
+                    next_statement = index + consumed
                 else:
-                    occurrence, bindings = group
-                    self.import_origin(node)
-                    occurrence["activation"] = "visited"
-                    evidence = self.package_fromlist(node, occurrence, dynamic=True)
-                    namespace_operations.namespace_effect(
-                        self,
-                        node,
-                        steps,
-                        "module_fromlist_publish",
-                        source_protocol="python.import",
-                        occurrence=occurrence["id"],
-                        request=occurrence["request"],
-                        resolved_module=node["module"],
-                        bindings=bindings,
-                        fromlist_checks=evidence["ordered_checks"],
-                        initializers=node["initializers"],
-                        source_effects=occurrence["source_effects"],
-                        dispatch="call_current_frame_importer_once_with_original_arguments",
-                        initialization="only_as_invoked_by_actual_importer_including_ordered_fromlist_prechecks",
-                        lookup="successive_IMPORT_FROM_on_retained_actual_return_including_circular_registry_fallback",
-                        publication="STORE_NAME_after_each_successful_lookup_in_current_frame_globals",
-                        release="preserve_replaced_values_operand_stack_unwind_and_final_import_result_release",
-                        callbacks="preserve_source_opcode_tracing_reentry_and_unraisable_finalizer_errors",
-                    )
-                    for binding in bindings:
-                        self.project.imports.publications[binding["slot"]] = dict(
-                            occurrence=occurrence["id"], **binding
-                        )
-                    next_statement = index + len(bindings)
+                    self.imported(node, steps)
             elif op == "unbind" and self.project.imports.open_namespace:
                 if not namespace_operations.open_object_statement(self, node, steps):
                     self.fail(

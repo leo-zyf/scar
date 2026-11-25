@@ -9546,3 +9546,114 @@ def test_plain_and_projected_alias_store_actual_objects_in_source_order(
             ("release", "offered.branch"),
             *([("stored_on_release", True)] if mode == "reenter" else []),
         ]
+
+
+def test_named_fromlist_retains_receiver_and_interleaves_each_mapping_store(tmp_path):
+    from scar.frontend import build
+    from scar.middle.binding import bind
+    from scar.middle.normalization.namespace_operations import publish_plain_import
+    from scar.middle.normalization.protocols import _Frame, _Project
+
+    entry = tmp_path / "main.py"
+    entry.write_text(
+        "import math\nglobal first\nfrom math import sin as first, sin as second, cos as third\n"
+    )
+    code = compile(entry.read_bytes(), str(entry), "exec")
+    graph = tmp_path / "graph"
+    build(entry, graph)
+    entry.unlink()
+    bound, issues, _ = bind(json.loads((graph / "graph.json").read_bytes()), graph)
+    assert not issues
+    functions = {f["name"]: f for f in bound["functions"]}
+    project = _Project(functions)
+    fn = functions[bound["entry"]]
+    frame = _Frame(project, fn, ())
+    project.active.append(frame.name)
+    first, *members = [n for n in fn["body"] if n["op"] == "python_import"]
+    bootstrap = project.source_imports.get(frame.name, first)
+    assert publish_plain_import(
+        frame, first, bootstrap, [], source_code=frame.scope["source_code"]
+    )
+    steps = []
+    assert frame.sequence(members, steps)
+    [statement] = steps
+    action = statement["value"]
+    assert action["op"] == "module_fromlist_publish" and action["may_raise"]
+    assert action["source_fromlist"] == members[0]["source_fromlist"]
+    assert (
+        action["source_code"] == frame.scope["source_code"]
+        and "source_equivalent" in action["on_code_mismatch"]
+    )
+    result = {"result": action["import_call"]["result"]}
+    stores = action["bindings"]
+    assert [b["read"]["receiver"] for b in stores] == [result] * 3
+    assert [b["value"] for b in stores] == [b["read"]["result"] for b in stores]
+    assert [b["read"]["instruction"]["name"] for b in stores] == ["sin", "sin", "cos"]
+    assert [b["namespace"] for b in stores] == [
+        "frame.globals",
+        "frame.locals",
+        "frame.locals",
+    ]
+    assert [b["site"] for b in stores] == members[0]["fromlist_binding_sites"]
+    assert action["after_store"]["release"] == result
+    offsets = [
+        offset
+        for b in stores
+        for offset in (b["read"]["instruction"]["offset"], b["offset"])
+    ] + [action["after_store"]["instruction"]["offset"]]
+    assert offsets == sorted(set(offsets))
+    [producer] = project.source_imports.get(frame.name, members[0])["producer_sites"]
+    assert producer["role"] == "source_import" and producer["opcode"] == action["op"]
+    assert code.co_consts[action["import_call"]["arguments"][3]["index"]] == (
+        "sin",
+        "sin",
+        "cos",
+    )
+
+    for mode in ("success", "read_error", "store_error", "import_error"):
+        events = []
+
+        class Returned:
+            def __getattr__(self, name):
+                assert glob.get("first") == (None if not events.count("sin") else 1)
+                events.append(name)
+                if name == "cos" and mode == "read_error":
+                    raise LookupError("read")
+                return events.count(name)
+
+        class Locals(dict):
+            def __setitem__(self, key, value):
+                super().__setitem__(key, value)
+                if key == "second":
+                    events.append("store")
+                    if mode == "store_error":
+                        raise LookupError("store")
+
+        def importer(name, gl, loc, fromlist, level):
+            assert name == "math" and gl is glob and loc is local and level == 0
+            if fromlist is not None:
+                assert (
+                    fromlist
+                    is code.co_consts[action["import_call"]["arguments"][3]["index"]]
+                )
+                events.append("loader")
+                if mode == "import_error":
+                    raise LookupError("import")
+            return Returned()
+
+        glob, local = {"__builtins__": {"__import__": importer}}, Locals()
+        if mode == "success":
+            exec(code, glob, local)
+        else:
+            with pytest.raises(LookupError, match=mode.split("_")[0]):
+                exec(code, glob, local)
+        expected = ["loader"]
+        if mode != "import_error":
+            expected += ["sin", "sin", "store"]
+            assert glob["first"] == 1 and local["second"] == 2
+            if mode != "store_error":
+                expected.append("cos")
+        else:
+            assert "first" not in glob and "second" not in local
+        assert ("third" in local) == (mode == "success")
+        assert events == expected

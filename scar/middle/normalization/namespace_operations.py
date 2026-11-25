@@ -56,8 +56,8 @@ def global_delete_slots(frame, deletion):
     return slots
 
 
-def global_fromlist(frame, body, index):
-    """Model source-ordered publication in an open module namespace."""
+def _fromlist_group(frame, body, index):
+    """Match a single source request with its ordered lexical bindings."""
     first = body[index]
     request = first.get("request", {})
     members = request.get("fromlist", ())
@@ -65,7 +65,6 @@ def global_fromlist(frame, body, index):
     module = first.get("module")
     if (
         not frame.initializing
-        or module not in frame.project.initializers
         or request.get("form") != "from"
         or request.get("binding_index") != 0
         or not request.get("level")
@@ -73,6 +72,16 @@ def global_fromlist(frame, body, index):
         or not members
         or end > len(body)
     ):
+        return None
+    port = first.get("source_fromlist")
+    code = _module_code(frame) if port is not None else None
+    verified = (
+        code is not None
+        and port["code_sha256"] == code["code_sha256"]
+        and first.get("fromlist_binding_sites")
+        == [n.get("site") for n in body[index:end]]
+    )
+    if not verified and module not in frame.project.initializers:
         return None
     if not frame.project.imports.open_namespace and (
         frame.dynamic
@@ -87,7 +96,7 @@ def global_fromlist(frame, body, index):
     requested = request.get("module")
     if type(level) is not int or level < 0 or not isinstance(requested, str):
         return None
-    if level:
+    if level and not verified:
         package = (
             frame.module
             if frame.scope.get("package")
@@ -121,7 +130,8 @@ def global_fromlist(frame, body, index):
         local = node.get("alias") or member
         if (
             node.get("op") != "python_import"
-            or node.get("graph_backed") is not True
+            or not verified
+            and node.get("graph_backed") is not True
             or node.get("module") != module
             or node.get("member") != member
             or not isinstance(member, str)
@@ -160,7 +170,61 @@ def global_fromlist(frame, body, index):
         global_delete_slots(frame, body[end])
     ) != {b["slot"] for b in bindings}:
         return None
-    return occurrence, bindings
+    return occurrence, bindings, port if verified else None, code
+
+
+def publish_fromlist(frame, body, index, steps):
+    group = _fromlist_group(frame, body, index)
+    if group is None:
+        return 0
+    occurrence, bindings, port, code = group
+    first = body[index]
+    frame.import_origin(first)
+    occurrence["activation"] = "visited"
+    evidence = frame.package_fromlist(first, occurrence, dynamic=True)
+    publication = "STORE_NAME_after_each_successful_lookup_in_current_frame_globals"
+    publications = [dict(occurrence=occurrence["id"], **b) for b in bindings]
+    source = {}
+    if port is not None:
+        for binding, source_port in zip(bindings, port["bindings"], strict=True):
+            read = _import_member(source_port["read"], {"result": "import_result"})
+            binding.update(
+                read=read, **_store_import_value(source_port["store"], read["result"])
+            )
+        source = _import_operands(first, port, code)
+        source.update(
+            source_fromlist=port,
+            writes=tuple(dict.fromkeys(b["namespace"] for b in bindings)),
+            after_store=dict(
+                instruction=port["release"], release={"result": "import_result"}
+            ),
+            unwind="on_import_lookup_or_store_failure_unwind_live_references_at_that_opcode_preserve_completed_effects_and_skip_later_bindings",
+        )
+        publication = "for_each_binding_read_then_store_its_value_in_the_source_mapping_before_next_read"
+    namespace_effect(
+        frame,
+        first,
+        steps,
+        "module_fromlist_publish",
+        source_protocol="python.import",
+        occurrence=occurrence["id"],
+        request=occurrence["request"],
+        resolved_module=first["module"],
+        bindings=bindings,
+        fromlist_checks=evidence["ordered_checks"],
+        initializers=first["initializers"],
+        source_effects=occurrence["source_effects"],
+        dispatch="call_current_frame_importer_once_with_original_arguments",
+        initialization="only_as_invoked_by_actual_importer_including_ordered_fromlist_prechecks",
+        lookup="successive_IMPORT_FROM_on_retained_actual_return_including_circular_registry_fallback",
+        publication=publication,
+        release="preserve_replaced_values_operand_stack_unwind_and_final_import_result_release",
+        callbacks="preserve_source_opcode_tracing_reentry_and_unraisable_finalizer_errors",
+        **source,
+    )
+    for published in publications:
+        frame.project.imports.publications[published["slot"]] = published
+    return len(bindings)
 
 
 def _matches_position(instruction, operand, source_key):
@@ -215,6 +279,57 @@ def _module_code(frame, *, source_code=None):
     return code
 
 
+def _import_operands(node, port, code):
+    level = port["level"]
+    level_operand = (
+        {"opcode": "LOAD_SMALL_INT", "oparg": level["oparg"]}
+        if level["opcode"] == "LOAD_SMALL_INT"
+        else {"table": "co_consts", "index": level["index"]}
+    )
+    return dict(
+        source_code=code,
+        reads=("frame.code", "frame.locals"),
+        import_call=dict(
+            opcode="IMPORT_NAME",
+            importer={"mapping": "frame.builtins", "key": "__import__"},
+            arguments=[
+                {"table": "co_names", "index": port["import_name"]["index"]},
+                {"frame": "globals"},
+                {"frame": "locals"},
+                {"table": "co_consts", "index": port["fromlist"]["index"]},
+                level_operand,
+            ],
+            result="import_result",
+            **(
+                {"body": node["loader_ports"]["body"]} if "loader_ports" in node else {}
+            ),
+            registry="actual_importer_controls_cache_initialization_hooks_and_audit",
+        ),
+        code_match="require_current_activation_code_and_instruction_operands_match_before_first_source_import_operand",
+        on_code_mismatch="resume_source_equivalent_execution_before_first_source_import_operand",
+    )
+
+
+def _store_import_value(store, value):
+    return dict(
+        namespace=(
+            "frame.locals" if store["opcode"] == "STORE_NAME" else "frame.globals"
+        ),
+        opcode=store["opcode"],
+        offset=store["offset"],
+        key={"table": "co_names", "index": store["index"]},
+        value=value,
+    )
+
+
+def _import_member(instruction, receiver):
+    return dict(
+        instruction=instruction,
+        receiver=receiver,
+        result={"from_offset": instruction["offset"]},
+    )
+
+
 def _project_import_members(port, result):
     """Connect the verified IMPORT_FROM, SWAP and POP_TOP operations to live references."""
     stack = [result]
@@ -223,8 +338,7 @@ def _project_import_members(port, result):
         opcode = instruction["opcode"]
         step = dict(instruction=instruction)
         if opcode == "IMPORT_FROM":
-            step["receiver"] = stack[-1]
-            step["result"] = {"from_offset": instruction["offset"]}
+            step = _import_member(instruction, stack[-1])
             stack.append(step["result"])
         elif opcode == "SWAP":
             stack[-2], stack[-1] = stack[-1], stack[-2]
@@ -278,20 +392,10 @@ def publish_plain_import(frame, node, occurrence, steps, *, source_code=None):
     value, projection = (
         _project_import_members(port, imported) if projected else (imported, None)
     )
-    level = port["level"]
-    level_operand = (
-        {"opcode": "LOAD_SMALL_INT", "oparg": level["oparg"]}
-        if level["opcode"] == "LOAD_SMALL_INT"
-        else {"table": "co_consts", "index": level["index"]}
-    )
-    mapping = "frame.locals" if store["opcode"] == "STORE_NAME" else "frame.globals"
     binding = dict(
         slot=slot,
         name=bound_name,
-        namespace=mapping,
-        opcode=store["opcode"],
-        key={"table": "co_names", "index": store["index"]},
-        value=value,
+        **_store_import_value(store, value),
         **source_site(node),
     )
     namespace_effect(
@@ -302,30 +406,11 @@ def publish_plain_import(frame, node, occurrence, steps, *, source_code=None):
         source_protocol="python.import",
         occurrence=occurrence["id"],
         request=request,
-        source_code=code,
+        **_import_operands(node, port, code),
         **{field: port},
         **({"projection": projection} if projected else {}),
-        reads=("frame.code", "frame.locals"),
-        writes=(mapping,),
-        import_call=dict(
-            opcode="IMPORT_NAME",
-            importer={"mapping": "frame.builtins", "key": "__import__"},
-            arguments=[
-                {"table": "co_names", "index": port["import_name"]["index"]},
-                {"frame": "globals"},
-                {"frame": "locals"},
-                {"table": "co_consts", "index": port["fromlist"]["index"]},
-                level_operand,
-            ],
-            result="import_result",
-            **(
-                {"body": node["loader_ports"]["body"]} if "loader_ports" in node else {}
-            ),
-            registry="actual_importer_controls_cache_initialization_hooks_and_audit",
-        ),
+        writes=(binding["namespace"],),
         binding=binding,
-        code_match="require_current_activation_code_and_instruction_operands_match_before_first_source_import_operand",
-        on_code_mismatch="resume_source_equivalent_execution_before_first_source_import_operand",
         unwind="on_import_failure_skip_store_on_store_failure_preserve_completed_effects_and_unwind_source_stack",
         release="preserve_source_stack_ownership_replaced_binding_release_reentry_and_unraisable_finalizer_errors",
         callbacks="preserve_source_opcode_tracing_and_exception_state",
