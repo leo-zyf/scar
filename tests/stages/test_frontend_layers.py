@@ -649,6 +649,106 @@ def test_python_tuple_identity_tracks_compiled_objects_offline(tmp_path, monkeyp
     assert other_ops["empty"]["identity"] == identity["empty"]
 
 
+def test_module_constant_stores_bind_source_bytecode_and_graph(tmp_path, monkeypatch):
+    import dis
+    import sys
+
+    from scar.contract import digest, json_bytes, read_member, walk_operations
+    from scar.frontend import build
+    from scar.frontend.languages.python.environment import code_digest
+
+    entry = tmp_path / "bindings.py"
+    source = (
+        "global explicit\n"
+        "é = 'same'; also = 'same'\n"
+        "explicit = ('different')\n"
+        "if False:\n    elided = 'no instruction'\n"
+        "try:\n    probe()\nfinally:\n    repeated = 'two instructions'\n"
+        "object.field = 'attribute'\nleft = right = 'chain'\nnumber = 1\n"
+        "def nested():\n    local = 'nested'\n"
+    )
+    entry.write_text(source)
+    code = compile(source, str(entry), "exec", dont_inherit=True)
+    instructions = {i.offset: i for i in dis.get_instructions(code)}
+    out = tmp_path / "graph"
+    build(entry, out)
+    graph = json.loads((out / "graph.json").read_bytes())
+    unit = read_member(out, graph["units"][0]["graph"])
+    (root,) = (fn for fn in unit["functions"] if fn["signature"]["name"] == "__main__")
+    rows = [
+        n["source_constant_store"]
+        for n in root["nodes"]
+        if "source_constant_store" in n
+    ]
+    if sys.implementation.name != "cpython" or not any(
+        column is not None
+        for _, _, column, _ in getattr(code, "co_positions", lambda: ())()
+    ):
+        assert not rows and "source_code" not in root["signature"]["python_scope"]
+        return
+    scope = root["signature"]["python_scope"]
+    assert scope["source_code"] == dict(
+        kind="module",
+        source_key=entry.name,
+        source_sha256=digest(source.encode()),
+        code_sha256=code_digest(code),
+        compiler=f"{sys.implementation.name} {sys.version.split()[0]}",
+        optimize=sys.flags.optimize,
+    )
+    assert [r["store"]["name"] for r in rows] == ["é", "also", "explicit"]
+    assert [r["store"]["opcode"] for r in rows] == [
+        "STORE_NAME",
+        "STORE_NAME",
+        "STORE_GLOBAL",
+    ]
+    assert rows[0]["load"]["index"] == rows[1]["load"]["index"]
+    assert rows[0]["load"]["offset"] != rows[1]["load"]["offset"]
+    for node in root["nodes"]:
+        if "source_constant_store" not in node:
+            continue
+        fact = node["source_constant_store"]
+        assert fact["semantics_version"] == 1 and fact["code"] == scope["source_code"]
+        for key, operand in (("load", "value"), ("store", "target")):
+            port = fact[key]
+            ins = instructions[port["offset"]]
+            assert (port["opcode"], port["index"], port["position"]) == (
+                ins.opname,
+                ins.arg,
+                list(ins.positions),
+            )
+            arg = root["nodes"][node[operand]["port"]]
+            loc = arg["location"]
+            assert port["position"] == [
+                loc["line"],
+                loc["end_line"],
+                loc["column"] - 1,
+                loc["end_column"] - 1,
+            ]
+            if key == "load":
+                assert port["type"] == "str" and code.co_consts[ins.arg] == arg["value"]
+                assert port["value_sha256"] == digest(json_bytes(arg["value"]))
+            else:
+                assert port["name"] == code.co_names[ins.arg]
+                assert arg["name"] == "py:bindings:" + port["name"]
+    assert all(
+        "source_code" not in f["signature"]["python_scope"]
+        and all("source_constant_store" not in n for n in f["nodes"])
+        for f in unit["functions"]
+        if f is not root
+    )
+    facts = python.capture_project(entry, tmp_path).units[0]
+    entry.unlink()
+    offline = _offline(
+        monkeypatch, python, facts, (builtins, "compile"), (dis, "get_instructions")
+    )
+    receipts = [
+        n["source_constant_store"]
+        for n in walk_operations(offline["functions"])
+        if "source_constant_store" in n
+    ]
+    assert sorted(receipts, key=lambda r: r["store"]["offset"]) == rows
+
+
 def test_scalar_annotation_contract_uses_captured_compiler_semantics(
     tmp_path, monkeypatch
 ):

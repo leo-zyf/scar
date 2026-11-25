@@ -13,6 +13,7 @@ from types import CodeType
 import unicodedata
 
 from scar.contract import digest, json_bytes
+from .environment import code_digest
 from .imports import (
     Imports,
     numeric_wire_value,
@@ -74,6 +75,8 @@ class ParsedUnit:
     source_origins: dict = field(default_factory=dict)
     import_value_uses: frozenset = frozenset()
     mapping_builders: dict = field(default_factory=dict)
+    constant_stores: dict = field(default_factory=dict)
+    source_code: dict = field(default_factory=dict)
 
     @property
     def source_digests(self):
@@ -86,10 +89,62 @@ def tuple_position(node):
     return node.lineno, node.end_lineno, node.col_offset, node.end_col_offset
 
 
-def _container_sites(tree, path, relative, source_hash):
-    """Capture container construction at exact source spans in one compiler pass."""
+def _constant_store_sites(program, instructions, assignments):
+    """Identify a single source LOAD_CONST feeding the precise module store."""
+    by_target = {tuple_position(node.targets[0]): node for node in assignments}
+    handler_targets = {
+        entry.target for entry in dis.Bytecode(program).exception_entries
+    }
+    sites = {}
+    load = None
+    for instruction in instructions:
+        opcode = getattr(instruction, "baseopname", instruction.opname)
+        if instruction.is_jump_target or instruction.offset in handler_targets:
+            load = None
+        if opcode == "EXTENDED_ARG":
+            continue
+        node = by_target.get(instruction.positions)
+        if node is not None and opcode in {"STORE_NAME", "STORE_GLOBAL"}:
+            span = tuple_position(node)
+            # A finally suite may give one source target several bytecode stores.
+            # A match at one copy cannot serve as a receipt for all copies.
+            if span in sites:
+                sites[span] = None
+            elif (
+                load is not None
+                and load.positions == tuple_position(node.value)
+                and type(program.co_consts[load.arg]) is str
+                and program.co_consts[load.arg] == node.value.value
+                and program.co_names[instruction.arg] == node.targets[0].id
+            ):
+                sites[span] = dict(
+                    semantics_version=1,
+                    load=dict(
+                        opcode="LOAD_CONST",
+                        index=load.arg,
+                        offset=load.offset,
+                        position=list(load.positions),
+                        type="str",
+                        value_sha256=digest(json_bytes(node.value.value)),
+                    ),
+                    store=dict(
+                        opcode=opcode,
+                        index=instruction.arg,
+                        name=node.targets[0].id,
+                        offset=instruction.offset,
+                        position=list(instruction.positions),
+                    ),
+                )
+            else:
+                sites[span] = None
+        load = instruction if opcode == "LOAD_CONST" else None
+    return {span: receipt for span, receipt in sites.items() if receipt is not None}
+
+
+def _compiler_sites(tree, path, relative, source_hash):
+    """Capture positioned construction and binding facts from one compilation."""
     if sys.implementation.name != "cpython" or not hasattr(CodeType, "co_positions"):
-        return {}, {}
+        return {}, {}, {}, {}
     nodes, mappings, syntax = {}, {}, deque([tree])
     while syntax:
         node = syntax.popleft()
@@ -102,11 +157,36 @@ def _container_sites(tree, path, relative, source_hash):
             and not any(isinstance(e, ast.Starred) for e in node.elts)
         ):
             nodes[tuple_position(node)] = node
-    if not (nodes or mappings):
-        return {}, {}
+    assignments = [
+        node
+        for node in scope_nodes(tree.body)
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+        and isinstance(node.value, ast.Constant)
+        and type(node.value.value) is str
+    ]
+    if not (nodes or mappings or assignments):
+        return {}, {}, {}, {}
     optimize = sys.flags.optimize
     program = compile(tree, str(path), "exec", dont_inherit=True, optimize=optimize)
     unit = digest(json_bytes([relative, source_hash, ParsedUnit.compiler_id, optimize]))
+    instructions = list(dis.get_instructions(program)) if assignments else None
+    stores = (
+        _constant_store_sites(program, instructions, assignments) if assignments else {}
+    )
+    source_code = (
+        dict(
+            kind="module",
+            source_key=relative,
+            source_sha256=source_hash,
+            code_sha256=code_digest(program),
+            compiler=ParsedUnit.compiler_id,
+            optimize=optimize,
+        )
+        if stores
+        else {}
+    )
     fresh, conflict = object(), object()
     origins = {}
 
@@ -114,11 +194,15 @@ def _container_sites(tree, path, relative, source_hash):
         if origins.setdefault(node, origin) is not origin:
             origins[node] = conflict
 
-    pending = [program]
+    pending = [program] if nodes or mappings else []
     while pending:
         code = pending.pop()
         pending.extend(c for c in reversed(code.co_consts) if isinstance(c, CodeType))
-        for instruction in dis.get_instructions(code):
+        for instruction in (
+            instructions
+            if code is program and instructions is not None
+            else dis.get_instructions(code)
+        ):
             opcode = getattr(instruction, "baseopname", instruction.opname)
             if instruction.positions in mappings and opcode in {
                 "BUILD_MAP",
@@ -163,7 +247,7 @@ def _container_sites(tree, path, relative, source_hash):
                     and len(member) == len(child.elts)
                 ):
                     observe(child, member)
-    return sites, mappings
+    return sites, mappings, stores, source_code
 
 
 @cache
@@ -222,7 +306,7 @@ def parse_unit(
     try:
         text, tree = snapshot.text, snapshot.tree
         scopes = LexicalScope.capture(symtable.symtable(text, str(path), "exec"))
-        tuple_sites, mapping_builders = _container_sites(
+        tuple_sites, mapping_builders, constant_stores, source_code = _compiler_sites(
             tree, path, relative, source_hash
         )
     except (SyntaxError, UnicodeError, LookupError) as error:
@@ -281,6 +365,8 @@ def parse_unit(
         source_origins=origins,
         import_value_uses=frozenset(value_uses),
         mapping_builders=mapping_builders,
+        constant_stores=constant_stores,
+        source_code=source_code,
     )
 
 

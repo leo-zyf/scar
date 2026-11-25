@@ -424,6 +424,8 @@ class _ModuleGraph:
         self.text_profile = next(iter(parsed.text_profiles), None)
         self.tuple_sites = parsed.tuple_sites
         self.mapping_builders = parsed.mapping_builders
+        self.constant_stores = parsed.constant_stores
+        self.source_code = parsed.source_code
         self.source_lines = parsed.source_text.splitlines()
         self.diagnostic_file = str(parsed.path)
 
@@ -801,6 +803,11 @@ class _Scope:
                     or self.unit.origin(self.unit.module)
                 ),
                 graph_backed=True,
+                **(
+                    {"source_code": self.unit.source_code}
+                    if self.module_scope and self.unit.source_code
+                    else {}
+                ),
                 **(
                     {"text_profile": self.unit.text_profile}
                     if self.unit.text_profile
@@ -1962,12 +1969,27 @@ class _Scope:
             value, f = self.expr(node.value)
             targets = node.targets
             if len(targets) == 1:
+                receipt = (
+                    self.unit.constant_stores.get(tuple_position(node))
+                    if self.module_scope
+                    else None
+                )
                 return [
                     R(
                         node,
                         "assign",
                         target=self.destination(targets[0], f),
                         value=value,
+                        **(
+                            {
+                                "source_constant_store": {
+                                    **receipt,
+                                    "code": self.unit.source_code,
+                                }
+                            }
+                            if receipt
+                            else {}
+                        ),
                     )
                 ]
             return [
