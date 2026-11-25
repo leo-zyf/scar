@@ -15,6 +15,7 @@ from .values import (
     protocols,
     source_site,
 )
+from . import integers
 
 _NUMERIC = {"i64", "f64"}
 _OPERATORS = {
@@ -125,7 +126,7 @@ def math_call(frame, node, name, args, keywords, steps, discard=False):
             node, "math_source_version", f"{name} is absent from this source library"
         )
     source_args = args
-    args = [construct(frame, node, "float", [value], {}) for value in args]
+    args = [construct(frame, node, "float", [value], {}, steps=steps) for value in args]
 
     def intrinsic(function, value, kind):
         return dict(
@@ -276,6 +277,9 @@ def math_call(frame, node, name, args, keywords, steps, discard=False):
 
 def _binary64_bounds(item):
     """Enclose finite values after binary64 conversion. An unknown float has no bounds."""
+    if item.kind == "integer":
+        # Conversion is an explicit operation with rounding and overflow edges.
+        return None
     if item.exact is not _UNKNOWN:
         interval = (item.exact, item.exact)
     elif item.kind in {"bool", "numpy_bool", "boolean_choice"}:
@@ -299,7 +303,9 @@ def _binary64_bounds(item):
     return None
 
 
-def _absolute(frame, node, item):
+def _absolute(frame, node, item, *, steps=None):
+    if item.kind == "integer":
+        return integers.unary(frame, node, item, "absolute", steps=steps)
     if item.kind == "numpy_bool":
         return item
     exact = item.exact
@@ -337,7 +343,7 @@ def _absolute(frame, node, item):
     )
 
 
-def construct(frame, node, name, args, keywords):
+def construct(frame, node, name, args, keywords, *, steps=None):
     """Close a proven numeric builtin using its already evaluated arguments."""
     if name == "abs":
         if len(args) != 1 or keywords:
@@ -346,7 +352,7 @@ def construct(frame, node, name, args, keywords):
                 "absolute_arguments",
                 "abs() requires exactly one positional argument",
             )
-        return _absolute(frame, node, args[0])
+        return _absolute(frame, node, args[0], steps=steps)
     if name not in {"int", "float"}:
         return None
     if keywords or len(args) > 1:
@@ -368,6 +374,7 @@ def construct(frame, node, name, args, keywords):
         "numpy_bool",
         "boolean_choice",
         "i64",
+        "integer",
         "f64",
         "numpy_f64",
         "binary64_choice",
@@ -380,37 +387,23 @@ def construct(frame, node, name, args, keywords):
         frame.fail(node, "scalar_conversion_domain", f"{name}(): {detail}")
 
     if name == "int":
+        if operand.kind == "integer":
+            return integers.promote(frame, node, operand, steps=steps)
         if operand.kind == "i64":
             return operand
         bounds = _binary64_bounds(operand)
         if bounds is None:
-            known = (
-                operand.value["value"]
-                if operand.value.get("op") == "literal"
-                else operand.exact
-            )
-            if type(known) is float and not math.isfinite(known):
-                error = "ValueError" if math.isnan(known) else "OverflowError"
-                frame.fail(
-                    node, "integer_conversion_nonfinite", f"int({known}) raises {error}"
-                )
-            frame.fail(
-                node,
-                "integer_conversion_range",
-                "int() needs a finite binary64 interval whose truncation fits signed 64 bits",
-            )
+            return integers.from_f64(frame, node, operand, steps=steps)
         # Comparing the mathematical truncations also handles +2**63: the
         # largest i64 rounds up to this *out-of-range* value in binary64.
         low, high = map(math.trunc, bounds)
         if not _MIN <= low <= high <= _MAX:
-            frame.fail(
-                node,
-                "integer_conversion_range",
-                f"int() can produce [{low}, {high}], outside signed 64 bits",
-            )
+            return integers.from_f64(frame, node, operand, steps=steps)
         facts = _numeric_facts(low) if low == high else {"range": (low, high)}
         return Value("i64", dict(op="cast", type="i64", value=operand.value), facts)
 
+    if operand.kind == "integer":
+        return integers.to_binary64(frame, node, operand, steps=steps)
     if operand.kind in {"f64", "numpy_f64", "binary64_choice"}:
         return Value("f64", operand.value, operand.facts)
     if operand.kind == "i64" and max(map(abs, operand.bounds)) > 1 << 53:
@@ -453,8 +446,10 @@ def as_float(frame, node, item):
     frame.fail(node, "array_element", f"cannot convert {item.kind} to binary64")
 
 
-def comparison(frame, node, op, lhs, rhs):
+def comparison(frame, node, op, lhs, rhs, steps=None):
     """Compare shared scalar representations; keep the result's protocol set."""
+    if "integer" in {lhs.kind, rhs.kind}:
+        return integers.binary(frame, node, op, lhs, rhs, steps)
     possible = [protocols(v.kind) for v in (lhs, rhs)]
     if op not in {"eq", "noteq", "lt", "lte", "gt", "gte"} or any(
         not kinds <= {"bool", "numpy_bool", "i64", "f64", "numpy_f64"}
@@ -510,9 +505,13 @@ def extreme(frame, node, name, args, keywords, steps):
             "extreme_arguments",
             f"{name} needs two or more scalar arguments; iterable/key/default protocols are not closed",
         )
+    if any(item.kind == "integer" for item in args):
+        args = [integers.promote(frame, node, item, steps=steps) for item in args]
     winner = args[0]
     for item in args[1:]:
-        check = comparison(frame, node, "gt" if name == "max" else "lt", item, winner)
+        check = comparison(
+            frame, node, "gt" if name == "max" else "lt", item, winner, steps
+        )
         if type(check.exact) is bool:
             if check.exact:
                 winner = item
@@ -525,7 +524,7 @@ def extreme(frame, node, name, args, keywords, steps):
                 f"{name} selection needs a common lossless representation for {winner.kind} and {item.kind}",
             )
         facts = {}
-        if winner.kind == item.kind == "i64":
+        if winner.kind == item.kind and winner.kind in {"i64", "integer"}:
             bounds = winner.bounds, item.bounds
         else:
             bounds = _binary64_bounds(winner), _binary64_bounds(item)
@@ -562,8 +561,14 @@ def extreme(frame, node, name, args, keywords, steps):
     return winner
 
 
-def unary(frame, node, item):
+def unary(frame, node, item, *, steps=None):
     op = {"uadd": "pos", "usub": "neg"}.get(node["operator"])
+    if item.kind == "integer" and op is not None:
+        return (
+            item
+            if op == "pos"
+            else integers.unary(frame, node, item, "negative", steps=steps)
+        )
     if op is None or item.kind not in _NUMERIC:
         frame.fail(
             node, "unary_contract", f"unclosed {node['operator']} on {item.kind}"
@@ -844,6 +849,29 @@ def _guard_true_division(frame, node, lhs, rhs, steps):
 
 def binary(frame, node, op, lhs, rhs, steps=None):
     """Return a typed numeric expression, or None for the nonnumeric protocol."""
+    if "integer" in {lhs.kind, rhs.kind}:
+        if {lhs.kind, rhs.kind} == {"integer", "f64"} and op in {
+            "add",
+            "sub",
+            "mult",
+            "div",
+        }:
+            if steps is None:
+                frame.fail(
+                    node,
+                    "integer_evaluation_order",
+                    "mixed arithmetic needs an ordered conversion site",
+                )
+            operands = [
+                (
+                    integers.to_binary64(frame, node, item, steps=steps)
+                    if item.kind == "integer"
+                    else item
+                )
+                for item in (lhs, rhs)
+            ]
+            return binary(frame, node, op, *operands, steps)
+        return integers.binary(frame, node, op, lhs, rhs, steps)
     if lhs.kind not in _NUMERIC or rhs.kind not in _NUMERIC:
         return None
     if op in {"floordiv", "mod"}:

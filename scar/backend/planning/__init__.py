@@ -25,7 +25,7 @@ from scar.contract import (
     walk_records,
 )
 from scar.host import array_sdk
-from . import fourier, mpi, runtime, toolchain
+from . import fourier, integer, mpi, runtime, toolchain
 from .runtime import QualificationFailure, qualification_check
 
 _ARRAY_OPERATIONS = {
@@ -95,7 +95,7 @@ def _observed_operators(module):
     # Collect tagged operations and the type-only dependencies of older
     # packages in one traversal of the sealed IR.
     observed, elements, array_nodes, process_requests = {}, set(), [], []
-    fourier_nodes, mapping_nodes = [], []
+    fourier_nodes, mapping_nodes, integer_nodes = [], [], []
     defined = {fn["name"] for fn in module.get("functions", ())}
     external = [
         decl for decl in module.get("externs", ()) if decl["name"] not in defined
@@ -111,7 +111,17 @@ def _observed_operators(module):
             if family is not None:
                 if not isinstance(family, str) or not family or not isinstance(op, str):
                     raise ValueError("invalid operator family or operation tag")
-                observed.setdefault(family, set()).add(op)
+                observed.setdefault(family, set()).add(
+                    node.get("operation")
+                    if family == "integer" and isinstance(node.get("operation"), str)
+                    else op
+                )
+            if op == "integer_op" or family == "integer":
+                operation = node.get("operation")
+                observed.setdefault("integer", set()).add(
+                    operation if isinstance(operation, str) else op
+                )
+                integer_nodes.append(node)
             if (
                 op in _ARRAY_OPERATIONS
                 or family == "ndarray"
@@ -163,6 +173,8 @@ def _observed_operators(module):
             observed.setdefault("ndarray", set())
             element = node.get("element")
             elements.add(element if isinstance(element, str) else "unspecified")
+        if node.get("type") == "integer" or node.get("result") == "integer":
+            observed.setdefault("integer", set())
         if isinstance(node.get("kind"), str) and node["kind"] in MAPPING_TYPES:
             observed.setdefault("builtin_scalar_mapping", set())
             mapping_nodes.append(node)
@@ -175,6 +187,7 @@ def _observed_operators(module):
         process_requests,
         fourier_nodes,
         mapping_nodes,
+        integer_nodes,
     )
 
 
@@ -693,12 +706,15 @@ def _qualify(module, image_context=None):
         process_requests,
         fourier_nodes,
         mapping_nodes,
+        integer_nodes,
     ) = _observed_operators(module)
     for family, operators in observed.items():
         if family not in requested:
             requirement = dict(operations=sorted(operators))
             if family == "builtin_scalar_mapping":
                 requirement["profile"] = MAPPING_PROFILE
+            if family == "integer":
+                requirement["semantics_version"] = 1
             if family == "process" and process_requests:
                 requirement["binding"] = "explicit_targets"
             if family == "ndarray":
@@ -745,7 +761,8 @@ def _qualify(module, image_context=None):
             )
     for family, requirement in sorted(requested.items()):
         if (process_requests or "text_array_source" in observed) and (
-            family in {"ndarray", "mpi", "process", "text_array_io", "fourier"}
+            family
+            in {"ndarray", "mpi", "process", "text_array_io", "fourier", "integer"}
         ):
             # Deployment cannot proceed. Report other unregistered families
             # below without probing any physical providers.
@@ -787,6 +804,12 @@ def _qualify(module, image_context=None):
                 elif family == "fourier":
                     bindings[family] = fourier.qualify(
                         requirement, fourier_nodes, requested
+                    )
+                elif family == "integer":
+                    bindings[family] = integer.qualify(
+                        requirement,
+                        integer_nodes,
+                        cache=(image_context or {}).get("compiler_features"),
                     )
                 elif family == "builtin_scalar_mapping":
                     bindings[family] = _mapping_binding(
@@ -878,6 +901,7 @@ def _schedule_image(
     module.pop("math_interface_binding_sha256", None)
     module.pop("numeric_permissions_binding_sha256", None)
     module.pop("fourier_binding_sha256", None)
+    module.pop("integer_binding_sha256", None)
     module.pop("builtin_scalar_mapping_binding_sha256", None)
     requirements, bindings, issues = _qualify(module, image_context)
     import_effects = runtime.import_effects(module, bindings)
@@ -890,6 +914,8 @@ def _schedule_image(
         module["posix_runtime_binding_sha256"] = digest(json_bytes(binding))
     if binding := bindings.get("fourier"):
         module["fourier_binding_sha256"] = digest(json_bytes(binding))
+    if binding := bindings.get("integer"):
+        module["integer_binding_sha256"] = digest(json_bytes(binding))
     if binding := bindings.get("builtin_scalar_mapping"):
         module["builtin_scalar_mapping_binding_sha256"] = digest(json_bytes(binding))
     if "process" in bindings:

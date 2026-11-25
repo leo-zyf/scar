@@ -149,6 +149,8 @@ def returned_facts(value):
     facts = {}
     if value.kind in values.SCALARS and value.exact is not values._UNKNOWN:
         facts.update(values.numeric_facts(value.exact))
+    if value.kind in {"i64", "integer"} and "range" in value.facts:
+        facts["range"] = deepcopy(value.facts["range"])
     if values.is_array(value.kind) and "shape" in value.facts:
         facts["shape"] = deepcopy(value.facts["shape"])
     if "stream_origin" in value.facts:

@@ -458,7 +458,7 @@ def product_items(spec):
 
     def member(value):
         if isinstance(value, str):
-            return value in scalars
+            return value in scalars or value == "integer"
         if not isinstance(value, dict):
             return False
         kind = value.get("kind")

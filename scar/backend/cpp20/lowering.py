@@ -322,6 +322,12 @@ class Lowerer:
             != digest(json_bytes(mapping))
         ):
             raise ValueError("mapping provider differs from the scheduled module")
+        integers = self.operator_backends.get("integer")
+        if (integers is not None or "integer_binding_sha256" in module) and (
+            not isinstance(integers, dict)
+            or module.get("integer_binding_sha256") != digest(json_bytes(integers))
+        ):
+            raise ValueError("integer provider differs from the scheduled module")
         fourier = self.operator_backends.get("fourier")
         if (fourier is not None or "fourier_binding_sha256" in module) and (
             fourier is None
@@ -417,6 +423,17 @@ class Lowerer:
 
     def type_name(self, spec):
         if isinstance(spec, str):
+            if spec == "integer":
+                if (
+                    self.operator_backends.get("integer", {}).get("provider")
+                    != "gmp-cpu"
+                ):
+                    raise ValueError(
+                        "mathematical integer requires a qualified target provider"
+                    )
+                self.use_sdk("integer.hpp")
+                self.libraries.links.add("GMP")
+                return named("scar::integers::value")
             if spec in ("c64", "c128"):
                 return Type(
                     "template",
@@ -967,6 +984,52 @@ class Lowerer:
             ),
         )
 
+    def integer_operation(self, node):
+        operation = node["operation"]
+        errors = {
+            "from_f64": ("value_error", "overflow_error"),
+            "to_binary64": ("overflow_error",),
+            "floordiv": ("zero_division_error",),
+            "mod": ("zero_division_error",),
+            "shape_extent": ("value_error",),
+            "sequence_index": ("index_error",),
+        }
+        supported = {
+            "from_i64",
+            "decimal_literal",
+            "negative",
+            "absolute",
+            "add",
+            "sub",
+            "mul",
+            "eq",
+            "ne",
+            "lt",
+            "le",
+            "gt",
+            "ge",
+            "decimal",
+            *errors,
+        }
+        binding = self.operator_backends.get("integer", {})
+        if (
+            node.get("operator_family") != "integer"
+            or node.get("semantics_version") != 1
+            or binding.get("profile") != "signed-arbitrary-precision-v1"
+            or operation not in supported
+            or operation not in binding.get("operations", ())
+        ):
+            raise ValueError(
+                "integer operation lacks a qualified target implementation"
+            )
+        self.type_name("integer")
+        args = [self.expression(value) for value in node["args"]]
+        messages = node.get("exception_messages", {})
+        args.extend(
+            Expr("string", value=messages[key]) for key in errors.get(operation, ())
+        )
+        return call("scar::integers::" + operation, *args)
+
     def fourier_operation(self, node):
         binding = self.operator_backends.get("fourier", {})
         input_value = node.get("input")
@@ -1459,6 +1522,8 @@ class Lowerer:
             return self.process_spawn(expr)
         if op == "array_text_read":
             return self.text_array_read(expr)
+        if op == "integer_op":
+            return self.integer_operation(expr)
         if op == "integer_to_binary64":
             value = expr["value"]
             if (

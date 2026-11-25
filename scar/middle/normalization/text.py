@@ -3,7 +3,7 @@
 import re
 import unicodedata
 
-from . import products, sequences
+from . import integers, products, sequences
 from .values import (
     SCALARS,
     Value,
@@ -412,8 +412,31 @@ def _container(frame, node, value, steps, *, ascii_only=False):
     return _concat(frame, [*parts, literal(closing)], steps)
 
 
+def _integer_decimal(frame, node, value, steps):
+    # All supported CPython profiles permit at least 640 decimal digits,
+    # including after an application changes its larger configurable limit.
+    bound = max(map(abs, value.bounds)) if value.bounds is not None else None
+    if bound is None or bound >= 10**640:
+        frame.fail(
+            node,
+            "integer_text_limit",
+            "decimal display needs a current digit-limit contract or a proven bound of at most 640 digits",
+        )
+    return integers.apply(
+        frame,
+        node,
+        "decimal",
+        [value],
+        "text",
+        steps=steps,
+        maximum_digits=len(str(bound)),
+    )
+
+
 def display(frame, node, value, steps):
     """Prepare aggregates for the existing stream-print scalar contract."""
+    if value.kind == "integer":
+        return _integer_decimal(frame, node, value, steps)
     if value.kind in {"list", "tuple"} or is_product(value.kind):
         return _container(frame, node, value, steps)
     if is_array(value.kind):
@@ -494,6 +517,14 @@ def render(frame, node, value, conversion, source_spec, steps, discard=False):
             value = _concat(frame, [literal("np.float64("), inner, literal(")")], steps)
         else:
             return _scalar_field(frame, node, value, conversion, spec, steps, discard)
+    elif source == "integer":
+        if conversion == "none" and not spec["empty"]:
+            frame.fail(
+                node,
+                "integer_format",
+                "numeric format requires an arbitrary-integer presentation contract",
+            )
+        value = _integer_decimal(frame, node, value, steps)
     elif source in SCALARS:
         return _scalar_field(frame, node, value, conversion, spec, steps, discard)
     else:

@@ -5781,8 +5781,22 @@ def test_finite_scalar_selections_propagate_ranges_without_replacing_winners():
     ):
         result = select("max", [values.literal(0.0), unknown])
         assert result.facts == {}
-        with pytest.raises(ValueError, match="integer_conversion_range"):
-            scalars.construct(frame, {}, "int", [result], {})
+        frame.project.require_operator = lambda family, operation, **contract: None
+        frame.project.text_profiles = {}
+        frame.scope = {}
+        widened = scalars.construct(
+            frame,
+            {"source_runtime": {"interpreter": "cpython 3.12.3"}},
+            "int",
+            [result],
+            {},
+        )
+        assert widened.kind == "integer" and widened.value["operation"] == "from_f64"
+        assert widened.value["may_raise"] is True
+        assert widened.value["exception_messages"] == {
+            "value_error": "cannot convert float NaN to integer",
+            "overflow_error": "cannot convert float infinity to integer",
+        }
 
     start = len(steps)
     zeros = [
@@ -5811,3 +5825,153 @@ def test_finite_scalar_selections_propagate_ranges_without_replacing_winners():
         assert struct.pack("!d", environment[first.value["name"]]) == struct.pack(
             "!d", max(left, right)
         )
+
+
+def test_unbounded_integer_contracts_keep_ranges_effects_and_conversion_errors():
+    import math
+    from types import SimpleNamespace
+
+    from scar.middle.normalization import (
+        expressions,
+        integers,
+        products,
+        protocols,
+        scalars,
+        values,
+    )
+
+    requirements, steps = [], []
+
+    def require(family, operation, **contract):
+        requirements.append((family, operation, contract))
+
+    def effect(operation, kind, body, discard=False, *, facts=None):
+        body.append(operation)
+        return values.Value(kind, None, facts or {}).at(f"captured{len(body)}")
+
+    def fail(node, field, detail):
+        raise ValueError(field)
+
+    frame = SimpleNamespace(
+        name="entry",
+        scope={},
+        project=SimpleNamespace(require_operator=require, text_profiles={}),
+        effect=effect,
+        fail=fail,
+    )
+    node = {"source_runtime": {"interpreter": "cpython 3.12.3"}, "site": "conversion"}
+    incoming = values.Value("f64", dict(op="var", name="input", type="f64"))
+    converted = scalars.construct(frame, node, "int", [incoming], {})
+    maximum = ((1 << 53) - 1) << 971
+    assert converted.kind == values.wire(converted.kind) == "integer"
+    assert converted.bounds == (-maximum, maximum) and maximum.bit_length() == 1024
+    assert len(str(maximum)) == 309 and converted.exact is values._UNKNOWN
+    assert converted.value["operation"] == "from_f64"
+    assert converted.value["may_raise"] is True
+    assert converted.value["exception_messages"] == {
+        "value_error": "cannot convert float NaN to integer",
+        "overflow_error": "cannot convert float infinity to integer",
+    }
+    captured = scalars.construct(frame, node, "int", [incoming], {}, steps=steps)
+    assert captured.value["op"] == "var" and steps[-1]["operation"] == "from_f64"
+    count = len(steps)
+    assert (
+        scalars.construct(frame, node, "int", [captured], {}, steps=steps) == captured
+    )
+    assert len(steps) == count
+    bounded = values.Value("f64", incoming.value, {"range": (-7.9, 8.9)})
+    narrow = scalars.construct(frame, node, "int", [bounded], {})
+    assert narrow.kind == "i64" and narrow.bounds == (-7, 8)
+    for source in (math.nan, math.inf, -math.inf, float(1 << 63)):
+        result = scalars.construct(frame, node, "int", [values.literal(source)], {})
+        assert result.kind == "integer" and result.value["may_raise"]
+    unbounded = values.Value(
+        "integer", dict(op="var", name="unbounded", type="integer")
+    )
+    assert unbounded.bounds is None and scalars._binary64_bounds(unbounded) is None
+
+    positive = integers.literal(frame, node, 1 << 100, steps=steps)
+    negative = integers.literal(frame, node, -(1 << 100), steps=steps)
+    assert steps[-2]["args"][0]["value"] == str(1 << 100)
+    assert steps[-1]["args"][0]["value"] == str(-(1 << 100))
+    assert scalars.unary(frame, {"operator": "usub"}, positive).exact == -(1 << 100)
+    assert scalars.construct(frame, {}, "abs", [negative], {}).exact == 1 << 100
+    added = scalars.binary(frame, node, "add", positive, values.literal(3), steps)
+    assert added.kind == "integer" and added.exact == (1 << 100) + 3
+    doubled = scalars.binary(frame, node, "mult", converted, values.literal(2), steps)
+    assert doubled.bounds == (-maximum * 2, maximum * 2)
+    quotient = scalars.binary(frame, node, "floordiv", converted, unbounded, steps)
+    assert quotient.bounds == (-maximum, maximum)
+    modulo = scalars.binary(frame, node, "mod", unbounded, values.literal(-7), steps)
+    assert modulo.bounds == (-6, 0) and steps[-1]["may_raise"]
+    assert steps[-1]["exception_messages"] == {
+        "zero_division_error": "integer modulo by zero"
+    }
+    zero = scalars.binary(frame, node, "floordiv", positive, values.literal(0), steps)
+    assert zero.kind == "integer" and steps[-1]["may_raise"]
+    assert steps[-1]["exception_messages"] == {
+        "zero_division_error": "integer division or modulo by zero"
+    }
+    newer = {"source_runtime": {"interpreter": "cpython 3.14.0"}}
+    scalars.binary(frame, newer, "mod", positive, values.literal(0), steps)
+    assert steps[-1]["exception_messages"] == {
+        "zero_division_error": "division by zero"
+    }
+    before = len(steps)
+    comparison = scalars.comparison(frame, node, "gt", converted, positive, steps)
+    assert comparison.kind == "bool" and comparison.value["op"] == "var"
+    assert [operation["operation"] for operation in steps[before:]] == [
+        "from_f64",
+        "gt",
+    ]
+    assert steps[-1]["may_raise"] is False
+    assert all(arg["op"] == "var" for arg in steps[-1]["args"])
+
+    for integer in ((1 << 53) + 1, -((1 << 53) + 3)):
+        wide = integers.literal(frame, node, integer)
+        rounded = scalars.construct(frame, node, "float", [wide], {})
+        assert rounded.kind == "f64" and rounded.exact == float(integer)
+        assert rounded.value["operation"] == "to_binary64"
+    overflow = scalars.construct(
+        frame, node, "float", [integers.literal(frame, node, 1 << 1100)], {}
+    )
+    assert overflow.exact is values._UNKNOWN and overflow.value["may_raise"]
+    assert overflow.value["exception_messages"] == {
+        "overflow_error": "int too large to convert to float"
+    }
+    mixed = scalars.binary(frame, node, "add", positive, values.literal(1.0), steps)
+    assert mixed.kind == "f64" and steps[-1]["operation"] == "to_binary64"
+    with pytest.raises(ValueError, match="integer_operand"):
+        scalars.binary(frame, node, "lt", positive, values.literal(1.0), steps)
+    with pytest.raises(ValueError, match="integer_source_version"):
+        scalars.construct(frame, {}, "int", [incoming], {})
+    assert all(
+        family == "integer" and contract == {"semantics_version": 1}
+        for family, _, contract in requirements
+    )
+    assert {operation for _, operation, _ in requirements} >= {
+        "from_f64",
+        "decimal_literal",
+        "from_i64",
+        "add",
+        "mul",
+        "floordiv",
+        "mod",
+        "gt",
+        "negative",
+        "absolute",
+        "to_binary64",
+    }
+    bounded = values.Value("integer", unbounded.value, {"range": (-10, 20)})
+    other = values.Value("integer", unbounded.value, {"range": (30, 40)})
+    assert expressions._join_facts([bounded, other]) == {"range": (-10, 40)}
+    assert expressions._join_facts([bounded, unbounded]) == {}
+    joined = protocols._join([{"number": bounded}, {"number": unbounded}])
+    assert joined["number"].bounds is None
+    assert products.returned_facts(bounded) == {"range": (-10, 20)}
+    returns = SimpleNamespace(returns=set(), return_facts=None)
+    protocols._Frame.record_return(returns, bounded)
+    protocols._Frame.record_return(returns, other)
+    assert returns.return_facts == {"range": (-10, 40)}
+    protocols._Frame.record_return(returns, unbounded)
+    assert returns.return_facts == {}

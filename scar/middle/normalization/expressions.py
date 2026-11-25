@@ -1,6 +1,6 @@
 """M2 ordered operand evaluation and control-flow joins for source operators."""
 
-from . import arrays, mappings, objects, scalars, values
+from . import arrays, integers, mappings, objects, scalars, values
 from .values import Value, literal
 
 
@@ -159,10 +159,8 @@ def _join_facts(items):
             for item in items[1:]
         )
     }
-    if first.kind == "i64":
-        facts["range"] = min(item.bounds[0] for item in items), max(
-            item.bounds[1] for item in items
-        )
+    if first.kind in {"i64", "integer"}:
+        facts.update(values.join_integer_ranges(items))
     if "array_allocation" in facts and "literal_region" not in facts:
         # Different views may still share their owner's invalidation token.
         facts["literal_region"] = None
@@ -212,6 +210,13 @@ def select(frame, node, steps, *, discard=False, truth_context=False):
     if discard:
         result = literal(None)
     else:
+        if any(item.kind == "integer" for item in results) and all(
+            item.kind in {"i64", "integer"} for item in results
+        ):
+            results = [
+                integers.promote(frame, node, item, steps=body)
+                for item, body in zip(results, arms)
+            ]
         kinds = [item.kind for item in results]
         if all(values.is_sequence(kind) for kind in kinds):
             kind = kinds[0] if frame.project.sequences.compatible(*kinds) else None

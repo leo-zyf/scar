@@ -2,6 +2,88 @@
 
 import re
 
+from scar.contract import digest, json_bytes
+
+# Both sides of the target package validate the same finite SDK output paths.
+SDK_HEADERS = {
+    name: f"include/scar/{name}"
+    for name in (
+        "array.hpp",
+        "array_io.hpp",
+        "exceptions.hpp",
+        "format.hpp",
+        "fourier.hpp",
+        "host.hpp",
+        "integer.hpp",
+        "mapping.hpp",
+        "sequence.hpp",
+        "text.hpp",
+    )
+}
+
+
+_GMP_MEMBERS = {
+    "include/gmp.h",
+    "include/gmpxx.h",
+    "lib/libgmp.a",
+    "COPYRIGHT",
+    "COPYING.LGPLv3",
+    "COPYING.GPLv2",
+    "COPYING.GPLv3",
+}
+
+
+def gmp_files(binding):
+    """Validate a scheduled or sealed GMP SDK without consulting an installation."""
+    if (
+        not isinstance(binding, dict)
+        or binding.get("provider") != "gmp-cpu"
+        or type(binding.get("semantics_version")) is not int
+        or binding["semantics_version"] != 1
+        or binding.get("device") != "cpu"
+        or binding.get("profile") != "signed-arbitrary-precision-v1"
+        or not isinstance(binding.get("version"), str)
+        or re.fullmatch(r"6\.[0-9]+\.[0-9]+", binding["version"]) is None
+        or not isinstance(binding.get("files"), dict)
+        or binding["files"].keys() != _GMP_MEMBERS
+    ):
+        raise ValueError("target requires a sealed qualified GMP CPU SDK")
+    files = binding["files"]
+    for row in files.values():
+        if (
+            not isinstance(row, dict)
+            or not is_digest(row.get("sha256"))
+            or type(row.get("size")) is not int
+            or row["size"] <= 0
+        ):
+            raise ValueError("invalid GMP SDK member identity")
+    identity = {
+        key: binding[key]
+        for key in ("provider", "semantics_version", "device", "profile", "version")
+    }
+    identities = {
+        name: {key: row[key] for key in ("sha256", "size")}
+        for name, row in files.items()
+    }
+    identity["files"] = identities
+    if binding.get("sdk_sha256") != digest(json_bytes(identity)):
+        raise ValueError("GMP SDK member set differs from its qualified identity")
+    abi = binding.get("abi", {})
+    if (
+        not isinstance(abi, dict)
+        or not isinstance(abi.get("architecture"), str)
+        or not abi["architecture"]
+        or type(abi.get("limb_bits")) is not int
+        or abi.get("limb_bits") not in {32, 64}
+        or type(abi.get("pointer_bits")) is not int
+        or abi.get("pointer_bits") not in {32, 64}
+        or abi.get("link") != "static"
+        or abi.get("api") != "gmp-mpz-c"
+    ):
+        raise ValueError("GMP SDK lacks its qualified static ABI")
+    return identities
+
+
 _POCKETFFT_REVISION = "33ae5dc94c9cdc7f1c78346504a85de87cadaa12"
 _POCKETFFT_FILES = {
     "include/pocketfft_hdronly.h": dict(

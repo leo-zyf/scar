@@ -9,6 +9,7 @@ from . import (
     expressions,
     exceptions,
     graphics,
+    integers,
     host_protocols,
     mappings,
     objects,
@@ -93,12 +94,8 @@ def _join(paths, sequence_domain=None):
             for v in incoming
         ):
             facts = {}
-            if first.kind == "i64":
-                bounds = [v.bounds for v in [first, *incoming]]
-                facts["range"] = (
-                    min(lo for lo, _ in bounds),
-                    max(hi for _, hi in bounds),
-                )
+            if first.kind in {"i64", "integer"}:
+                facts.update(values.join_integer_ranges([first, *incoming]))
             if "stream_origin" in first.facts and all(
                 values.identical(
                     v.facts.get("stream_origin"), first.facts["stream_origin"]
@@ -1125,6 +1122,7 @@ class _Frame:
                 self.dynamic
                 and not self.protected_normal_context()
                 or value.kind == "range"
+                and global_
             ):
                 self.fail(
                     target,
@@ -1145,6 +1143,8 @@ class _Frame:
             if global_:
                 self.project.imports.binding_written(name)
             return
+        if previous is not None and previous.kind == "integer" and value.kind == "i64":
+            value = integers.promote(self, target, value, steps=steps)
         if previous is not None and not self.project.sequences.compatible(
             previous.kind, value.kind
         ):
@@ -1154,18 +1154,29 @@ class _Frame:
                 f"{name} changes type from {previous.kind} to {value.kind}",
             )
         types = self.project.globals if global_ else self.locals
-        if name in types and not self.project.sequences.compatible(
-            types[name], value.kind
+        storage = (
+            previous.value["name"]
+            if previous is not None
+            and isinstance(previous.value, dict)
+            and previous.value.get("binding_slot") == name
+            else name
+        )
+        if storage in types and not self.project.sequences.compatible(
+            types[storage], value.kind
         ):
             self.fail(
                 target, "local_type", f"{name} has incompatible reaching value types"
             )
-        types[name] = (
-            values.join_arrays([types[name], value.kind])
-            if name in types and values.is_array(value.kind)
+        types[storage] = (
+            values.join_arrays([types[storage], value.kind])
+            if storage in types and values.is_array(value.kind)
             else value.kind
         )
-        variable = value.at(name, **({"scope": "global"} if global_ else {}))
+        variable = value.at(
+            storage,
+            **({"scope": "global"} if global_ else {}),
+            **({"binding_slot": name} if storage != name else {}),
+        )
         scope[name] = variable
         if global_:
             self.project.imports.binding_written(name)
@@ -1852,9 +1863,9 @@ class _Frame:
                 return _Value(
                     "python_complex", dict(op="literal", type="c128", value=value)
                 )
-            if type(value) not in (bool, int, float, str, type(None)) or (
-                type(value) is int and not -(1 << 63) <= value < 1 << 63
-            ):
+            if type(value) is int and not -(1 << 63) <= value < 1 << 63:
+                return integers.literal(self, node, value, steps=steps)
+            if type(value) not in (bool, int, float, str, type(None)):
                 self.fail(
                     node,
                     "literal_contract",
@@ -2105,7 +2116,9 @@ class _Frame:
                 )
             return args[0]
         if target.kind == "builtin" and target.value in {"int", "float", "abs"}:
-            result = scalars.construct(self, node, target.value, args, kwargs)
+            result = scalars.construct(
+                self, node, target.value, args, kwargs, steps=steps
+            )
             self.project.decisions.append(
                 dict(
                     code=(
@@ -2136,11 +2149,15 @@ class _Frame:
                 self, node, target, args, kwargs, steps, discard
             )
         if target.kind == "builtin" and target.value == "range":
-            if kwargs or not 1 <= len(args) <= 3 or any(v.kind != "i64" for v in args):
+            if (
+                kwargs
+                or not 1 <= len(args) <= 3
+                or any(v.kind not in {"i64", "integer"} for v in args)
+            ):
                 self.fail(
                     node,
                     "range_contract",
-                    "range requires one to three index-width integers",
+                    "range requires one to three mathematical integers",
                 )
             if len(args) == 3 and (
                 type(args[2].exact) is not int or args[2].exact == 0
@@ -2318,9 +2335,23 @@ class _Frame:
         if self.return_facts is None:
             self.return_facts = facts
         elif not values.identical(self.return_facts, facts):
-            self.return_facts = {}
+            self.return_facts = (
+                values.join_integer_ranges(
+                    [
+                        _Value(value.kind, None, self.return_facts),
+                        _Value(value.kind, None, facts),
+                    ]
+                )
+                if self.returns == {"integer"}
+                else {}
+            )
 
     def truth(self, value, node):
+        if value.kind == "integer":
+            zero = integers.promote(self, node, _literal(0))
+            return integers.apply(
+                self, node, "ne", [value, zero], "bool", may_raise=False
+            )
         if value.kind in {"mapping_ref", "structured_value"}:
             return mappings.truth(self, node, value)
         if values.is_sequence(value.kind):
@@ -2676,6 +2707,8 @@ class _Frame:
         stride = step.exact
         if type(stride) is not int or not stride:
             self.fail(node, "range_step", "a nonzero constant step is required")
+        if any(value.kind == "integer" for value in (start, stop, step)):
+            return self.wide_range_loop(node, start, stop, step, steps)
         # Range operands are already captured in source order by call().
         positive = stride > 0
         al, ah = start.bounds
@@ -2723,6 +2756,79 @@ class _Frame:
                 op="update", operator="set", target=iv.value, value=advance, type="i64"
             ),
             body=[],
+        )
+        return loop, iv, count, empty, nonempty, []
+
+    def widen_integer_binding(self, target, steps):
+        """Give a widened source binding a new slot; earlier ports stay typed."""
+        name = target["name"]
+        global_ = target.get("scope") == "global"
+        scope = self.project.names if global_ else self.env
+        previous = scope.get(name)
+        if previous is None or previous.kind != "i64":
+            return
+        converted = integers.promote(self, target, previous)
+        storage = self.temporary()
+        types = self.project.globals if global_ else self.locals
+        types[storage] = "integer"
+        current = converted.at(
+            storage, binding_slot=name, **({"scope": "global"} if global_ else {})
+        )
+        steps.append(dict(op="assign", target=current.value, value=converted.value))
+        scope[name] = current
+
+    def wide_range_loop(self, node, start, stop, step, steps):
+        """A lazy range needs a mathematical cursor, never a materialized length."""
+        stride = step.exact
+        positive = stride > 0
+        a, b = start.bounds, stop.bounds
+        empty = nonempty = False
+        count, facts = None, {}
+        if a is not None and b is not None:
+            al, ah = a
+            bl, bh = b
+            empty = al >= bh if positive else ah <= bl
+            nonempty = ah < bl if positive else al > bh
+            distance = bh - al if positive else ah - bl
+            count = max(0, (distance + abs(stride) - 1) // abs(stride))
+            if not empty:
+                facts["range"] = (al, bh - 1) if positive else (bl + 1, ah)
+        first, last, stride_value = [
+            integers.promote(self, node, value, steps=steps)
+            for value in (start, stop, step)
+        ]
+        if not empty:
+            self.widen_integer_binding(node["target"], steps)
+        cursor = self.temporary()
+        iv = _Value("integer", None, facts).at(cursor)
+        condition = integers.apply(
+            self, node, "lt" if positive else "gt", [iv, last], "bool", may_raise=False
+        )
+        advance = integers.apply(self, node, "add", [iv, stride_value])
+        loop = dict(
+            op="for",
+            init=[dict(op="decl", name=cursor, type="integer", init=first.value)],
+            condition=condition.value,
+            step=dict(
+                op="update",
+                operator="set",
+                target=iv.value,
+                value=advance.value,
+                type="integer",
+            ),
+            body=[],
+        )
+        self.project.decisions.append(
+            dict(
+                code="mathematical_range_iteration",
+                symbol=self.name,
+                cursor="integer",
+                constant_step=stride,
+                length_materialized=False,
+                bound_status="proven" if a is not None and b is not None else "unknown",
+                proof="captured immutable arguments; sign-directed exclusive bound; private mathematical cursor; source target is assigned only on visits",
+                **values.source_site(node),
+            )
         )
         return loop, iv, count, empty, nonempty, []
 

@@ -19,7 +19,14 @@ from scar.contract import (
     validate_numeric_contract,
     write_json,
 )
-from .receipts import is_digest, pocketfft_files, validate_mpi_sdk, xtensor_headers
+from .receipts import (
+    SDK_HEADERS,
+    gmp_files,
+    is_digest,
+    pocketfft_files,
+    validate_mpi_sdk,
+    xtensor_headers,
+)
 
 _XTENSOR_NOTICE = b"""BSD 3-Clause License
 
@@ -126,6 +133,36 @@ def _seal_pocketfft(destination, binding):
                 "device",
                 "revision",
                 "profile",
+            )
+        },
+        "files": sealed,
+    }
+
+
+def _seal_gmp(destination, binding):
+    files = gmp_files(binding)
+    sealed = {}
+    for name, expected in files.items():
+        path = Path(binding["files"][name].get("path", ""))
+        if not path.is_absolute():
+            raise ValueError("GMP schedule lacks the selected absolute SDK member")
+        data = path.read_bytes()
+        if len(data) != expected["size"] or digest(data) != expected["sha256"]:
+            raise ValueError("GMP SDK changed after physical qualification")
+        output = destination / "operator-sdk" / expected["sha256"]
+        publish(output, data)
+        sealed[name] = file_receipt(destination, output)
+    return {
+        **{
+            key: binding[key]
+            for key in (
+                "provider",
+                "semantics_version",
+                "device",
+                "profile",
+                "version",
+                "sdk_sha256",
+                "abi",
             )
         },
         "files": sealed,
@@ -467,23 +504,13 @@ def _lower_image(path, revision, scheduled, destination):
     if "host.hpp" in lowerer.used_sdk_headers:
         lowerer.used_sdk_headers.add("exceptions.hpp")
     for name in sorted(lowerer.used_sdk_headers):
-        if name not in {
-            "array.hpp",
-            "array_io.hpp",
-            "mapping.hpp",
-            "fourier.hpp",
-            "host.hpp",
-            "exceptions.hpp",
-            "format.hpp",
-            "text.hpp",
-            "sequence.hpp",
-        }:
+        if name not in SDK_HEADERS:
             raise ValueError(f"unregistered target SDK header {name!r}")
         data = Path(__file__).with_name(name).read_bytes()
         sealed = destination / "runtime" / (digest(data) + ".hpp")
         publish(sealed, data)
         headers.append(
-            dict(output="include/scar/" + name, blob=file_receipt(destination, sealed))
+            dict(output=SDK_HEADERS[name], blob=file_receipt(destination, sealed))
         )
     operator_sdks = {}
     mpi = physical.get("operator_backends", {}).get("mpi")
@@ -515,6 +542,10 @@ def _lower_image(path, revision, scheduled, destination):
     if "PocketFFT" in lowerer.libraries.links:
         operator_sdks["PocketFFT"] = _seal_pocketfft(
             destination, physical.get("operator_backends", {}).get("fourier")
+        )
+    if "GMP" in lowerer.libraries.links:
+        operator_sdks["GMP"] = _seal_gmp(
+            destination, physical.get("operator_backends", {}).get("integer")
         )
     if operator_sdks:
         metadata["operator_sdks"] = operator_sdks

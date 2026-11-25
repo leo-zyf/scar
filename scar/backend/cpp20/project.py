@@ -20,7 +20,14 @@ from scar.contract import (
     write_json,
 )
 from scar.host import cpu_availability
-from .receipts import is_digest, pocketfft_files, validate_mpi_sdk, xtensor_headers
+from .receipts import (
+    SDK_HEADERS,
+    gmp_files,
+    is_digest,
+    pocketfft_files,
+    validate_mpi_sdk,
+    xtensor_headers,
+)
 
 _STYLE = "BasedOnStyle: LLVM\nStandard: c++20\n"
 
@@ -106,6 +113,16 @@ def _install_pocketfft(folder, directory, binding):
         output.write_bytes(data)
 
 
+def _install_gmp(folder, directory, binding):
+    for name, expected in gmp_files(binding).items():
+        receipt = binding["files"][name]
+        if any(receipt.get(key) != value for key, value in expected.items()):
+            raise ValueError("sealed GMP member differs from its selected SDK")
+        output = directory / "vendor" / "gmp" / name
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_bytes(read_blob(folder, receipt))
+
+
 def _mpi_checks(receipt):
     """Recheck FindMPI's effective include roots and ordered binary link inputs at build time."""
     lines = [
@@ -159,6 +176,7 @@ def _package(
         "libgfortran.so.5",
         "XTensor",
         "PocketFFT",
+        "GMP",
     }
     if unknown:
         raise ValueError(
@@ -258,6 +276,13 @@ def _package(
         lines.append(
             f'target_include_directories({objects} SYSTEM PRIVATE "${{CMAKE_CURRENT_SOURCE_DIR}}/vendor/pocketfft/include")'
         )
+    if "GMP" in libraries:
+        lines.extend(
+            (
+                f'target_include_directories({objects} SYSTEM PRIVATE "${{CMAKE_CURRENT_SOURCE_DIR}}/vendor/gmp/include")',
+                f'target_link_libraries({target} PRIVATE "${{CMAKE_CURRENT_SOURCE_DIR}}/vendor/gmp/lib/libgmp.a")',
+            )
+        )
     if image:
         lines.append(
             f'set_target_properties({target} PROPERTIES OUTPUT_NAME "{image["output"]}")'
@@ -329,17 +354,7 @@ def _print_image(path, product, directory, runtime, jobs, image=None):
     (directory / "src").mkdir()
     (directory / "include/scar/runtime.hpp").write_bytes(runtime)
     for header in product.get("sdk_headers", ()):
-        if header["output"] not in {
-            "include/scar/array.hpp",
-            "include/scar/array_io.hpp",
-            "include/scar/mapping.hpp",
-            "include/scar/fourier.hpp",
-            "include/scar/host.hpp",
-            "include/scar/exceptions.hpp",
-            "include/scar/format.hpp",
-            "include/scar/text.hpp",
-            "include/scar/sequence.hpp",
-        }:
+        if header["output"] not in SDK_HEADERS.values():
             raise ValueError("invalid target SDK header output")
         target = directory / header["output"]
         if target.exists():
@@ -384,7 +399,7 @@ def _print_image(path, product, directory, runtime, jobs, image=None):
         raise ValueError("target MPI header requires a qualified MPI SDK")
     bindings = product.get("operator_sdks", {})
     if not isinstance(bindings, dict) or bindings.keys() - (
-        libraries & {"XTensor", "MPI", "PocketFFT"}
+        libraries & {"XTensor", "MPI", "PocketFFT", "GMP"}
     ):
         raise ValueError("target declares an unused or unsupported native operator SDK")
     if (
@@ -399,6 +414,10 @@ def _print_image(path, product, directory, runtime, jobs, image=None):
         raise ValueError("target Fourier header requires a sealed PocketFFT SDK")
     if "PocketFFT" in libraries:
         _install_pocketfft(path.parent, directory, bindings.get("PocketFFT"))
+    if "scar/integer.hpp" in local_headers and "GMP" not in libraries:
+        raise ValueError("target integer header requires a sealed GMP SDK")
+    if "GMP" in libraries:
+        _install_gmp(path.parent, directory, bindings.get("GMP"))
     mpi = None
     if "MPI" in libraries:
         if "MPI" not in bindings:

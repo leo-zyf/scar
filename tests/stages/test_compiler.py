@@ -1368,12 +1368,16 @@ finally: builtins.__import__ = original_import
         graph, plan = folder / "graph", folder / "plan"
         _stage(folder, "frontend", "build", "--entry", entry, "--out", graph)
         entry.unlink()
-        report = _stage(
-            folder, "middle", "plan", "--graph", graph, "--out", plan, returncode=2
-        )
-        assert report["status"] == "INCOMPLETE"
-        issues = json.loads((plan / "plan.json").read_bytes())["issues"]
-        assert issues[0]["code"] == "python.integer_conversion_range", issues
+        report = _stage(folder, "middle", "plan", "--graph", graph, "--out", plan)
+        assert report["status"] == "READY"
+        ir = json.loads((plan / "exec-ir.json").read_bytes())
+        conversions = [
+            op
+            for ref in ir["functions"]
+            for op in walk_operations(read_member(plan, ref))
+            if op.get("operation") == "from_f64"
+        ]
+        assert conversions and all(op["may_raise"] for op in conversions), name
 
 
 def test_short_circuit_preserves_values_effects_and_activation_edges(tmp_path):
@@ -4239,3 +4243,230 @@ def test_wide_integer_binary64_conversion_rounds_once_at_the_consumer(tmp_path):
     compiled = _stage(tmp_path, "backend", "compile", "--ir", plan, "--out", delivery)
     shutil.rmtree(plan)
     assert _run([compiled["executable"]], tmp_path) == expected
+
+
+def test_mathematical_integer_survives_source_removal_and_narrows_at_consumers(
+    tmp_path,
+):
+    entry = tmp_path / "integers.py"
+    entry.write_text("""import numpy as np
+def exercise(value):
+    n = int(value)
+    print(n, n % -7, -(n // 7), abs(n + 2), float(n))
+    try:
+        print([4][n])
+    except IndexError as error:
+        print(str(error))
+    try:
+        a = np.zeros((n,))
+        print(a.size)
+    except ValueError as error:
+        print(str(error))
+exercise(-3.9)
+exercise(1e100)
+exercise(1.0)
+try:
+    np.zeros((0, int(2.0**62)))
+except ValueError as error:
+    print(str(error))
+try:
+    n = int(1e308) * int(1e308)
+    print(float(n))
+except OverflowError as error:
+    print(str(error))
+def convert(value):
+    try:
+        int(value)
+    except ValueError as error:
+        print(str(error))
+    except OverflowError as error:
+        print(str(error))
+inf = 1e308 * 1e308
+convert(inf)
+convert(inf-inf)
+print(float(9007199254740995 + 9223372036854775808))
+""")
+    expected = _run([sys.executable, "-B", entry], tmp_path)
+    graph, plan, delivery = (tmp_path / name for name in ("graph", "plan", "delivery"))
+    _stage(tmp_path, "frontend", "build", "--entry", entry, "--out", graph)
+    entry.unlink()
+    _stage(tmp_path, "middle", "plan", "--graph", graph, "--out", plan)
+    shutil.rmtree(graph)
+    built = _stage(tmp_path, "backend", "compile", "--ir", plan, "--out", delivery)
+    shutil.rmtree(plan)
+    assert _run([built["executable"]], tmp_path) == expected
+
+
+def test_wide_integer_float_promotions_keep_dispatch_ranges_and_warnings(tmp_path):
+    from scar.contract import read_member, walk_operations
+
+    entry = tmp_path / "promotion.py"
+    entry.write_text(
+        """import numpy as np
+
+def chosen(flag):
+    return int(1e20) if flag else 7
+
+def branch(flag):
+    if flag:
+        number = int(1e20)
+    else:
+        number = int(2e20)
+    return number
+
+number = int(1e20) + 9007199254740995 - int(1e20)
+print((np.array([1.0, 2.0]) * number)[0])
+print(np.array([9007199254740996.0])[0] == number)
+print(number * 1.0, 1.0 + number)
+print(chosen(True), chosen(False), branch(True), branch(False))
+"""
+        + f"huge = {10**325}\n"
+        + """try:
+    np.array([1.0])[0] * huge
+except OverflowError as error:
+    print(str(error))
+try:
+    1.0 * huge
+except OverflowError as error:
+    print(str(error))
+zero = number - number
+print(np.array([1.0, 0.0]) / zero)
+"""
+    )
+    expected = subprocess.run(
+        [sys.executable, "-B", entry], capture_output=True, timeout=30
+    )
+    assert expected.returncode == 0 and expected.stderr.count(b"RuntimeWarning:") == 2
+    assert expected.stdout.count(b"int too large to convert to float") == 2
+    graph, plan, delivery = (tmp_path / name for name in ("graph", "plan", "delivery"))
+    _stage(tmp_path, "frontend", "build", "--entry", entry, "--out", graph)
+    entry.unlink()
+    _stage(tmp_path, "middle", "plan", "--graph", graph, "--out", plan)
+    ir = json.loads((plan / "exec-ir.json").read_bytes())
+    operations = [
+        operation
+        for ref in ir["functions"]
+        for operation in walk_operations(read_member(plan, ref))
+    ]
+    assert any(operation.get("operation") == "to_binary64" for operation in operations)
+    assert all(
+        operation["numeric_policy"] == "numpy_default"
+        for operation in operations
+        if operation["op"] == "array_binary"
+    )
+    # Ordinary returns retain proven ranges without specializing on one call.
+    decimal = [
+        operation for operation in operations if operation.get("operation") == "decimal"
+    ]
+    assert decimal and all(
+        0 < operation["maximum_digits"] <= 640 for operation in decimal
+    )
+    shutil.rmtree(graph)
+    result = _stage(tmp_path, "backend", "compile", "--ir", plan, "--out", delivery)
+    shutil.rmtree(plan)
+    actual = subprocess.run([result["executable"]], capture_output=True, timeout=30)
+    assert (actual.returncode, actual.stdout, actual.stderr) == (
+        expected.returncode,
+        expected.stdout,
+        expected.stderr,
+    )
+
+
+def test_wide_ranges_stay_lazy_and_preserve_target_and_control_flow(tmp_path):
+    from scar.contract import read_member, walk_operations
+
+    entry = tmp_path / "wide_range.py"
+    entry.write_text(f"base = {10**1000}\n" + """target = -1
+for target in range(base, base + 3):
+    print(target - base)
+else:
+    print('exhausted')
+print('last', target - base)
+for target in range(base + 3, base - 1, -2):
+    print(target - base)
+print('descending', target - base)
+target = 17
+for target in range(base, base):
+    print('never')
+else:
+    print('empty', target)
+for target in range(base, base + 4):
+    if target - base == 0:
+        continue
+    if target - base == 2:
+        break
+    print('before-break', target - base)
+else:
+    print('must-not-run')
+print('broken', target - base)
+for target in range(base, base + 2):
+    target = 7
+    continue
+else:
+    print('assigned', target)
+for item in range(base):
+    print('lazy')
+    break
+for item in range(base * 2, 0, -base):
+    print('big-step', item // base)
+
+def capture():
+    begin = 1000000000000000000000000000000
+    end = begin + 3
+    saved = range(begin, end)
+    end = begin + 99
+    for index in saved:
+        print('saved', index - begin)
+    print('saved-last', index - begin)
+capture()
+
+def inspect(start, stop):
+    for visit in range(start, stop):
+        print('unknown-bounds')
+        break
+    else:
+        print('unknown-empty')
+inspect(base, base + 3)
+inspect(base, base)
+""")
+    expected = subprocess.run(
+        [sys.executable, "-B", entry], capture_output=True, timeout=30
+    )
+    assert expected.returncode == 0 and not expected.stderr
+    assert expected.stdout == (
+        b"0\n1\n2\nexhausted\nlast 2\n3\n1\ndescending 1\nempty 17\n"
+        b"before-break 1\nbroken 2\nassigned 7\nlazy\nbig-step 2\nbig-step 1\n"
+        b"saved 0\nsaved 1\nsaved 2\nsaved-last 2\nunknown-bounds\nunknown-empty\n"
+    )
+    graph, plan, delivery = (tmp_path / name for name in ("graph", "plan", "delivery"))
+    _stage(tmp_path, "frontend", "build", "--entry", entry, "--out", graph)
+    entry.unlink()
+    _stage(tmp_path, "middle", "plan", "--graph", graph, "--out", plan)
+    ir = json.loads((plan / "exec-ir.json").read_bytes())
+    operations = [
+        operation
+        for ref in ir["functions"]
+        for operation in walk_operations(read_member(plan, ref))
+    ]
+    counted = [operation for operation in operations if operation["op"] == "for"]
+    assert len(counted) == 9 and all(
+        loop["init"][0]["type"] == "integer" for loop in counted
+    )
+    decisions = json.loads((plan / "plan.json").read_bytes())["normalizations"]
+    ranges = [
+        decision
+        for decision in decisions
+        if decision["code"] == "mathematical_range_iteration"
+    ]
+    assert len(ranges) == 9 and all(
+        not record["length_materialized"] for record in ranges
+    )
+    shutil.rmtree(graph)
+    result = _stage(tmp_path, "backend", "compile", "--ir", plan, "--out", delivery)
+    shutil.rmtree(plan)
+    actual = subprocess.run([result["executable"]], capture_output=True, timeout=30)
+    assert (actual.returncode, actual.stdout, actual.stderr) == (
+        expected.returncode,
+        expected.stdout,
+        expected.stderr,
+    )

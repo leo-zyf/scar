@@ -7,7 +7,7 @@ import re
 from scar.contract import walk_operations
 from scar.source_contracts import python_source_boundary
 
-from . import exceptions, fourier, products, scalars, sequences, text
+from . import exceptions, fourier, integers, products, scalars, sequences, text
 from .effects import FRESH_ARRAYS
 from .scalars import as_float as _as_float
 from .values import (
@@ -710,6 +710,37 @@ def _scalar_element(frame, node, item, element):
     return dict(op="cast", type="c128", value=value) if element == "c128" else value
 
 
+def _integer_operands(frame, node, op, lhs, rhs, steps):
+    """Apply the registered weak-Python-integer promotion before the ufunc."""
+    if not any(item.kind == "integer" for item in (lhs, rhs)):
+        return lhs, rhs
+    if frame.project.providers.get("numpy", {}).get("version") != "2.5.5":
+        frame.fail(
+            node,
+            "array_integer_promotion",
+            "wide integer promotion needs the registered NumPy 2.5.5 contract",
+        )
+    if op not in {"add", "sub", "mult", "div", *_COMPARISONS} or any(
+        item.kind != "integer"
+        and item.kind != "numpy_f64"
+        and (not is_array(item.kind) or array_element(item.kind) != "f64")
+        for item in (lhs, rhs)
+    ):
+        frame.fail(
+            node,
+            "array_integer_promotion",
+            "this integer promotion requires a binary64 NumPy arithmetic or scalar comparison contract",
+        )
+    return tuple(
+        (
+            scalars.construct(frame, node, "float", [item], {}, steps=steps)
+            if item.kind == "integer"
+            else item
+        )
+        for item in (lhs, rhs)
+    )
+
+
 def _complex(item):
     return array_element(item.kind) == "c128" or item.kind in {
         "python_complex",
@@ -718,6 +749,7 @@ def _complex(item):
 
 
 def _operation(frame, node, op, lhs, rhs, steps, *, inplace=False, discard=False):
+    lhs, rhs = _integer_operands(frame, node, op, lhs, rhs, steps)
     operands = (lhs, rhs)
     element = "c128" if any(_complex(v) for v in operands) else "f64"
     if element == "c128" and not all(_complex(v) for v in operands):
@@ -794,6 +826,7 @@ def binary(frame, node, op, lhs, rhs, steps, discard=False):
             "array arithmetic requires resolved ranks or an explicit scalar/array result contract",
         )
     if op in _COMPARISONS:
+        lhs, rhs = _integer_operands(frame, node, op, lhs, rhs, steps)
         if any(_complex(v) for v in (lhs, rhs)):
             frame.fail(
                 node,
@@ -865,6 +898,9 @@ def update(frame, node, lhs, rhs, steps):
 
 
 def scalar_unary(frame, node, item, steps, discard):
+    if item.kind == "integer":
+        result = scalars.unary(frame, node, item, steps=steps)
+        return literal(None) if discard else result
     op = {"uadd": "pos", "usub": "neg"}.get(node["operator"])
     n = rank(item.kind)
     if is_array(item.kind) and n is None:
@@ -1639,9 +1675,32 @@ def construct(frame, node, target, args, keywords, steps, discard):
                 "array_shape",
                 "array construction needs a current finite dimension sequence",
             )
-        if any(
-            v.kind != "i64" or v.exact is not _UNKNOWN and v.exact < 0 for v in dims
-        ):
+        if any(v.kind == "integer" for v in dims):
+            if frame.project.providers.get("numpy", {}).get("version") != "2.5.5":
+                frame.fail(
+                    node,
+                    "array_shape_profile",
+                    "wide extent conversion needs a registered array dimension profile",
+                )
+            dims = tuple(
+                (
+                    integers.apply(
+                        frame,
+                        node,
+                        "shape_extent",
+                        [v],
+                        "i64",
+                        steps=steps,
+                        exception_messages={
+                            "value_error": "Maximum allowed dimension exceeded"
+                        },
+                    )
+                    if v.kind == "integer"
+                    else v
+                )
+                for v in dims
+            )
+        if any(v.kind != "i64" for v in dims):
             frame.fail(
                 node,
                 "array_shape",
@@ -1704,7 +1763,20 @@ def index(frame, node, steps, rhs=None, discard=False, *, evaluated_base=None):
                 "sequence_index",
                 "one list index is supported; indexed mutation needs a separate protocol",
             )
-        result = sequences.get(frame, node, base, axes[0])
+        index_value = axes[0]
+        if index_value.kind == "integer":
+            index_value = integers.apply(
+                frame,
+                node,
+                "sequence_index",
+                [index_value],
+                "i64",
+                steps=steps,
+                exception_messages={
+                    "index_error": "cannot fit 'int' into an index-sized integer"
+                },
+            )
+        result = sequences.get(frame, node, base, index_value)
         # A reaching initializer can describe the result, but the source read
         # (including its bounds failure) still happens at this exact point.
         return frame.effect(

@@ -64,7 +64,7 @@ template <class T> class ndarray {
     result.reserve(layout.rank);
     for (auto extent : layout.extents) {
       if (!std::in_range<std::size_t>(extent))
-        throw std::length_error("invalid array extent");
+        throw std::invalid_argument("negative dimensions are not allowed");
       result.push_back(static_cast<std::size_t>(extent));
     }
     return result;
@@ -123,34 +123,31 @@ template <class T> class ndarray {
     } else if (size != product)
       reshape_mismatch(layout, size);
 
-    // An empty view still requires representable strides along nonempty axes.
-    if (!size) {
-      std::size_t bytes = sizeof(T);
-      for (const auto extent : dims)
-        if (extent) {
-          if (bytes > limit / extent)
-            throw std::invalid_argument(
-                "array is too big; `arr.size * arr.dtype.itemsize` is "
-                "larger than the maximum possible size.");
-          bytes *= extent;
-        }
-    }
+    if (!size)
+      (void)count(dims);
     return dims;
   }
 
   static std::size_t count(const shape_type &shape) {
-    if (std::find(shape.begin(), shape.end(), 0) != shape.end())
-      return 0;
     constexpr auto limit =
         static_cast<std::size_t>(std::numeric_limits<std::ptrdiff_t>::max()) /
         sizeof(T);
     std::size_t size = 1;
+    bool empty = false;
     for (auto extent : shape) {
+      if (extent == 0) {
+        empty = true;
+        continue;
+      }
+      // Source ndarray allocation checks strides even when a different axis is
+      // empty.
       if (size > limit / extent)
-        throw std::length_error("array byte size overflow");
+        throw std::invalid_argument(
+            "array is too big; `arr.size * arr.dtype.itemsize` is "
+            "larger than the maximum possible size.");
       size *= extent;
     }
-    return size;
+    return empty ? 0 : size;
   }
 
   static strides_type row_strides(const shape_type &shape, std::size_t size) {

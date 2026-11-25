@@ -30,6 +30,7 @@ _SCALAR_CHOICES = {
 SCALARS = {
     "bool",
     "i64",
+    "integer",
     "f64",
     "text",
     "unit",
@@ -316,6 +317,8 @@ class Value:
 
     @property
     def bounds(self):
+        if self.kind == "integer":
+            return self.facts.get("range")
         return self.facts.get("range", (_MIN, _MAX))
 
     def at(self, name, **attributes):
@@ -330,6 +333,19 @@ def numeric_facts(value):
     if type(value) is int:
         return {"exact": value, "range": (value, value)}
     return {"exact": value} if type(value) is not float or math.isfinite(value) else {}
+
+
+def join_integer_ranges(items):
+    """Union proven integer intervals; a single unknown predecessor stays unknown."""
+    items = tuple(items)
+    if not items or any(item.kind not in {"i64", "integer"} for item in items):
+        return {}
+    bounds = [item.bounds for item in items]
+    if any(bound is None for bound in bounds):
+        return {}
+    return {
+        "range": (min(bound[0] for bound in bounds), max(bound[1] for bound in bounds))
+    }
 
 
 def literal(value):
