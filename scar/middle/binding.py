@@ -112,6 +112,53 @@ _SITE_OPERATIONS = {
 }
 
 
+def _bind_import_store(node, scope):
+    """Check an optional bytecode witness against the reconstructed graph ports."""
+    proof = node["source_import_store"]
+    request, target, loc = node["request"], node["binding"], node["location"]
+    module = node["module"]
+    slot = node.get("alias") or module.partition(".")[0]
+    ports = ("level", "fromlist", "import_name", "store")
+    if not isinstance(proof, dict) or not all(
+        isinstance(proof.get(key), dict) for key in ports
+    ):
+        raise ValueError("invalid source import operands")
+    level, fromlist, imported, stored = (proof[key] for key in ports)
+    code = scope.get("source_code") or {}
+    position = proof.get("position")
+    if not (
+        type(proof.get("semantics_version")) is int
+        and proof["semantics_version"] == 1
+        and code.get("kind") == "module"
+        and proof.get("code_sha256") == code["code_sha256"]
+        and loc.get("file") == code["source_key"]
+        and position
+        == [loc["line"], loc["end_line"], loc["column"] - 1, loc["end_column"] - 1]
+        and request.get("form") == "import"
+        and request.get("module") == imported.get("name") == module
+        and request.get("level") == 0
+        and request.get("fromlist") == []
+        and level.get("opcode") == fromlist.get("opcode") == "LOAD_CONST"
+        and type(level.get("value")) is int
+        and level["value"] == 0
+        and "value" in fromlist
+        and fromlist["value"] is None
+        and imported.get("opcode") == "IMPORT_NAME"
+        and stored.get("opcode") in {"STORE_NAME", "STORE_GLOBAL"}
+        and stored.get("name") == slot
+        and target.get("op") == "var"
+        and target.get("scope") == "global"
+        and target.get("name") == f"py:{scope['module']}:{slot}"
+        and all(
+            type(proof[key].get(field)) is int and proof[key][field] >= 0
+            for key in ports
+            for field in ("index", "offset")
+        )
+        and level["offset"] < fromlist["offset"] < imported["offset"] < stored["offset"]
+    ):
+        raise ValueError("source import operands disagree with their graph ports")
+
+
 def _definition(graph):
     nodes = graph["nodes"]
     active = set()
@@ -127,6 +174,8 @@ def _definition(graph):
                 raise ValueError(f"invalid operand port {port} in {graph['id']}")
             active.add(port)
             result = read(nodes[port])
+            if result["op"] == "python_import" and "source_import_store" in result:
+                _bind_import_store(result, graph["signature"].get("python_scope", {}))
             if result["op"] in _SITE_OPERATIONS or "source_name_load" in result:
                 result["site"] = f"{graph['id']}/{port}"
             active.remove(port)

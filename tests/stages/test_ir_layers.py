@@ -44,6 +44,32 @@ def test_binding_rejects_module_code_from_another_source_revision(tmp_path):
         bind(graph, folder)
 
 
+def test_binding_checks_import_result_against_its_source_publication(tmp_path):
+    from scar.contract import read_member
+    from scar.frontend import build
+    from scar.middle.binding import bind
+
+    source = tmp_path / "entry.py"
+    source.write_text("import math as library\n")
+    folder = tmp_path / "graph"
+    build(source, folder)
+    graph = json.loads((folder / "graph.json").read_bytes())
+    unit = next(u for u in graph["units"] if u["path"] == "entry.py")
+    fragment = read_member(folder, unit["graph"])
+    declaration = next(
+        node
+        for fn in fragment["functions"]
+        for node in fn["nodes"]
+        if node["op"] == "python_import" and node["module"] == "math"
+    )
+    source.unlink()
+    bind(graph, folder)
+    declaration["source_import_store"]["store"]["name"] = "math"
+    unit["graph"] = member(folder, "units", fragment)
+    with pytest.raises(ValueError, match="source import operands"):
+        bind(graph, folder)
+
+
 def test_middle_products_reject_out_of_order_passes_and_keep_inputs_owned(tmp_path):
     canonical = dict(
         entry="main",
