@@ -583,12 +583,17 @@ def _lower_image(path, revision, scheduled, destination):
 
 
 def _check_launch_targets(folder, plans):
-    workers, launches = {}, []
+    workers, launches, targets, references = {}, [], {}, []
     for image_id, plan in plans.items():
         _, _, physical = read_image_product(
             folder, plan, "physical", "physical-plan.json", PHYSICAL
         )
         bindings = physical.get("operator_backends", {})
+        targets[image_id] = dict(
+            image_id=image_id, output=plan["output"], ir_sha256=physical["ir_sha256"]
+        )
+        process = bindings.get("process", {})
+        references.extend(process.get("images", {}).items())
         sdk = bindings.get("mpi")
         if isinstance(sdk, dict) and physical.get("status") == "READY":
             workers[image_id] = (
@@ -596,7 +601,10 @@ def _check_launch_targets(folder, plans):
                 physical["ir_sha256"],
                 digest(json_bytes(sdk)),
             )
-        launches.extend(bindings.get("process", {}).get("launches", {}).items())
+        launches.extend(process.get("launches", {}).items())
+    for name, reference in references:
+        if name not in targets or reference != targets[name]:
+            raise ValueError("process launch target is outside the qualified image set")
     for site, launch in launches:
         expected = workers.get(launch["image_id"])
         actual = tuple(

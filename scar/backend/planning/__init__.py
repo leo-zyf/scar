@@ -1093,6 +1093,59 @@ def _seal_schedule(destination, fields, physical, scheduled):
     return path, fields["status"], fields.get("issues", [])
 
 
+def _closed_component_schedule(destination, root, revision, plans, schedules):
+    """Project deployable children of a partial release without scheduling again."""
+    dependents = {}
+    excluded = {root}
+    for plan in plans:
+        name = plan["id"]
+        if plan["status"] != "READY" or name == root:
+            excluded.add(name)
+            continue
+        physical = read_member(destination, plan["physical"])
+        targets = physical.get("operator_backends", {}).get("process", {}).get("images", {})
+        for target in targets:
+            dependents.setdefault(target, []).append(name)
+
+    pending = list(excluded)
+    while pending:
+        for caller in dependents.get(pending.pop(), ()):
+            if caller not in excluded:
+                excluded.add(caller)
+                pending.append(caller)
+    members = [row for row in plans if row["id"] not in excluded]
+    if not members:
+        return None
+
+    # The CMake bundle needs one installation entry. The parent continues to
+    # own the application entry and its incomplete status.
+    fields = dict(
+        kind="image_bundle",
+        stage="B1",
+        status="READY",
+        ir_sha256=revision,
+        root_image=members[0]["id"],
+        application_root=root,
+        delivery_scope="closed_components",
+    )
+    physical = document(
+        PHYSICAL,
+        **fields,
+        planning_scope="per_image",
+        interprocess_schedule="unmodeled",
+        images=members,
+    )
+    package = document(
+        "scar.scheduled-ir",
+        **fields,
+        physical=member(destination, "scheduled-units", physical),
+        images=[row for row in schedules if row["id"] not in excluded],
+    )
+    path = destination / "component-scheduled-ir.json"
+    write_json(path, package)
+    return file_receipt(destination, path)
+
+
 def schedule_ir(source, destination, *, policy="auto", workers=None):
     if workers is not None and (type(workers) is not int or workers < 1):
         raise ValueError("worker_limit must be a positive integer")
@@ -1213,6 +1266,11 @@ def schedule_ir(source, destination, *, policy="auto", workers=None):
     )
     if issues:
         fields["issues"] = issues
+        component_schedule = _closed_component_schedule(
+            destination, root, revision, plans, scheduled
+        )
+        if component_schedule:
+            fields["component_schedule"] = component_schedule
     physical_path = destination / "physical-plan.json"
     write_json(
         physical_path,

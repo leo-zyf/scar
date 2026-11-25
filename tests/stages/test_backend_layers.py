@@ -306,6 +306,58 @@ raise SystemExit(main(['compile', '--ir', sys.argv[1], '--out', sys.argv[2], '--
         if index == 2:
             assert {i["image_id"] for i in report["issues"]} == {"solver"}
 
+    # When the application entry is blocked, a different qualified program
+    # in the same IR is still deliverable through the ordinary compile command.
+    from scar.backend import compile_ir
+
+    package = json.loads((bundle / "exec-ir.json").read_bytes())
+    package["root_image"] = "solver"
+    write_json(bundle / "exec-ir.json", package)
+    delivery = tmp_path / "components-release"
+    report = compile_ir(bundle, delivery, policy="serial")
+    assert report["status"] == "INCOMPLETE" and "executable" not in report
+    component = report["component_delivery"]
+    assert set(component["executables"]) == {"driver"}
+    binary = component["executables"]["driver"]
+    published = file_receipt(delivery, delivery / binary["path"])
+    assert (published["sha256"], published["size"]) == (binary["sha256"], binary["size"])
+    subprocess.run([delivery / binary["path"]], check=True)
+    assert not (delivery / "project").exists()
+
+
+def test_component_schedule_excludes_dependents_of_incomplete_images(tmp_path):
+    from scar.backend.planning import _closed_component_schedule
+    from scar.contract import read_member
+
+    edges = {
+        "root": [],
+        "broken": ["root"],
+        "caller": ["broken"],
+        "a": ["b"],
+        "b": ["a"],
+        "alone": [],
+    }
+    rows = []
+    for name, dependencies in edges.items():
+        plan = {
+            "operator_backends": {"process": {"images": dict.fromkeys(dependencies)}}
+        }
+        rows.append(
+            dict(
+                id=name,
+                entry="main",
+                output=name,
+                status="INCOMPLETE" if name == "root" else "READY",
+                physical=member(tmp_path, "units", plan),
+            )
+        )
+    receipt = _closed_component_schedule(
+        tmp_path, "root", "source-revision", rows, rows
+    )
+    projected = read_member(tmp_path, receipt)
+    assert [row["id"] for row in projected["images"]] == ["a", "b", "alone"]
+    assert projected["application_root"] == "root"
+
 
 def test_file_graph_and_workflow_members_survive_schedule_relocation(
     tmp_path, monkeypatch
