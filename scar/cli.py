@@ -27,9 +27,6 @@ def main(argv=None):
     )
     mid.add_argument("--graph", type=Path, required=True)
     mid.add_argument(
-        "--no-rewrite", action="store_true", help="retain the original operation order"
-    )
-    mid.add_argument(
         "--input-shapes", type=Path, help="dimension list for a binary array entry"
     )
     mid.add_argument("--trip-count", type=int)
@@ -39,7 +36,12 @@ def main(argv=None):
     source = back.add_mutually_exclusive_group(required=True)
     source.add_argument("--ir", type=Path)
     source.add_argument("--plan", type=Path, help="directory containing exec-ir.json")
-    back.add_argument("--physical", choices=("auto", "serial"), default="auto")
+    back.add_argument(
+        "--physical",
+        choices=("auto", "serial"),
+        default="auto",
+        help="serial limits the CPU worker budget to one",
+    )
     back.add_argument("--cpu-threads", type=_workers)
     for stage in (front, mid, back):
         stage.add_argument("--out", type=Path, required=True)
@@ -60,7 +62,6 @@ def main(argv=None):
             result = plan(
                 args.graph,
                 args.out,
-                optimize_graph=not args.no_rewrite,
                 shape=shape,
                 trip_count=args.trip_count,
             )

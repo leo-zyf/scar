@@ -87,10 +87,10 @@ else: raise AssertionError('partial program prepared for execution')
 module,facts=prepare(source)
 assert source['layer_contract']['phase']=='M3'
 assert module['layer_contract']['phase']=='M4'
-try: seal(source,Path(data['out']),status='READY',graph_sha256=None,contract={},logical_optimization=True)
+try: seal(source,Path(data['out']),status='READY',graph_sha256=None,contract={})
 except ValueError: pass
 else: raise AssertionError('unprepared M3 product sealed')
-path=seal(module,Path(data['out']),status='READY',graph_sha256=None,contract={},logical_optimization=True)
+path=seal(module,Path(data['out']),status='READY',graph_sha256=None,contract={})
 print(json.dumps(dict(path=str(path))))
 """,
         dict(module=rewritten, out=str(tmp_path / "execution")),
@@ -191,7 +191,7 @@ print(json.dumps(module))
         """from pathlib import Path
 from scar.middle.execution import prepare,seal
 module,_=prepare(product(data['module'],'M3'))
-seal(module,Path(data['out']),status='READY',graph_sha256='captured',contract={},logical_optimization=False)
+seal(module,Path(data['out']),status='READY',graph_sha256='captured',contract={})
 print(json.dumps({}))
 """,
         dict(module=normalized, out=str(plan)),
@@ -418,7 +418,7 @@ images=[]
 for name,flow in [('driver',data['flow']),('worker',consumer)]:
     module=dict(entry='main',functions=[],resource_model=dict(artifact_flow=flow))
     path=seal(product(module,'M4',complete=False),out/name,status='INCOMPLETE',graph_sha256='source',
-              contract={},logical_optimization=False)
+              contract={})
     images.append(dict(id=name,entry='main',output=name,ir=file_receipt(out,path)))
 relocated=out.with_name('relocated-ir')
 out.rename(relocated)
@@ -3731,7 +3731,7 @@ print(json.dumps({'function':data,'changes':changes}))
         """from pathlib import Path
 from scar.middle.execution import prepare,seal
 module,facts=prepare(product(data['module'],'M3'))
-path=seal(module,Path(data['out']),status='READY',graph_sha256='reference',contract={},logical_optimization=True)
+path=seal(module,Path(data['out']),status='READY',graph_sha256='reference',contract={})
 print(json.dumps({'path':str(path),'facts':facts}))
 """,
         dict(module=normalized, out=str(tmp_path / "sealed")),

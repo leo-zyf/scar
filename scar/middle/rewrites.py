@@ -5,13 +5,11 @@ from scar.contract import control_regions, semantic_form as semantics
 from .contracts import is_complete, publish_program, require_program
 
 
-def rewrite(module, *, enabled=True):
+def rewrite(module):
     """Return an M3 product without mutating M2 bodies or ownership evidence."""
     require_program(module, "M2")
-    if type(enabled) is not bool:
-        raise ValueError("logical rewrite selection must be explicit")
     result, changes = dict(module), []
-    if enabled and is_complete(module):
+    if is_complete(module):
         result["functions"] = []
         for source in module["functions"]:
             function = dict(source)

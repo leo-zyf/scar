@@ -16,7 +16,7 @@ from scar.contract import (
 )
 
 
-def _plan_image(graph, folder, revision, out, *, optimize_graph, shape, trip_count):
+def _plan_image(graph, folder, revision, out, *, shape, trip_count):
     from .binding import bind
     from .normalization import normalize
     from .rewrites import rewrite
@@ -47,7 +47,7 @@ def _plan_image(graph, folder, revision, out, *, optimize_graph, shape, trip_cou
     issues.extend(normalized_issues)
     status = "INCOMPLETE" if issues else "READY"
     lowering_facts = {}
-    module, changes = rewrite(module, enabled=optimize_graph)
+    module, changes = rewrite(module)
     module, lowering_facts = prepare(module, executable=not issues)
     ir_path = seal(
         module,
@@ -55,7 +55,6 @@ def _plan_image(graph, folder, revision, out, *, optimize_graph, shape, trip_cou
         status=status,
         graph_sha256=revision,
         contract=graph["contract"],
-        logical_optimization=optimize_graph,
     )
     import_analysis = {}
     if "python_entry_environment" in module:
@@ -137,8 +136,8 @@ def _plan_image(graph, folder, revision, out, *, optimize_graph, shape, trip_cou
             ),
             dict(
                 layer="M3_REWRITE",
-                enabled=optimize_graph,
-                executed=not issues and optimize_graph,
+                enabled=True,
+                executed=not issues,
                 changes=len(changes),
             ),
             dict(layer="M4_EXECUTION", status=status, **lowering_facts),
@@ -149,10 +148,10 @@ def _plan_image(graph, folder, revision, out, *, optimize_graph, shape, trip_cou
     return report, ir_path
 
 
-def plan(graph_path, out, *, optimize_graph=True, shape=None, trip_count=None):
+def plan(graph_path, out, *, shape=None, trip_count=None):
     path, revision, graph = open_product(graph_path, "graph.json", GRAPH)
     out = Path(out).resolve()
-    options = dict(optimize_graph=optimize_graph, shape=shape, trip_count=trip_count)
+    options = dict(shape=shape, trip_count=trip_count)
     if "images" not in graph:
         report, ir_path = _plan_image(graph, path.parent, revision, out, **options)
         return dict(
@@ -182,7 +181,6 @@ def plan(graph_path, out, *, optimize_graph=True, shape=None, trip_count=None):
             path.parent,
             revision,
             child_dir,
-            optimize_graph=optimize_graph,
             shape=shape if image["id"] == root else None,
             trip_count=trip_count if image["id"] == root else None,
         )
@@ -215,7 +213,7 @@ def plan(graph_path, out, *, optimize_graph=True, shape=None, trip_count=None):
             IR,
             **fields,
             contract=graph["contract"],
-            logical_optimization=optimize_graph,
+            logical_optimization=True,
             images=products,
         ),
     )

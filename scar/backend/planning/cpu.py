@@ -536,7 +536,7 @@ def _collect(module):
 
 
 def _structural_layout(bodies):
-    """Fixed serial policy without calibration. Express a count, not a time estimate."""
+    """Use operation counts when a calibrated cost comparison is unavailable."""
     coord = bodies.get("coordinate")
     if not coord:
         return {}
@@ -571,6 +571,10 @@ def schedule(module, mode, worker_limit=None):
         movement = Movement(flow, _BYTES)
     deployment_cpu = cpu_availability()
     caps = _worker_caps(deployment_cpu.worker_budget, worker_limit)
+    if mode not in {"auto", "serial"}:
+        raise ValueError("unknown CPU resource constraint")
+    if mode == "serial":
+        caps["serial_worker_limit"] = 1
     limit = min(caps.values())
     selected = deepcopy(module)
     maps, has_fusion = _collect(selected)
@@ -589,8 +593,8 @@ def schedule(module, mode, worker_limit=None):
         deployment="unverified",
     )
     samples = {}
-    map_probe = bool(mode == "auto" and maps)
-    metrics = movement.required_metrics() if movement and mode == "auto" else set()
+    map_probe = bool(maps)
+    metrics = movement.required_metrics() if movement else set()
     if map_probe:
         metrics.update(("byte", "team"))
         if has_fusion:
@@ -671,9 +675,7 @@ def schedule(module, mode, worker_limit=None):
                 guard_checks=bodies["guard_checks"],
                 carry_steps_per_element_bound=bodies["carry_steps_per_element_bound"],
             )
-        if mode == "serial":
-            region.update(_structural_layout(bodies))
-        elif samples and work["priced"]:
+        if samples and work["priced"]:
             lines, threshold = _costs(bodies, samples)
             region.update(
                 cost_evidence="inferred",
@@ -692,6 +694,7 @@ def schedule(module, mode, worker_limit=None):
                     serial_layout="mixed_radix", minimum_coordinate_elements=threshold
                 )
         else:
+            region.update(_structural_layout(bodies))
             region["fallback"] = work["unpriced"] or ["target calibration unavailable"]
         choices[site] = (region, lines)
 
@@ -760,10 +763,7 @@ def schedule(module, mode, worker_limit=None):
                     report["workers"] = max(
                         report["workers"], *(r["workers"] for r in region["widths"])
                     )
-                if region or stmt.get("iteration_layout") or mode == "serial":
-                    report["regions"][stmt["site"]] = region or {
-                        "serial_layout": "linear"
-                    }
+                report["regions"][stmt["site"]] = region or {"serial_layout": "linear"}
             output.append(stmt)
         return output
 

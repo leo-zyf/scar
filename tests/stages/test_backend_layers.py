@@ -337,7 +337,7 @@ def test_file_graph_and_workflow_members_survive_schedule_relocation(
             resource_model={"artifact_flow": flow},
         )
         module = publish_program(module, "M4", complete=True)
-        args = dict(graph_sha256="f" * 64, contract={}, logical_optimization=False)
+        args = dict(graph_sha256="f" * 64, contract={})
         ir = seal(module, folder, status="READY", **args)
         receipt = member(folder, "analysis", flow)
         assert (
@@ -685,7 +685,7 @@ def test_cpu_budget_is_shared_with_graph_planner_and_formatter(tmp_path, monkeyp
             if e.source == pool.id and e.value == "CPU_POOL_MEMBER"
         } == {f"cpu:{i}" for i in range(8)}
         assert platform["cpu_availability"] == observed.as_record()
-        _, plan = schedule(dict(functions=[]), "serial", worker_limit=5)
+        _, plan = schedule(dict(functions=[]), "auto", worker_limit=5)
         assert plan["deployment_cpu"] == observed.as_record()
         assert plan["worker_limit"] == budget and plan["workers"] == 1
         assert _format_workers(4, 36) == budget
@@ -954,7 +954,6 @@ def test_copy_costs_share_one_calibration_and_preserve_runtime_binding(tmp_path)
             status="READY",
             graph_sha256="0" * 64,
             contract={},
-            logical_optimization={},
         )
 
     def measure(source, policy):
@@ -1031,7 +1030,9 @@ def test_copy_costs_share_one_calibration_and_preserve_runtime_binding(tmp_path)
         filesystem_copy["ordering"]["ready_on_success"]["operation"]
         == filesystem_copy["id"]
     )
-    assert measure(source, "serial")[0] == 0
+    calls, serial = measure(source, "serial")
+    assert calls == 1 and serial["worker_limit"] == 1
+    assert serial["calibration"]["metrics"] == measured["metrics"]
     files_only = execution("files", [dict(op="expr", value=filesystem)])
     assert measure(files_only, "auto")[0] == 0
 

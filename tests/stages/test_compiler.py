@@ -3885,7 +3885,6 @@ def coordinate_library(tmp_path_factory):
         status="READY",
         graph_sha256=None,
         contract={},
-        logical_optimization={},
     )
     scheduled = schedule_ir(source, folder / "b1", policy="serial")
     physical = json.loads((scheduled.parent / "physical-plan.json").read_bytes())
