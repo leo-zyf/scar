@@ -429,6 +429,7 @@ class _ModuleGraph:
         self.name_loads = parsed.name_loads
         self.import_stores = parsed.import_stores
         self.statement_expressions = parsed.statement_expressions
+        self.definition_sites = parsed.definition_sites
         self.exception_handlers = parsed.exception_handlers
         self.source_lines = parsed.source_text.splitlines()
         self.diagnostic_file = str(parsed.path)
@@ -1982,6 +1983,16 @@ class _Scope:
                 self.unit, symbol, qual, table, parent=self, definition_path=link
             )
             definition = nested.definition(node, node.body, params, facts)
+            receipt = (
+                self.unit.definition_sites.get(tuple_position(node))
+                if self.module_scope
+                else None
+            )
+            if receipt:
+                definition["python_scope"]["definition_code"] = receipt["child"]
+                creation["source_definition"] = dict(
+                    receipt, code_sha256=self.unit.source_code["code_sha256"]
+                )
             if self.class_scope:
                 definition["owner_class"] = self.symbol.removesuffix(".<class_body>")
                 definition["source_name"] = node.name

@@ -176,6 +176,39 @@ def test_binding_checks_branch_successors_and_binary_dispatch(tmp_path):
         obj[key] = original
 
 
+def test_function_construction_uses_the_declared_child_code(tmp_path):
+    from scar.contract import read_member
+    from scar.frontend import build
+    from scar.middle.binding import bind
+
+    source = tmp_path / "entry.py"
+    source.write_text(
+        "def first(arg):\n    return arg\ndef second():\n    return 2\ndef evaluated(x=first(1)):\n    return x\n"
+    )
+    folder = tmp_path / "graph"
+    build(source, folder)
+    index = json.loads((folder / "graph.json").read_bytes())
+    unit = index["units"][0]
+    payload = read_member(folder, unit["graph"])
+    module = next(
+        f
+        for f in payload["functions"]
+        if f["signature"].get("python_scope", {}).get("kind") == "module"
+    )
+    first, second, evaluated = [
+        n for n in module["nodes"] if n["op"] == "python_define"
+    ]
+    assert "source_definition" not in evaluated
+    assert first["source_definition"]["child"]["name"] == "first"
+    assert second["source_definition"]["child"]["name"] == "second"
+    source.unlink()
+    bind(index, folder)
+    first["source_definition"]["child"] = second["source_definition"]["child"]
+    unit["graph"] = member(folder, "units", payload)
+    with pytest.raises(ValueError, match="child code"):
+        bind(index, folder)
+
+
 def test_binding_rejects_exception_edge_to_a_different_handler(tmp_path):
     from scar.contract import read_member
     from scar.frontend import build

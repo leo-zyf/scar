@@ -440,6 +440,76 @@ def bind_source_expression(node, scope, successor=None):
         raise ValueError("source call region has no final result discard")
 
 
+def bind_source_definition(node, scope, declarations):
+    """Tie the code constant and the published object to the declared function."""
+    proof = node["source_definition"]
+    parent = scope.get("source_code", {})
+    child = proof.get("child") if isinstance(proof, dict) else None
+    declared = declarations.get(node.get("symbol"), {})
+    nested = declared.get("python_scope", {})
+    location = node["location"]
+    if not (
+        isinstance(child, dict)
+        and node["op"] == "python_define"
+        and parent.get("kind") == "module"
+        and parent.get("source_key") == location["file"]
+        and type(proof.get("semantics_version")) is int
+        and proof["semantics_version"] == 1
+        and proof.get("code_sha256") == parent.get("code_sha256")
+        and proof.get("position") == _source_position(location)
+        and nested.get("kind") == "function"
+        and nested.get("module") == scope["module"]
+        and nested.get("source_key") == location["file"]
+        and declared.get("location") == location
+        and declared.get("call_protocol", {}).get("kind") == "regular"
+        and child == nested.get("definition_code")
+        and type(child.get("code_sha256")) is str
+        and len(child["code_sha256"]) == 64
+        and all(c in "0123456789abcdef" for c in child["code_sha256"])
+        and child.get("first_line") == location["line"]
+        and child.get("name") == child.get("qualname")
+        and not any(
+            node.get(k)
+            for k in ("decorators", "defaults", "annotations", "type_params")
+        )
+        and not any(v is not None for v in node.get("keyword_defaults", ()))
+    ):
+        raise ValueError(
+            "source definition disagrees with its child code or declaration"
+        )
+    rows = proof.get("instructions")
+    if not (
+        isinstance(rows, list)
+        and len(rows) == 3
+        and all(
+            isinstance(row, dict)
+            and row.get("position") == proof["position"]
+            and type(row.get("offset")) is int
+            for row in rows
+        )
+    ):
+        raise ValueError("source definition has invalid instruction positions")
+    load, make, store = rows
+    if not (
+        0 <= load["offset"] < make["offset"] < store["offset"]
+        and load.get("opcode") == "LOAD_CONST"
+        and make.get("opcode") == "MAKE_FUNCTION"
+        and ("oparg" not in make or type(make["oparg"]) is int and make["oparg"] == 0)
+        and store.get("opcode") in {"STORE_NAME", "STORE_GLOBAL"}
+        and all(
+            type(r.get("index")) is int
+            and type(r.get("oparg")) is int
+            and 0 <= r["index"] == r["oparg"]
+            for r in (load, store)
+        )
+        and store.get("name") == child["name"]
+        and _namespace_target(store, node.get("target"), scope)
+    ):
+        raise ValueError(
+            "source definition disagrees with its construction or publication"
+        )
+
+
 def bind_import_store(node, scope):
     """Check an optional bytecode witness against the reconstructed graph ports."""
     proof = node["source_import_store"]

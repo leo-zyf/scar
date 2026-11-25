@@ -7,6 +7,7 @@ from .source_binding import (
     bind_exception_arms,
     bind_import_store,
     bind_source_expression,
+    bind_source_definition,
 )
 from scar.contract import (
     digest,
@@ -119,7 +120,7 @@ _SITE_OPERATIONS = {
 }
 
 
-def _definition(graph):
+def _definition(graph, declarations=None):
     nodes = graph["nodes"]
     active = set()
 
@@ -140,6 +141,12 @@ def _definition(graph):
             result = read(nodes[port])
             if result["op"] == "python_import" and "source_import_store" in result:
                 bind_import_store(result, graph["signature"].get("python_scope", {}))
+            if "source_definition" in result:
+                bind_source_definition(
+                    result,
+                    graph["signature"].get("python_scope", {}),
+                    declarations or {},
+                )
             if "source_constant_store" in result:
                 bind_constant_store(result, graph["signature"].get("python_scope", {}))
             if "source_expression" in result:
@@ -933,7 +940,7 @@ def bind(graph, folder):
                 and fn["signature"].get("calling_convention") == "python"
             )
             if fn["defined"] or protocol:
-                body = _definition(fn)
+                body = _definition(fn, python_definitions)
                 if protocol:
                     body["execution_kind"] = "python_protocol"
                     scope = body.get("python_scope", {})

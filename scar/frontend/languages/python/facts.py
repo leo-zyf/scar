@@ -6,6 +6,7 @@ from bisect import bisect_right
 from collections import Counter, defaultdict, deque
 from dataclasses import dataclass, field, replace
 import dis
+import inspect
 from functools import cache
 from itertools import pairwise
 from pathlib import Path
@@ -83,6 +84,7 @@ class ParsedUnit:
     name_loads: dict = field(default_factory=dict)
     import_stores: dict = field(default_factory=dict)
     statement_expressions: dict = field(default_factory=dict)
+    definition_sites: dict = field(default_factory=dict)
     exception_handlers: dict = field(default_factory=dict)
 
     @property
@@ -939,6 +941,68 @@ def _exception_handler_sites(instructions, entries, tries, loads):
     return sites
 
 
+def _definition_sites(program, instructions, definitions, handlers):
+    """Plain module definitions whose code object is loaded, constructed and stored."""
+    found, repeated = {}, set()
+    for i, make in enumerate(instructions):
+        if (
+            make.opname != "MAKE_FUNCTION"
+            or make.arg not in (None, 0)
+            or not 0 < i < len(instructions) - 1
+        ):
+            continue
+        load, store = instructions[i - 1], instructions[i + 1]
+        node = definitions.get(make.positions)
+        if not (
+            node
+            and load.opname == "LOAD_CONST"
+            and type(load.argval) is CodeType
+            and load.argval is program.co_consts[load.arg]
+            and load.positions == make.positions == store.positions
+            and store.opname in {"STORE_NAME", "STORE_GLOBAL"}
+            and program.co_names[store.arg] == store.argval == node.name
+            and not any(
+                op.is_jump_target or op.offset in handlers for op in (make, store)
+            )
+        ):
+            continue
+        child = load.argval
+        if (
+            child.co_firstlineno != node.lineno
+            or child.co_qualname != node.name
+            or child.co_name != node.name
+            or child.co_freevars
+            or child.co_flags
+            & (inspect.CO_GENERATOR | inspect.CO_COROUTINE | inspect.CO_ASYNC_GENERATOR)
+        ):
+            continue
+        if make.positions in found:
+            repeated.add(make.positions)
+        rows = [
+            dict(
+                opcode=op.opname,
+                offset=op.offset,
+                position=list(op.positions),
+                **({"oparg": op.arg} if op.arg is not None else {}),
+            )
+            for op in (load, make, store)
+        ]
+        rows[0]["index"] = load.arg
+        rows[2].update(index=store.arg, name=node.name)
+        found[make.positions] = dict(
+            semantics_version=1,
+            position=list(make.positions),
+            instructions=rows,
+            child=dict(
+                name=child.co_name,
+                qualname=child.co_qualname,
+                first_line=child.co_firstlineno,
+                code_sha256=code_digest(child),
+            ),
+        )
+    return {k: v for k, v in found.items() if k not in repeated}
+
+
 def _compiler_sites(tree, path, relative, source_hash):
     """Capture positioned construction and binding facts from one compilation."""
     if sys.implementation.name != "cpython" or not hasattr(CodeType, "co_positions"):
@@ -964,6 +1028,7 @@ def _compiler_sites(tree, path, relative, source_hash):
         ):
             nodes[tuple_position(node)] = node
     assignments, names, imports, expressions, tries = [], {}, {}, {}, []
+    definitions = {}
     for node in scope_nodes(tree.body):
         if (
             isinstance(node, ast.Assign)
@@ -973,6 +1038,20 @@ def _compiler_sites(tree, path, relative, source_hash):
             expressions[tuple_position(node.targets[0])] = node
             if _constant_store_rhs(node.value):
                 assignments.append(node)
+        elif (
+            isinstance(node, ast.FunctionDef)
+            and not node.decorator_list
+            and not node.args.defaults
+            and not any(node.args.kw_defaults)
+            and node.returns is None
+            and not getattr(node, "type_params", ())
+            and not any(
+                x.annotation is not None
+                for x in ast.walk(node.args)
+                if isinstance(x, ast.arg)
+            )
+        ):
+            definitions[tuple_position(node)] = node
         elif isinstance(node, ast.Delete) and all(
             isinstance(t, ast.Name) for t in node.targets
         ):
@@ -991,22 +1070,35 @@ def _compiler_sites(tree, path, relative, source_hash):
             expressions[tuple_position(operand)] = node
         elif isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
             expressions[tuple_position(node.value)] = node.value
-    if not (nodes or mappings or assignments or names or imports or expressions):
+    if not (
+        nodes
+        or mappings
+        or assignments
+        or names
+        or imports
+        or expressions
+        or definitions
+    ):
         return {}
     optimize = sys.flags.optimize
     program = compile(tree, str(path), "exec", dont_inherit=True, optimize=optimize)
     unit = digest(json_bytes([relative, source_hash, ParsedUnit.compiler_id, optimize]))
     instructions = (
         list(dis.get_instructions(program))
-        if assignments or names or imports or expressions
+        if assignments or names or imports or expressions or definitions
         else None
     )
     entries = (
         dis.Bytecode(program).exception_entries
-        if assignments or imports or expressions or tries
+        if assignments or imports or expressions or tries or definitions
         else ()
     )
     handlers = {e.target for e in entries}
+    definition_sites = (
+        _definition_sites(program, instructions, definitions, handlers)
+        if definitions
+        else {}
+    )
     stores = (
         _constant_store_sites(program, instructions, assignments, handlers)
         if assignments
@@ -1037,7 +1129,7 @@ def _compiler_sites(tree, path, relative, source_hash):
             compiler=ParsedUnit.compiler_id,
             optimize=optimize,
         )
-        if stores or loads or import_stores or statement_expressions
+        if stores or loads or import_stores or statement_expressions or definition_sites
         else {}
     )
     fresh, conflict = object(), object()
@@ -1108,6 +1200,7 @@ def _compiler_sites(tree, path, relative, source_hash):
         name_loads=loads,
         import_stores=import_stores,
         statement_expressions=statement_expressions,
+        definition_sites=definition_sites,
         exception_handlers=exception_handlers,
     )
 
