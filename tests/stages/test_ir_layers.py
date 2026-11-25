@@ -3552,7 +3552,7 @@ print(json.dumps(flows))
     flow = flows[0]
     nodes = {node["id"]: node for node in flow["nodes"]}
     copies = {node["site"]: node for node in nodes.values() if node["kind"] == "COPY"}
-    assert flow["coverage"] == dict(kind="canonical", functions=1, copies=10)
+    assert flow["coverage"] == dict(kind="canonical", functions=1, copies=13)
     assert copies["known"]["byte_count"] == dict(kind="constant", value=48)
     assert copies["view"]["byte_count"] == dict(kind="constant", value=24)
     assert copies["reshape"]["byte_count"] == dict(kind="constant", value=48)
@@ -3564,6 +3564,9 @@ print(json.dumps(flows))
     )
     assert copies["broadcast"]["byte_count"]["kind"] == "result_nbytes"
     assert copies["iteration"]["scope"][0]["kind"] == "while"
+    assert copies["source-iterable"]["scope"] == []
+    assert [s["kind"] for s in copies["source-body"]["scope"]] == ["module_object_for"]
+    assert [s["kind"] for s in copies["source-exhaustion"]["scope"]] == ["exhaustion"]
     assert (
         len([node for node in nodes.values() if node.get("site") == "iteration"]) == 1
     )
