@@ -3469,6 +3469,50 @@ def test_conditional_frames_require_returns_on_both_arms_and_exhaustion(tmp_path
     assert checked == {"source_frame_if", "source_frame_for"}
 
 
+def test_live_function_body_requires_its_original_globals_calls_and_terminal_edge(
+    tmp_path,
+):
+    from copy import deepcopy
+    from scar.backend.cpp20.imports import _body_tables
+    from scar.backend.planning import _load_module
+    from scar.backend.planning.import_frames import _callee_return
+    from scar.backend.planning.runtime import import_effects
+    from scar.frontend import build
+    from scar.middle import plan
+
+    (tmp_path / "entry.py").write_text("import leaf\nleaf.log()\nleaf.once()\n")
+    (tmp_path / "leaf.py").write_text(
+        "def log():\n    print('first')\n    print('second')\n"
+        "def once():\n    return print('one')\n"
+    )
+    build(tmp_path / "entry.py", tmp_path / "graph")
+    plan(tmp_path / "graph", tmp_path / "ir")
+    path = tmp_path / "ir/exec-ir.json"
+    module = _load_module(path, json.loads(path.read_bytes()))
+    effects = import_effects(module, {})
+    assert effects["coverage"] == "INCOMPLETE"
+    bodies = [
+        r
+        for r in effects["native_frame_bodies"]
+        if r.get("profile") == "live_function_calls"
+    ]
+    assert sorted(
+        sum(op == "CALL" for op, *rest in r["instructions"]) for r in bodies
+    ) == [1, 2]
+    for body in bodies:
+        _body_tables([body], [])
+        broken = deepcopy(body)
+        broken["instructions"][-1][1] += 2
+        with pytest.raises(ValueError, match="live call instruction span"):
+            _body_tables([broken], [])
+    log = next(
+        c for c in module["source_dispatch"]["callees"] if c["symbol"].endswith(":log")
+    )
+    receipt = log["function"]["body"][-2]["source_expression"]
+    receipt.pop("normal_successor")
+    assert not _callee_return(log)
+
+
 def test_native_import_frame_uses_live_registry_and_dispatches_returned_objects(
     tmp_path,
 ):

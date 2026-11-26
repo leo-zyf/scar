@@ -51,6 +51,10 @@ def _array(symbol, element, items):
 
 
 _BODY_OPERATIONS = {
+    "LOAD_GLOBAL": "load_global",
+    "LOAD_GLOBAL_CALL": "load_global_call",
+    "CALL": "call",
+    "POP_TOP": "discard",
     "LOAD_DEFAULT_TUPLE": "default_tuple",
     "LOAD_FRAME_CONST": "constant",
     "LOAD_NAME": "load_name",
@@ -180,6 +184,7 @@ def _body_tables(rows, definitions):
         steps_name, slots_name = f"body_steps_{i}", f"constants_{i}"
         program = row["instructions"]
         start = row.get("entry_offset", 2)
+        called = row.get("profile") == "live_function_calls"
         if (
             not program
             or type(start) is not int
@@ -187,13 +192,24 @@ def _body_tables(rows, definitions):
             or start % 2
             or (row["kind"] == "function" and start != 2)
             or program[0][1] != start
-            or any(next_[1] != prev[1] + 2 for prev, next_ in zip(program, program[1:]))
+            or not called
+            and any(
+                next_[1] != prev[1] + 2 for prev, next_ in zip(program, program[1:])
+            )
         ):
             raise ValueError("invalid activation body instruction interval")
         # Each declaration consumes one code object and publishes the function
         # before the next declaration. A prefix can stop only after its store.
         pos = 0
-        if "normal_successor" in row:
+        if called:
+            if (
+                row["kind"] != "function"
+                or row.get("minor") not in (12, 14)
+                or "normal_successor" in row
+            ):
+                raise ValueError("invalid live function activation")
+            _validate_live_call(row)
+        elif "normal_successor" in row:
             _validate_subscript(row)
             pos = len(program)
         elif row["kind"] == "module":
@@ -215,11 +231,15 @@ def _body_tables(rows, definitions):
                     break
                 pos = _publication_end(row, pos)
         tail = [ins[0] for ins in program[pos:]]
-        if tail not in (["RETURN_CONST"], ["LOAD_CONST", "RETURN_VALUE"]) and not (
-            row["kind"] == "function"
-            and tail == ["LOAD_SMALL_INT", "RETURN_VALUE"]
-            or row["kind"] == "module"
-            and not tail
+        if (
+            not called
+            and tail not in (["RETURN_CONST"], ["LOAD_CONST", "RETURN_VALUE"])
+            and not (
+                row["kind"] == "function"
+                and tail == ["LOAD_SMALL_INT", "RETURN_VALUE"]
+                or row["kind"] == "module"
+                and not tail
+            )
         ):
             raise ValueError("invalid source activation return sequence")
         steps = []
@@ -324,6 +344,7 @@ def _body_tables(rows, definitions):
                 name(slots_name),
                 Expr("literal", value=returns),
                 integer(row["resume_offset"] or 0),
+                *((integer(row["minor"]),) if called else ()),
                 form="brace",
             )
         )
@@ -369,23 +390,54 @@ def _validate_live_call(row):
     """Recheck the stack/PC boundary before emitting an independent caller fragment."""
     program = row["instructions"]
     pc = program[0][1]
+    function = row.get("profile") == "live_function_calls"
     if (
         type(pc) is not int
         or pc < 2
         or pc % 2
-        or not row.get("import_site")
-        or not row.get("site")
+        or not function
+        and (not row.get("import_site") or not row.get("site"))
+        or function
+        and pc != 2
     ):
         raise ValueError("invalid live call entry")
-    stack, calls = [], set()
+    stack, calls, global_names = [], set(), {}
     for op, offset, n, text in program:
         if type(n) is not int or n < 0 or not isinstance(text, str) or offset != pc:
             raise ValueError("invalid live call instruction span")
-        pc += {"LOAD_ATTR": 20, "CALL": 8}.get(op, 2)
-        if op == "PUSH_NULL" and n == 0 and not text:
+        pc += {
+            "LOAD_ATTR": 20,
+            "CALL": 8,
+            "LOAD_GLOBAL": 10,
+            "LOAD_GLOBAL_CALL": 10,
+        }.get(op, 2)
+        if (
+            function
+            and op in {"LOAD_GLOBAL", "LOAD_GLOBAL_CALL"}
+            and text.isidentifier()
+        ):
+            if global_names.setdefault(n, text) != text:
+                raise ValueError("conflicting active code global slot")
+            if op == "LOAD_GLOBAL_CALL":
+                stack.extend([False, True] if row["minor"] == 12 else [True, False])
+            else:
+                stack.append(True)
+        elif function and op in {"RETURN_CONST", "RETURN_VALUE"}:
+            expected = [] if op == "RETURN_CONST" else [True]
+            if (
+                text
+                or offset != program[-1][1]
+                or stack != expected
+                or (op == "RETURN_VALUE" and n != 0)
+                or (op == "RETURN_CONST" and row["minor"] != 12)
+            ):
+                raise ValueError("invalid live function return")
+            stack.clear()
+        elif not function and op == "PUSH_NULL" and n == 0 and not text:
             stack.append(False)
         elif (
-            op == "LOAD_NAME"
+            not function
+            and op == "LOAD_NAME"
             and text.isidentifier()
             or op == "LOAD_CONST"
             and not text
@@ -395,7 +447,13 @@ def _validate_live_call(row):
             and not text
         ):
             stack.append(True)
-        elif op == "LOAD_ATTR" and text.isidentifier() and stack and stack[-1]:
+        elif (
+            not function
+            and op == "LOAD_ATTR"
+            and text.isidentifier()
+            and stack
+            and stack[-1]
+        ):
             pass
         elif op == "CALL" and not text and len(stack) >= n + 2:
             prefix = stack[-(n + 2) :]
@@ -409,12 +467,20 @@ def _validate_live_call(row):
             and not text
             and n == 0
             and stack == [True]
-            and offset == program[-1][1]
+            and (function or offset == program[-1][1])
         ):
             stack.clear()
         else:
             raise ValueError("invalid live call operand stack")
-    if stack or row.get("call_offset") not in calls or row.get("resume_offset") != pc:
+    if function:
+        if (
+            not calls
+            or stack
+            or program[-1][0] not in {"RETURN_CONST", "RETURN_VALUE"}
+            or row.get("resume_offset") is not None
+        ):
+            raise ValueError("invalid live function continuation")
+    elif stack or row.get("call_offset") not in calls or row.get("resume_offset") != pc:
         raise ValueError("invalid live call continuation")
 
 

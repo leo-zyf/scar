@@ -56,6 +56,10 @@ public:
 };
 
 enum class body_opcode {
+  load_global,
+  load_global_call,
+  call,
+  discard,
   load_name,
   build_list,
   build_defaults_tuple,
@@ -91,10 +95,13 @@ struct body_program {
   std::span<const constant_slot> constants;
   bool returns;
   unsigned resume_offset;
+  unsigned minor = 0;
 };
 
 enum class outcome { unmatched, continued_in_host, completed };
-template <class Frame> outcome run_body(Frame &, const body_program &);
+struct body_provider;
+template <class Frame>
+outcome run_body(Frame &, const body_program &, body_provider);
 
 struct body_provider {
   std::span<const body_program> programs{};
@@ -109,7 +116,7 @@ struct body_provider {
     for (const auto &p : programs) {
       if (p.code_sha256 == code_sha256 && p.symbol == symbol &&
           !p.instructions.empty() && p.instructions.front().offset == pc)
-        return run_body(frame, p);
+        return run_body(frame, p, *this);
     }
     return outcome::unmatched;
   }
@@ -215,6 +222,28 @@ struct region {
   bool named_request{};
 };
 
+template <class Frame, class Slots>
+bool invoke_slots(Frame &frame, Slots slots, unsigned count, unsigned minor,
+                  body_provider bodies) {
+  if (slots.size() < 2 || count > slots.size() - 2)
+    return false;
+  auto args = slots.last(count);
+  auto prefix = slots.subspan(slots.size() - count - 2, 2);
+  auto callable = minor == 12 ? 1 : 0;
+  if (!prefix[callable] || prefix[1 - callable] ||
+      !std::all_of(args.begin(), args.end(),
+                   [](const auto &s) { return s.has_value(); }))
+    return false;
+  auto result = [&] {
+    if constexpr (requires { frame.invoke(*prefix[callable], args, bodies); })
+      return frame.invoke(*prefix[callable], args, bodies);
+    else
+      return frame.invoke(*prefix[callable], args);
+  }();
+  frame.replace(count + 2, std::move(result));
+  return true;
+}
+
 // The host supplies the actual active frame and live owned operand slots, one
 // optional<object> per slot (disengaged is the interpreter's call NULL).
 // replace applies the source opcode's stack cleanup and release semantics.
@@ -311,24 +340,9 @@ template <class Frame> outcome run(Frame &frame, const region &program) {
         break;
       }
       case opcode::call: {
-        if (slots.size() < 2 || ins.operand > slots.size() - 2)
+        if (!invoke_slots(frame, slots, ins.operand, program.minor,
+                          program.bodies))
           return outcome::continued_in_host;
-        auto args = slots.last(ins.operand);
-        auto prefix = slots.subspan(slots.size() - ins.operand - 2, 2);
-        auto callable = program.minor == 12 ? 1 : 0;
-        if (!prefix[callable] || prefix[1 - callable] ||
-            !std::all_of(args.begin(), args.end(),
-                         [](const auto &s) { return s.has_value(); }))
-          return outcome::continued_in_host;
-        auto result = [&] {
-          if constexpr (requires {
-                          frame.invoke(*prefix[callable], args, program.bodies);
-                        })
-            return frame.invoke(*prefix[callable], args, program.bodies);
-          else
-            return frame.invoke(*prefix[callable], args);
-        }();
-        frame.replace(ins.operand + 2, std::move(result));
         break;
       }
       case opcode::discard:
@@ -348,7 +362,8 @@ template <class Frame> outcome run(Frame &frame, const region &program) {
 // owns locals, globals, builtins and code objects. A mismatch after an opcode
 // leaves its original stack intact for the host continuation.
 template <class Frame>
-outcome run_body(Frame &frame, const body_program &program) {
+outcome run_body(Frame &frame, const body_program &program,
+                 body_provider bodies) {
   if (program.instructions.empty() || !frame.enter_body(program))
     return outcome::unmatched;
   auto &stack = frame.stack();
@@ -360,6 +375,10 @@ outcome run_body(Frame &frame, const body_program &program) {
       requires { frame.make_function(*stack.back(), *stack.back()); };
   constexpr bool sets_defaults =
       requires { frame.set_function_defaults(*stack.back(), *stack.back()); };
+  constexpr bool loads_globals = requires { frame.load_global(0u); };
+  constexpr bool invokes = requires {
+    frame.invoke(*stack.back(), std::span(stack), bodies);
+  } || requires { frame.invoke(*stack.back(), std::span(stack)); };
   constexpr bool loads_names = requires { frame.load_name(0u); };
   constexpr bool builds_tuples =
       requires { frame.build_tuple(std::span(stack)); };
@@ -372,7 +391,10 @@ outcome run_body(Frame &frame, const body_program &program) {
     frame.store_subscript(*stack.back(), *stack.back(), *stack.back());
   };
   for (const auto &ins : program.instructions)
-    if ((!checks_tuple && ins.operation == body_opcode::default_tuple) ||
+    if ((!loads_globals && (ins.operation == body_opcode::load_global ||
+                            ins.operation == body_opcode::load_global_call)) ||
+        (!invokes && ins.operation == body_opcode::call) ||
+        (!checks_tuple && ins.operation == body_opcode::default_tuple) ||
         (!creates_with_defaults &&
          ins.operation == body_opcode::make_function && ins.operand == 1) ||
         (!sets_defaults &&
@@ -400,6 +422,31 @@ outcome run_body(Frame &frame, const body_program &program) {
       if (!frame.before(ins.offset))
         return outcome::continued_in_host;
       switch (ins.operation) {
+      case body_opcode::load_global:
+      case body_opcode::load_global_call:
+        if constexpr (loads_globals) {
+          auto value = frame.load_global(ins.operand);
+          bool pair = ins.operation == body_opcode::load_global_call;
+          if (pair && program.minor == 12)
+            stack.emplace_back(std::nullopt);
+          stack.emplace_back(std::move(value));
+          if (pair && program.minor == 14)
+            stack.emplace_back(std::nullopt);
+        }
+        break;
+      case body_opcode::call:
+        if constexpr (invokes) {
+          if (stack.size() < base ||
+              !invoke_slots(frame, std::span(stack).subspan(base), ins.operand,
+                            program.minor, bodies))
+            return outcome::continued_in_host;
+        }
+        break;
+      case body_opcode::discard:
+        if (stack.size() <= base || !stack.back())
+          return outcome::continued_in_host;
+        frame.replace(1, std::nullopt);
+        break;
       case body_opcode::load_name:
         if constexpr (loads_names)
           stack.emplace_back(frame.load_name(ins.operand));
@@ -517,5 +564,9 @@ outcome run_body(Frame &frame, const body_program &program) {
   }
   frame.resume_at(program.resume_offset);
   return outcome::continued_in_host;
+}
+template <class Frame>
+outcome run_body(Frame &frame, const body_program &program) {
+  return run_body(frame, program, {});
 }
 } // namespace scar::imports

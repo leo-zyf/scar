@@ -702,10 +702,187 @@ def _module_intervals(loader, slots):
         yield steps, None
 
 
+def _callee_calls(fragment):
+    """Join complete, straight-line call regions to the sealed terminal return."""
+    from scar.contract import digest, json_bytes, valid_python_source_successor
+
+    code = fragment.get("entry", {}).get("code", {})
+    version = code.get("compiler", "").split(".")[:2]
+    if version not in (["cpython 3", "12"], ["cpython 3", "14"]):
+        return []
+    minor = int(version[1])
+    body = fragment["function"]["body"]
+    slots = fragment["function"].get("constants", {})
+    pc, successor, program = 2, None, []
+    for segment in body:
+        source = segment.get("source_expression", {})
+        instructions, steps = source.get("instructions", []), segment.get("steps", [])
+        if (
+            segment.get("op") != "source_object_region"
+            or source.get("code_sha256") != code["code_sha256"]
+            or not instructions
+            or (
+                segment is body[-1]
+                and len(body) > 1
+                and [i.get("opcode") for i in instructions]
+                in (["RETURN_CONST"], ["LOAD_CONST", "RETURN_VALUE"])
+                and successor is None
+            )
+            or len(steps) != len(instructions)
+            or successor is not None
+            and successor.get("opcode") != instructions[0].get("opcode")
+        ):
+            return []
+        stack = []
+        for ins, step in zip(instructions, steps, strict=True):
+            opcode, op = ins.get("opcode"), step.get("op")
+            arg, name = ins.get("oparg", 0), ""
+            if (
+                type(arg) is not int
+                or not 0 <= arg < 2**32
+                or ins.get("offset") != pc
+                or step.get("offset") != pc
+            ):
+                return []
+            if opcode == "LOAD_GLOBAL" and op == "module_name_load":
+                load = step.get("instruction", {})
+                name = ins.get("name")
+                if (
+                    not isinstance(name, str)
+                    or not name.isidentifier()
+                    or ins.get("index") != arg >> 1
+                    or load.get("code_sha256") != code["code_sha256"]
+                    or any(
+                        load.get(k) != ins.get(k)
+                        for k in (
+                            "offset",
+                            "opcode",
+                            "oparg",
+                            "index",
+                            "position",
+                            "name",
+                        )
+                    )
+                    or step.get("lookup_order") != ["frame.globals", "frame.builtins"]
+                    or step.get("lookup")
+                    != "source_mapping_lookup_propagate_nonmissing_errors_or_NameError"
+                ):
+                    return []
+                if arg & 1:
+                    opcode = "LOAD_GLOBAL_CALL"
+                    stack.extend([None, pc] if minor == 12 else [pc, None])
+                else:
+                    stack.append(pc)
+                arg >>= 1
+            elif opcode in {"LOAD_CONST", "LOAD_SMALL_INT", "RETURN_CONST"}:
+                if opcode == "LOAD_SMALL_INT":
+                    if minor != 14 or arg >= 256:
+                        return []
+                    value, kind = arg, "int"
+                else:
+                    literal = slots.get(str(arg), {})
+                    if ins.get("index") != arg or "value" not in literal:
+                        return []
+                    value, kind = literal["value"], literal.get("kind")
+                if (
+                    ins.get("value_sha256") != digest(json_bytes(value))
+                    or ins.get("type") != kind
+                ):
+                    return []
+                if opcode == "RETURN_CONST":
+                    if (
+                        minor != 12
+                        or stack
+                        or step.get("value")
+                        != {"source": "current_frame_co_consts", "index": arg}
+                    ):
+                        return []
+                else:
+                    source_kind = (
+                        "source_small_integer"
+                        if opcode == "LOAD_SMALL_INT"
+                        else "current_frame_co_consts"
+                    )
+                    if (
+                        op != "source_object_constant"
+                        or step.get("source") != source_kind
+                        or step.get("operand") != arg
+                    ):
+                        return []
+                    stack.append(pc)
+            elif (
+                opcode == "CALL"
+                and op == "source_object_call"
+                and len(stack) >= arg + 2
+            ):
+                group = stack[-(arg + 2) :]
+                target, marker = (
+                    (group[1], group[0]) if minor == 12 else (group[0], group[1])
+                )
+                if (
+                    target is None
+                    or marker is not None
+                    or None in group[2:]
+                    or step.get("target") != {"from_offset": target}
+                    or step.get("args") != [{"from_offset": i} for i in group[2:]]
+                    or step.get("target_layout") != "callable_with_implicit_NULL"
+                    or step.get("keyword_names") is not None
+                    or step.get("keyword_values") != []
+                    or step.get("dispatch")
+                    != "consume_source_call_slots_including_method_receiver_at_most_once"
+                ):
+                    return []
+                stack[-(arg + 2) :] = [pc]
+            elif (opcode, op) in {
+                ("POP_TOP", "source_object_discard"),
+                ("RETURN_VALUE", "frame_return"),
+            }:
+                if (
+                    arg
+                    or len(stack) != 1
+                    or stack[0] is None
+                    or step.get("value") != {"from_offset": stack.pop()}
+                ):
+                    return []
+            else:
+                return []
+            if opcode.startswith("RETURN_") and (
+                segment is not body[-1]
+                or ins is not instructions[-1]
+                or op != "frame_return"
+                or step.get("opcode") != opcode
+                or step.get("destination") != "actual_caller"
+                or step.get("lifetime")
+                != "transfer_result_and_release_frame_locals_at_source_exit"
+            ):
+                return []
+            program.append([opcode, pc, arg, name])
+            pc += {"LOAD_GLOBAL": 10, "LOAD_GLOBAL_CALL": 10, "CALL": 8}.get(opcode, 2)
+        if stack or (segment is not body[-1] and program[-1][0] != "POP_TOP"):
+            return []
+        successor = source.get("normal_successor")
+        if successor is not None and (
+            not valid_python_source_successor(program[-1][1], successor)
+            or successor["offset"] != pc
+        ):
+            return []
+    if not program or program[-1][0] not in {"RETURN_CONST", "RETURN_VALUE"}:
+        return []
+    if any(i[0] == "CALL" for i in program) or [i[0] for i in program] in (
+        ["RETURN_CONST"],
+        ["LOAD_CONST", "RETURN_VALUE"],
+        ["LOAD_SMALL_INT", "RETURN_VALUE"],
+    ):
+        return program
+    return []
+
+
 def _callee_return(fragment):
     if fragment.get("completion") != "conditional_source_body":
         return []
     body = fragment["function"]["body"]
+    if any(r.get("source_expression") for r in body):
+        return _callee_calls(fragment)
     if len(body) != 1 or body[0]["op"] != "source_object_region":
         return []
     steps = body[0]["steps"]
@@ -804,6 +981,11 @@ def activation_bodies(dispatch, checked):
                             else None
                         ),
                     )
+                    if role == "callees" and any(step[0] == "CALL" for step in steps):
+                        body.update(
+                            profile="live_function_calls",
+                            minor=int(code["compiler"].split(".")[1]),
+                        )
                     if successor:
                         body["normal_successor"] = successor
                         body["resume_offset"] = successor["offset"]
