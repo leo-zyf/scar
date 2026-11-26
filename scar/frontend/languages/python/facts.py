@@ -1130,27 +1130,12 @@ _JUMP_OPCODES = frozenset(
 )
 
 
-def _statement_expression(
-    program, instructions, root, end, handlers, *, function_frame=False
-):
-    """Capture source operands and the terminal operation consuming them."""
-    expr = root
-    if isinstance(root, ast.If):
-        expr = _condition_operand(root.test, function_frame=function_frame)
-    elif isinstance(root, ast.For):
-        expr = root.iter
-    span = tuple_position(expr)
+def _expression_parts(expr, *, allow_indexed):
     parts, keywords = defaultdict(list), defaultdict(list)
-    discarded_call = isinstance(root, ast.Call)
-    needs_object_ports = function_frame or not discarded_call
+    object_ports = False
     for node in ast.walk(expr):
-        if (
-            not function_frame
-            and isinstance(node, (ast.Subscript, ast.Slice, ast.Compare))
-            and not (
-                isinstance(root, ast.Assign)
-                and isinstance(root.targets[0], ast.Subscript)
-            )
+        if not allow_indexed and isinstance(
+            node, (ast.Subscript, ast.Slice, ast.Compare)
         ):
             return None
         if isinstance(
@@ -1209,10 +1194,31 @@ def _statement_expression(
                 return None
             keywords[pos].append(keys)
             keywords[tuple_position(node.func)].append(keys)
-        needs_object_ports |= isinstance(
+        object_ports |= isinstance(
             node, (ast.Attribute, ast.Constant, ast.JoinedStr, ast.List, ast.Tuple)
         )
-    if not (needs_object_ports or keywords):
+    return parts, keywords, object_ports
+
+
+def _statement_expression(
+    program, instructions, root, end, handlers, *, function_frame=False
+):
+    """Capture source operands and the terminal operation consuming them."""
+    expr = root
+    if isinstance(root, ast.If):
+        expr = _condition_operand(root.test, function_frame=function_frame)
+    elif isinstance(root, ast.For):
+        expr = root.iter
+    span = tuple_position(expr)
+    discarded_call = isinstance(root, ast.Call)
+    allow_indexed = function_frame or (
+        isinstance(root, ast.Assign) and isinstance(root.targets[0], ast.Subscript)
+    )
+    operands = _expression_parts(expr, allow_indexed=allow_indexed)
+    if operands is None:
+        return None
+    parts, keywords, object_ports = operands
+    if discarded_call and not (function_frame or object_ports or keywords):
         return None
 
     if isinstance(root, (ast.For, ast.If)):
@@ -1789,7 +1795,45 @@ def _default_tuple_items(value, defaults):
     return None
 
 
-def _definition_sites(program, instructions, definitions, handlers):
+def _default_expression_rows(program, instructions, node, build, loads):
+    """Match each source default to one contiguous stack value consumed by BUILD_TUPLE."""
+    groups = []
+    stop = build
+    for default in reversed(node.args.defaults):
+        start = stop
+        span = tuple_position(default)
+        while start and _within_position(instructions[start - 1].positions, span):
+            start -= 1
+        if start == stop:
+            return None
+        operands = _expression_parts(default, allow_indexed=True)
+        if operands is None:
+            return None
+        parts, keywords, _ = operands
+        rows, depth = [], 0
+        for ins in instructions[start:stop]:
+            if ins.positions not in parts:
+                return None
+            row = _expression_instruction(
+                program, ins, parts[ins.positions], keywords.get(ins.positions, ())
+            )
+            if row is None or (
+                row["opcode"] in {"LOAD_NAME", "LOAD_GLOBAL"}
+                and loads.get(ins.positions, {}).get("offset") != ins.offset
+            ):
+                return None
+            depth += dis.stack_effect(ins.opcode, ins.arg)
+            if depth < 0:
+                return None
+            rows.append(row)
+        if depth != 1:
+            return None
+        groups.append(rows)
+        stop = start
+    return stop, [row for group in reversed(groups) for row in group]
+
+
+def _definition_sites(program, instructions, definitions, handlers, loads):
     """Plain module definitions whose code object is loaded, constructed and stored."""
     found, seen, repeated = {}, set(), set()
     for i, make in enumerate(instructions):
@@ -1813,7 +1857,10 @@ def _definition_sites(program, instructions, definitions, handlers):
         seen.add(make.positions)
         start, end = i - 1, i + 1
         defaults = node.args.defaults
-        items = None
+        tail = start
+        value_rows = []
+        pool_fields = {}
+        default_ports = {}
         if defaults:
             if sys.version_info[:2] == (3, 12) and make.arg == 1:
                 pass
@@ -1829,24 +1876,36 @@ def _definition_sites(program, instructions, definitions, handlers):
             start -= 1
             if not (0 <= start and end < len(instructions)):
                 continue
-            pool = instructions[start]
-            if (
-                pool.opname != "LOAD_CONST"
-                or (start and instructions[start - 1].opname == "EXTENDED_ARG")
-                or not (
-                    items := _default_tuple_items(program.co_consts[pool.arg], defaults)
-                )
+            tail = start
+            first = instructions[tail]
+            if first.opname == "LOAD_CONST" and (
+                items := _default_tuple_items(program.co_consts[first.arg], defaults)
             ):
+                default_ports = dict(index=first.arg, count=len(defaults))
+                pool_fields = dict(items, index=first.arg)
+            elif first.opname == "BUILD_TUPLE" and first.arg == len(defaults):
+                matched = _default_expression_rows(
+                    program, instructions, node, start, loads
+                )
+                if matched is None:
+                    continue
+                start, value_rows = matched
+                default_ports = dict(count=len(defaults), build_offset=first.offset)
+            else:
                 continue
         elif make.arg not in (None, 0):
             continue
-        window = instructions[start : end + 1]
+        window = instructions[tail : end + 1]
         store = window[-1]
         if not (
             all(op.positions == make.positions for op in window)
+            and not (start and instructions[start - 1].opname == "EXTENDED_ARG")
             and store.opname in {"STORE_NAME", "STORE_GLOBAL"}
             and program.co_names[store.arg] == store.argval == node.name
-            and not any(op.is_jump_target or op.offset in handlers for op in window[1:])
+            and not any(
+                op.is_jump_target or op.offset in handlers
+                for op in instructions[start + 1 : end + 1]
+            )
         ):
             continue
         child = load.argval
@@ -1868,19 +1927,14 @@ def _definition_sites(program, instructions, definitions, handlers):
             )
             for op in window
         ]
-        rows[i - 1 - start]["index"] = load.arg
+        rows[0].update(pool_fields)
+        rows[i - 1 - tail]["index"] = load.arg
         rows[-1].update(index=store.arg, name=node.name)
-        if items:
-            rows[0].update(index=pool.arg, **items)
-        found[make.positions] = dict(
+        proof = dict(
             semantics_version=1,
             position=list(make.positions),
-            instructions=rows,
-            **(
-                {"positional_defaults": dict(index=pool.arg, count=len(defaults))}
-                if items
-                else {}
-            ),
+            instructions=value_rows + rows,
+            **({"positional_defaults": default_ports} if defaults else {}),
             child=dict(
                 name=child.co_name,
                 qualname=child.co_qualname,
@@ -1890,6 +1944,7 @@ def _definition_sites(program, instructions, definitions, handlers):
                 varnames=list(child.co_varnames),
             ),
         )
+        found[make.positions] = proof, child
     return {k: v for k, v in found.items() if k not in repeated}
 
 
@@ -2030,8 +2085,9 @@ def _compiler_sites(tree, path, relative, source_hash):
         else ()
     )
     handlers = {e.target for e in entries}
+    loads = _name_load_sites(program, instructions, names) if names else {}
     definition_sites = (
-        _definition_sites(program, instructions, definitions, handlers)
+        _definition_sites(program, instructions, definitions, handlers, loads)
         if definitions
         else {}
     )
@@ -2040,7 +2096,6 @@ def _compiler_sites(tree, path, relative, source_hash):
         if assignments or docstring is not None
         else ({}, {})
     )
-    loads = _name_load_sites(program, instructions, names) if names else {}
     import_stores = (
         _import_store_sites(program, instructions, imports, handlers) if imports else {}
     )
@@ -2134,19 +2189,12 @@ def _compiler_sites(tree, path, relative, source_hash):
         name_loads=loads,
         import_stores=import_stores,
         statement_expressions=statement_expressions,
-        definition_sites=definition_sites,
+        definition_sites={span: proof for span, (proof, _) in definition_sites.items()},
         function_expression_sites={
             span: _function_expression_sites(
-                program.co_consts[
-                    proof["instructions"][1 if "positional_defaults" in proof else 0][
-                        "index"
-                    ]
-                ],
-                definitions[span],
-                following,
-                inherited,
+                child, definitions[span], following, inherited
             )
-            for span, proof in definition_sites.items()
+            for span, (_, child) in definition_sites.items()
         },
         exception_handlers=exception_handlers,
     )

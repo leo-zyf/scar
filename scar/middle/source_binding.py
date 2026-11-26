@@ -554,63 +554,16 @@ def _fast_operand(row, node, code):
     )
 
 
-def bind_source_expression(node, scope, successor=None, loop=None):
-    """Bind positioned instruction evidence; M2 verifies semantic evaluation order."""
-    proof, code = node["source_expression"], scope.get("source_code") or {}
-    loc = node["location"]
-    position = _source_position(loc)
-    if not (
-        isinstance(proof, dict)
-        and type(proof.get("semantics_version")) is int
-        and proof["semantics_version"] == 1
-        and code.get("kind") == scope.get("kind")
-        and code["kind"] in {"function", "module"}
-        and proof.get("code_sha256") == code.get("code_sha256")
-        and loc.get("file") == code.get("source_key")
-        and proof.get("position") == position
-        and isinstance(proof.get("instructions"), list)
-        and proof["instructions"]
-    ):
-        raise ValueError("source expression region disagrees with its module")
-    operation = node["op"]
-    if operation == "raise":
-        present, cause = node.get("has_exception"), node.get("has_cause")
-        if not (
-            type(present) is bool
-            and type(cause) is bool
-            and (present or not cause)
-            and all(isinstance(node.get(k), dict) for k in ("value", "cause"))
-        ):
-            raise ValueError("source raise disagrees with its operand ports")
-        for supplied, key in ((present, "value"), (cause, "cause")):
-            operand = node[key]
-            if not supplied and operand != {
-                "op": "literal",
-                "type": {"kind": "python_object", "class": "NoneType"},
-                "value": None,
-            }:
-                raise ValueError("source raise omits an evaluated operand")
-    elif operation == "literal":
-        if not (
-            code["kind"] == "function"
-            and len(proof["instructions"]) == 1
-            and proof["instructions"][0].get("opcode") == "NOP"
-            and proof["instructions"][0].get("position") == position
-        ):
-            raise ValueError("discarded literal lacks its source line instruction")
-    elif operation not in {"assign", "unbind", "if", "for", "return"} and not (
-        isinstance(node.get("target"), dict)
-        and isinstance(node.get("args"), list)
-        and isinstance(node.get("keywords"), list)
-    ):
-        raise ValueError("source call region disagrees with its call port")
+def _bind_operand_instructions(node, scope, position, instructions):
+    """Check positioned instruction operands against one bound expression or statement."""
+    code = scope["source_code"]
     first = position[0], position[2]
     last = position[1], position[3]
     previous = -1
     sequences = None
     binary_ports = fast_reads = None
     folded_ports = None
-    for instruction in proof["instructions"]:
+    for instruction in instructions:
         if not isinstance(instruction, dict):
             raise ValueError("invalid source instruction in call region")
         offset, opcode = instruction.get("offset"), instruction.get("opcode")
@@ -854,6 +807,59 @@ def bind_source_expression(node, scope, successor=None, loop=None):
                     or any(c not in "0123456789abcdef" for c in fingerprint)
                 ):
                     raise ValueError("missing literal identity in source call")
+
+
+def bind_source_expression(node, scope, successor=None, loop=None):
+    """Bind positioned instruction evidence; M2 verifies semantic evaluation order."""
+    proof, code = node["source_expression"], scope.get("source_code") or {}
+    loc = node["location"]
+    position = _source_position(loc)
+    if not (
+        isinstance(proof, dict)
+        and type(proof.get("semantics_version")) is int
+        and proof["semantics_version"] == 1
+        and code.get("kind") == scope.get("kind")
+        and code["kind"] in {"function", "module"}
+        and proof.get("code_sha256") == code.get("code_sha256")
+        and loc.get("file") == code.get("source_key")
+        and proof.get("position") == position
+        and isinstance(proof.get("instructions"), list)
+        and proof["instructions"]
+    ):
+        raise ValueError("source expression region disagrees with its module")
+    operation = node["op"]
+    if operation == "raise":
+        present, cause = node.get("has_exception"), node.get("has_cause")
+        if not (
+            type(present) is bool
+            and type(cause) is bool
+            and (present or not cause)
+            and all(isinstance(node.get(k), dict) for k in ("value", "cause"))
+        ):
+            raise ValueError("source raise disagrees with its operand ports")
+        for supplied, key in ((present, "value"), (cause, "cause")):
+            operand = node[key]
+            if not supplied and operand != {
+                "op": "literal",
+                "type": {"kind": "python_object", "class": "NoneType"},
+                "value": None,
+            }:
+                raise ValueError("source raise omits an evaluated operand")
+    elif operation == "literal":
+        if not (
+            code["kind"] == "function"
+            and len(proof["instructions"]) == 1
+            and proof["instructions"][0].get("opcode") == "NOP"
+            and proof["instructions"][0].get("position") == position
+        ):
+            raise ValueError("discarded literal lacks its source line instruction")
+    elif operation not in {"assign", "unbind", "if", "for", "return"} and not (
+        isinstance(node.get("target"), dict)
+        and isinstance(node.get("args"), list)
+        and isinstance(node.get("keywords"), list)
+    ):
+        raise ValueError("source call region disagrees with its call port")
+    _bind_operand_instructions(node, scope, position, proof["instructions"])
     last = proof["instructions"][-1]
     if operation == "raise":
         if not (
@@ -964,58 +970,103 @@ def _default_items_sha256(defaults):
     return digest(json_bytes(tokens)) if all(t is not None for t in tokens) else None
 
 
-def _bind_positional_defaults(node, rows, declared, parent):
+def _bind_positional_defaults(node, rows, declared, scope):
     defaults = node["defaults"]
-    port = node["source_definition"].get("positional_defaults")
+    proof = node["source_definition"]
+    port = proof.get("positional_defaults")
+    parent = scope["source_code"]
     compiler = parent["compiler"]
     attached = compiler.startswith(("cpython 3.13.", "cpython 3.14."))
+    tail = 4 if attached else 3
+    params = [
+        p for p in declared["params"] if p["binding"] in {"positional", "posonly"}
+    ]
+    cut = len(params) - len(defaults)
     if not (
         isinstance(defaults, list)
         and isinstance(port, dict)
         and type(port.get("count")) is int
         and port["count"] == len(defaults)
-        and type(port.get("index")) is int
-        and (attached or compiler.startswith("cpython 3.12."))
-        and len(rows) == (5 if attached else 4)
-        and all(b["offset"] == a["offset"] + 2 for a, b in zip(rows, rows[1:]))
-    ):
-        raise ValueError("invalid source positional defaults window")
-    pool, child, make = rows[:3]
-    params = [
-        p for p in declared["params"] if p["binding"] in {"positional", "posonly"}
-    ]
-    cut = len(params) - len(defaults)
-    fingerprint = _default_items_sha256(defaults)
-    if not (
-        cut >= 0
+        and cut >= 0
         and all(
             p.get("default_from")
             == (None if i < cut else {"field": "defaults", "index": i - cut})
             for i, p in enumerate(params)
         )
-        and "parameters" in node["source_definition"]["child"]
-        and pool.get("opcode") == "LOAD_CONST"
-        and type(pool.get("index")) is int
-        and type(pool.get("oparg")) is int
-        and 0 <= pool["index"] == pool["oparg"] == port["index"]
-        and pool["index"] != child.get("index")
-        and pool.get("type") == "tuple"
-        and type(pool.get("item_count")) is int
-        and pool["item_count"] == len(defaults)
-        and fingerprint is not None
-        and pool.get("items_sha256") == fingerprint
+        and "parameters" in proof["child"]
+        and (attached or compiler.startswith("cpython 3.12."))
+        and len(rows) > tail
+        and all(a["offset"] < b["offset"] for a, b in zip(rows, rows[1:]))
+    ):
+        raise ValueError("invalid source positional defaults window")
+    prefix, suffix = rows[:-tail], rows[-tail:]
+    result = prefix[-1]
+    child, make = suffix[:2]
+    if not (
+        all(r["position"] == proof["position"] for r in [result, *suffix])
+        and all(
+            b["offset"] == a["offset"] + 2 for a, b in zip([result, *suffix], suffix)
+        )
         and (
             "oparg" not in make
-            and rows[3].get("opcode") == "SET_FUNCTION_ATTRIBUTE"
-            and type(rows[3].get("oparg")) is int
-            and rows[3]["oparg"] == 1
+            and suffix[2].get("opcode") == "SET_FUNCTION_ATTRIBUTE"
+            and type(suffix[2].get("oparg")) is int
+            and suffix[2]["oparg"] == 1
             if attached
             else type(make.get("oparg")) is int and make["oparg"] == 1
         )
     ):
         raise ValueError(
+            "source positional defaults disagree with their function window"
+        )
+    if "build_offset" in port:
+        if not (
+            set(port) == {"count", "build_offset"}
+            and type(port["build_offset"]) is int
+            and result["offset"] == port["build_offset"]
+            and result.get("opcode") == "BUILD_TUPLE"
+            and type(result.get("oparg")) is int
+            and result["oparg"] == len(defaults)
+        ):
+            raise ValueError(
+                "source positional defaults require their original tuple build"
+            )
+        # Each expression owns its own instructions, including callbacks and reads.
+        # The compiler gives only the trailing tuple build the span of the definition.
+        i = 0
+        for operand in defaults:
+            position = _graph_position(operand, parent)
+            first = i
+            while i < len(prefix) - 1 and _inside_source(
+                position, prefix[i]["position"]
+            ):
+                i += 1
+            if first == i:
+                raise ValueError(
+                    "source positional defaults disagree with their ordered operands"
+                )
+            _bind_operand_instructions(operand, scope, position, prefix[first:i])
+        if i != len(prefix) - 1:
+            raise ValueError("source positional defaults contain unbound instructions")
+    elif not (
+        set(port) == {"index", "count"}
+        and type(port["index"]) is int
+        and len(prefix) == 1
+        and result.get("opcode") == "LOAD_CONST"
+        and type(result.get("index")) is int
+        and type(result.get("oparg")) is int
+        and 0 <= result["index"] == result["oparg"] == port["index"]
+        and result["index"] != child.get("index")
+        and result.get("type") == "tuple"
+        and type(result.get("item_count")) is int
+        and result["item_count"] == len(defaults)
+        and (fingerprint := _default_items_sha256(defaults)) is not None
+        and result.get("items_sha256") == fingerprint
+    ):
+        raise ValueError(
             "source positional defaults disagree with their function and operands"
         )
+    return child, make, suffix[-1]
 
 
 def bind_source_definition(node, scope, declarations):
@@ -1080,16 +1131,16 @@ def bind_source_definition(node, scope, declarations):
         isinstance(rows, list)
         and all(
             isinstance(row, dict)
-            and row.get("position") == proof["position"]
+            and _inside_source(proof["position"], row.get("position"))
             and type(row.get("offset")) is int
+            and row["offset"] >= 0
+            and row["offset"] % 2 == 0
             for row in rows
         )
     ):
         raise ValueError("source definition has invalid instruction positions")
     if node.get("defaults"):
-        _bind_positional_defaults(node, rows, declared, parent)
-        load, make = rows[1:3]
-        store = rows[-1]
+        load, make, store = _bind_positional_defaults(node, rows, declared, scope)
     elif len(rows) == 3 and "positional_defaults" not in proof:
         load, make, store = rows
         if "oparg" in make and (type(make["oparg"]) is not int or make["oparg"] != 0):
@@ -1100,6 +1151,7 @@ def bind_source_definition(node, scope, declarations):
         )
     if not (
         0 <= load["offset"] < make["offset"] < store["offset"]
+        and all(r["position"] == proof["position"] for r in (load, make, store))
         and load.get("opcode") == "LOAD_CONST"
         and make.get("opcode") == "MAKE_FUNCTION"
         and store.get("opcode") in {"STORE_NAME", "STORE_GLOBAL"}

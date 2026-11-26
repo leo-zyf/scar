@@ -58,6 +58,7 @@ public:
 enum class body_opcode {
   load_name,
   build_list,
+  build_defaults_tuple,
   list_extend,
   store_subscript,
   default_tuple,
@@ -320,16 +321,9 @@ outcome run_body(Frame &frame, const body_program &program) {
       requires { frame.make_function(*stack.back(), *stack.back()); };
   constexpr bool sets_defaults =
       requires { frame.set_function_defaults(*stack.back(), *stack.back()); };
-  if constexpr (!checks_tuple || !creates_with_defaults || !sets_defaults) {
-    for (const auto &ins : program.instructions)
-      if ((!checks_tuple && ins.operation == body_opcode::default_tuple) ||
-          (!creates_with_defaults &&
-           ins.operation == body_opcode::make_function && ins.operand == 1) ||
-          (!sets_defaults &&
-           ins.operation == body_opcode::set_function_defaults))
-        return outcome::unmatched;
-  }
   constexpr bool loads_names = requires { frame.load_name(0u); };
+  constexpr bool builds_tuples =
+      requires { frame.build_tuple(std::span(stack)); };
   constexpr bool builds_lists =
       requires { frame.build_list(std::span(stack)); };
   constexpr bool extends_lists =
@@ -338,13 +332,20 @@ outcome run_body(Frame &frame, const body_program &program) {
     frame.admit_subscript_region(program);
     frame.store_subscript(*stack.back(), *stack.back(), *stack.back());
   };
+  for (const auto &ins : program.instructions)
+    if ((!checks_tuple && ins.operation == body_opcode::default_tuple) ||
+        (!creates_with_defaults &&
+         ins.operation == body_opcode::make_function && ins.operand == 1) ||
+        (!sets_defaults &&
+         ins.operation == body_opcode::set_function_defaults) ||
+        (!loads_names && ins.operation == body_opcode::load_name) ||
+        (!builds_tuples &&
+         ins.operation == body_opcode::build_defaults_tuple) ||
+        (!builds_lists && ins.operation == body_opcode::build_list) ||
+        (!extends_lists && ins.operation == body_opcode::list_extend))
+      return outcome::unmatched;
   if (program.instructions.back().operation == body_opcode::store_subscript) {
     if constexpr (stores_items) {
-      for (const auto &ins : program.instructions)
-        if ((!loads_names && ins.operation == body_opcode::load_name) ||
-            (!builds_lists && ins.operation == body_opcode::build_list) ||
-            (!extends_lists && ins.operation == body_opcode::list_extend))
-          return outcome::unmatched;
       // Admission guarantees source-equivalent dispatch for this live frame.
       // It must precede allocation, mapping lookups and all source callbacks.
       if (!frame.admit_subscript_region(program))
@@ -371,6 +372,15 @@ outcome run_body(Frame &frame, const body_program &program) {
           auto items = std::span(stack).last(ins.operand);
           auto list = frame.build_list(items);
           frame.replace(ins.operand, std::move(list));
+        }
+        break;
+      case body_opcode::build_defaults_tuple:
+        if constexpr (builds_tuples) {
+          if (pending_defaults || stack.size() - base != ins.operand)
+            return outcome::continued_in_host;
+          auto tuple = frame.build_tuple(std::span(stack).last(ins.operand));
+          frame.replace(ins.operand, std::move(tuple));
+          pending_defaults = true;
         }
         break;
       case body_opcode::list_extend:

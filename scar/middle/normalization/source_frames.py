@@ -1021,7 +1021,17 @@ class SourceExpressionRegion:
                 "function creation requires the sealed ordinary definition in this module"
             )
         default_ref = None
-        if defaults is not None:
+        if defaults is not None and "build_offset" in defaults:
+            values = [self.value(operand) for operand in node["defaults"]]
+            default_ref = self.build_sequence(node, "BUILD_TUPLE", values)
+            if defaults != {
+                "count": len(values),
+                "build_offset": default_ref["from_offset"],
+            }:
+                raise ValueError(
+                    "function defaults disagree with the defining tuple build"
+                )
+        elif defaults is not None:
             pool = self.take("LOAD_CONST", source=node)
             if (
                 pool.get("type") != "tuple"

@@ -167,6 +167,51 @@ def _constant_store(op, code, offset, slots):
     ]
 
 
+def _frame_operand(ins, step, code):
+    """Read one positioned stack operand from the original module frame."""
+    opcode, arg, pc = ins["opcode"], ins.get("oparg"), ins["offset"]
+    if type(arg) is not int or not 0 <= arg < 2**32 or step.get("offset") != pc:
+        return None
+    if opcode == "LOAD_NAME":
+        field = step.get("instruction", {})
+        name = ins.get("name")
+        if (
+            step.get("op") == "module_name_load"
+            and step.get("lookup_order")
+            == ["frame.locals", "frame.globals", "frame.builtins"]
+            and field.get("code_sha256") == code["code_sha256"]
+            and all(
+                field.get(k) == ins.get(k)
+                for k in ("opcode", "offset", "position", "oparg", "index", "name")
+            )
+            and ins.get("index") == arg
+            and isinstance(name, str)
+            and name.isidentifier()
+        ):
+            return [opcode, pc, arg, name]
+    elif step.get("op") == "source_object_constant" and step.get("operand") == arg:
+        if (
+            opcode == "LOAD_CONST"
+            and ins.get("index") == arg
+            and step.get("source") == "current_frame_co_consts"
+        ):
+            identity = (
+                ins.get("items_sha256")
+                if ins.get("type") == "tuple"
+                else ins.get("value_sha256")
+            )
+            if isinstance(identity, str) and len(identity) == 64:
+                return ["LOAD_FRAME_CONST", pc, arg, identity]
+        if (
+            opcode == "LOAD_SMALL_INT"
+            and code["compiler"].startswith("cpython 3.14.")
+            and arg < 256
+            and step.get("source") == "source_small_integer"
+        ):
+            return [opcode, pc, arg, ""]
+    return None
+
+
 def _function_store(op, code, offset):
     from scar.contract import source_function_publication
 
@@ -176,26 +221,58 @@ def _function_store(op, code, offset):
     make, store, child = publication
     proof = op["source_definition"]
     source = proof["instructions"]
-    if any(ins["offset"] != offset + i * 2 for i, ins in enumerate(source)):
+    if len(op["evaluation"]) != len(source) - 1 or any(
+        ins["offset"] != offset + i * 2 for i, ins in enumerate(source)
+    ):
         return []
     defaults = proof.get("positional_defaults")
-    begin = int(defaults is not None)
+    split = source[-2]["opcode"] == "SET_FUNCTION_ATTRIBUTE"
+    begin = len(source) - 3 - int(split)
     load, creation = source[begin : begin + 2]
-    if store["index"] != store["oparg"]:
+    namespace = "frame.locals" if store["opcode"] == "STORE_NAME" else "frame.globals"
+    if (
+        store["index"] != store["oparg"]
+        or op.get("namespace") != namespace
+        or op["target"].get("namespace") != namespace
+        or op.get("store_opcode") != store["opcode"]
+        or op.get("name") != store["name"]
+    ):
         return []
     group = []
     if defaults is not None:
         compiler = code.get("compiler", "").split(".")
-        if (
-            compiler[:2]
-            not in (["cpython 3", "12"], ["cpython 3", "13"], ["cpython 3", "14"])
-            or (len(source) == 4) != (compiler[1] == "12")
-            or defaults["index"] == load["index"]
-        ):
+        if compiler[:2] not in (
+            ["cpython 3", "12"],
+            ["cpython 3", "13"],
+            ["cpython 3", "14"],
+        ) or split != (compiler[1] != "12"):
             return []
-        group.append(
-            ["LOAD_DEFAULT_TUPLE", offset, defaults["index"], defaults["count"]]
-        )
+        count = defaults["count"]
+        if "index" in defaults:
+            if begin != 1 or defaults["index"] == load["index"]:
+                return []
+            group.append(["LOAD_DEFAULT_TUPLE", offset, defaults["index"], count])
+        else:
+            if begin != count + 1:
+                return []
+            for ins, step in zip(source[:count], op["evaluation"]):
+                operand = _frame_operand(ins, step, code)
+                if not operand:
+                    return []
+                group.append(operand)
+            build, step = source[count], op["evaluation"][count]
+            if (
+                build["opcode"] != "BUILD_TUPLE"
+                or build.get("oparg") != count
+                or build["offset"] != defaults.get("build_offset")
+                or step.get("op") != "source_object_build_sequence"
+                or step.get("offset") != build["offset"]
+                or step.get("opcode") != "BUILD_TUPLE"
+                or step.get("may_raise") is not True
+                or step.get("items") != [{"from_offset": row[1]} for row in group]
+            ):
+                return []
+            group.append(["BUILD_TUPLE", build["offset"], count, ""])
     group.extend(
         [
             ["LOAD_CHILD_CODE", load["offset"], load["index"], child["code_sha256"]],
@@ -253,48 +330,14 @@ def _subscript_store(op, code):
             or (program and pc != program[-1][1] + 2)
         ):
             return []
-        if opcode in {"LOAD_CONST", "LOAD_SMALL_INT"}:
-            pool = opcode == "LOAD_CONST"
-            if (
-                kind != "source_object_constant"
-                or step.get("source")
-                != ("current_frame_co_consts" if pool else "source_small_integer")
-                or step.get("operand") != arg
-                or pool
-                and ins.get("index") != arg
-                or not pool
-                and (not code["compiler"].startswith("cpython 3.14.") or arg > 255)
-            ):
-                return []
-            if pool:
-                opcode = "LOAD_FRAME_CONST"
-                name = (
-                    ins.get("items_sha256")
-                    if ins.get("type") == "tuple"
-                    else ins.get("value_sha256")
-                )
-                if not isinstance(name, str) or len(name) != 64:
-                    return []
-            stack.append({"from_offset": pc})
-        elif opcode == "LOAD_NAME":
-            field = step.get("instruction", {})
-            name = ins.get("name")
-            if (
-                kind != "module_name_load"
-                or step.get("lookup_order")
-                != ["frame.locals", "frame.globals", "frame.builtins"]
-                or field.get("code_sha256") != code["code_sha256"]
-                or any(
-                    field.get(k) != ins.get(k)
-                    for k in ("opcode", "offset", "position", "oparg", "index", "name")
-                )
-                or ins.get("index") != arg
-                or not isinstance(name, str)
-                or not name.isidentifier()
-            ):
+        if opcode in {"LOAD_CONST", "LOAD_SMALL_INT", "LOAD_NAME"}:
+            operand = _frame_operand(ins, step, code)
+            if not operand:
                 return []
             stack.append({"from_offset": pc})
-        elif opcode == "BUILD_LIST":
+            program.append(operand)
+            continue
+        if opcode == "BUILD_LIST":
             if (
                 kind != "source_object_build_sequence"
                 or step.get("opcode") != opcode
@@ -513,7 +556,10 @@ def activation_bodies(dispatch, checked):
                         body["resume_offset"] = successor["offset"]
                     if steps[0][1] != 2:
                         body["entry_offset"] = steps[0][1]
-                    if any(step[0] == "LOAD_DEFAULT_TUPLE" for step in steps):
+                    if any(
+                        step[0] in {"LOAD_DEFAULT_TUPLE", "BUILD_TUPLE"}
+                        for step in steps
+                    ):
                         body["minor"] = int(code["compiler"].split(".")[1])
                     if key in bodies and bodies[key] != body:
                         raise ValueError(

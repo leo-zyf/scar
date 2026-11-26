@@ -4274,3 +4274,94 @@ def test_function_truth_jump_binds_one_source_value_and_two_return_arms(tmp_path
                 == ("external" if name == "global_name" else "flag")
             )
             assert len(rows) == 2 + int(sys.version_info >= (3, 13))
+
+
+def test_definition_binds_each_runtime_default_to_the_parent_frame(tmp_path):
+    import dis
+    from types import CodeType
+
+    from scar.contract import read_member
+    from scar.frontend import build
+    from scar.frontend.languages.python.environment import code_digest
+
+    path = tmp_path / "default_frame.py"
+    path.write_text(
+        "global choose\n"
+        "def selected(a=left, /, b=choose(right), c=0, d=[], e=left):\n"
+        "    return a\n"
+        "def pooled(a=(1, 2)): pass\n"
+        "def conditional(a=left if switch else right): pass\n"
+        "def keyword(*, a=left): pass\n"
+        "try: work()\n"
+        "finally:\n"
+        "    def repeated(a=left): pass\n"
+    )
+    parent = compile(path.read_bytes(), str(path), "exec", dont_inherit=True)
+    real = list(dis.get_instructions(parent))
+    out = tmp_path / "graph"
+    build(path, out)
+    [unit] = json.loads((out / "graph.json").read_bytes())["units"]
+    funcs = read_member(out, unit["graph"])["functions"]
+    module = next(
+        f for f in funcs if f["signature"]["python_scope"]["kind"] == "module"
+    )
+    definitions = {
+        n["symbol"].split(":")[-1]: n
+        for n in module["nodes"]
+        if n["op"] == "python_define"
+    }
+    assert {k for k, n in definitions.items() if "source_definition" in n} == {
+        "selected",
+        "pooled",
+    }
+    node = definitions["selected"]
+    proof = node["source_definition"]
+    rows = proof["instructions"]
+    assert proof["code_sha256"] == code_digest(parent)
+    window = [i for i in real if rows[0]["offset"] <= i.offset <= rows[-1]["offset"]]
+    assert [
+        (r["opcode"], r["offset"], r.get("oparg"), r["position"]) for r in rows
+    ] == [(i.opname, i.offset, i.arg, list(i.positions)) for i in window]
+    packed = next(i for i, r in enumerate(rows) if r["opcode"] == "BUILD_TUPLE")
+    assert proof["positional_defaults"] == {
+        "count": 5,
+        "build_offset": rows[packed]["offset"],
+    }
+    assert rows[packed]["oparg"] == 5 and rows[packed]["position"] == proof["position"]
+    child = parent.co_consts[rows[packed + 1]["index"]]
+    assert (
+        type(child) is CodeType and code_digest(child) == proof["child"]["code_sha256"]
+    )
+    inner = next(f for f in funcs if f["signature"]["name"] == node["symbol"])
+    assert inner["signature"]["python_scope"]["definition_code"] == proof["child"]
+    assert any("source_expression" in n for n in inner["nodes"] if n["op"] == "return")
+    assert [r["opcode"] for r in rows[packed + 1 :]] == [
+        "LOAD_CONST",
+        "MAKE_FUNCTION",
+        *(["SET_FUNCTION_ATTRIBUTE"] if window[packed + 2].arg is None else []),
+        "STORE_NAME",
+    ]
+    reads = [r for r in rows if r["opcode"] in {"LOAD_NAME", "LOAD_GLOBAL"}]
+    assert [r["name"] for r in reads] == ["left", "choose", "right", "left"]
+    loads = {
+        n["source_name_load"]["offset"]: n["source_name_load"]
+        for n in module["nodes"]
+        if "source_name_load" in n
+    }
+    for read in reads:
+        assert loads[read["offset"]] == dict(
+            read, semantics_version=1, code_sha256=proof["code_sha256"]
+        )
+    args = [module["nodes"][p["port"]] for p in node["defaults"]]
+    assert [args[i]["source_name_load"]["offset"] for i in (0, 4)] == [
+        reads[0]["offset"],
+        reads[-1]["offset"],
+    ]
+    assert args[2]["value"] == 0
+    # A prebuilt pool tuple has its own identity and the historical one-load receipt.
+    pooled = definitions["pooled"]["source_definition"]
+    assert pooled["positional_defaults"] == {
+        "count": 1,
+        "index": pooled["instructions"][0]["index"],
+    }
+    assert parent.co_consts[pooled["positional_defaults"]["index"]] == ((1, 2),)

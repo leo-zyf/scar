@@ -209,7 +209,13 @@ def test_binding_checks_original_positional_defaults_tuple_and_creation_window(
         for f in payload["functions"]
         if f["signature"].get("python_scope", {}).get("kind") == "module"
     )
-    [creation] = [n for n in mod["nodes"] if "source_definition" in n]
+    definitions = {
+        n["source_definition"]["child"]["name"]: n
+        for n in mod["nodes"]
+        if "source_definition" in n
+    }
+    assert set(definitions) == {"sample", "mutable", "evaluated"}
+    creation = definitions["sample"]
     proof = creation["source_definition"]
     window = proof["instructions"]
     assert [r["opcode"] for r in window] == [
@@ -275,7 +281,9 @@ def test_function_construction_uses_the_declared_child_code(tmp_path):
     first, second, evaluated = [
         n for n in module["nodes"] if n["op"] == "python_define"
     ]
-    assert "source_definition" not in evaluated
+    proof = evaluated["source_definition"]
+    assert proof["positional_defaults"]["count"] == 1
+    assert "CALL" in [r["opcode"] for r in proof["instructions"]]
     assert first["source_definition"]["child"]["name"] == "first"
     assert second["source_definition"]["child"]["name"] == "second"
     source.unlink()
@@ -9331,22 +9339,23 @@ def test_open_function_definition_publishes_fresh_object_with_current_builtins(
     report = json.loads((out / "plan.json").read_bytes())
     [gap] = report["issues"]
     assert (gap["location"]["line"], gap["code"]) == (
-        9,
-        "python.source_definition_evidence",
+        1,
+        "python.loader_activation_contract",
     )
     ref = next(
         r
-        for r in report["protocol_analysis"]["prefix_fragments"]
+        for r in report["protocol_analysis"]["conditional_loader_fragments"]
         if r["symbol"] == "py:pkg:<init>"
     )
     defs = [
         s["value"]
-        for s in read_member(out, ref["fragment"])["body"]
+        for s in read_member(out, ref["function"])["body"]
         if "source_definition" in s.get("value", {})
     ]
-    assert [d["store_opcode"] for d in defs] == ["STORE_NAME", "STORE_GLOBAL"]
-    assert [d["name"] for d in defs] == ["first", "other"]
-    for d in defs:
+    assert [d["name"] for d in defs] == ["first", "other", "restricted", "declaration"]
+    assert [d["store_opcode"] for d in defs[:2]] == ["STORE_NAME", "STORE_GLOBAL"]
+    assert ref["completion"] == "conditional_source_body"
+    for d in defs[:2]:
         load, make = d["evaluation"]
         port = d["source_definition"]
         assert d["op"] == "module_global_store" and d["external_effect"] == "UNKNOWN"
@@ -10732,17 +10741,29 @@ def test_open_module_keeps_default_tuple_identity_through_function_publication(
     module.unlink()
     plan(graph, output)
     report = json.loads((output / "plan.json").read_bytes())
-    assert report["issues"][0]["location"]["line"] == 5
+    assert report["issues"][0]["code"] == "python.loader_activation_contract"
     part = next(
         p
-        for p in report["protocol_analysis"]["prefix_fragments"]
+        for p in report["protocol_analysis"]["conditional_loader_fragments"]
         if p["symbol"] == "py:package:<init>"
     )
-    store = next(
-        s["value"]
-        for s in read_member(output, part["fragment"])["body"]
-        if s.get("value", {}).get("name") == "chosen"
+    assert part["completion"] == "conditional_source_body"
+    stores = {
+        s["value"]["name"]: s["value"]
+        for s in read_member(output, part["function"])["body"]
+        if "source_definition" in s.get("value", {})
+    }
+    store, later = stores["chosen"], stores["later"]
+    receipt = later["source_definition"]
+    call = next(s for s in later["evaluation"] if s["op"] == "source_object_call")
+    packed = next(
+        s for s in later["evaluation"] if s["op"] == "source_object_build_sequence"
     )
+    assert packed["items"] == [{"from_offset": call["offset"]}]
+    assert packed["offset"] == receipt["positional_defaults"]["build_offset"]
+    assert source_function_publication(later, receipt["code_sha256"]) is not None
+    assert "later" not in live
+
     proof = store["source_definition"]
     actual_tuple = actual.co_consts[proof["positional_defaults"]["index"]]
     assert live["chosen"].__defaults__ is actual_tuple
@@ -10805,12 +10826,12 @@ def test_module_subscription_keeps_source_order_folded_values_and_write_successo
     report = json.loads((output / "plan.json").read_bytes())
     ref = next(
         f
-        for f in report["protocol_analysis"]["prefix_fragments"]
+        for f in report["protocol_analysis"]["conditional_loader_fragments"]
         if f["symbol"] == "py:package:<init>"
     )
     store = next(
         s["value"]
-        for s in read_member(output, ref["fragment"])["body"]
+        for s in read_member(output, ref["function"])["body"]
         if s.get("value", {}).get("expression", {}).get("steps", [{}])[-1].get("op")
         == "source_object_setitem"
     )

@@ -1824,14 +1824,18 @@ def source_function_publication(store, parent_code_sha256):
     if not parent_code_sha256 or proof.get("code_sha256") != parent_code_sha256:
         return None
     defaults = proof.get("positional_defaults")
-    if len(source) not in {3, 4, 5} or len(steps) != len(source) - 1:
+    if len(source) < 3 or not steps:
         return None
-    child_index = int(defaults is not None)
-    split_attributes = len(source) == 5
-    if len(source) != 3 + child_index + int(split_attributes):
+    split_attributes = source[-2].get("opcode") == "SET_FUNCTION_ATTRIBUTE"
+    tail = 4 if split_attributes else 3
+    if len(source) < tail or len(steps) < tail - 1:
         return None
-    load, make = steps[child_index : child_index + 2]
-    load_ins, make_ins = source[child_index : child_index + 2]
+    prefix = source[:-tail]
+    operands = steps[: 1 - tail]
+    if bool(prefix) != (defaults is not None) or bool(operands) != bool(prefix):
+        return None
+    load, make = steps[1 - tail :][:2]
+    load_ins, make_ins = source[-tail:][:2]
     target = store["target"]["instruction"]
     child = proof["child"]
     if not (
@@ -1851,10 +1855,8 @@ def source_function_publication(store, parent_code_sha256):
         return None
     published = {"from_offset": make["offset"]}
     if defaults is not None:
-        pool, load_tuple = source[0], steps[0]
         if not (
             isinstance(defaults, dict)
-            and type(defaults.get("index")) is int
             and type(defaults.get("count")) is int
             and 0
             < defaults["count"]
@@ -1862,18 +1864,53 @@ def source_function_publication(store, parent_code_sha256):
                 kind in {"posonly", "positional"}
                 for kind, _ in child.get("parameters", ())
             )
-            and 0 <= defaults["index"] == pool.get("index") == pool.get("oparg")
-            and pool.get("opcode") == "LOAD_CONST"
-            and pool.get("type") == "tuple"
-            and pool.get("item_count") == defaults["count"]
-            and load_tuple.get("op") == "source_object_constant"
-            and load_tuple.get("source") == "current_frame_co_consts"
-            and load_tuple.get("operand") == defaults["index"]
-            and load_tuple.get("expected_tuple") == {"count": defaults["count"]}
-            and load_tuple.get("offset") == pool["offset"]
         ):
             return None
-        tuple_ref = {"from_offset": pool["offset"]}
+        result, produced = prefix[-1], operands[-1]
+        if produced.get("offset") != result["offset"]:
+            return None
+        if "build_offset" in defaults:
+            items = produced.get("items")
+            if not (
+                set(defaults) == {"count", "build_offset"}
+                and defaults["build_offset"] == result["offset"]
+                and result["opcode"] == produced.get("opcode") == "BUILD_TUPLE"
+                and result.get("oparg") == defaults["count"]
+                and produced.get("op") == "source_object_build_sequence"
+                and produced.get("may_raise") is True
+                and isinstance(items, list)
+                and len(items) == defaults["count"]
+            ):
+                return None
+            # Every default is a separate evaluation. Earlier items stay alive
+            # while the defining frame evaluates later ones and builds the tuple.
+            offsets = [
+                item.get("from_offset") for item in items if isinstance(item, dict)
+            ]
+            producers = {op.get("offset") for op in operands[:-1]}
+            if (
+                len(offsets) != len(items)
+                or any(
+                    type(pc) is not int or pc not in producers or pc >= result["offset"]
+                    for pc in offsets
+                )
+                or any(a >= b for a, b in zip(offsets, offsets[1:]))
+            ):
+                return None
+        elif not (
+            len(prefix) == len(operands) == 1
+            and type(defaults.get("index")) is int
+            and 0 <= defaults["index"] == result.get("index") == result.get("oparg")
+            and result.get("opcode") == "LOAD_CONST"
+            and result.get("type") == "tuple"
+            and result.get("item_count") == defaults["count"]
+            and produced.get("op") == "source_object_constant"
+            and produced.get("source") == "current_frame_co_consts"
+            and produced.get("operand") == defaults["index"]
+            and produced.get("expected_tuple") == {"count": defaults["count"]}
+        ):
+            return None
+        tuple_ref = {"from_offset": result["offset"]}
         if split_attributes:
             instruction, attach = source[-2], steps[-1]
             if not (
@@ -1891,7 +1928,7 @@ def source_function_publication(store, parent_code_sha256):
             published = {"from_offset": attach["offset"]}
         elif make_ins.get("oparg") != 1 or make.get("defaults") != tuple_ref:
             return None
-    elif make_ins.get("oparg", 0) != 0 or "defaults" in make:
+    elif split_attributes or make_ins.get("oparg", 0) != 0 or "defaults" in make:
         return None
     if store["value"] == published:
         return make, target, child

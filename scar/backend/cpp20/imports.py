@@ -5,6 +5,7 @@ from pathlib import Path
 from scar.contract import (
     digest,
     document,
+    json_bytes,
     member,
     read_member,
     valid_python_source_successor,
@@ -51,6 +52,7 @@ _BODY_OPERATIONS = {
     "LOAD_FRAME_CONST": "constant",
     "LOAD_NAME": "load_name",
     "BUILD_LIST": "build_list",
+    "BUILD_TUPLE": "build_defaults_tuple",
     "LIST_EXTEND": "list_extend",
     "STORE_SUBSCR": "store_subscript",
     "LOAD_CHILD_CODE": "child_code",
@@ -65,13 +67,43 @@ _BODY_OPERATIONS = {
 }
 
 
+def _frame_load(op, n, text):
+    return (
+        op == "LOAD_NAME"
+        and isinstance(text, str)
+        and text.isidentifier()
+        or op == "LOAD_FRAME_CONST"
+        and is_digest(text)
+        or op == "LOAD_SMALL_INT"
+        and type(n) is int
+        and 0 <= n < 256
+        and text == ""
+    )
+
+
 def _publication_end(row, pos):
     program = row["instructions"]
     defaults = program[pos][0] == "LOAD_DEFAULT_TUPLE"
     minor = row.get("minor")
+    start = pos + int(defaults)
+    if _frame_load(program[pos][0], *program[pos][2:]):
+        while start < len(program):
+            op, _, n, text = program[start]
+            if not _frame_load(op, n, text):
+                break
+            if op == "LOAD_SMALL_INT" and minor != 14:
+                raise ValueError("invalid immediate in function defaults")
+            start += 1
+        if (
+            start >= len(program)
+            or program[start][0] != "BUILD_TUPLE"
+            or program[start][2:] != [start - pos, ""]
+        ):
+            raise ValueError("invalid stack for function defaults tuple")
+        defaults = True
+        start += 1
     if defaults and minor not in (12, 13, 14):
         raise ValueError("invalid source version for function defaults")
-    start = pos + int(defaults)
     split = defaults and minor >= 13
     stop = start + 3 + int(split)
     group = program[start:stop]
@@ -104,16 +136,7 @@ def _validate_subscript(row):
     for i, (op, _, n, text) in enumerate(program):
         if type(n) is not int or not 0 <= n < 2**32:
             raise ValueError("invalid subscription instruction argument")
-        if (
-            op == "LOAD_NAME"
-            and isinstance(text, str)
-            and text.isidentifier()
-            or op == "LOAD_FRAME_CONST"
-            and is_digest(text)
-            or op == "LOAD_SMALL_INT"
-            and n < 256
-            and not text
-        ):
+        if _frame_load(op, n, text):
             stack.append("object")
         elif op == "BUILD_LIST" and not text and n <= len(stack):
             if n:
@@ -181,7 +204,11 @@ def _body_tables(rows, definitions):
                         raise ValueError("module constant publication lacks a name")
                     pos += 2
                     continue
-                if program[pos][0] not in {"LOAD_CHILD_CODE", "LOAD_DEFAULT_TUPLE"}:
+                op, _, n, text = program[pos]
+                if op not in {
+                    "LOAD_CHILD_CODE",
+                    "LOAD_DEFAULT_TUPLE",
+                } and not _frame_load(op, n, text):
                     break
                 pos = _publication_end(row, pos)
         tail = [ins[0] for ins in program[pos:]]
@@ -193,7 +220,10 @@ def _body_tables(rows, definitions):
         ):
             raise ValueError("invalid source activation return sequence")
         steps = []
-        slot_types = {int(index): ("literal",) for index in row["constants"]}
+        slot_types = {
+            int(index): ("LOAD_FRAME_CONST", digest(json_bytes(literal["value"])))
+            for index, literal in row["constants"].items()
+        }
         for opcode, offset, operand, spelling in program:
             tuple_size = 0
             if opcode == "LOAD_DEFAULT_TUPLE":

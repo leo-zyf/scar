@@ -3686,7 +3686,8 @@ int main(int argc,char **argv){
         )
 
 
-def test_native_definition_uses_original_positional_defaults(tmp_path):
+@pytest.mark.parametrize("dynamic", [False, True], ids=["pool", "runtime"])
+def test_native_definition_uses_original_positional_defaults(tmp_path, dynamic):
     from copy import deepcopy
 
     from scar.backend import compile_ir
@@ -3698,7 +3699,9 @@ def test_native_definition_uses_original_positional_defaults(tmp_path):
 
     entry, leaf = tmp_path / "run.py", tmp_path / "properties.py"
     entry.write_text("import properties\nprint(properties.label())\n")
-    leaf.write_text("def label(x=5, y=None):\n    return 'value'\n")
+    defaults = "x=seed, y=seed, z=None" if dynamic else "x=5, y=None"
+    prefix = "seed = 'initial'\n" if dynamic else ""
+    leaf.write_text(f"{prefix}def label({defaults}):\n    return 'value'\n")
     code = compile(leaf.read_bytes(), str(leaf), "exec")
     ns = {}
     exec(code, ns)
@@ -3709,14 +3712,51 @@ def test_native_definition_uses_original_positional_defaults(tmp_path):
     index = read_member(plan_dir, ir["module"]["source_dispatch"])
     (loader,) = index["loaders"]
     loader["function"] = read_member(plan_dir, loader["function"])
-    op = loader["function"]["body"][0]["value"]
+    def_index = int(dynamic)
+    op = loader["function"]["body"][def_index]["value"]
     proof = op["source_definition"]
-    slot = proof["positional_defaults"]["index"]
-    assert code.co_consts[slot] is ns["label"].__defaults__
-    assert code.co_consts[slot] == (5, None)
+    if dynamic:
+        assert ns["label"].__defaults__ == ("initial", "initial", None)
+        seen = []
+
+        class ChangingNames(dict):
+            def __getitem__(self, name):
+                if name == "seed":
+                    seen.append(object())
+                    return seen[-1]
+                return super().__getitem__(name)
+
+        local = ChangingNames()
+        exec(code, {}, local)
+        assert local["label"].__defaults__ == (*seen, None) and len(seen) == 2
+
+        class FailingNames(ChangingNames):
+            def __getitem__(self, name):
+                if name == "seed" and seen:
+                    raise RuntimeError("second lookup")
+                return super().__getitem__(name)
+
+        seen.clear()
+        failing = FailingNames()
+        with pytest.raises(RuntimeError, match="second lookup"):
+            exec(code, {}, failing)
+        assert len(seen) == 1 and dict(failing) == {"seed": "initial"}
+        slot = proof["instructions"][2]["index"]
+    else:
+        slot = proof["positional_defaults"]["index"]
+        assert code.co_consts[slot] is ns["label"].__defaults__
+        assert code.co_consts[slot] == (5, None)
     bad_loader = deepcopy(loader)
-    bad_loader["function"]["body"][0]["value"]["evaluation"][0]["operand"] += 1
-    assert not list(_module_intervals(bad_loader, {}))
+    evaluation = bad_loader["function"]["body"][def_index]["value"]["evaluation"]
+    if dynamic:
+        evaluation[3]["items"][:2] = evaluation[3]["items"][:2][::-1]
+    else:
+        evaluation[0]["operand"] += 1
+    assert all(
+        row[0] != "MAKE_FUNCTION"
+        for interval, _ in _module_intervals(bad_loader, {})
+        for row in interval
+    )
 
     entry.unlink()
     leaf.unlink()
@@ -3727,24 +3767,35 @@ def test_native_definition_uses_original_positional_defaults(tmp_path):
     (body,) = [
         r for r in read_member(delivery, schedule["bodies"]) if r["kind"] == "module"
     ]
-    steps = body["instructions"]
-    assert steps[0] == [
-        "LOAD_DEFAULT_TUPLE",
-        proof["instructions"][0]["offset"],
-        slot,
-        2,
-    ]
+    steps = body["instructions"][2 * int(dynamic) :]
+    if dynamic:
+        assert [s[0] for s in steps[:4]] == [
+            "LOAD_NAME",
+            "LOAD_NAME",
+            "LOAD_FRAME_CONST",
+            "BUILD_TUPLE",
+        ]
+        assert steps[3][1:] == [proof["positional_defaults"]["build_offset"], 3, ""]
+        assert steps[2][2] == slot
+    else:
+        assert steps[0] == [
+            "LOAD_DEFAULT_TUPLE",
+            proof["instructions"][0]["offset"],
+            slot,
+            2,
+        ]
     make = next(s for s in steps if s[0] == "MAKE_FUNCTION")
+    after_make = steps[steps.index(make) + 1]
     if sys.version_info.minor == 12:
-        assert make[2] == 1 and steps[3][0] == "STORE_NAME"
+        assert make[2] == 1 and after_make[0] == "STORE_NAME"
         failure_pc = make[1]
     else:
         assert (
             make[2] == 0
-            and steps[3][0] == "SET_FUNCTION_ATTRIBUTE"
-            and steps[3][2:] == [1, "defaults"]
+            and after_make[0] == "SET_FUNCTION_ATTRIBUTE"
+            and after_make[2:] == [1, "defaults"]
         )
-        failure_pc = steps[3][1]
+        failure_pc = after_make[1]
     bad = deepcopy(body)
     bad["minor"] = 14 if body["minor"] == 12 else 12
     with pytest.raises(ValueError, match="function publication"):
@@ -3761,9 +3812,14 @@ def test_native_definition_uses_original_positional_defaults(tmp_path):
     with pytest.raises(ValueError, match="instruction interval"):
         _body_tables([later], [])
     bad = deepcopy(body)
-    bad["instructions"][0][2] = steps[1][2]
-    with pytest.raises(ValueError, match="constant slot"):
-        _body_tables([bad], [])
+    if dynamic:
+        bad["instructions"][5][2] -= 1
+        with pytest.raises(ValueError, match="stack for function defaults"):
+            _body_tables([bad], [])
+    else:
+        bad["instructions"][0][2] = steps[1][2]
+        with pytest.raises(ValueError, match="constant slot"):
+            _body_tables([bad], [])
 
     # The fixture supplies the active code and pool. The typed program supplies
     # the operand index, attachment opcode, publication target and failure PC.
@@ -3777,6 +3833,22 @@ struct defaults_frame : activation {
   handle tuple = object_value("tuple"), created{};
   text mode{};
   unsigned error = 0;
+  std::vector<handle> seen{};
+  handle load_name(unsigned index) {
+    assert(index == 0 && module->attributes.contains("seed"));
+    if (mode == "fail_lookup" && !seen.empty()) throw std::runtime_error("lookup");
+    seen.push_back(object_value("current binding"));
+    return seen.back();
+  }
+  handle build_tuple(std::span<slot> items) {
+    assert(items.size() == 3 && seen.size() == 2 && seen[0] != seen[1]);
+    assert(items[0] == seen[0] && items[1] == seen[1] && items[2] == none);
+    if (mode == "fail_build") throw std::runtime_error("allocation");
+    tuple = object_value("tuple");
+    for (unsigned i = 0; i < items.size(); ++i)
+      tuple->attributes[std::to_string(i)] = *items[i];
+    return tuple;
+  }
   bool matches_defaults_tuple(const handle &v, unsigned arity) {
     return mode != "wrong_tuple" && v == tuple && arity == 2;
   }
@@ -3785,7 +3857,7 @@ struct defaults_frame : activation {
     return created = activation::make_function(code);
   }
   void set_function_defaults(const handle &fn, const handle &v) {
-    assert(fn == created && v == tuple && module->attributes.empty());
+    assert(fn == created && v == tuple && !module->attributes.contains("label"));
     if (mode == "fail") throw std::runtime_error("defaults");
     fn->attributes["__defaults__"] = v;
   }
@@ -3796,6 +3868,9 @@ struct defaults_frame : activation {
   }
   void unwind(unsigned pc, std::exception_ptr) { error = pc; }
 };
+struct without_tuple : defaults_frame {
+  handle build_tuple(std::span<slot>) = delete;
+};
 int main(int argc, char **argv) {
   assert(argc == 4);
   const body_provider provider{generated::bodies};
@@ -3803,18 +3878,34 @@ int main(int argc, char **argv) {
   auto module = object_value("module"), none = object_value("None");
   defaults_frame f{activation{body, provider, module, none}};
   f.mode = argv[1];
-  f.constants[std::stoul(argv[2])] = f.tuple;
+  const bool dynamic = body.instructions.front().operation == body_opcode::constant;
+  f.constants[std::stoul(argv[2])] = dynamic ? none : f.tuple;
   auto result = run_body(f, f.mode == "wrong_frame" ? child : body);
   if (f.mode == "ok") {
     assert(result == outcome::completed && module->attributes.at("label") == f.created);
     assert(f.created->attributes.at("__defaults__") == f.tuple && f.returned == none);
+    if (dynamic) {
+      std::weak_ptr<value> first = f.seen[0], second = f.seen[1];
+      f.seen.clear();
+      assert(first.lock() == f.tuple->attributes.at("0") && second.lock() == f.tuple->attributes.at("1"));
+    }
   } else {
-    assert(module->attributes.empty() && !f.returned);
+    if (f.mode == "fail_lookup")
+      assert(!f.created && f.values.size() == 1 && f.values[0] == f.seen[0]);
+    if (f.mode == "fail_build")
+      assert(!f.created && f.values.size() == 3 && f.values[1] == f.seen[1]);
+    assert(!module->attributes.contains("label") && !f.returned);
+    assert(module->attributes.contains("seed") == (dynamic && f.mode != "wrong_frame"));
     assert(f.error == std::stoul(argv[3]));
     assert(result == (f.mode == "wrong_frame" ? outcome::unmatched : outcome::continued_in_host));
   }
-  activation legacy{body, provider, module, none};
-  assert(run_body(legacy, body) == outcome::unmatched && legacy.values.empty());
+  if (dynamic) {
+    without_tuple missing{defaults_frame{activation{body, provider, object_value("empty"), none}}};
+    assert(run_body(missing, body) == outcome::unmatched);
+    assert(missing.seen.empty() && missing.module->attributes.empty() && missing.values.empty());
+  }
+  activation legacy{body, provider, object_value("empty"), none};
+  assert(run_body(legacy, body) == outcome::unmatched && legacy.values.empty() && legacy.module->attributes.empty());
 }
 """)
     built = tmp_path / "defaults"
@@ -3841,8 +3932,11 @@ int main(int argc, char **argv) {
         ("fail", failure_pc),
         ("fail_make", make[1]),
         ("wrong_frame", 0),
-        ("wrong_tuple", 0),
-    ]:
+    ] + (
+        [("fail_lookup", steps[1][1]), ("fail_build", steps[3][1])]
+        if dynamic
+        else [("wrong_tuple", 0)]
+    ):
         subprocess.run([built, mode, str(slot), str(error_offset)], check=True)
 
 
