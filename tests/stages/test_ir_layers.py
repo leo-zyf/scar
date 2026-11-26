@@ -5884,6 +5884,61 @@ def test_string_map_insertions_are_conditional_sources_of_open_operand(tmp_path)
     )
 
 
+def test_stream_extractions_keep_conditional_by_value_consumers_separate(tmp_path):
+    from scar.contract import read_member
+    from scar.frontend import build
+    from scar.middle import plan
+
+    source = tmp_path / "entry.cpp"
+    source.write_text(
+        "#include <fstream>\n#include <string>\n"
+        "int consume(std::string s, int k) { return int(s.size())+k; }\n"
+        'int mutate(std::string &s) { s="changed"; return 0; }\n'
+        "int main(int argc,char **argv) { std::ifstream in(argv[0]); char a[8],b[8]; std::string s;\n"
+        "in.getline(a,8,';'); s=a; int first=consume(s,argc);\n"
+        "in.getline(b,8); s=a; int other=consume(s,argc);\n"
+        "in.getline(a,0); s=a; int empty=consume(s,argc);\n"
+        "in.getline(a,8); s=a; int second=consume(s,argc);\n"
+        "in.getline(a,8); s=a; return consume(s,mutate(s)); }\n"
+    )
+    request = tmp_path / "request.json"
+    request.write_text(
+        json.dumps(
+            dict(
+                source_root=str(tmp_path),
+                entry="main",
+                units=[dict(path=source.name, language="c++", flags=["-std=c++17"])],
+            )
+        )
+    )
+    graph, out = tmp_path / "graph", tmp_path / "plan"
+    build(request, graph)
+    source.unlink()
+    assert plan(graph, out)["status"] == "READY"
+    ir = json.loads((out / "exec-ir.json").read_bytes())
+    flow = read_member(out, ir["module"]["resource_model"]["artifact_flow"])
+    nodes = {n["id"]: n for n in flow["nodes"]}
+    copies = [e for e in flow["edges"] if e["kind"] == "COPIES_EXTRACTED_C_STRING"]
+    calls = [e for e in flow["edges"] if e["kind"] == "SUPPLIES_STRING_CALL_ARGUMENT"]
+    assert len(copies) == len(calls) == 2 and len({c["source"] for c in copies}) == 2
+    assert {c["target"] for c in copies} == {c["source"] for c in calls}
+    assert all(
+        c["conditional"] and c["operand"] == ["args", 0] and c["passing"] == "value"
+        for c in calls
+    )
+    assert all(
+        c["extent"] == "characters_before_first_nul" and c["conditional"]
+        for c in copies
+    )
+    assert all(nodes[c["source"]]["form"] == "conditional_stream_write" for c in copies)
+    req = [n for n in nodes.values() if n.get("role") == "runtime_stream_read"]
+    assert len(req) == 5 and len({r["consumer"] for r in req}) == 5
+    assert all(
+        r["value"] is None and r["historical_instance"] == "not_established"
+        for r in req
+    )
+
+
 def test_native_stream_input_ports_preserve_conditional_buffer_versions():
     from scar.contract import ARTIFACT_FLOW
 
@@ -7868,6 +7923,110 @@ def test_counted_loop_only_drops_remainders_with_a_stable_induction_domain():
         0, dict(op="decl", name="n", type="i64", init=constant(1))
     )
     assert not reduced(shadow)
+
+
+def test_loop_invariants_move_to_the_outermost_proven_preheader():
+    from scar.middle.rewrites import optimize
+
+    def var(name):
+        return dict(op="var", name=name)
+
+    def literal(value):
+        return dict(op="literal", type="u64", value=value)
+
+    def binary(operator, left, right, **fields):
+        return dict(op="binary", operator=operator, left=left, right=right, **fields)
+
+    def loop(name, limit, body):
+        return dict(
+            op="for",
+            site=name + "-loop",
+            init=[dict(op="decl", name=name, type="u64", init=literal(0))],
+            condition=binary("lt", var(name), limit),
+            step=dict(op="unary", operator="preinc", value=var(name)),
+            body=body,
+        )
+
+    def consume(value):
+        return dict(op="assign", target=var("answer"), value=value)
+
+    repeated = binary("mul", var("x"), literal(101), site="invariant")
+    local = binary("mul", var("x"), var("i"), site="outer-index")
+    division = binary("div", var("x"), var("denominator"), site="may-trap")
+    unstable = binary("mul", var("changed"), literal(5), site="loop-carried")
+    external = binary("mul", var("aliased"), literal(5), site="address-taken")
+    function = _canonical_function(
+        dict(
+            name="calculate",
+            params=[
+                dict(name=n, type="u64")
+                for n in ("x", "denominator", "count", "aliased")
+            ],
+            result="u64",
+            body=[
+                dict(op="decl", name="answer", type="u64", init=literal(0)),
+                dict(op="decl", name="changed", type="u64", init=literal(2)),
+                dict(
+                    op="expr",
+                    value=dict(op="unary", operator="addr", value=var("aliased")),
+                ),
+                loop(
+                    "i",
+                    var("count"),
+                    [
+                        loop(
+                            "j",
+                            literal(4),
+                            [
+                                dict(
+                                    op="decl",
+                                    name="scale",
+                                    type="u64",
+                                    init=deepcopy(repeated),
+                                ),
+                                consume(repeated),
+                                consume(deepcopy(repeated)),
+                                consume(
+                                    binary(
+                                        "add", var("scale"), literal(9), site="composed"
+                                    )
+                                ),
+                                consume(local),
+                                dict(
+                                    op="if",
+                                    condition=var("denominator"),
+                                    then=[consume(division)],
+                                ),
+                                consume(unstable),
+                                consume(external),
+                                dict(
+                                    op="expr",
+                                    value=dict(
+                                        op="unary",
+                                        operator="preinc",
+                                        value=var("changed"),
+                                    ),
+                                ),
+                            ],
+                        ),
+                    ],
+                ),
+                dict(op="return", value=var("answer")),
+            ],
+        )
+    )
+    changes = [r for r in optimize(function) if r["rule"] == "loop_invariant_motion"]
+    assert [(r["site"], r["loop"], r["dependencies"]) for r in changes] == [
+        ("invariant", "i-loop", ["x"]),
+        ("composed", "i-loop", [changes[0]["slot"]]),
+        ("outer-index", "j-loop", ["i", "x"]),
+    ]
+    outer, inner = function["body"][3], function["body"][3]["body"][0]
+    assert [step["name"] for step in [*outer["init"][1:], *inner["init"][1:]]] == [
+        r["slot"] for r in changes
+    ]
+    assert inner["body"][1]["value"] == inner["body"][2]["value"]
+    assert inner["body"][5]["then"][0]["value"]["operator"] == "div"
 
 
 def test_math_operand_sharing_preserves_effectful_calls_and_control():

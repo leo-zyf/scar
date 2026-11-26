@@ -737,6 +737,7 @@ class _Function:
             types["global", name] = row["type"]
             if _storage(row["type"]):
                 self.declare(row, state, ("global", name), "global")
+        self.types = types
         self.map_strings = (
             _StringMap(self, types)
             if self.structured and _STRING_MAP in types.values()
@@ -1395,6 +1396,92 @@ class _Function:
             )
         return _Value(stream=handle)
 
+    def line_consumer(self, body, i, state, path):
+        """Connect an extracted buffer to an immediately copied by-value call operand."""
+        read = body[i]["value"]
+        if not self.structured or i + 2 >= len(body):
+            return
+        assign = body[i + 1].get("value")
+        if (
+            body[i + 1]["op"] != "expr"
+            or not isinstance(assign, dict)
+            or not _library_call(assign, "operator=", ["pointer"])
+        ):
+            return
+        variable = assign.get("receiver", {})
+        slot = variable.get("scope"), variable.get("name")
+        if variable.get("op") != "var" or self.types.get(slot) != _STRING:
+            return
+        # Restrict both pointers to the same tracked storage. An offset or open
+        # pointer computation cannot identify the first character of this write.
+        dest = self.simple(read["args"][0], state).locator if read.get("args") else None
+        src = self.simple(assign["args"][0], state).locator
+        reaching = state.versions.get(dest) if dest and dest == src else None
+        version = self.g.nodes.get(reaching.ref, {}) if reaching else {}
+        if version.get("form") != "conditional_stream_write" or version[
+            "producer"
+        ] != self.op(read, (*path, i, "value")):
+            return
+        following = body[i + 2]
+        field = {"decl": "init", "expr": "value", "return": "value"}.get(
+            following["op"]
+        )
+        call = following.get(field) or {}
+        if (
+            not isinstance(call, dict)
+            or call.get("op") != "call"
+            or not call.get("callee")
+        ):
+            return
+        args = call["args"]
+        params = call.get("parameter_types", ())
+        if len(args) != len(params):
+            return
+        copies = []
+        for index, (arg, param) in enumerate(zip(args, params)):
+            if param == _STRING and _library_construct(arg, _STRING, ["reference"]):
+                copied = _unqualify(arg["args"][0])
+                if (
+                    copied.get("op") == "var"
+                    and (copied.get("scope"), copied.get("name")) == slot
+                ):
+                    copies.append(index)
+                    continue
+            if any(
+                n["op"] not in {"var", "literal", "cast", "library_value"}
+                for n in walk_operations(arg)
+            ):
+                return
+        if copies:
+            assignment = self.op(assign, (*path, i + 1, "value"))
+            self.g.edge(
+                "COPIES_EXTRACTED_C_STRING",
+                reaching.ref,
+                assignment,
+                operand=["args", 0],
+                extent="characters_before_first_nul",
+                conditional=True,
+                requires=[
+                    "getline_wrote_a_terminated_sequence_at_this_address",
+                    "same_buffer_contents_reach_normal_string_assignment",
+                ],
+            )
+            consumer = self.op(call, (*path, i + 2, field))
+            for index in copies:
+                self.g.edge(
+                    "SUPPLIES_STRING_CALL_ARGUMENT",
+                    assignment,
+                    consumer,
+                    operand=["args", index],
+                    callee=call["callee"],
+                    passing="value",
+                    conditional=True,
+                    requires=[
+                        "same_live_string_contents_reach_copy_construction",
+                        "argument_construction_and_call_entry_succeed",
+                    ],
+                )
+
     def transfer(self, node, effect, values, state, path):
         g = self.g
         g.calls += 1
@@ -1711,6 +1798,11 @@ class _Function:
                 self.store(stmt["target"], value, state, stmt, here)
             elif op == "expr":
                 self.expr(stmt["value"], state, (*here, "value"))
+                if (
+                    stmt["value"].get("artifact_effect", {}).get("interface")
+                    == "stream.getline_into"
+                ):
+                    self.line_consumer(body, i, state, path)
                 if self.map_strings:
                     self.map_strings.statement(stmt, state.map_origins, here)
                 if self.structured and calls_libc_exit(stmt["value"], self.externs):

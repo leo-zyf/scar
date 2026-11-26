@@ -8,6 +8,11 @@ from scar.contract import (
     semantic_form as semantics,
 )
 from .contracts import is_complete, publish_program, require_program
+from .loop_invariants import (
+    hoist as hoist_loop_invariants,
+    scalar_write,
+    summarize_calls,
+)
 from .math_operands import analyze as analyze_math_operands
 
 
@@ -24,13 +29,14 @@ def rewrite(module):
             if d["name"] not in definitions
             and (abi := external_math_declaration(d)) is not None
         }
+        scalar_calls = summarize_calls(module["functions"])
         for source in module["functions"]:
             function = dict(source)
             # optimize rebuilds the body before changing it. Its ownership
             # annotations also need a private copy; the remaining fields are read-only.
             if "state_contract" in source:
                 function["state_contract"] = deepcopy(source["state_contract"])
-            changes.extend(optimize(function))
+            changes.extend(optimize(function, scalar_calls=scalar_calls))
             changes.extend(analyze_math_operands(function, math, _introduced_scalar))
             result["functions"].append(function)
     return publish_program(result, "M3", complete=is_complete(module)), changes
@@ -292,19 +298,7 @@ def _bounded_coordinates(fn, changes):
         return None
 
     def writes(value):
-        names = set()
-        for node in _nodes(value):
-            target = node.get("target") if node["op"] in {"assign", "update"} else None
-            if node["op"] == "unary" and node["operator"] in {
-                "preinc",
-                "postinc",
-                "predec",
-                "postdec",
-            }:
-                target = node["value"]
-            if isinstance(target, dict) and target.get("op") == "var":
-                names.add(target["name"])
-        return names
+        return {name for node in _nodes(value) if (name := scalar_write(node))}
 
     def invalidate(env, names):
         for name in names:
@@ -992,7 +986,7 @@ def _forward_materializations(fn, changes):
     sequence(fn["body"])
 
 
-def optimize(fn):
+def optimize(fn, *, scalar_calls=None):
     changes = []
     fn["body"] = _fold(fn["body"], changes)
     _bounded_coordinates(fn, changes)
@@ -1074,4 +1068,5 @@ def optimize(fn):
             )
             body[start:end] = [choice]
         start += 1
+    hoist_loop_invariants(fn, changes, _introduced_scalar, scalar_calls)
     return changes
