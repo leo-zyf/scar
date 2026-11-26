@@ -51,6 +51,9 @@ def _array(symbol, element, items):
 
 
 _BODY_OPERATIONS = {
+    "PUSH_NULL": "push_null",
+    "LOAD_ATTR": "attribute",
+    "UNPACK_SEQUENCE": "unpack_sequence",
     "LOAD_GLOBAL": "load_global",
     "LOAD_GLOBAL_CALL": "load_global_call",
     "CALL": "call",
@@ -185,6 +188,7 @@ def _body_tables(rows, definitions):
         program = row["instructions"]
         start = row.get("entry_offset", 2)
         called = row.get("profile") == "live_function_calls"
+        unpacking = row.get("profile") == "live_unpack_store"
         if (
             not program
             or type(start) is not int
@@ -192,7 +196,7 @@ def _body_tables(rows, definitions):
             or start % 2
             or (row["kind"] == "function" and start != 2)
             or program[0][1] != start
-            or not called
+            or not (called or unpacking)
             and any(
                 next_[1] != prev[1] + 2 for prev, next_ in zip(program, program[1:])
             )
@@ -209,6 +213,11 @@ def _body_tables(rows, definitions):
             ):
                 raise ValueError("invalid live function activation")
             _validate_live_call(row)
+        elif unpacking:
+            if row["kind"] != "module" or row.get("minor") not in (12, 14):
+                raise ValueError("invalid live unpack activation")
+            _validate_live_call(row)
+            pos = len(program)
         elif "normal_successor" in row:
             _validate_subscript(row)
             pos = len(program)
@@ -344,7 +353,7 @@ def _body_tables(rows, definitions):
                 name(slots_name),
                 Expr("literal", value=returns),
                 integer(row["resume_offset"] or 0),
-                *((integer(row["minor"]),) if called else ()),
+                *((integer(row["minor"]),) if called or unpacking else ()),
                 form="brace",
             )
         )
@@ -391,11 +400,18 @@ def _validate_live_call(row):
     program = row["instructions"]
     pc = program[0][1]
     function = row.get("profile") == "live_function_calls"
+    unpacking = row.get("profile") == "live_unpack_store"
+    width = stored = 0
+    targets = (
+        sum(s[0] in {"STORE_NAME", "STORE_GLOBAL", "STORE_SUBSCR"} for s in program)
+        if unpacking
+        else 0
+    )
     if (
         type(pc) is not int
         or pc < 2
         or pc % 2
-        or not function
+        or not (function or unpacking)
         and (not row.get("import_site") or not row.get("site"))
         or function
         and pc != 2
@@ -410,6 +426,8 @@ def _validate_live_call(row):
             "CALL": 8,
             "LOAD_GLOBAL": 10,
             "LOAD_GLOBAL_CALL": 10,
+            "UNPACK_SEQUENCE": 4,
+            "STORE_SUBSCR": 4,
         }.get(op, 2)
         if (
             function
@@ -433,13 +451,31 @@ def _validate_live_call(row):
             ):
                 raise ValueError("invalid live function return")
             stack.clear()
+        elif unpacking and op == "UNPACK_SEQUENCE":
+            if width or n != targets or n < 1 or stack != [True] or text:
+                raise ValueError("invalid live unpack sequence")
+            width = n
+            stack = [("item", i) for i in reversed(range(n))]
+        elif unpacking and op == "STORE_SUBSCR":
+            if n or text or stack[-3:] != [("item", stored), True, True]:
+                raise ValueError("invalid live unpack subscription write")
+            del stack[-3:]
+            stored += 1
+        elif unpacking and op in {"STORE_NAME", "STORE_GLOBAL"}:
+            if not text.isidentifier() or not stack or stack[-1] != ("item", stored):
+                raise ValueError("invalid live unpack namespace write")
+            stack.pop()
+            stored += 1
+        elif unpacking and op == "LOAD_FRAME_CONST" and is_digest(text):
+            stack.append(True)
         elif not function and op == "PUSH_NULL" and n == 0 and not text:
             stack.append(False)
         elif (
             not function
             and op == "LOAD_NAME"
             and text.isidentifier()
-            or op == "LOAD_CONST"
+            or not unpacking
+            and op == "LOAD_CONST"
             and not text
             or op == "LOAD_SMALL_INT"
             and row["minor"] == 14
@@ -452,18 +488,19 @@ def _validate_live_call(row):
             and op == "LOAD_ATTR"
             and text.isidentifier()
             and stack
-            and stack[-1]
+            and stack[-1] is True
         ):
             pass
         elif op == "CALL" and not text and len(stack) >= n + 2:
             prefix = stack[-(n + 2) :]
             required = [False, True] if row["minor"] == 12 else [True, False]
-            if prefix[:2] != required or not all(prefix[2:]):
+            if prefix[:2] != required or any(value is not True for value in prefix[2:]):
                 raise ValueError("invalid live callable or positional arguments")
             stack[-(n + 2) :] = [True]
             calls.add(offset)
         elif (
             op == "POP_TOP"
+            and not unpacking
             and not text
             and n == 0
             and stack == [True]
@@ -480,6 +517,17 @@ def _validate_live_call(row):
             or row.get("resume_offset") is not None
         ):
             raise ValueError("invalid live function continuation")
+    elif unpacking:
+        successor = row.get("normal_successor")
+        if (
+            stack
+            or not width
+            or stored != width
+            or not valid_python_source_successor(program[-1][1], successor)
+            or successor["offset"] != pc
+            or row.get("resume_offset") != pc
+        ):
+            raise ValueError("invalid live unpack continuation")
     elif stack or row.get("call_offset") not in calls or row.get("resume_offset") != pc:
         raise ValueError("invalid live call continuation")
 

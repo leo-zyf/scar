@@ -543,6 +543,207 @@ def _function_store(op, code, offset):
     return group
 
 
+def unpack_body(owner, code, op):
+    """Schedule one reached module destructuring statement, including partial writes."""
+    from scar.contract import valid_python_source_successor
+
+    receipt = op.get("source_expression", {})
+    source = receipt.get("instructions", [])
+    evaluation = op.get("evaluation", [])
+    successor = receipt.get("normal_successor")
+    version = code.get("compiler", "").split(".")[:2]
+    if (
+        op.get("op") != "module_unpack_store"
+        or op.get("type") != "unit"
+        or op.get("semantics_version") != 1
+        or op.get("frame_globals", {}).get("owner") != owner
+        or op.get("frame_globals", {}).get("identity") != "current_activation_globals"
+        or op.get("exceptional_exit")
+        != "propagate_at_failing_source_operation_preserving_completed_effects"
+        or op.get("on_code_mismatch")
+        != "resume_source_equivalent_execution_before_first_instruction_with_original_stack_and_exception_state"
+        or op.get("ownership")
+        != "retain_each_owned_operand_until_consumed_at_its_source_opcode"
+        or op.get("release")
+        != "preserve_replaced_or_deleted_values_release_reentry_and_unraisable_finalizer_errors"
+        or op.get("callbacks")
+        != "preserve_instruction_tracing_reentry_and_release_of_live_source_stack_references"
+        or op.get("source_code") != code
+        or code.get("kind") != "module"
+        or version not in (["cpython 3", "12"], ["cpython 3", "14"])
+        or receipt.get("code_sha256") != code["code_sha256"]
+        or receipt.get("semantics_version") != 1
+        or op.get("code_match")
+        != "qualify_current_activation_code_instruction_stack_and_exception_table_before_first_source_instruction"
+        or op.get("assignment")
+        != "consume_each_owned_unpack_result_at_its_source_target_preserving_completed_stores_on_failure"
+        or op.get("unwind")
+        != "on_failure_unwind_at_failing_opcode_follow_source_exception_table_and_preserve_completed_effects"
+        or not source
+        or not valid_python_source_successor(source[-1].get("offset"), successor)
+    ):
+        return None
+    minor = int(version[1])
+    steps = iter(evaluation)
+    stack, program = [], []
+    pc = source[0].get("offset")
+    if type(pc) is not int or pc < 2 or pc % 2:
+        return None
+    width = stored = 0
+    targets = sum(
+        a.get("opcode") in {"STORE_SUBSCR", "STORE_NAME", "STORE_GLOBAL"}
+        for a in source
+    )
+    for ins in source:
+        opcode, n, text = ins["opcode"], ins.get("oparg", 0), ""
+        if type(n) is not int or not 0 <= n < 2**32 or ins.get("offset") != pc:
+            return None
+        if opcode == "PUSH_NULL":
+            if n:
+                return None
+            stack.append(None)
+        else:
+            step = next(steps, {})
+            if step.get("offset") != pc:
+                return None
+            kind = step.get("op")
+            if operand := _frame_operand(ins, step, code):
+                opcode, _, n, text = operand
+                stack.append({"from_offset": pc})
+            elif opcode == "LOAD_ATTR" and kind == "source_object_attribute":
+                text = ins.get("name")
+                if (
+                    not stack
+                    or stack[-1] is None
+                    or step.get("base") != stack[-1]
+                    or step.get("result") != "attribute_object"
+                    or ins.get("index") != n >> 1
+                    or n & 1
+                    or step.get("name_index") != n >> 1
+                    or step.get("name") != text
+                    or not isinstance(text, str)
+                    or not text.isidentifier()
+                ):
+                    return None
+                n >>= 1
+                stack[-1] = {"from_offset": pc}
+            elif (
+                opcode == "CALL"
+                and kind == "source_object_call"
+                and len(stack) >= n + 2
+            ):
+                group = stack[-(n + 2) :]
+                target, null = (
+                    (group[1], group[0]) if minor == 12 else (group[0], group[1])
+                )
+                if (
+                    target is None
+                    or null is not None
+                    or None in group[2:]
+                    or step.get("target") != target
+                    or step.get("args") != group[2:]
+                    or step.get("keyword_names") is not None
+                    or step.get("keyword_values") != []
+                    or step.get("target_layout") != "callable_with_explicit_NULL"
+                    or step.get("dispatch")
+                    != "consume_source_call_slots_including_method_receiver_at_most_once"
+                ):
+                    return None
+                stack[-(n + 2) :] = [{"from_offset": pc}]
+            elif opcode == "UNPACK_SEQUENCE" and kind == "source_object_unpack":
+                if (
+                    width
+                    or n != targets
+                    or n < 1
+                    or len(stack) != 1
+                    or stack[0] is None
+                    or step.get("value") != stack[0]
+                    or step.get("arity") != n
+                    or step.get("opcode") != opcode
+                    or step.get("may_raise") is not True
+                ):
+                    return None
+                width = n
+                stack = [
+                    dict(from_offset=pc, result_index=i) for i in reversed(range(n))
+                ]
+            elif opcode == "STORE_SUBSCR" and kind == "source_object_setitem":
+                if (
+                    n
+                    or len(stack) < 3
+                    or not stack[-3]
+                    or stack[-3].get("result_index") != stored
+                    or [step.get(k) for k in ("value", "base", "key")] != stack[-3:]
+                    or step.get("opcode") != opcode
+                    or step.get("may_raise") is not True
+                    or step.get("write_effect", {}).get("exceptional_completion")
+                    != "may_have_written"
+                ):
+                    return None
+                del stack[-3:]
+                stored += 1
+            elif (
+                opcode in {"STORE_NAME", "STORE_GLOBAL"}
+                and kind == "source_frame_namespace_store"
+            ):
+                text = ins.get("name")
+                record = step.get("instruction", {})
+                if (
+                    not stack
+                    or not stack[-1]
+                    or stack[-1].get("result_index") != stored
+                    or step.get("value") != stack[-1]
+                    or not isinstance(text, str)
+                    or not text.isidentifier()
+                    or step.get("name") != text
+                    or ins.get("index") != n
+                    or step.get("index") != n
+                    or step.get("may_raise") is not True
+                    or step.get("namespace")
+                    != ("frame.locals" if opcode == "STORE_NAME" else "frame.globals")
+                    or any(
+                        record.get(k) != ins.get(k)
+                        for k in (
+                            "offset",
+                            "opcode",
+                            "oparg",
+                            "index",
+                            "name",
+                            "position",
+                        )
+                    )
+                ):
+                    return None
+                stack.pop()
+                stored += 1
+            else:
+                return None
+        program.append([opcode, pc, n, text])
+        pc += {"LOAD_ATTR": 20, "CALL": 8, "UNPACK_SEQUENCE": 4, "STORE_SUBSCR": 4}.get(
+            opcode, 2
+        )
+    if (
+        stack
+        or not width
+        or stored != width
+        or next(steps, None) is not None
+        or successor["offset"] != pc
+    ):
+        return None
+    return dict(
+        symbol=owner,
+        kind="module",
+        profile="live_unpack_store",
+        code_sha256=code["code_sha256"],
+        minor=minor,
+        entry_offset=program[0][1],
+        instructions=program,
+        constants={},
+        normal_successor=successor,
+        resume_offset=pc,
+    )
+
+
 def _subscript_store(op, code):
     """Match each live operand in a complete module STORE_SUBSCR statement."""
     from scar.contract import valid_python_source_successor

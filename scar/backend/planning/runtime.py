@@ -506,7 +506,7 @@ def _body_returns_to_caller(fragment):
 
 
 def _dispatch_sites(dispatch, ledger):
-    from .import_frames import named_loaders, named_region
+    from .import_frames import named_loaders, named_region, unpack_body
 
     requirements = dispatch["required_imports"]
     required = {(r["owner"], r["site"]) for r in requirements}
@@ -553,20 +553,36 @@ def _dispatch_sites(dispatch, ledger):
         code = loader["entry"]["code"]["code_sha256"]
         bodies[symbol, id(fn)] = (symbol, fn, code)
     scoped_plain, scoped_named = defaultdict(list), defaultdict(list)
-    statements = {}
+    statements, scoped_unpacks = {}, defaultdict(list)
     for owner, fn, code in bodies.values():
         expressions = {}
         # Each control arm owns its own source continuation. At the end of an
         # arm, hand control back to the active frame at the next source offset.
-        scopes = [fn["body"]]
+        # A sealed prefix may end inside a structured control arm. Its
+        # complete statements can be entered only by the actual frame PC,
+        # never as an unconditional continuation of the parent prefix.
+        scopes = [(fn["body"], False)]
+        fragments = [fn]
+        while fragments:
+            fragment = fragments.pop()
+            for child in fragment.get("frontier", {}).get("regions", ()):
+                scopes.append((child["body"], True))
+                fragments.append(child)
         while scopes:
-            sequence = scopes.pop()
+            sequence, inside_frontier = scopes.pop()
             for pos, stmt in enumerate(sequence):
-                scopes.extend(block[field] for block, field, _ in control_regions(stmt))
+                scopes.extend(
+                    (block[field], inside_frontier)
+                    for block, field, _ in control_regions(stmt)
+                )
                 op = stmt.get("value", {})
                 if stmt["op"] != "expr":
                     continue
-                if op.get("op") == "module_object_expression":
+                if op.get("op") == "module_unpack_store":
+                    scoped_unpacks[owner, id(fn)].append(op)
+                elif inside_frontier:
+                    continue
+                elif op.get("op") == "module_object_expression":
                     expressions[id(op.get("expression"))] = op
                 elif op.get("op") == "module_fromlist_publish":
                     scoped_named[owner, id(fn)].append(op)
@@ -613,7 +629,7 @@ def _dispatch_sites(dispatch, ledger):
         if key[0] not in loader_owners or key[0] == dispatch["entry"]
     }
     pending = deque(("plain", key) for key in sorted(queued))
-    activated, live_named, providers = set(), {}, {}
+    activated, live_named, providers, unpacks = set(), {}, {}, {}
 
     def activate(owner, code, fn, *, loader=True):
         scope = owner, id(fn)
@@ -621,6 +637,12 @@ def _dispatch_sites(dispatch, ledger):
         if frame in activated:
             return
         activated.add(frame)
+        for op in scoped_unpacks[scope]:
+            body = unpack_body(owner, code, op)
+            if body:
+                key = owner, body["code_sha256"], body["entry_offset"]
+                if unpacks.setdefault(key, body) != body:
+                    raise ValueError("conflicting active module unpack interval")
         if loader:
             for op in scoped_plain[scope]:
                 key = owner, op["site"]
@@ -852,7 +874,14 @@ def _dispatch_sites(dispatch, ledger):
             loaders=[],
             calls=[],
         )
-    return results, candidates, call_candidates, list(live_named.values()), providers
+    return (
+        results,
+        candidates,
+        call_candidates,
+        list(live_named.values()),
+        providers,
+        list(unpacks.values()),
+    )
 
 
 def import_effects(module, bindings):
@@ -883,12 +912,12 @@ def import_effects(module, bindings):
     if dispatch:
         from .import_frames import activation_bodies, regions
 
-        sites, candidates, calls, live_named, providers = _dispatch_sites(
+        sites, candidates, calls, live_named, providers, unpacks = _dispatch_sites(
             dispatch, ledger
         )
         frame_regions = regions(candidates, sites, calls)
         frame_bodies = (
-            activation_bodies(dispatch, sites | providers)
+            activation_bodies(dispatch, sites | providers) + unpacks
             if frame_regions or live_named
             else []
         )

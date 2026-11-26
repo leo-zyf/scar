@@ -56,6 +56,9 @@ public:
 };
 
 enum class body_opcode {
+  push_null,
+  attribute,
+  unpack_sequence,
   load_global,
   load_global_call,
   call,
@@ -386,12 +389,22 @@ outcome run_body(Frame &frame, const body_program &program,
       requires { frame.build_list(std::span(stack)); };
   constexpr bool extends_lists =
       requires { frame.extend_list(*stack.back(), *stack.back()); };
+  constexpr bool reads_attributes =
+      requires { frame.attribute(*stack.back(), 0u); };
+  constexpr bool unpacks = requires {
+    frame.admit_unpack_store(program);
+    frame.unpack_sequence(*stack.back(), 0u);
+  };
   constexpr bool stores_items = requires {
-    frame.admit_subscript_region(program);
     frame.store_subscript(*stack.back(), *stack.back(), *stack.back());
   };
-  for (const auto &ins : program.instructions)
-    if ((!loads_globals && (ins.operation == body_opcode::load_global ||
+  bool uses_unpack = false;
+  for (const auto &ins : program.instructions) {
+    uses_unpack |= ins.operation == body_opcode::unpack_sequence;
+    if ((!reads_attributes && ins.operation == body_opcode::attribute) ||
+        (!unpacks && ins.operation == body_opcode::unpack_sequence) ||
+        (!stores_items && ins.operation == body_opcode::store_subscript) ||
+        (!loads_globals && (ins.operation == body_opcode::load_global ||
                             ins.operation == body_opcode::load_global_call)) ||
         (!invokes && ins.operation == body_opcode::call) ||
         (!checks_tuple && ins.operation == body_opcode::default_tuple) ||
@@ -405,8 +418,18 @@ outcome run_body(Frame &frame, const body_program &program,
         (!builds_lists && ins.operation == body_opcode::build_list) ||
         (!extends_lists && ins.operation == body_opcode::list_extend))
       return outcome::unmatched;
-  if (program.instructions.back().operation == body_opcode::store_subscript) {
-    if constexpr (stores_items) {
+  }
+  if (uses_unpack) {
+    if constexpr (unpacks) {
+      // The active frame certifies source-compatible iteration, ownership,
+      // exception dispatch, and operand capacity before the first operation.
+      if (!frame.admit_unpack_store(program))
+        return outcome::unmatched;
+    }
+  } else if (program.instructions.back().operation ==
+             body_opcode::store_subscript) {
+    if constexpr (stores_items &&
+                  requires { frame.admit_subscript_region(program); }) {
       // Admission guarantees source-equivalent dispatch for this live frame.
       // It must precede allocation, mapping lookups and all source callbacks.
       if (!frame.admit_subscript_region(program))
@@ -422,6 +445,34 @@ outcome run_body(Frame &frame, const body_program &program,
       if (!frame.before(ins.offset))
         return outcome::continued_in_host;
       switch (ins.operation) {
+      case body_opcode::push_null:
+        stack.emplace_back(std::nullopt);
+        break;
+      case body_opcode::attribute:
+        if constexpr (reads_attributes) {
+          if (stack.size() <= base || !stack.back())
+            return outcome::continued_in_host;
+          auto value = frame.attribute(*stack.back(), ins.operand);
+          frame.replace(1, std::move(value));
+        }
+        break;
+      case body_opcode::unpack_sequence:
+        if constexpr (unpacks) {
+          if (stack.size() != base + 1 || !stack.back())
+            return outcome::continued_in_host;
+          // A successful provider returns exactly the source arity, left to
+          // right. A short/long iterable or a failing iterator raises before
+          // the first assignment target is evaluated.
+          auto iterable = std::move(*stack.back());
+          stack.pop_back();
+          auto items = frame.unpack_sequence(std::move(iterable), ins.operand);
+          if (items.size() != ins.operand)
+            throw std::logic_error(
+                "invalid result from admitted unpack provider");
+          for (auto i = items.rbegin(); i != items.rend(); ++i)
+            stack.emplace_back(std::move(*i));
+        }
+        break;
       case body_opcode::load_global:
       case body_opcode::load_global_call:
         if constexpr (loads_globals) {
@@ -480,11 +531,12 @@ outcome run_body(Frame &frame, const body_program &program,
         break;
       case body_opcode::store_subscript:
         if constexpr (stores_items) {
-          if (stack.size() != base + 3 || !stack[base] || !stack[base + 1] ||
-              !stack[base + 2])
+          if (stack.size() < base + 3)
             return outcome::continued_in_host;
-          frame.store_subscript(*stack[base + 1], *stack[base + 2],
-                                *stack[base]);
+          auto slots = std::span(stack).last(3);
+          if (!slots[0] || !slots[1] || !slots[2])
+            return outcome::continued_in_host;
+          frame.store_subscript(*slots[1], *slots[2], *slots[0]);
           frame.replace(3, std::nullopt);
         }
         break;
@@ -540,7 +592,7 @@ outcome run_body(Frame &frame, const body_program &program,
       }
       case body_opcode::store_name:
       case body_opcode::store_global:
-        if (stack.size() != base + 1 || !stack.back())
+        if (stack.size() <= base || !stack.back())
           return outcome::continued_in_host;
         frame.publish(ins.operand, ins.operation == body_opcode::store_global,
                       *stack.back());
