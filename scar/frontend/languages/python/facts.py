@@ -82,6 +82,7 @@ class ParsedUnit:
     constant_stores: dict = field(default_factory=dict)
     module_docstring: dict = field(default_factory=dict)
     source_code: dict = field(default_factory=dict)
+    frame_exit: dict = field(default_factory=dict)
     name_loads: dict = field(default_factory=dict)
     import_stores: dict = field(default_factory=dict)
     statement_expressions: dict = field(default_factory=dict)
@@ -100,15 +101,32 @@ def tuple_position(node):
     return node.lineno, node.end_lineno, node.col_offset, node.end_col_offset
 
 
+def _constant_syntax(node):
+    """Project literal syntax onto the same ordered operands as the neutral graph."""
+    if isinstance(node, ast.Constant) and type(node.value) in (
+        str,
+        int,
+        float,
+        bool,
+        type(None),
+    ):
+        return ["literal", type(node.value).__name__, numeric_wire_value(node.value)]
+    if isinstance(node, (ast.UnaryOp, ast.BinOp)):
+        unary = isinstance(node, ast.UnaryOp)
+        children = (node.operand,) if unary else (node.left, node.right)
+        parts = [_constant_syntax(child) for child in children]
+        if all(part is not None for part in parts):
+            return [
+                "unary" if unary else "binary",
+                type(node.op).__name__.lower(),
+                *parts,
+            ]
+
+
 def _constant_store_rhs(value):
     if isinstance(value, ast.Constant):
         return type(value.value) is str
-    return isinstance(value, (ast.UnaryOp, ast.BinOp)) and all(
-        isinstance(node, (ast.UnaryOp, ast.BinOp, ast.unaryop, ast.operator))
-        or isinstance(node, ast.Constant)
-        and type(node.value) in (str, int, float, bool, type(None))
-        for node in ast.walk(value)
-    )
+    return _constant_syntax(value) is not None
 
 
 def _constant_store_sites(
@@ -501,6 +519,28 @@ def _expression_instruction(program, ins, parts, keywords):
                 row.update(items)
             else:
                 return None
+        elif (
+            opcode != "KW_NAMES"
+            and type(value) in (str, int, float, bool, type(None))
+            and (
+                syntax := next(
+                    (
+                        form
+                        for part in parts
+                        if isinstance(part, (ast.UnaryOp, ast.BinOp))
+                        and (form := _constant_syntax(part)) is not None
+                    ),
+                    None,
+                )
+            )
+        ):
+            wire = numeric_wire_value(value)
+            row.update(
+                type=type(value).__name__,
+                folded_value=wire,
+                rhs_sha256=digest(json_bytes(syntax)),
+                value_sha256=digest(json_bytes(wire)),
+            )
         elif opcode != "KW_NAMES" and any(
             isinstance(n, ast.Constant)
             and type(n.value) is type(value)
@@ -650,20 +690,20 @@ def _condition_operand(test, *, comparison=False):
         return test
 
 
+def _within_position(spot, span):
+    return (
+        None not in spot
+        and (span[0], span[2]) <= (spot.lineno, spot.col_offset)
+        and (spot.end_lineno, spot.end_col_offset) <= (span[1], span[3])
+    )
+
+
 def _suite_entry(ins, statement, kind, preceding=()):
     span = tuple_position(statement)
-
-    def inside(spot):
-        return (
-            None not in spot
-            and (span[0], span[2]) <= (spot.lineno, spot.col_offset)
-            and (spot.end_lineno, spot.end_col_offset) <= (span[1], span[3])
-        )
-
     if (
         ins.opname == "EXTENDED_ARG"
-        or not inside(ins.positions)
-        or any(inside(other.positions) for other in preceding)
+        or not _within_position(ins.positions, span)
+        or any(_within_position(other.positions, span) for other in preceding)
     ):
         return None
     return dict(
@@ -701,13 +741,93 @@ def _implicit_return(instructions, index, span):
     )
 
 
-def _branch_receipt(node, after, instructions, end, offsets, rows, *, function_frame):
-    """Match the actual successors of a call's truth jump to the source suites."""
+def _loop_backedge(instructions, index, loop, operand_position):
+    if not loop:
+        return None
+    parent, iteration = loop
+    start = index
+    while instructions[index].opname == "EXTENDED_ARG":
+        index += 1
+    back = instructions[index]
+    backs = iteration.get("backedges") or [iteration["backedge"]]
+    if (
+        back.positions != operand_position
+        or not any(row["offset"] == back.offset for row in backs)
+        or any(
+            i.positions != operand_position or i.is_jump_target
+            for i in instructions[start + 1 : index + 1]
+        )
+    ):
+        return None
+    first = instructions[start]
+    return dict(
+        kind="loop_backedge",
+        statement_position=list(tuple_position(parent)),
+        offset=first.offset,
+        opcode=first.opname,
+        position=list(first.positions),
+        prefixes=[_positioned_instruction(i) for i in instructions[start:index]],
+        backedge_offset=back.offset,
+        target=back.argval,
+    )
+
+
+def _suite_exits(instructions, start, stop, suite, destination, handlers):
+    """Check every normal transfer out of this suite against one successor."""
+    if start >= stop:
+        return None
+    first, limit = instructions[start].offset, instructions[stop].offset
+    result = []
+    for i in range(start, stop):
+        ins = instructions[i]
+        if (
+            ins.offset in handlers
+            or not any(_within_position(ins.positions, span) for span in suite)
+            or ins.opname
+            in {
+                "RETURN_VALUE",
+                "RETURN_CONST",
+                "RAISE_VARARGS",
+                "RERAISE",
+                "YIELD_VALUE",
+            }
+        ):
+            return None
+        if ins.opcode in _JUMP_OPCODES:
+            if ins.opname not in {
+                "JUMP_FORWARD",
+                "JUMP_BACKWARD",
+                "POP_JUMP_IF_TRUE",
+                "POP_JUMP_IF_FALSE",
+            }:
+                return None
+            if not first <= ins.argval < limit:
+                if ins.argval != destination:
+                    return None
+                result.append(dict(_positioned_instruction(ins), target=destination))
+            elif ins.argval <= ins.offset:
+                return None
+            if ins.opname in {"JUMP_FORWARD", "JUMP_BACKWARD"}:
+                continue
+        if i + 1 == stop:
+            if limit != destination:
+                return None
+            result.append(dict(_positioned_instruction(ins), fallthrough=destination))
+    return result or None
+
+
+def _branch_receipt(
+    node, after, instructions, end, offsets, rows, *, function_frame, loop, handlers
+):
+    """Map the truth jump's two physical successors to their source suites."""
     operand = _condition_operand(node.test, comparison=True)
     negated = operand is not node.test
     pos = tuple_position(operand)
     branch = instructions[end]
-    if branch.opname != ("POP_JUMP_IF_TRUE" if negated else "POP_JUMP_IF_FALSE"):
+    if branch.opname not in {"POP_JUMP_IF_TRUE", "POP_JUMP_IF_FALSE"}:
+        return None
+    taken_then = (branch.opname == "POP_JUMP_IF_TRUE") != negated
+    if taken_then and not function_frame:
         return None
     # 3.12 truth-tests the object in the jump. Later bytecode must produce an
     # exact bool first. A separate UNARY_NOT is not interchangeable with this lowering.
@@ -723,23 +843,24 @@ def _branch_receipt(node, after, instructions, end, offsets, rows, *, function_f
         or any(row["position"] != list(pos) for row in rows[-2 - truth :])
     ):
         return None
-    then = end + 1
-    if then >= len(instructions):
+    fall = end + 1
+    if fall >= len(instructions):
         return None
     marker = None
-    if instructions[then].opname == "NOT_TAKEN":
-        ins = instructions[then]
+    if instructions[fall].opname == "NOT_TAKEN":
+        ins = instructions[fall]
         if ins.positions != pos or ins.is_jump_target:
             return None
-        marker = dict(opcode=ins.opname, offset=ins.offset, position=list(pos))
-        then += 1
-    other = offsets[branch.argval]
-    if not then < other:
+        marker = _positioned_instruction(ins)
+        fall += 1
+    taken = offsets[branch.argval]
+    if not fall < taken:
         return None
+    then, other = (taken, fall) if taken_then else (fall, taken)
 
     def destination(index, statement, kind):
         return _suite_entry(
-            instructions[index], statement, kind, instructions[then:index]
+            instructions[index], statement, kind, instructions[fall:index]
         )
 
     yes = destination(then, node.body[0], "suite")
@@ -747,60 +868,85 @@ def _branch_receipt(node, after, instructions, end, offsets, rows, *, function_f
         no = destination(other, node.orelse[0], "suite")
     elif after is not None:
         no = destination(other, after, "continuation")
+    elif loop:
+        no = _loop_backedge(instructions, other, loop, pos)
     else:
         no = _implicit_return(instructions, other, pos)
-    if yes and no:
-        exits = {}
-        if function_frame and node.orelse and after is not None:
-            # A jump over a straight else suite and its normal fallthrough
-            # converge at the first instruction of the next source statement.
-            jump = instructions[other - 1]
-            if jump.opname == "JUMP_FORWARD" and jump.argval in offsets:
-                join = offsets[jump.argval]
-                if other < join and (
-                    destination_row := destination(join, after, "continuation")
-                ):
-                    last = instructions[join - 1]
-                    terminal = {
-                        "RETURN_VALUE",
-                        "RETURN_CONST",
-                        "RAISE_VARARGS",
-                        "RERAISE",
-                        "YIELD_VALUE",
-                    }
-                    if (
-                        not any(
-                            i.opcode in _JUMP_OPCODES or i.opname in terminal
-                            for i in (
-                                *instructions[then : other - 1],
-                                *instructions[other:join],
-                            )
-                        )
-                        and _suite_entry(jump, node.body[-1], "suite")
-                        and _suite_entry(last, node.orelse[-1], "suite")
-                    ):
-                        exits = dict(
-                            join=destination_row,
-                            then_exit=dict(
-                                _positioned_instruction(jump), target=jump.argval
-                            ),
-                            else_exit=dict(
-                                _positioned_instruction(last), fallthrough=jump.argval
-                            ),
-                        )
-        return dict(
-            **exits,
-            condition_position=list(tuple_position(node.test)),
-            operand_position=list(pos),
-            negated=negated,
-            fallthrough_marker=marker,
-            then=yes,
-            **{"else": no},
+    if not yes or not no:
+        return None
+    edges = dict(
+        condition_position=list(tuple_position(node.test)),
+        operand_position=list(pos),
+        negated=negated,
+        fallthrough_marker=marker,
+        then=yes,
+        **{"else": no},
+    )
+    if function_frame:
+        edges.update(
+            taken="then" if taken_then else "else",
+            fallthrough="else" if taken_then else "then",
         )
+    if not (function_frame and node.orelse and then < other):
+        return edges
+
+    # A branch may have several normal exits, for example the alternatives of
+    # an elif that each advance the same enclosing iterator.
+    if loop:
+        parent, iteration = loop
+        head = (iteration.get("next_prefix") or [iteration["next"]])[0]
+        join = {k: head[k] for k in ("opcode", "offset", "position")}
+        join.update(kind="loop_header", statement_position=list(tuple_position(parent)))
+        stop = offsets[iteration["cleanup"][0]["offset"]]
+    elif after is not None:
+        jump = instructions[other - 1]
+        if jump.opname != "JUMP_FORWARD" or jump.argval not in offsets:
+            return edges
+        stop = offsets[jump.argval]
+        join = destination(stop, after, "continuation")
+    else:
+        return edges
+    if not join or stop <= other:
+        return edges
+    true_exits = _suite_exits(
+        instructions,
+        then,
+        other,
+        [tuple_position(n) for n in node.body],
+        join["offset"],
+        handlers,
+    )
+    false_exits = _suite_exits(
+        instructions,
+        other,
+        stop,
+        [tuple_position(n) for n in node.orelse],
+        join["offset"],
+        handlers,
+    )
+    if true_exits and false_exits:
+        edges["join"] = join
+        if (
+            len(true_exits) == len(false_exits) == 1
+            and true_exits[0]["opcode"] == "JUMP_FORWARD"
+            and "fallthrough" in false_exits[0]
+            and _within_position(
+                instructions[offsets[true_exits[0]["offset"]]].positions,
+                tuple_position(node.body[-1]),
+            )
+            and _within_position(
+                instructions[offsets[false_exits[0]["offset"]]].positions,
+                tuple_position(node.orelse[-1]),
+            )
+        ):
+            edges.update(then_exit=true_exits[0], else_exit=false_exits[0])
+        else:
+            edges["exits"] = {"then": true_exits, "else": false_exits}
+    return edges
 
 
-def _iteration_receipt(
-    node, after, instructions, end, offsets, jumps, handlers, *, function_frame
+def _iteration_region(
+    node, instructions, end, offsets, jumps, handlers, nested, *, function_frame
 ):
     if not isinstance(node.target, ast.Name) or any(
         isinstance(part, (ast.Break, ast.Continue))
@@ -890,6 +1036,9 @@ def _iteration_receipt(
                     or i.opname
                     in {"POP_JUMP_IF_TRUE", "POP_JUMP_IF_FALSE", "JUMP_FORWARD"}
                     and i.offset < i.argval < cleanup.offset
+                    or i.offset in nested
+                    and body_code[0].offset <= nested[i.offset][0]
+                    and nested[i.offset][1] < cleanup.offset
                 )
             )
             for i in body_code[:-1]
@@ -897,34 +1046,30 @@ def _iteration_receipt(
     ):
         return None
     body = _suite_entry(body_code[0], node.body[0], "suite")
-    if node.orelse:
-        exhausted = _suite_entry(instructions[stop], node.orelse[0], "suite")
-    elif after is not None:
-        exhausted = _suite_entry(instructions[stop], after, "continuation")
-    else:
-        exhausted = _implicit_return(instructions, stop, acquire.positions)
-    if not body or not exhausted:
+    if not body:
         return None
-    return dict(
-        next=dict(_positioned_instruction(step), target=step.argval),
-        store=_positioned_instruction(store),
-        body=body,
-        **(
-            {"next_prefix": [_positioned_instruction(i) for i in prefix]}
-            if prefix
-            else {}
+    return (
+        dict(
+            next=dict(_positioned_instruction(step), target=step.argval),
+            store=_positioned_instruction(store),
+            body=body,
+            **(
+                {"next_prefix": [_positioned_instruction(i) for i in prefix]}
+                if prefix
+                else {}
+            ),
+            **(
+                {"backedge": dict(_positioned_instruction(back), target=head)}
+                if len(backs) == 1
+                else {
+                    "backedges": [
+                        dict(_positioned_instruction(i), target=head) for i in backs
+                    ]
+                }
+            ),
+            cleanup=[_positioned_instruction(i) for i in clean],
         ),
-        **(
-            {"backedge": dict(_positioned_instruction(back), target=head)}
-            if len(backs) == 1
-            else {
-                "backedges": [
-                    dict(_positioned_instruction(i), target=head) for i in backs
-                ]
-            }
-        ),
-        cleanup=[_positioned_instruction(i) for i in clean],
-        exhausted=exhausted,
+        stop,
     )
 
 
@@ -952,7 +1097,16 @@ def _statement_expression(
         ):
             return None
         if isinstance(
-            node, (ast.Load, ast.Store, ast.Del, ast.keyword, ast.operator, ast.cmpop)
+            node,
+            (
+                ast.Load,
+                ast.Store,
+                ast.Del,
+                ast.keyword,
+                ast.operator,
+                ast.unaryop,
+                ast.cmpop,
+            ),
         ):
             continue
         if not isinstance(
@@ -960,6 +1114,7 @@ def _statement_expression(
             (
                 ast.Call,
                 ast.BinOp,
+                ast.UnaryOp,
                 ast.Compare,
                 ast.Subscript,
                 ast.Slice,
@@ -1072,6 +1227,7 @@ def _statement_expression_sites(
     following,
     *,
     function_frame=False,
+    inherited=None,
 ):
     # Multiple compiled copies of a finally suite have the same source span.
     ends = defaultdict(list)
@@ -1084,6 +1240,30 @@ def _statement_expression_sites(
         root = expressions.get(ins.positions)
         if root is not None and ins.opname in _STATEMENT_END[type(root)]:
             ends[root].append(index)
+    # Inner headers and backedges can be checked before their parent. The
+    # source successor after exhaustion is then bound in forward order.
+    loops, nested_transfers = {}, {}
+    for root, matches in reversed(ends.items()):
+        if len(matches) != 1 or not isinstance(root, ast.For):
+            continue
+        region = _iteration_region(
+            root,
+            instructions,
+            matches[0],
+            offsets,
+            jumps,
+            handlers,
+            nested_transfers,
+            function_frame=function_frame,
+        )
+        if region:
+            ports, stop = loops[root] = region
+            interval = (instructions[matches[0]].offset, ports["cleanup"][-1]["offset"])
+            for row in [
+                ports["next"],
+                *(ports.get("backedges") or [ports["backedge"]]),
+            ]:
+                nested_transfers[row["offset"]] = interval
     sites = {}
     for root, matches in ends.items():
         span = tuple_position(root)
@@ -1097,33 +1277,54 @@ def _statement_expression_sites(
                 function_frame=function_frame,
             )
             if receipt is not None:
+                after = following.get(root)
+                loop = None
+                if inherited and root in inherited:
+                    kind, owner = inherited[root]
+                    if kind == "continuation":
+                        after = owner
+                    else:
+                        iteration = sites.get(tuple_position(owner), {}).get(
+                            "iteration"
+                        )
+                        if iteration:
+                            loop = (owner, iteration)
                 if isinstance(root, ast.If):
                     edges = _branch_receipt(
                         root,
-                        following.get(root),
+                        after,
                         instructions,
                         matches[0],
                         offsets,
                         receipt["instructions"],
                         function_frame=function_frame,
+                        loop=loop,
+                        handlers=handlers,
                     )
                     if edges is None:
                         continue
                     receipt["branch"] = edges
                 if isinstance(root, ast.For):
-                    iteration = _iteration_receipt(
-                        root,
-                        following.get(root),
-                        instructions,
-                        matches[0],
-                        offsets,
-                        jumps,
-                        handlers,
-                        function_frame=function_frame,
-                    )
-                    if not iteration:
+                    if root not in loops:
                         continue
-                    receipt["iteration"] = iteration
+                    iteration, stop = loops[root]
+                    if root.orelse:
+                        exit_ = _suite_entry(
+                            instructions[stop], root.orelse[0], "suite"
+                        )
+                    elif after is not None:
+                        exit_ = _suite_entry(instructions[stop], after, "continuation")
+                    elif loop:
+                        exit_ = _loop_backedge(
+                            instructions, stop, loop, instructions[matches[0]].positions
+                        )
+                    else:
+                        exit_ = _implicit_return(
+                            instructions, stop, instructions[matches[0]].positions
+                        )
+                    if not exit_:
+                        continue
+                    receipt["iteration"] = dict(iteration, exhausted=exit_)
                 sites[span] = receipt
     return sites
 
@@ -1386,7 +1587,7 @@ def _code_parameters(code):
     return params
 
 
-def _function_expression_sites(program, node, following):
+def _function_expression_sites(program, node, following, inherited):
     """Collect located expression, assignment and control regions in one child frame."""
     expressions = {}
     for stmt in scope_nodes(node.body):
@@ -1416,7 +1617,14 @@ def _function_expression_sites(program, node, following):
     instructions = list(dis.get_instructions(program))
     handlers = {entry.target for entry in dis.Bytecode(program).exception_entries}
     regions = _statement_expression_sites(
-        program, instructions, expressions, handlers, {}, following, function_frame=True
+        program,
+        instructions,
+        expressions,
+        handlers,
+        {},
+        following,
+        function_frame=True,
+        inherited=inherited,
     )
     regions = {
         span: proof
@@ -1441,16 +1649,29 @@ def _function_expression_sites(program, node, following):
         if row["opcode"] in _FAST_READS or row["opcode"] == "LOAD_GLOBAL"
     }
     loads = _name_load_sites(program, instructions, names)
-    regions = {
-        span: proof
-        for span, proof in regions.items()
-        if all(
+    verified = {}
+    for span, proof in regions.items():
+        if not all(
             loads.get(tuple(row["position"]), {}).get("offset") == row["offset"]
             for row in proof["instructions"]
             if row["opcode"] in _FAST_READS or row["opcode"] == "LOAD_GLOBAL"
+        ):
+            continue
+        branch = proof.get("branch", {})
+        successors = (
+            branch.get("join"),
+            branch.get("else"),
+            proof.get("iteration", {}).get("exhausted"),
         )
-    }
-    return regions, loads
+        if any(
+            edge
+            and edge["kind"] in {"loop_header", "loop_backedge"}
+            and tuple(edge["statement_position"]) not in verified
+            for edge in successors
+        ):
+            continue
+        verified[span] = proof
+    return verified, loads
 
 
 def _definition_sites(program, instructions, definitions, handlers):
@@ -1517,11 +1738,38 @@ def _definition_sites(program, instructions, definitions, handlers):
     return {k: v for k, v in found.items() if k not in repeated}
 
 
+def _module_frame_exit(instructions, code_sha256):
+    """Identify a normal module return at its actual PC, including its None slot."""
+    last = instructions[-1]
+    if last.opname == "RETURN_CONST":
+        tail = instructions[-1:]
+    elif (
+        last.opname == "RETURN_VALUE"
+        and len(instructions) > 1
+        and not last.is_jump_target
+    ):
+        tail = instructions[-2:]
+        if tail[0].opname != "LOAD_CONST" or tail[0].offset + 2 != last.offset:
+            return {}
+    else:
+        return {}
+    constant = tail[0]
+    if constant.argval is not None or constant.arg > 255:
+        return {}
+    rows = [_positioned_instruction(i) for i in tail]
+    rows[0].pop("value", None)
+    rows[0].update(
+        index=constant.arg, type="NoneType", value_sha256=digest(json_bytes(None))
+    )
+    return dict(code_sha256=code_sha256, instructions=rows)
+
+
 def _compiler_sites(tree, path, relative, source_hash):
     """Capture positioned construction and binding facts from one compilation."""
     if sys.implementation.name != "cpython" or not hasattr(CodeType, "co_positions"):
         return {}
     nodes, mappings, following, syntax = {}, {}, {}, deque([tree])
+    inherited = {}
     while syntax:
         node = syntax.popleft()
         syntax.extend(ast.iter_child_nodes(node))
@@ -1533,6 +1781,18 @@ def _compiler_sites(tree, path, relative, source_hash):
                     for a, b in pairwise(suite)
                     if isinstance(a, (ast.If, ast.For))
                 )
+                if (
+                    suite
+                    and isinstance(suite[-1], (ast.If, ast.For))
+                    and isinstance(node, (ast.If, ast.For))
+                ):
+                    tail = suite[-1]
+                    if isinstance(node, ast.For) and field == "body":
+                        inherited[tail] = ("loop_backedge", node)
+                    elif node in following:
+                        inherited[tail] = ("continuation", following[node])
+                    elif node in inherited:
+                        inherited[tail] = inherited[node]
         if isinstance(node, ast.Dict):
             mappings[tuple_position(node)] = []
         elif (
@@ -1595,30 +1855,10 @@ def _compiler_sites(tree, path, relative, source_hash):
     docstring = (
         tree.body[0] if ast.get_docstring(tree, clean=False) is not None else None
     )
-    if not (
-        nodes
-        or mappings
-        or assignments
-        or names
-        or imports
-        or expressions
-        or definitions
-        or docstring is not None
-    ):
-        return {}
     optimize = sys.flags.optimize
     program = compile(tree, str(path), "exec", dont_inherit=True, optimize=optimize)
     unit = digest(json_bytes([relative, source_hash, ParsedUnit.compiler_id, optimize]))
-    instructions = (
-        list(dis.get_instructions(program))
-        if assignments
-        or names
-        or imports
-        or expressions
-        or definitions
-        or docstring is not None
-        else None
-    )
+    instructions = list(dis.get_instructions(program))
     entries = (
         dis.Bytecode(program).exception_entries
         if assignments
@@ -1656,22 +1896,13 @@ def _compiler_sites(tree, path, relative, source_hash):
         if tries and loads
         else {}
     )
-    source_code = (
-        dict(
-            kind="module",
-            source_key=relative,
-            source_sha256=source_hash,
-            code_sha256=code_digest(program),
-            compiler=ParsedUnit.compiler_id,
-            optimize=optimize,
-        )
-        if stores
-        or document
-        or loads
-        or import_stores
-        or statement_expressions
-        or definition_sites
-        else {}
+    source_code = dict(
+        kind="module",
+        source_key=relative,
+        source_sha256=source_hash,
+        code_sha256=code_digest(program),
+        compiler=ParsedUnit.compiler_id,
+        optimize=optimize,
     )
     fresh, conflict = object(), object()
     origins = {}
@@ -1739,6 +1970,7 @@ def _compiler_sites(tree, path, relative, source_hash):
         constant_stores=stores,
         module_docstring=document,
         source_code=source_code,
+        frame_exit=_module_frame_exit(instructions, source_code["code_sha256"]),
         name_loads=loads,
         import_stores=import_stores,
         statement_expressions=statement_expressions,
@@ -1748,6 +1980,7 @@ def _compiler_sites(tree, path, relative, source_hash):
                 program.co_consts[proof["instructions"][0]["index"]],
                 definitions[span],
                 following,
+                inherited,
             )
             for span, proof in definition_sites.items()
         },

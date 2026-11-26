@@ -433,6 +433,7 @@ class _ModuleGraph:
         self.constant_stores = parsed.constant_stores
         self.module_docstring = parsed.module_docstring
         self.source_code = parsed.source_code
+        self.frame_exit = parsed.frame_exit
         self.name_loads = parsed.name_loads
         self.import_stores = parsed.import_stores
         self.statement_expressions = parsed.statement_expressions
@@ -850,6 +851,11 @@ class _Scope:
                 ),
                 graph_backed=True,
                 **({"source_code": self.code} if self.code else {}),
+                **(
+                    {"frame_exit": self.unit.frame_exit}
+                    if kind == "module" and self.unit.frame_exit
+                    else {}
+                ),
                 **(
                     {"text_profile": self.unit.text_profile}
                     if self.unit.text_profile

@@ -4079,3 +4079,100 @@ def test_function_comparison_iteration_and_subscription_match_child_bytecode(tmp
         "source_expression" not in statements[13]
         and "source_expression" not in statements[15]
     )
+
+
+def test_function_branch_successors_match_loop_headers_and_lexical_continuations(
+    tmp_path,
+):
+    import dis
+    from types import CodeType
+
+    from scar.contract import read_member
+    from scar.frontend import build
+
+    path = tmp_path / "route.py"
+    path.write_text("""def run(values, test):
+    for item in values:
+        if item == 0:
+            test(item)
+        elif not test(item):
+            test(1)
+    for group in values:
+        for item in group:
+            test(item)
+    if test(2):
+        test(3)
+    elif test(4):
+        test(5)
+    for item in values:
+        if test(item):
+            break
+    return
+""")
+    code = compile(path.read_bytes(), str(path), "exec", dont_inherit=True)
+    child = next(c for c in code.co_consts if type(c) is CodeType)
+    ops = {i.offset: i for i in dis.get_instructions(child)}
+    out = tmp_path / "graph"
+    build(path, out)
+    [unit] = json.loads((out / "graph.json").read_bytes())["units"]
+    fn = next(
+        f
+        for f in read_member(out, unit["graph"])["functions"]
+        if f["signature"]["name"].endswith(":run")
+    )
+    controls = {
+        n["location"]["line"]: n for n in fn["nodes"] if n["op"] in {"for", "if"}
+    }
+
+    def backedge(edge, parent):
+        assert edge["kind"] == "loop_backedge"
+        head = (parent.get("next_prefix") or [parent["next"]])[0]["offset"]
+        back = ops[edge["backedge_offset"]]
+        assert back.opname == "JUMP_BACKWARD" and back.argval == head == edge["target"]
+        assert any(
+            row["offset"] == back.offset
+            for row in (parent.get("backedges") or [parent["backedge"]])
+        )
+        assert [p["offset"] for p in edge["prefixes"]] == list(
+            range(edge["offset"], back.offset, 2)
+        )
+        assert all(
+            ops[p["offset"]].opname == p["opcode"] == "EXTENDED_ARG"
+            for p in edge["prefixes"]
+        )
+
+    def condition(line):
+        proof = controls[line]["source_expression"]
+        jump = ops[proof["instructions"][-1]["offset"]]
+        branch = proof["branch"]
+        assert {branch["taken"], branch["fallthrough"]} == {"then", "else"}
+        takes_then = (jump.opname == "POP_JUMP_IF_TRUE") != branch["negated"]
+        assert (branch["taken"] == "then") == takes_then
+        assert branch[branch["taken"]]["offset"] == jump.argval
+        return branch
+
+    parent = controls[2]["source_expression"]["iteration"]
+    first, tail = condition(3), condition(5)
+    assert first["taken"] == "else" and tail["taken"] == "then" and tail["negated"]
+    backedge(tail["else"], parent)
+    assert {r["offset"] for side in first["exits"].values() for r in side} == {
+        r["offset"] for r in parent["backedges"]
+    }
+    nested = controls[8]["source_expression"]["iteration"]
+    backedge(nested["exhausted"], controls[7]["source_expression"]["iteration"])
+    assert nested["exhausted"]["target"] != nested["next"]["offset"]
+    branch, alternative = condition(10), condition(12)
+    assert branch["join"] == alternative["else"]
+    assert branch["join"]["statement_position"][0] == 14
+    for side in branch["exits"].values():
+        for edge in side:
+            if "target" in edge:
+                assert (
+                    ops[edge["offset"]].argval
+                    == edge["target"]
+                    == branch["join"]["offset"]
+                )
+            else:
+                assert edge["fallthrough"] == branch["join"]["offset"]
+    assert "source_expression" not in controls[14]
+    assert "source_expression" not in controls[15]
