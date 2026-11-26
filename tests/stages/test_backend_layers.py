@@ -4951,7 +4951,8 @@ def test_isolated_module_publications_cover_the_initializer(tmp_path, with_prefi
 def test_live_fromlist_stores_each_member_before_fetching_the_next(tmp_path):
     import shutil
     from scar.backend.cpp20 import lower_scheduled, print_target
-    from scar.backend.planning import schedule_ir
+    from scar.backend.planning import _load_module, schedule_ir
+    from scar.backend.planning.runtime import import_effects
     from scar.contract import read_member
     from scar.frontend import build
     from scar.middle import plan
@@ -4960,7 +4961,8 @@ def test_live_fromlist_stores_each_member_before_fetching_the_next(tmp_path):
     (tmp_path / "outer.py").write_text(
         "from pair import first as alpha, second as beta\ndef get():\n    return 'ok'\n"
     )
-    (tmp_path / "pair.py").write_text("first = 'a'\nsecond = 'b'\n")
+    (tmp_path / "pair.py").write_text("import child\nfirst = 'a'\nsecond = 'b'\n")
+    (tmp_path / "child.py").write_text("flag = 'ready'\n")
     build(tmp_path / "entry.py", tmp_path / "graph")
     plan(tmp_path / "graph", tmp_path / "ir")
     dst = tmp_path / "schedule"
@@ -4980,6 +4982,41 @@ def test_live_fromlist_stores_each_member_before_fetching_the_next(tmp_path):
         "POP_TOP",
     ]
     assert named["resume_offset"] == named["instructions"][-1][1] + 2
+    assert {r["instructions"][2][3] for r in rows} == {"outer", "pair", "child"}
+
+    # Remove the nominal execution witness for the deep import. Its original
+    # owner and code still exist; only the selected named loader may expose it.
+    path = tmp_path / "ir/exec-ir.json"
+    module = _load_module(path, json.loads(path.read_bytes()))
+    dispatch = module["source_dispatch"]
+    nested = next(
+        o
+        for o in module["source_imports"]["occurrences"]
+        if o["request"]["module"] == "child"
+    )
+    nested["activation"] = "unvisited"
+    dispatch["required_imports"] = [
+        r for r in dispatch["required_imports"] if r["owner"] != nested["owner"]
+    ]
+
+    def reachable():
+        effects = import_effects(module, {})
+        assert (
+            next(o for o in effects["occurrences"] if o["id"] == nested["id"])[
+                "activation"
+            ]
+            == "unvisited"
+        )
+        return {r["instructions"][2][3] for r in effects["native_frame_regions"]}
+
+    assert reachable() == {"outer", "pair", "child"}
+    named_provider = next(
+        r for r in dispatch["loaders"] if r.get("route") == "fromlist"
+    )
+    named_provider["entry"]["code"] = dict(
+        named_provider["entry"]["code"], code_sha256="0" * 64
+    )
+    assert reachable() == {"outer", "pair"}
     out = print_target(
         lower_scheduled(dst / ref["path"], tmp_path / "target"), tmp_path / "out"
     )

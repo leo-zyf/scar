@@ -129,7 +129,7 @@ def regions(candidates, checked):
     return result
 
 
-def _named_region(owner, code, op, occurrence):
+def named_region(owner, code, op, occurrence):
     """Bind a from-list to one IMPORT_NAME, ordered lookup/store pairs and POP_TOP."""
     port, call = op.get("source_fromlist", {}), op.get("import_call", {})
     request, bindings = op.get("request", {}), op.get("bindings", [])
@@ -296,72 +296,22 @@ def _named_region(owner, code, op, occurrence):
     )
 
 
-def named_regions(dispatch, ledger, checked):
-    """A region can only be entered at its observed code identity and source PC."""
-    from collections import deque
-    from scar.contract import control_regions
-
-    occurrences = {o["id"]: o for o in ledger["occurrences"]}
-    loaders = {(r["owner"], r["site"], r["symbol"]): r for r in dispatch["loaders"]}
-    entry = dispatch.get("entry_frame", {}).get("code")
-    pending = deque(
-        (r["symbol"], entry, r["body"])
-        for r in dispatch["functions"]
-        if entry and r["symbol"] == dispatch["entry"]
-    )
-
-    def activate(row):
-        pending.append((row["symbol"], row["entry"]["code"], row["function"]))
-
-    for key, review in checked.items():
-        if review.get("import_binding_verified"):
-            for symbol in review["loaders"]:
-                activate(loaders[(*key, symbol)])
-    regions, seen, providers = {}, set(), {}
-    while pending:
-        owner, code, fn = pending.popleft()
-        key = owner, code["code_sha256"], id(fn)
-        if key in seen:
-            continue
-        seen.add(key)
-        scopes = [fn["body"]]
-        while scopes:
-            for stmt in scopes.pop():
-                scopes.extend(block[field] for block, field, _ in control_regions(stmt))
-                op = stmt.get("value", {})
-                if stmt["op"] != "expr" or op.get("op") != "module_fromlist_publish":
-                    continue
-                row = occurrences.get(op.get("occurrence"), {})
-                site = _named_region(owner, code, op, row)
-                if site is None:
-                    continue
-                if regions.setdefault(row["id"], site) != site:
-                    raise ValueError("conflicting source fromlist occurrence")
-                for candidate in (
-                    row.get("loader_ports", {}).get("body", {}).get("candidates", ())
-                ):
-                    child = loaders.get((owner, op["site"], candidate["initializer"]))
-                    entry = (
-                        child["entry"]
-                        if child and child.get("route") == "fromlist"
-                        else {}
-                    )
-                    selected = entry.get("code", {})
-                    if (
-                        selected.get("source_key") == candidate.get("source_key")
-                        and selected.get("code_sha256") == candidate["code_sha256"]
-                        and entry.get("selection")
-                        == "each_actual_matching_code_activation"
-                        and entry.get("on_mismatch")
-                        == "resume_source_equivalent_execution_before_module_body"
-                    ):
-                        route = providers.setdefault(
-                            (owner, op["site"]), dict(loaders=[], calls=[])
-                        )
-                        if child["symbol"] not in route["loaders"]:
-                            route["loaders"].append(child["symbol"])
-                        activate(child)
-    return list(regions.values()), providers
+def named_loaders(op, occurrence, loaders):
+    """Yield conditional source bodies selected by this verified from-list."""
+    for candidate in (
+        occurrence.get("loader_ports", {}).get("body", {}).get("candidates", ())
+    ):
+        child = loaders.get((occurrence["owner"], op["site"], candidate["initializer"]))
+        entry = child["entry"] if child and child.get("route") == "fromlist" else {}
+        selected = entry.get("code", {})
+        if (
+            selected.get("source_key") == candidate.get("source_key")
+            and selected.get("code_sha256") == candidate["code_sha256"]
+            and entry.get("selection") == "each_actual_matching_code_activation"
+            and entry.get("on_mismatch")
+            == "resume_source_equivalent_execution_before_module_body"
+        ):
+            yield child
 
 
 def _constant_store(op, code, offset, slots):

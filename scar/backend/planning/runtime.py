@@ -506,6 +506,8 @@ def _body_returns_to_caller(fragment):
 
 
 def _dispatch_sites(dispatch, ledger):
+    from .import_frames import named_loaders, named_region
+
     requirements = dispatch["required_imports"]
     required = {(r["owner"], r["site"]) for r in requirements}
     occurrences = {(r["owner"], r["site"]): r for r in ledger["occurrences"]}
@@ -540,17 +542,17 @@ def _dispatch_sites(dispatch, ledger):
     ):
         raise ValueError("ambiguous source dispatch activation")
     imports, calls, creations = defaultdict(list), defaultdict(list), defaultdict(dict)
-    scopes = {r["symbol"]: r["body"] for r in dispatch["functions"]}
-    if dispatch["entry"] not in scopes:
+    functions = {r["symbol"]: r["body"] for r in dispatch["functions"]}
+    if dispatch["entry"] not in functions:
         raise ValueError("source dispatch lacks its entry body")
     # A loader can be selected at several sites. Its site-indexed entry and its
     # source body have separate identities; traverse each sealed body once.
-    bodies = {(name, id(fn)): (name, fn, None) for name, fn in scopes.items()}
+    bodies = {(name, id(fn)): (name, fn, None) for name, fn in functions.items()}
     for loader in loaders.values():
         symbol, fn = loader["symbol"], loader["function"]
         code = loader["entry"]["code"]["code_sha256"]
         bodies[symbol, id(fn)] = (symbol, fn, code)
-    conditional_sites = defaultdict(list)
+    scoped_plain, scoped_named = defaultdict(list), defaultdict(list)
     statements = {}
     for owner, fn, code in bodies.values():
         # Each control arm owns its own source continuation. At the end of an
@@ -561,7 +563,12 @@ def _dispatch_sites(dispatch, ledger):
             for pos, stmt in enumerate(sequence):
                 scopes.extend(block[field] for block, field, _ in control_regions(stmt))
                 op = stmt.get("value", {})
-                if stmt["op"] == "expr" and op.get("op") == "module_import_publish":
+                if stmt["op"] != "expr":
+                    continue
+                if op.get("op") == "module_fromlist_publish":
+                    scoped_named[owner, id(fn)].append(op)
+                elif op.get("op") == "module_import_publish":
+                    scoped_plain[owner, id(fn)].append(op)
                     following = sequence[pos + 1] if pos + 1 < len(sequence) else {}
                     statements[owner, id(op)] = (
                         following.get("value")
@@ -572,14 +579,6 @@ def _dispatch_sites(dispatch, ledger):
             if op["op"] == "module_import_publish":
                 key = owner, op["site"]
                 imports[key].append(op)
-                occurrence = occurrences.get(key, {})
-                if (
-                    code
-                    and op.get("source_code", {}).get("code_sha256") == code
-                    and occurrence.get("activation") == "unvisited"
-                    and occurrence.get("loader_ports")
-                ):
-                    conditional_sites[owner, code].append(key)
             if code and (published := source_function_publication(op, code)):
                 make, target, child = published
                 key = (
@@ -596,10 +595,63 @@ def _dispatch_sites(dispatch, ledger):
     results = {}
     consumed = set()
     candidates = {}
-    pending = deque(sorted(required))
-    queued = set(required)
+    # A nominal requirement owned by a loader must still match a reachable
+    # frame. Index its body once, then follow both import forms in one worklist.
+    loader_owners = {row["symbol"] for row in loaders.values()}
+    queued = {
+        key
+        for key in required
+        if key[0] not in loader_owners or key[0] == dispatch["entry"]
+    }
+    pending = deque(("plain", key) for key in sorted(queued))
+    activated, live_named, providers = set(), {}, {}
+
+    def activate(owner, code, fn, *, loader=True):
+        scope = owner, id(fn)
+        frame = (*scope, code["code_sha256"])
+        if frame in activated:
+            return
+        activated.add(frame)
+        if loader:
+            for op in scoped_plain[scope]:
+                key = owner, op["site"]
+                row = occurrences.get(key, {})
+                if (
+                    key not in queued
+                    and op.get("source_code") == code
+                    and row.get("activation") in {"visited", "unvisited"}
+                    and row.get("loader_ports")
+                ):
+                    pending.append(("plain", key))
+                    queued.add(key)
+        pending.extend(("named", (owner, code, op)) for op in scoped_named[scope])
+
+    if entry_code := dispatch.get("entry_frame", {}).get("code"):
+        entry = dispatch["entry"]
+        activate(
+            entry,
+            entry_code,
+            functions[entry],
+            loader=False,
+        )
     while pending:
-        key = pending.popleft()
+        route, item = pending.popleft()
+        if route == "named":
+            owner, code, op = item
+            key = owner, op["site"]
+            row = occurrences.get(key, {})
+            region = named_region(owner, code, op, row)
+            if region is None:
+                continue
+            if live_named.setdefault(row["id"], region) != region:
+                raise ValueError("conflicting source fromlist occurrence")
+            for child in named_loaders(op, row, loaders):
+                provider = providers.setdefault(key, dict(loaders=[], calls=[]))
+                if child["symbol"] not in provider["loaders"]:
+                    provider["loaders"].append(child["symbol"])
+                activate(child["symbol"], child["entry"]["code"], child["function"])
+            continue
+        key = item
         owner, site = key
         row = occurrences[key]
         gaps, matched, consumers = [], {}, []
@@ -657,6 +709,7 @@ def _dispatch_sites(dispatch, ledger):
             entry = loader.get("entry", {})
             if (
                 call.get("body") != body
+                or loader.get("route") not in (None, "plain")
                 or body.get("completion") != "return_to_loader_or_propagate"
                 or entry.get("code", {}).get("code_sha256") != c["code_sha256"]
                 or entry.get("selection") != "each_actual_matching_code_activation"
@@ -675,13 +728,9 @@ def _dispatch_sites(dispatch, ledger):
             position = owner, id(imported)
             if position in statements:
                 candidates[key] = imported, statements[position]
-            # Only an actual matching parent frame can reach these import sites.
-            # Their ledger activation remains unvisited.
-            for parent in matched.items():
-                for nested in conditional_sites[parent]:
-                    if nested not in queued:
-                        pending.append(nested)
-                        queued.add(nested)
+            for symbol in matched:
+                child = loaders[(*key, symbol)]
+                activate(symbol, child["entry"]["code"], child["function"])
         for call, load, attribute, previous in calls[owner, row["id"]]:
             binding = bindings.get((previous["site"], previous["slot"]), {})
             attribute = attribute or {}
@@ -784,7 +833,15 @@ def _dispatch_sites(dispatch, ledger):
             site["missing"] = sorted(
                 set(site["missing"]) | {"conditional_callable_body_or_continuation"}
             )
-    return results, candidates
+    for key in required - results.keys():
+        results[key] = dict(
+            status="missing_source_dataflow",
+            import_binding_verified=False,
+            missing=["matching_loader_frame_activation"],
+            loaders=[],
+            calls=[],
+        )
+    return results, candidates, list(live_named.values()), providers
 
 
 def import_effects(module, bindings):
@@ -811,14 +868,14 @@ def import_effects(module, bindings):
         if "source_import_occurrence" in node
     }
     dispatch = module.get("source_dispatch")
-    sites, candidates = _dispatch_sites(dispatch, ledger) if dispatch else ({}, {})
+    sites = {}
     if dispatch:
-        from .import_frames import activation_bodies, named_regions, regions
+        from .import_frames import activation_bodies, regions
 
+        sites, candidates, live_named, providers = _dispatch_sites(dispatch, ledger)
         frame_regions = regions(candidates, sites)
-        live_named, named_loaders = named_regions(dispatch, ledger, sites)
         frame_bodies = (
-            activation_bodies(dispatch, sites | named_loaders)
+            activation_bodies(dispatch, sites | providers)
             if frame_regions or live_named
             else []
         )
