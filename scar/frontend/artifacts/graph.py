@@ -475,32 +475,33 @@ def join_artifacts(units, projections, build, images, root):
             )
     if any(e["source"] not in nodes or e["target"] not in nodes for e in edges):
         raise ValueError("artifact graph has an unbound endpoint")
-    # Stable order and duplicate removal keep this cross-unit index compact.
-    edges = [json_loads(value) for value in sorted({json_bytes(e) for e in edges})]
-    return validate_artifact_flow(
-        link_observations(
-            document(
-                ARTIFACT_FLOW,
-                nodes=list(nodes.values()),
-                edges=edges,
-                source_effects=source_sites,
-                source_processes=source_processes,
-                open_fields=pending,
-                coverage=dict(
-                    source_effect_sites=len(source_sites),
-                    source_process_sites=len(source_processes),
-                    process_execution_events="not_observed",
-                    process_instance_binding="source_templates_only",
-                    process_build_invocation_matching="not_established",
-                    parser_snapshot_reads=sum(
-                        e["kind"] == "READS_CAPTURED_VERSION" for e in edges
-                    ),
-                    historical_read_versions="not_observed",
-                    path_to_inode_aliasing="not_inferred",
-                ),
+    # The observation join canonicalizes the union, including the original
+    # source edges. Without observations it passes its input through.
+    if (build or {}).get("process_observation") is None:
+        edges = [json_loads(value) for value in sorted({json_bytes(e) for e in edges})]
+    flow = link_observations(
+        document(
+            ARTIFACT_FLOW,
+            nodes=list(nodes.values()),
+            edges=edges,
+            source_effects=source_sites,
+            source_processes=source_processes,
+            open_fields=pending,
+            coverage=dict(
+                source_effect_sites=len(source_sites),
+                source_process_sites=len(source_processes),
+                process_execution_events="not_observed",
+                process_instance_binding="source_templates_only",
+                process_build_invocation_matching="not_established",
+                historical_read_versions="not_observed",
+                path_to_inode_aliasing="not_inferred",
             ),
-            build,
-            units,
-            root,
-        )
+        ),
+        build,
+        units,
+        root,
     )
+    flow["coverage"]["parser_snapshot_reads"] = sum(
+        edge["kind"] == "READS_CAPTURED_VERSION" for edge in flow["edges"]
+    )
+    return validate_artifact_flow(flow)
