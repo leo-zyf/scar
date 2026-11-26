@@ -654,7 +654,7 @@ def _expression_instruction(program, ins, parts, keywords):
                 return None
             row["intrinsic"] = ins.argrepr
     elif opcode in {"POP_JUMP_IF_TRUE", "POP_JUMP_IF_FALSE", "TO_BOOL"}:
-        if not any(isinstance(n, (ast.Call, ast.Compare)) for n in parts):
+        if not any(isinstance(n, ast.If) for n in parts):
             return None
         if opcode != "TO_BOOL":
             row["target"] = ins.argval
@@ -678,14 +678,30 @@ def _expression_instruction(program, ins, parts, keywords):
     return row
 
 
-def _condition_operand(test, *, comparison=False):
+# The final value producer must belong to the complete source operand. Its
+# inputs, code slots and stack effect are checked by the expression capture.
+_CONDITION_PRODUCERS = {
+    ast.Name: _FAST_READS | {"LOAD_GLOBAL"},
+    ast.Attribute: {"LOAD_ATTR"},
+    ast.Subscript: {"BINARY_SUBSCR", "BINARY_OP"},
+    ast.BinOp: {"BINARY_OP"},
+    ast.Call: {"CALL", "CALL_KW"},
+    ast.Compare: {"COMPARE_OP"},
+    ast.List: {"BUILD_LIST", "LIST_APPEND", "LIST_EXTEND"},
+    ast.Tuple: {"BUILD_TUPLE", "CALL_INTRINSIC_1", "LOAD_CONST"},
+    ast.JoinedStr: {"BUILD_STRING"},
+}
+
+
+def _condition_operand(test, *, function_frame=False):
     if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
         test = test.operand
+    if isinstance(test, ast.Compare) and len(test.ops) != 1:
+        return None
     if (
         isinstance(test, ast.Call)
-        or comparison
-        and isinstance(test, ast.Compare)
-        and len(test.ops) == 1
+        or function_frame
+        and type(test) in _CONDITION_PRODUCERS
     ):
         return test
 
@@ -820,7 +836,7 @@ def _branch_receipt(
     node, after, instructions, end, offsets, rows, *, function_frame, loop, handlers
 ):
     """Map the truth jump's two physical successors to their source suites."""
-    operand = _condition_operand(node.test, comparison=True)
+    operand = _condition_operand(node.test, function_frame=function_frame)
     negated = operand is not node.test
     pos = tuple_position(operand)
     branch = instructions[end]
@@ -831,8 +847,8 @@ def _branch_receipt(
         return None
     # 3.12 truth-tests the object in the jump. Later bytecode must produce an
     # exact bool first. A separate UNARY_NOT is not interchangeable with this lowering.
-    truth = int(sys.version_info >= (3, 13) and isinstance(operand, ast.Call))
-    opcode = {"COMPARE_OP"} if isinstance(operand, ast.Compare) else {"CALL", "CALL_KW"}
+    truth = int(sys.version_info >= (3, 13) and not isinstance(operand, ast.Compare))
+    opcode = _CONDITION_PRODUCERS[type(operand)]
     if (
         len(rows) < 2 + truth
         or rows[-2 - truth]["opcode"] not in opcode
@@ -1084,7 +1100,7 @@ def _statement_expression(
     """Capture source operands and the terminal operation consuming them."""
     expr = root
     if isinstance(root, ast.If):
-        expr = _condition_operand(root.test, comparison=function_frame)
+        expr = _condition_operand(root.test, function_frame=function_frame)
     elif isinstance(root, ast.For):
         expr = root.iter
     span = tuple_position(expr)
@@ -1158,7 +1174,7 @@ def _statement_expression(
     if not (needs_object_ports or keywords):
         return None
 
-    if isinstance(root, ast.For):
+    if isinstance(root, (ast.For, ast.If)):
         parts[instructions[end].positions].append(root)
     start = end
     while start > 0:
@@ -1178,6 +1194,9 @@ def _statement_expression(
             and (ins.is_jump_target or ins.offset in handlers)
         ):
             return None
+        if ins.opname in _STATEMENT_END[ast.If] or ins.opname == "TO_BOOL":
+            if depth != 1 or index != end - int(ins.opname == "TO_BOOL"):
+                return None
         row = _expression_instruction(
             program, ins, parts[ins.positions], keywords.get(ins.positions, ())
         )
@@ -1606,7 +1625,7 @@ def _function_expression_sites(program, node, following, inherited):
         ):
             expressions[tuple_position(stmt.targets[0])] = stmt
         elif isinstance(stmt, ast.If) and (
-            operand := _condition_operand(stmt.test, comparison=True)
+            operand := _condition_operand(stmt.test, function_frame=True)
         ):
             expressions[tuple_position(operand)] = stmt
         elif isinstance(stmt, ast.For) and isinstance(stmt.target, ast.Name):
@@ -1739,16 +1758,20 @@ def _definition_sites(program, instructions, definitions, handlers):
 
 
 def _module_frame_exit(instructions, code_sha256):
-    """Identify a normal module return at its actual PC, including its None slot."""
-    last = instructions[-1]
+    """Locate the unique normal return, even when exception handlers follow it."""
+    returns = [
+        i
+        for i, row in enumerate(instructions)
+        if row.opname in {"RETURN_CONST", "RETURN_VALUE"}
+    ]
+    if len(returns) != 1:
+        return {}
+    index = returns[0]
+    last = instructions[index]
     if last.opname == "RETURN_CONST":
-        tail = instructions[-1:]
-    elif (
-        last.opname == "RETURN_VALUE"
-        and len(instructions) > 1
-        and not last.is_jump_target
-    ):
-        tail = instructions[-2:]
+        tail = [last]
+    elif last.opname == "RETURN_VALUE" and index > 0 and not last.is_jump_target:
+        tail = instructions[index - 1 : index + 1]
         if tail[0].opname != "LOAD_CONST" or tail[0].offset + 2 != last.offset:
             return {}
     else:

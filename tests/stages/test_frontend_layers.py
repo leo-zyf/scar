@@ -4176,3 +4176,72 @@ def test_function_branch_successors_match_loop_headers_and_lexical_continuations
                 assert edge["fallthrough"] == branch["join"]["offset"]
     assert "source_expression" not in controls[14]
     assert "source_expression" not in controls[15]
+
+
+def test_function_truth_jump_binds_one_source_value_and_two_return_arms(tmp_path):
+    import dis
+    import sys
+    from types import CodeType
+
+    from scar.contract import read_member
+    from scar.frontend import build
+
+    path = tmp_path / "truth.py"
+    tests = {
+        "arg": "flag",
+        "inverted": "not flag",
+        "global_name": "external",
+        "attribute": "flag.enabled",
+        "index": "flag[0]",
+        "addition": "flag + 7",
+        "sequence": "[flag]",
+        "short_circuit": "flag and external",
+    }
+    path.write_text(
+        "".join(
+            f"def {name}(flag):\n    if {expression}:\n        return 1\n    else:\n        return 2\n"
+            for name, expression in tests.items()
+        )
+        + "if external:\n    module_value = 1\n"
+    )
+    code = compile(path.read_bytes(), str(path), "exec", dont_inherit=True)
+    children = {c.co_name: c for c in code.co_consts if type(c) is CodeType}
+    out = tmp_path / "graph"
+    build(path, out)
+    [unit] = json.loads((out / "graph.json").read_bytes())["units"]
+    functions = read_member(out, unit["graph"])["functions"]
+    for fn in functions:
+        name = fn["signature"]["name"].split(":")[-1]
+        [condition] = [n for n in fn["nodes"] if n["op"] == "if"]
+        if name == "__main__" or name == "short_circuit":
+            assert "source_expression" not in condition
+            continue
+        proof = condition["source_expression"]
+        rows = proof["instructions"]
+        edges = proof["branch"]
+        child = children[name]
+        ops = {i.offset: i for i in dis.get_instructions(child)}
+        for row in rows:
+            assert (row["opcode"], row["position"]) == (
+                ops[row["offset"]].opname,
+                list(ops[row["offset"]].positions),
+            )
+        jump = ops[rows[-1]["offset"]]
+        assert jump.opname == (
+            "POP_JUMP_IF_TRUE" if name == "inverted" else "POP_JUMP_IF_FALSE"
+        )
+        assert edges["else"]["offset"] == jump.argval and edges["taken"] == "else"
+        assert edges["then"]["statement_position"][0] == child.co_firstlineno + 2
+        assert edges["else"]["statement_position"][0] == child.co_firstlineno + 4
+        assert sum(r["opcode"] == "TO_BOOL" for r in rows) == int(
+            sys.version_info >= (3, 13)
+        )
+        if name in ("arg", "inverted", "global_name"):
+            read = rows[0]
+            slots = child.co_names if name == "global_name" else child.co_varnames
+            assert (
+                slots[read["index"]]
+                == read["name"]
+                == ("external" if name == "global_name" else "flag")
+            )
+            assert len(rows) == 2 + int(sys.version_info >= (3, 13))
