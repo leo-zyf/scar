@@ -20,7 +20,7 @@ def _plan_image(graph, folder, revision, out, *, shape, trip_count):
     from .binding import bind
     from .normalization import normalize
     from .rewrites import rewrite
-    from .execution import prepare, seal
+    from .execution import prepare, seal_product
 
     abi = graph.get("entry_abi")
     if shape is not None or trip_count is not None:
@@ -48,7 +48,7 @@ def _plan_image(graph, folder, revision, out, *, shape, trip_count):
     status = "INCOMPLETE" if issues else "READY"
     module, changes = rewrite(module)
     module, lowering_facts = prepare(module, executable=not issues)
-    ir_path = seal(
+    ir_path, sealed = seal_product(
         module,
         out,
         status=status,
@@ -69,21 +69,21 @@ def _plan_image(graph, folder, revision, out, *, shape, trip_count):
         "source_obligations",
         "source_dispatch",
     }
-    if sealed_fields:
-        _, _, product = open_product(ir_path, "exec-ir.json", IR)
-        import_analysis.update({key: product["module"][key] for key in sealed_fields})
-    artifact_analysis = module.get("artifact_analysis")
-    if artifact_analysis is not None:
-        artifact_analysis = {
-            **artifact_analysis,
-            "graph": member(out, "analysis", artifact_analysis["graph"]),
-        }
-    resource_analysis = module.get("resource_analysis")
-    if resource_analysis is not None:
-        resource_analysis = {
-            **resource_analysis,
-            "graph": member(out, "resources", resource_analysis["graph"]),
-        }
+    import_analysis.update({key: sealed[key] for key in sealed_fields})
+    analysis_graphs = {}
+    inventory = module.get("resource_model", {})
+    sealed_inventory = sealed.get("resource_model", {})
+    for field, flow, group in (
+        ("artifact_analysis", "artifact_flow", "analysis"),
+        ("resource_analysis", "resource_flow", "resources"),
+    ):
+        analysis = module.get(field)
+        if analysis is None:
+            continue
+        reference = sealed_inventory.get(flow)
+        if reference is None or inventory.get(flow) is not analysis["graph"]:
+            reference = member(out, group, analysis["graph"])
+        analysis_graphs[field] = {**analysis, "graph": reference}
     protocol_analysis = module.get("protocol_analysis")
     if protocol_analysis is not None:
         protocol_analysis = dict(protocol_analysis)
@@ -130,16 +130,7 @@ def _plan_image(graph, folder, revision, out, *, shape, trip_count):
         baseline_defects=module.get("baseline_defects", []),
         normalizations=module.get("normalizations", []),
         **import_analysis,
-        **(
-            {"artifact_analysis": artifact_analysis}
-            if artifact_analysis is not None
-            else {}
-        ),
-        **(
-            {"resource_analysis": resource_analysis}
-            if resource_analysis is not None
-            else {}
-        ),
+        **analysis_graphs,
         **(
             {"protocol_analysis": protocol_analysis}
             if protocol_analysis is not None

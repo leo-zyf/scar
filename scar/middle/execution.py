@@ -485,7 +485,8 @@ def _seal_source_dispatch(out, dispatch, entry):
     return member(out, "analysis", index)
 
 
-def seal(module, out, *, status, graph_sha256, contract, issues=()):
+def seal_product(module, out, *, status, graph_sha256, contract, issues=()):
+    """Publish an execution package and return the exact module references it contains."""
     require_program(module, "M4")
     if status not in {"READY", "INCOMPLETE"}:
         raise ValueError("invalid execution IR completion status")
@@ -559,4 +560,16 @@ def seal(module, out, *, status, graph_sha256, contract, issues=()):
     )
     path = out / "exec-ir.json"
     write_json(path, product)
+    return path, payload
+
+
+def seal(module, out, *, status, graph_sha256, contract, issues=()):
+    path, _ = seal_product(
+        module,
+        out,
+        status=status,
+        graph_sha256=graph_sha256,
+        contract=contract,
+        issues=issues,
+    )
     return path
