@@ -1246,7 +1246,9 @@ def test_nested_module_truth_jump_inherits_parent_continuation(tmp_path):
     assert branch["else"]["kind"] == "continuation"
     assert branch["else"]["statement_position"] == [4, 4, 0, 6]
     assert branch["then"]["statement_position"] == [3, 3, 8, 17]
-    assert [r["name"] for r in receipt["instructions"] if r["opcode"] == "LOAD_NAME"] == [
+    assert [
+        r["name"] for r in receipt["instructions"] if r["opcode"] == "LOAD_NAME"
+    ] == [
         "hasattr",
         "receiver",
     ]

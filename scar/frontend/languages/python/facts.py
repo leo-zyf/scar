@@ -2490,7 +2490,12 @@ def _compiler_sites(tree, path, relative, source_hash):
     )
     statement_expressions = (
         _statement_expression_sites(
-            program, instructions, expressions, handlers, stores, following,
+            program,
+            instructions,
+            expressions,
+            handlers,
+            stores,
+            following,
             inherited=inherited,
         )
         if expressions
