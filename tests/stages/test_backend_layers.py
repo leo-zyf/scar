@@ -3226,6 +3226,24 @@ def test_source_dispatch_seals_import_result_and_conditional_callee_for_b1(tmp_p
     assert detail["loaders"] == [loader["symbol"]]
     assert detail["calls"][0]["callees"] == [callee["symbol"]]
 
+    def module_program():
+        out = tmp_path / "schedule"
+        physical = json.loads((out / "physical-plan.json").read_bytes())
+        schedule = read_member(out, physical["source_frame_schedule"])
+        return next(
+            b for b in read_member(out, schedule["bodies"]) if b["kind"] == "module"
+        )
+
+    assert module_program()["resume_offset"] is None
+    exit_ = loader["entry"].pop("frame_exit")
+    ir["module"]["source_dispatch"] = member(execution, "analysis", index)
+    write_json(path, ir)
+    inspect()
+    prefix = module_program()
+    assert prefix["instructions"][-1][0] == "STORE_NAME"
+    assert prefix["resume_offset"] == prefix["instructions"][-1][1] + 2
+    loader["entry"]["frame_exit"] = exit_
+
     (caller,) = index["functions"]
     original = caller["body"]
     body = read_member(execution, original)
@@ -3245,6 +3263,47 @@ def test_source_dispatch_seals_import_result_and_conditional_callee_for_b1(tmp_p
     (execution / loader["function"]["path"]).write_bytes(b"{}")
     with pytest.raises(ValueError, match="checksum mismatch"):
         inspect()
+
+
+def test_conditional_frames_require_returns_on_both_arms_and_exhaustion(tmp_path):
+    from scar.backend.planning.import_frames import _callee_return
+    from scar.backend.planning.runtime import _body_returns_to_caller
+    from scar.contract import read_member
+    from scar.frontend import build
+    from scar.middle import plan
+
+    entry, leaf = tmp_path / "entry.py", tmp_path / "leaf.py"
+    entry.write_text("import leaf\nleaf.choose(input())\nleaf.scan(input())\n")
+    leaf.write_text(
+        "def choose(flag):\n    if flag == 'yes':\n        return 1\n"
+        "    else:\n        return 2\n"
+        "def scan(items):\n    for item in items:\n        print(item)\n"
+        "    else:\n        return 'done'\n"
+    )
+    graph, execution = tmp_path / "graph", tmp_path / "ir"
+    build(entry, graph)
+    entry.unlink()
+    leaf.unlink()
+    plan(graph, execution)
+    ir = json.loads((execution / "exec-ir.json").read_bytes())
+    index = read_member(execution, ir["module"]["source_dispatch"])
+    checked = set()
+    for descriptor in index["callees"]:
+        fragment = {
+            **descriptor,
+            "function": read_member(execution, descriptor["function"]),
+        }
+        [control] = fragment["function"]["body"]
+        checked.add(control["op"])
+        assert _body_returns_to_caller(fragment)
+        assert not _callee_return(fragment)
+        for arm in (
+            ("then", "else") if control["op"] == "source_frame_if" else ("else",)
+        ):
+            suite, control[arm] = control[arm], []
+            assert not _body_returns_to_caller(fragment)
+            control[arm] = suite
+    assert checked == {"source_frame_if", "source_frame_for"}
 
 
 def test_native_import_frame_uses_live_registry_and_dispatches_returned_objects(
@@ -3320,12 +3379,24 @@ def test_native_import_frame_uses_live_registry_and_dispatches_returned_objects(
     result = compile_ir(execution, delivery, policy="serial")
     assert result["status"] == "INCOMPLETE" and "executable" not in result
     component = result["source_frame_components"]
+    with pytest.raises(ValueError, match="already contains a generated project"):
+        compile_ir(execution, delivery, policy="serial")
     ir = json.loads((execution / "exec-ir.json").read_bytes())
     index = read_member(execution, ir["module"]["source_dispatch"])
     (callee,) = index["callees"]
     constants = read_member(execution, callee["function"])["constants"]
     (literal,) = constants.values()
     assert literal["kind"] == "str"
+    schedule = read_member(delivery, component["schedule"])
+    bodies = read_member(delivery, schedule["bodies"])
+    module, function = sorted(bodies, key=lambda b: b["kind"] != "module")
+    assert all(body["resume_offset"] is None for body in bodies)
+    assert module["instructions"][0][0] == "LOAD_CHILD_CODE"
+    assert module["instructions"][0][3] == function["code_sha256"]
+    assert module["instructions"][1][0] == "MAKE_FUNCTION"
+    assert module["instructions"][2] == ["STORE_NAME", 6, 0, member_name]
+    assert any(value["kind"] == "NoneType" for value in module["constants"].values())
+    assert function["constants"] == constants
     source_code = read_member(execution, index["functions"][0]["body"])
     code = source_code["body"][0]["value"]["source_code"]["code_sha256"]
     import shutil
@@ -3384,9 +3455,7 @@ def test_native_import_frame_uses_live_registry_and_dispatches_returned_objects(
     )
     reference["mismatch"] = (2, b"")
     for mode, state in states.items():
-        run = subprocess.run(
-            [native, mode, code, literal["value"], "replacement"], capture_output=True
-        )
+        run = subprocess.run([native, mode, code, "replacement"], capture_output=True)
         assert (run.returncode, run.stdout) == reference[mode], (mode, run.stderr)
         assert run.stderr.decode().strip() == state
 

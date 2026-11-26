@@ -423,17 +423,72 @@ def _entry_observation(record):
     )
 
 
+def _frame_exits(regions, fallthrough=False):
+    """Check the destination of every normal path, including an empty loop."""
+    if not isinstance(regions, list):
+        return False
+    for region in reversed(regions):
+        kind = region.get("op")
+        steps = region.get("steps", ())
+        exits = [step for step in steps if step.get("op") == "frame_return"]
+        if exits:
+            returned = exits[0]
+            value = returned.get("value", {})
+            if (
+                kind != "source_object_region"
+                or exits != [steps[-1]]
+                or returned.get("destination") != "actual_caller"
+                or not (
+                    returned.get("opcode") == "RETURN_CONST"
+                    and value.get("source") == "current_frame_co_consts"
+                    and type(value.get("index")) is int
+                    or returned.get("opcode") == "RETURN_VALUE"
+                    and len(steps) > 1
+                    and value == {"from_offset": steps[-2]["offset"]}
+                )
+            ):
+                return False
+            fallthrough = True
+        elif kind == "source_frame_if":
+            branch = region.get("branch", {})
+            if (
+                branch.get("taken_arm") not in {"then", "else"}
+                or branch.get("instruction", {}).get("opcode")
+                not in {"POP_JUMP_IF_TRUE", "POP_JUMP_IF_FALSE"}
+                or not branch.get("fallthrough")
+                or not branch.get("taken")
+                or branch.get("instruction", {}).get("target")
+                != branch["taken"].get("offset")
+            ):
+                return False
+            fallthrough = _frame_exits(
+                region.get("then"), fallthrough
+            ) and _frame_exits(region.get("else"), fallthrough)
+        elif kind == "source_frame_for":
+            advance = region.get("advance", {})
+            stops = region.get("edges", {}).get("cleanup", ())
+            if (
+                advance.get("on_exhaustion") != "release_iterator_once_then_enter_else"
+                or advance.get("instruction", {}).get("opcode") != "FOR_ITER"
+                or not stops
+                or stops[0].get("opcode") != "END_FOR"
+                or advance.get("instruction", {}).get("target")
+                != stops[0].get("offset")
+            ):
+                return False
+            exhausted = _frame_exits(region.get("else"), fallthrough)
+            fallthrough = exhausted and _frame_exits(region.get("body"), exhausted)
+        elif kind != "source_object_region":
+            return False
+    return fallthrough
+
+
 def _body_returns_to_caller(fragment):
     fn = fragment.get("function", {})
     regions = fn.get("body", ())
     if fragment.get("completion") != "conditional_source_body" or not regions:
         return False
-    steps = regions[-1].get("steps", ())
-    if (
-        not steps
-        or steps[-1].get("op") != "frame_return"
-        or steps[-1].get("destination") != "actual_caller"
-    ):
+    if not _frame_exits(regions):
         return False
     slots = fn.get("constants", {})
     for op in walk_operations(regions, exclude_fields=EXECUTION_ANNOTATIONS):
@@ -463,6 +518,10 @@ def _dispatch_sites(dispatch, ledger):
         raise ValueError("invalid source dispatch completion")
     loaders = {(r["owner"], r["site"], r["symbol"]): r for r in dispatch["loaders"]}
     callees = {r["symbol"]: r for r in dispatch["callees"]}
+    if len(loaders) != len(dispatch["loaders"]) or len(callees) != len(
+        dispatch["callees"]
+    ):
+        raise ValueError("ambiguous source dispatch activation")
     imports, calls, creations = defaultdict(list), defaultdict(list), defaultdict(dict)
     scopes = {r["symbol"]: r["body"] for r in dispatch["functions"]}
     if dispatch["entry"] not in scopes:
@@ -682,9 +741,10 @@ def import_effects(module, bindings):
     dispatch = module.get("source_dispatch")
     sites = _dispatch_sites(dispatch, ledger) if dispatch else {}
     if dispatch:
-        from .import_frames import regions
+        from .import_frames import activation_bodies, regions
 
         frame_regions = regions(dispatch, sites)
+        frame_bodies = activation_bodies(dispatch, sites) if frame_regions else []
     rows, identities = [], set()
     counts = dict(visited=0, unvisited=0, proven_inactive=0)
     for occurrence in ledger["occurrences"]:
@@ -737,7 +797,7 @@ def import_effects(module, bindings):
         semantics_version=1,
         scope="source_import_occurrences",
         **(
-            {"native_frame_regions": frame_regions}
+            {"native_frame_regions": frame_regions, "native_frame_bodies": frame_bodies}
             if dispatch and frame_regions
             else {}
         ),

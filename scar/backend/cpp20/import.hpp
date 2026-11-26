@@ -55,12 +55,59 @@ public:
   }
 };
 
+enum class body_opcode {
+  child_code,
+  make_function,
+  store_name,
+  store_global,
+  constant,
+  small_int,
+  return_const,
+  return_value
+};
+struct body_instruction {
+  body_opcode operation;
+  unsigned offset;
+  unsigned operand;
+  std::string_view name;
+};
+struct constant_slot {
+  unsigned index;
+  std::string_view kind;
+  std::string_view value;
+};
+struct body_program {
+  std::string_view symbol;
+  std::string_view code_sha256;
+  std::span<const body_instruction> instructions;
+  std::span<const constant_slot> constants;
+  bool returns;
+  unsigned resume_offset;
+};
+
+enum class outcome { unmatched, continued_in_host, completed };
+template <class Frame> outcome run_body(Frame &, const body_program &);
+
+struct body_provider {
+  std::span<const body_program> programs{};
+  template <class Frame>
+  outcome enter(Frame &frame, std::string_view code_sha256,
+                std::string_view symbol) const {
+    for (const auto &p : programs) {
+      if (p.code_sha256 == code_sha256 && p.symbol == symbol)
+        return run_body(frame, p);
+    }
+    return outcome::unmatched;
+  }
+};
+
 // Adapter to a live import domain. All cache, spec and object operations use
 // that domain's actual mappings, locking and reference semantics. The default
 // path is only for top-level absolute names and a source-capable modern loader.
 // find_spec/create_module/exec_module include their observable callbacks.
 template <class Host, class Spec>
-auto load_selected(Host &host, Spec &spec) -> typename Host::object {
+auto load_selected(Host &host, Spec &spec, body_provider bodies = {}) ->
+    typename Host::object {
   if (!host.supports_modern_loader(spec))
     return host.continue_other_loader(spec);
   auto module = host.create_module(spec);
@@ -68,7 +115,10 @@ auto load_selected(Host &host, Spec &spec) -> typename Host::object {
   try {
     host.publish_module(host.spec_name(spec), module);
     try {
-      host.exec_module(spec, module);
+      if constexpr (requires { host.exec_module(spec, module, bodies); })
+        host.exec_module(spec, module, bodies);
+      else
+        host.exec_module(spec, module);
     } catch (...) {
       host.erase_module_if_present(host.spec_name(spec));
       throw;
@@ -87,8 +137,8 @@ auto load_selected(Host &host, Spec &spec) -> typename Host::object {
 }
 
 template <class Host>
-auto default_absolute(Host &host, std::string_view name, unsigned minor) ->
-    typename Host::object {
+auto default_absolute(Host &host, std::string_view name, unsigned minor,
+                      body_provider bodies = {}) -> typename Host::object {
   {
     auto cached = host.lookup_module(name);
     if (cached && !host.is_none(*cached)) {
@@ -106,7 +156,7 @@ auto default_absolute(Host &host, std::string_view name, unsigned minor) ->
         cached = host.lookup_module(name);
         if (!cached) {
           auto spec = host.find_spec(name);
-          cached = load_selected(host, spec);
+          cached = load_selected(host, spec, bodies);
           loaded = true;
         }
       });
@@ -145,9 +195,8 @@ struct region {
   std::string_view code_sha256;
   unsigned minor;
   std::span<const instruction> instructions;
+  body_provider bodies{};
 };
-
-enum class outcome { unmatched, continued_in_host, completed };
 
 // The host supplies the actual active frame and live owned operand slots, one
 // optional<object> per slot (disengaged is the interpreter's call NULL).
@@ -180,8 +229,9 @@ template <class Frame> outcome run(Frame &frame, const region &program) {
           return outcome::continued_in_host;
         auto value = frame.import_name(ins.operand, *slots[slots.size() - 2],
                                        *slots.back(), [&](auto &host) {
-                                         return default_absolute(host, ins.name,
-                                                                 program.minor);
+                                         return default_absolute(
+                                             host, ins.name, program.minor,
+                                             program.bodies);
                                        });
         frame.replace(2, std::move(value));
         break;
@@ -217,7 +267,14 @@ template <class Frame> outcome run(Frame &frame, const region &program) {
             !std::all_of(args.begin(), args.end(),
                          [](const auto &s) { return s.has_value(); }))
           return outcome::continued_in_host;
-        auto result = frame.invoke(*prefix[callable], args);
+        auto result = [&] {
+          if constexpr (requires {
+                          frame.invoke(*prefix[callable], args, program.bodies);
+                        })
+            return frame.invoke(*prefix[callable], args, program.bodies);
+          else
+            return frame.invoke(*prefix[callable], args);
+        }();
         frame.replace(ins.operand + 2, std::move(result));
         break;
       }
@@ -233,5 +290,63 @@ template <class Frame> outcome run(Frame &frame, const region &program) {
     }
   }
   return outcome::completed;
+}
+// This entry follows actual loader or callable selection. The source frame
+// owns locals, globals, builtins and code objects. A mismatch after an opcode
+// leaves its original stack intact for the host continuation.
+template <class Frame>
+outcome run_body(Frame &frame, const body_program &program) {
+  if (program.instructions.empty() || !frame.enter_body(program))
+    return outcome::unmatched;
+  auto &stack = frame.stack();
+  const auto base = stack.size();
+  for (const auto &ins : program.instructions) {
+    try {
+      if (!frame.before(ins.offset))
+        return outcome::continued_in_host;
+      switch (ins.operation) {
+      case body_opcode::child_code:
+      case body_opcode::constant:
+        stack.emplace_back(frame.constant(ins.operand));
+        break;
+      case body_opcode::small_int:
+        stack.emplace_back(frame.small_int(ins.operand));
+        break;
+      case body_opcode::make_function: {
+        if (stack.size() != base + 1 || !stack.back() ||
+            !frame.matches_code(*stack.back(), ins.name))
+          return outcome::continued_in_host;
+        // MAKE_FUNCTION takes its globals and effective builtins from this
+        // activation, including an updated __builtins__ entry in its globals.
+        auto function = frame.make_function(*stack.back());
+        frame.replace(1, std::move(function));
+        break;
+      }
+      case body_opcode::store_name:
+      case body_opcode::store_global:
+        if (stack.size() != base + 1 || !stack.back())
+          return outcome::continued_in_host;
+        frame.publish(ins.operand, ins.operation == body_opcode::store_global,
+                      *stack.back());
+        frame.replace(1, std::nullopt);
+        break;
+      case body_opcode::return_const:
+        if (stack.size() != base)
+          return outcome::continued_in_host;
+        frame.return_constant(ins.operand);
+        return outcome::completed;
+      case body_opcode::return_value:
+        if (stack.size() != base + 1 || !stack.back())
+          return outcome::continued_in_host;
+        frame.return_top();
+        return outcome::completed;
+      }
+    } catch (...) {
+      frame.unwind(ins.offset, std::current_exception());
+      return outcome::continued_in_host;
+    }
+  }
+  frame.resume_at(program.resume_offset);
+  return outcome::continued_in_host;
 }
 } // namespace scar::imports

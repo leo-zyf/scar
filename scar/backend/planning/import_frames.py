@@ -141,3 +141,185 @@ def regions(dispatch, checked):
                 )
             )
     return result
+
+
+def _module_body(loader):
+    from scar.contract import digest, json_bytes, source_function_publication
+
+    entry = loader["entry"]
+    code = entry["code"]["code_sha256"]
+    steps = []
+    for stmt in loader["function"]["body"]:
+        op = stmt.get("value", {})
+        published = (
+            source_function_publication(op, code) if stmt["op"] == "expr" else None
+        )
+        if not published:
+            return steps
+        make, store, child = published
+        load, instruction, _ = op["source_definition"]["instructions"]
+        constant = op["evaluation"][0]
+        if (
+            op.get("source_code") != entry["code"]
+            or constant.get("source") != "current_frame_co_consts"
+            or constant.get("operand") != load["index"]
+            or load["index"] != load["oparg"]
+            or instruction.get("oparg", 0) != 0
+            or store["index"] != store["oparg"]
+            or load["offset"] != (steps[-1][1] + 2 if steps else 2)
+            or instruction["offset"] != load["offset"] + 2
+            or store["offset"] != instruction["offset"] + 2
+        ):
+            return steps
+        steps.extend(
+            [
+                [
+                    "LOAD_CHILD_CODE",
+                    load["offset"],
+                    load["index"],
+                    child["code_sha256"],
+                ],
+                ["MAKE_FUNCTION", make["offset"], 0, child["code_sha256"]],
+                [store["opcode"], store["offset"], store["index"], store["name"]],
+            ]
+        )
+    frame_exit = entry.get("frame_exit", {})
+    tail = frame_exit.get("instructions", [])
+    if (
+        frame_exit.get("code_sha256") != code
+        or not tail
+        or tail[0]["offset"] != (steps[-1][1] + 2 if steps else 2)
+        or tail[0].get("index") != tail[0].get("oparg")
+    ):
+        return steps
+    if tail[0].get("type") != "NoneType" or tail[0].get("value_sha256") != digest(
+        json_bytes(None)
+    ):
+        return steps
+    opcodes = [t["opcode"] for t in tail]
+    if opcodes == ["RETURN_CONST"]:
+        steps.append(["RETURN_CONST", tail[0]["offset"], tail[0]["index"], ""])
+    elif (
+        opcodes == ["LOAD_CONST", "RETURN_VALUE"]
+        and tail[1]["offset"] == tail[0]["offset"] + 2
+    ):
+        steps.extend(
+            [
+                ["LOAD_CONST", tail[0]["offset"], tail[0]["index"], ""],
+                ["RETURN_VALUE", tail[1]["offset"], 0, ""],
+            ]
+        )
+    return steps
+
+
+def _callee_return(fragment):
+    if fragment.get("completion") != "conditional_source_body":
+        return []
+    body = fragment["function"]["body"]
+    if len(body) != 1 or body[0]["op"] != "source_object_region":
+        return []
+    steps = body[0]["steps"]
+    if (
+        not steps
+        or steps[0]["offset"] != 2
+        or steps[-1]["op"] != "frame_return"
+        or steps[-1].get("destination") != "actual_caller"
+    ):
+        return []
+    returned = steps[-1]
+    value = returned["value"]
+    if (
+        len(steps) == 1
+        and returned["opcode"] == "RETURN_CONST"
+        and value.get("source") == "current_frame_co_consts"
+    ):
+        return [["RETURN_CONST", returned["offset"], value["index"], ""]]
+    if len(steps) != 2 or returned["opcode"] != "RETURN_VALUE":
+        return []
+    load = steps[0]
+    if (
+        value != {"from_offset": load["offset"]}
+        or returned["offset"] != load["offset"] + 2
+    ):
+        return []
+    if load["op"] == "source_object_constant":
+        opcode = {
+            "current_frame_co_consts": "LOAD_CONST",
+            "source_small_integer": "LOAD_SMALL_INT",
+        }.get(load["source"])
+        if opcode:
+            return [
+                [opcode, load["offset"], load["operand"], ""],
+                ["RETURN_VALUE", returned["offset"], 0, ""],
+            ]
+    return []
+
+
+def activation_bodies(dispatch, checked):
+    """Bind independently enterable body instructions to their original live code."""
+    bodies = {}
+    callees = {
+        name
+        for site in checked.values()
+        for call in site["calls"]
+        for name in call["callees"]
+    }
+    for role in ("loaders", "callees"):
+        for row in dispatch[role]:
+            symbol = row["symbol"]
+            if role == "loaders":
+                site = checked.get((row["owner"], row["site"]), {})
+                if symbol not in site.get("loaders", ()):
+                    continue
+                steps = _module_body(row)
+            else:
+                if symbol not in callees:
+                    continue
+                steps = _callee_return(row)
+            if not steps:
+                continue
+            code = row["entry"]["code"]
+            slots = row["function"].get("constants", {})
+            used = {}
+            for op, _, index, _ in steps:
+                if op in {"LOAD_CONST", "RETURN_CONST"}:
+                    literal = (
+                        {"kind": "NoneType", "value": None}
+                        if role == "loaders"
+                        else slots.get(str(index), {})
+                    )
+                    kind = literal.get("kind")
+                    if type(literal.get("value")).__name__ != kind or kind not in {
+                        "NoneType",
+                        "bool",
+                        "int",
+                        "str",
+                        "float",
+                    }:
+                        break
+                    if kind == "str" and any(
+                        0xD800 <= ord(ch) <= 0xDFFF for ch in literal["value"]
+                    ):
+                        # The native constant-slot ABI represents text as UTF-8.
+                        break
+                    used[str(index)] = literal
+            else:
+                key = symbol, code["code_sha256"]
+                body = dict(
+                    symbol=symbol,
+                    kind=code["kind"],
+                    code_sha256=code["code_sha256"],
+                    instructions=steps,
+                    constants=used,
+                    resume_offset=(
+                        steps[-1][1] + 2
+                        if not steps[-1][0].startswith("RETURN_")
+                        else None
+                    ),
+                )
+                if key in bodies and bodies[key] != body:
+                    raise ValueError(
+                        "conflicting schedules for the same source activation"
+                    )
+                bodies[key] = body
+    return list(bodies.values())

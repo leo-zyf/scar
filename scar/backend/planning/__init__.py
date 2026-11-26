@@ -1119,6 +1119,7 @@ def _schedule_image(
 
 def _seal_schedule(destination, fields, physical, scheduled):
     regions = physical.get("source_import_effects", {}).pop("native_frame_regions", ())
+    bodies = physical.get("source_import_effects", {}).pop("native_frame_bodies", ())
     if regions:
         component = document(
             "scar.scheduled-ir",
@@ -1127,6 +1128,11 @@ def _seal_schedule(destination, fields, physical, scheduled):
             entry_abi="live_native_frame",
             ir_sha256=fields["ir_sha256"],
             regions=member(destination, "scheduled-units", regions),
+            **(
+                {"bodies": member(destination, "scheduled-units", bodies)}
+                if bodies
+                else {}
+            ),
         )
         file = destination / "source-frame-scheduled-ir.json"
         write_json(file, component)

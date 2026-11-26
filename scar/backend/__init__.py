@@ -92,7 +92,10 @@ def compile_ir(source, out, *, policy="auto", workers=None):
     from .planning import schedule_ir
 
     out = Path(out).resolve()
-    if (out / "project").exists() or (out / "components").exists():
+    if any(
+        (out / item).exists()
+        for item in ("project", "components", "source-frames/project")
+    ) or any((out / "images").glob("*/source-frames/project")):
         raise ValueError(f"delivery already contains a generated project: {out}")
     schedule = schedule_ir(source, out, policy=policy, workers=workers)
     physical_path, _, physical = open_product(out, "physical-plan.json", PHYSICAL)
