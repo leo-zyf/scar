@@ -365,6 +365,59 @@ def lower_library(path, revision, scheduled, destination):
     return target
 
 
+def _validate_live_call(row):
+    """Recheck the stack/PC boundary before emitting an independent caller fragment."""
+    program = row["instructions"]
+    pc = program[0][1]
+    if (
+        type(pc) is not int
+        or pc < 2
+        or pc % 2
+        or not row.get("import_site")
+        or not row.get("site")
+    ):
+        raise ValueError("invalid live call entry")
+    stack, calls = [], set()
+    for op, offset, n, text in program:
+        if type(n) is not int or n < 0 or not isinstance(text, str) or offset != pc:
+            raise ValueError("invalid live call instruction span")
+        pc += {"LOAD_ATTR": 20, "CALL": 8}.get(op, 2)
+        if op == "PUSH_NULL" and n == 0 and not text:
+            stack.append(False)
+        elif (
+            op == "LOAD_NAME"
+            and text.isidentifier()
+            or op == "LOAD_CONST"
+            and not text
+            or op == "LOAD_SMALL_INT"
+            and row["minor"] == 14
+            and n < 256
+            and not text
+        ):
+            stack.append(True)
+        elif op == "LOAD_ATTR" and text.isidentifier() and stack and stack[-1]:
+            pass
+        elif op == "CALL" and not text and len(stack) >= n + 2:
+            prefix = stack[-(n + 2) :]
+            required = [False, True] if row["minor"] == 12 else [True, False]
+            if prefix[:2] != required or not all(prefix[2:]):
+                raise ValueError("invalid live callable or positional arguments")
+            stack[-(n + 2) :] = [True]
+            calls.add(offset)
+        elif (
+            op == "POP_TOP"
+            and not text
+            and n == 0
+            and stack == [True]
+            and offset == program[-1][1]
+        ):
+            stack.clear()
+        else:
+            raise ValueError("invalid live call operand stack")
+    if stack or row.get("call_offset") not in calls or row.get("resume_offset") != pc:
+        raise ValueError("invalid live call continuation")
+
+
 def _frame_tree(rows, bodies, modules=None):
     if not rows:
         raise ValueError("source-frame library has no scheduled regions")
@@ -376,7 +429,9 @@ def _frame_tree(rows, bodies, modules=None):
             raise ValueError("invalid source-frame code identity")
         program = row["instructions"]
         named_request = row.get("profile") == "live_fromlist"
-        if named_request:
+        if row.get("profile") == "live_call":
+            _validate_live_call(row)
+        elif named_request:
             # The request keeps its actual result on the operand stack while
             # each member is looked up and stored. End with its source POP_TOP.
             if (
@@ -534,9 +589,15 @@ def isolated_units(folder, physical, certificate):
                 "isolated module requires a complete initializer starting at frame entry"
             )
     rows = sorted(rows, key=lambda r: r["instructions"][0][1])
-    if rows[-1]["resume_offset"] != certificate["exit_offset"] or any(
-        r["code_sha256"] != certificate["code_sha256"] for r in rows
-    ):
+    if (
+        not rows
+        or rows[0]["instructions"][0][1] != 2
+        or any(
+            a["resume_offset"] != b["instructions"][0][1]
+            for a, b in zip(rows, rows[1:])
+        )
+        or rows[-1]["resume_offset"] != certificate["exit_offset"]
+    ) or any(r["code_sha256"] != certificate["code_sha256"] for r in rows):
         raise ValueError("local module entry does not reach its sealed exit")
     tree = _frame_tree(rows, bodies, certificate["modules"])
     main = Decl(

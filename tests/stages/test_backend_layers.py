@@ -4889,6 +4889,8 @@ def test_isolated_import_retries_through_typed_exception_handlers(tmp_path):
 def test_isolated_module_publications_cover_the_initializer(tmp_path, with_prefix):
     from scar.backend.build import build as build_binary
     from scar.backend.cpp20 import lower_scheduled, print_target
+    from scar.backend.cpp20.imports import _frame_tree
+    from scar.contract import read_member
     from scar.backend.planning import schedule_ir
     from scar.frontend import build
     from scar.middle import plan
@@ -4896,7 +4898,7 @@ def test_isolated_module_publications_cover_the_initializer(tmp_path, with_prefi
     root = tmp_path / "src"
     root.mkdir()
     (root / "entry.py").write_text(
-        "import provider\nprint(provider.value, provider.fetch())\n"
+        "import provider\nprint(provider.value, provider.fetch())\nprint(provider.fetch())\n"
     )
     prefix = "print('initializing')\n" if with_prefix else ""
     (root / "provider.py").write_text(
@@ -4926,11 +4928,23 @@ def test_isolated_module_publications_cover_the_initializer(tmp_path, with_prefi
     product = schedule_ir(tmp_path / "ir", tmp_path / "schedule", policy="serial")
     physical = json.loads((tmp_path / "schedule/physical-plan.json").read_bytes())
     if with_prefix:
-        assert source.stdout == b"initializing\nlast called\n"
+        assert source.stdout == b"initializing\nlast called\ncalled\n"
         assert physical["status"] == "INCOMPLETE"
         assert "isolated_entry" not in physical["source_import_effects"]
         return
     assert physical["status"] == "READY"
+    schedule = tmp_path / "schedule"
+    component = read_member(schedule, physical["source_frame_schedule"])
+    imported, called = read_member(schedule, component["regions"])
+    assert called["profile"] == "live_call"
+    assert imported["resume_offset"] == called["instructions"][0][1]
+    assert (called["import_site"], called["occurrence"]) == (
+        imported["site"],
+        imported["occurrence"],
+    )
+    assert sum(step[0] == "CALL" for step in called["instructions"]) == 2
+    with pytest.raises(ValueError, match="live call continuation"):
+        _frame_tree([dict(called, call_offset=called["instructions"][0][1])], [])
     target = lower_scheduled(product, tmp_path / "target")
     project = print_target(target, tmp_path / "out")
     build_binary(tmp_path / "out/cpp20.json")
@@ -4944,7 +4958,7 @@ def test_isolated_module_publications_cover_the_initializer(tmp_path, with_prefi
     assert (
         (source.stdout, source.stderr)
         == (result.stdout, result.stderr)
-        == (b"last called\n", b"")
+        == (b"last called\ncalled\n", b"")
     )
 
 

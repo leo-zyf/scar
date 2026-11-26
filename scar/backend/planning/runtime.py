@@ -555,6 +555,7 @@ def _dispatch_sites(dispatch, ledger):
     scoped_plain, scoped_named = defaultdict(list), defaultdict(list)
     statements = {}
     for owner, fn, code in bodies.values():
+        expressions = {}
         # Each control arm owns its own source continuation. At the end of an
         # arm, hand control back to the active frame at the next source offset.
         scopes = [fn["body"]]
@@ -565,7 +566,9 @@ def _dispatch_sites(dispatch, ledger):
                 op = stmt.get("value", {})
                 if stmt["op"] != "expr":
                     continue
-                if op.get("op") == "module_fromlist_publish":
+                if op.get("op") == "module_object_expression":
+                    expressions[id(op.get("expression"))] = op
+                elif op.get("op") == "module_fromlist_publish":
                     scoped_named[owner, id(fn)].append(op)
                 elif op.get("op") == "module_import_publish":
                     scoped_plain[owner, id(fn)].append(op)
@@ -590,11 +593,17 @@ def _dispatch_sites(dispatch, ledger):
                     target["offset"],
                 )
                 creations[owner, target["name"]][key] = child
-            for edge in source_call_operands(op):
-                calls[owner, edge[3]["occurrence"]].append(edge)
+            edges = source_call_operands(op)
+            expression = expressions.get(id(op))
+            if expression is not None:
+                edges = tuple(edges)
+                if len(edges) != 1:
+                    expression = None
+            for edge in edges:
+                calls[owner, edge[3]["occurrence"]].append((*edge, expression))
     results = {}
     consumed = set()
-    candidates = {}
+    candidates, call_candidates = {}, []
     # A nominal requirement owned by a loader must still match a reachable
     # frame. Index its body once, then follow both import forms in one worklist.
     loader_owners = {row["symbol"] for row in loaders.values()}
@@ -731,7 +740,7 @@ def _dispatch_sites(dispatch, ledger):
             for symbol in matched:
                 child = loaders[(*key, symbol)]
                 activate(symbol, child["entry"]["code"], child["function"])
-        for call, load, attribute, previous in calls[owner, row["id"]]:
+        for call, load, attribute, previous, expression in calls[owner, row["id"]]:
             binding = bindings.get((previous["site"], previous["slot"]), {})
             attribute = attribute or {}
             member = attribute.get("name") or binding.get("member")
@@ -791,6 +800,8 @@ def _dispatch_sites(dispatch, ledger):
                     gaps.append("conditional_callable_body_or_continuation")
             if expected.keys() != linked:
                 gaps.append("conditional_callable_body_or_continuation")
+            if linked and not prefixes and expression is not None:
+                call_candidates.append((key, row["id"], expression, call))
             consumers.append(
                 dict(
                     site=call["site"],
@@ -841,7 +852,7 @@ def _dispatch_sites(dispatch, ledger):
             loaders=[],
             calls=[],
         )
-    return results, candidates, list(live_named.values()), providers
+    return results, candidates, call_candidates, list(live_named.values()), providers
 
 
 def import_effects(module, bindings):
@@ -872,8 +883,10 @@ def import_effects(module, bindings):
     if dispatch:
         from .import_frames import activation_bodies, regions
 
-        sites, candidates, live_named, providers = _dispatch_sites(dispatch, ledger)
-        frame_regions = regions(candidates, sites)
+        sites, candidates, calls, live_named, providers = _dispatch_sites(
+            dispatch, ledger
+        )
+        frame_regions = regions(candidates, sites, calls)
         frame_bodies = (
             activation_bodies(dispatch, sites | providers)
             if frame_regions or live_named

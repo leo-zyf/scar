@@ -9,6 +9,14 @@ def _expression(node, code, minor):
     if (
         receipt.get("code_sha256") != code["code_sha256"]
         or region.get("op") != "source_object_region"
+        or node.get("code_match")
+        != "qualify_current_frame_code_and_expression_instruction_order_stack_operands_spans_and_jumps_before_first_operand"
+        or node.get("on_code_mismatch")
+        != "resume_source_equivalent_execution_before_first_operand"
+        or node.get("unwind")
+        != "on_failure_unwind_only_live_source_stack_references_at_failing_opcode_no_duplicate_effects"
+        or node.get("exceptional_exit")
+        != "propagate_at_failing_source_operation_preserving_completed_effects"
     ):
         return []
     steps = {s["offset"]: s for s in region["steps"]}
@@ -18,6 +26,14 @@ def _expression(node, code, minor):
         step = steps.get(pc, {})
         kind = step.get("op")
         arg = ins.get("index", ins.get("oparg", 0))
+        # The two supported bytecodes have nine cache words after LOAD_ATTR
+        # and three after CALL. Reject gaps (including unmodeled EXTENDED_ARG).
+        if type(pc) is not int or pc < 2 or pc % 2 or type(arg) is not int or arg < 0:
+            return []
+        if program:
+            prior, offset, _, _ = program[-1]
+            if pc != offset + {"LOAD_ATTR": 20, "CALL": 8}.get(prior, 2):
+                return []
         if opcode == "PUSH_NULL":
             if step:
                 return []
@@ -25,13 +41,19 @@ def _expression(node, code, minor):
         elif (
             opcode == "LOAD_NAME"
             and kind == "module_name_load"
-            and step["instruction"]["index"] == arg
+            and step["instruction"]["index"] == arg == ins.get("oparg")
+            and step["instruction"].get("code_sha256") == code["code_sha256"]
+            and step["instruction"].get("name") == ins.get("name")
+            and step["instruction"].get("offset") == pc
+            and step.get("lookup_order")
+            == ["frame.locals", "frame.globals", "frame.builtins"]
         ):
             stack.append(pc)
         elif (
             opcode in {"LOAD_CONST", "LOAD_SMALL_INT"}
             and kind == "source_object_constant"
             and step.get("operand") == arg
+            and (opcode != "LOAD_SMALL_INT" or minor == 14 and arg < 256)
         ):
             stack.append(pc)
         elif (
@@ -40,8 +62,9 @@ def _expression(node, code, minor):
             and step["result"] == "attribute_object"
         ):
             if (
-                ins["oparg"] & 1
+                ins["oparg"] != arg * 2
                 or step["name_index"] != arg
+                or step.get("name") != ins.get("name")
                 or not stack
                 or step["base"] != {"from_offset": stack.pop()}
             ):
@@ -57,6 +80,7 @@ def _expression(node, code, minor):
             if (
                 marker is not None
                 or target is None
+                or None in args
                 or step["target"] != {"from_offset": target}
                 or step["args"] != [{"from_offset": v} for v in args]
                 or step.get("keyword_names") is not None
@@ -79,7 +103,7 @@ def _expression(node, code, minor):
     return program if not stack and used == steps.keys() else []
 
 
-def regions(candidates, checked):
+def regions(candidates, checked, calls):
     """A normal continuation starts immediately after the last included opcode."""
     result = []
     for key, (op, following) in candidates.items():
@@ -126,6 +150,50 @@ def regions(candidates, checked):
                 resume_offset=program[-1][1] + 2,
             )
         )
+    included = {
+        (r["owner"], r["code_sha256"], pc)
+        for r in result
+        for opcode, pc, _, _ in r["instructions"]
+        if opcode == "CALL"
+    }
+    # Re-enter independently at the actual caller PC. No jump from the
+    # import to a later consumer, or across an enclosing control arm.
+    for key, occurrence, expression, call in calls:
+        if key not in candidates or checked[key]["missing"]:
+            continue
+        code = candidates[key][0]["source_code"]
+        identity = key[0], code["code_sha256"], call["offset"]
+        compiler = code["compiler"].split(".")[:2]
+        if identity in included or compiler not in (
+            ["cpython 3", "12"],
+            ["cpython 3", "14"],
+        ):
+            continue
+        minor = int(compiler[1])
+        program = _expression(expression, code, minor)
+        if (
+            not program
+            or program[-1][0] != "POP_TOP"
+            or not any(
+                op == "CALL" and pc == call["offset"] for op, pc, _, _ in program
+            )
+        ):
+            continue
+        result.append(
+            dict(
+                owner=key[0],
+                site=call["site"],
+                occurrence=occurrence,
+                import_site=key[1],
+                code_sha256=code["code_sha256"],
+                minor=minor,
+                profile="live_call",
+                call_offset=call["offset"],
+                instructions=program,
+                resume_offset=program[-1][1] + 2,
+            )
+        )
+        included.add(identity)
     return result
 
 
@@ -872,6 +940,7 @@ def isolated_project_entry(module, ledger, dispatch, rows, regions, bodies):
         or sys.implementation.name != "cpython"
     ):
         return None
+    imports = [r for r in regions if "profile" not in r]
     entry_exit = dispatch["entry_frame"].get("frame_exit", {})
     exits = entry_exit.get("instructions", ())
     if (
@@ -884,12 +953,12 @@ def isolated_project_entry(module, ledger, dispatch, rows, regions, bodies):
         or exits[0].get("value_sha256") != digest(json_bytes(None))
         or entry_exit.get("code_sha256") != entry["code_sha256"]
         or not regions
-        or not (len(regions) == len(rows) == len(ledger["occurrences"]))
+        or not (len(imports) == len(rows) == len(ledger["occurrences"]))
     ):
         return None
     loader_at = {(row["owner"], row["site"]): row for row in dispatch["loaders"]}
     occurrences = {row["id"]: row for row in ledger["occurrences"]}
-    if set(occurrences) != {region["occurrence"] for region in regions}:
+    if set(occurrences) != {region["occurrence"] for region in imports}:
         return None
     if any(
         row["activation"] != "visited"
@@ -930,6 +999,20 @@ def isolated_project_entry(module, ledger, dispatch, rows, regions, bodies):
     for region in sorted(regions, key=lambda row: row["instructions"][0][1]):
         steps = region["instructions"]
         occurrence = occurrences[region["occurrence"]]
+        if (
+            region["owner"] != module["entry"]
+            or region["code_sha256"] != entry["code_sha256"]
+            or steps[0][1] != previous
+        ):
+            return None
+        previous = region["resume_offset"]
+        if region.get("profile") == "live_call":
+            if (region["owner"], region["import_site"]) != (
+                occurrence["owner"],
+                occurrence["site"],
+            ) or not _isolated_expression(region, names, slots, start=0):
+                return None
+            continue
         effect = occurrence["import_effects"]
         identity = effect["source_identity"]
         loader = loader_at.get((region["owner"], region["site"]), {})
@@ -947,9 +1030,6 @@ def isolated_project_entry(module, ledger, dispatch, rows, regions, bodies):
             or body["resume_offset"] is not None
             or not body["instructions"]
             or body["instructions"][-1][0] not in {"RETURN_CONST", "RETURN_VALUE"}
-            or region["owner"] != module["entry"]
-            or region["code_sha256"] != entry["code_sha256"]
-            or steps[0][1] != previous
             or len(steps) < 4
             or steps[2][0] != "IMPORT_NAME"
             or steps[2][3] != key
@@ -966,7 +1046,6 @@ def isolated_project_entry(module, ledger, dispatch, rows, regions, bodies):
         names[steps[3][3]] = ("module", key)
         if not _isolated_expression(region, names, slots):
             return None
-        previous = region["resume_offset"]
     if previous != exits[0]["offset"]:
         return None
     return dict(
@@ -980,10 +1059,10 @@ def isolated_project_entry(module, ledger, dispatch, rows, regions, bodies):
     )
 
 
-def _isolated_expression(region, names, exports):
+def _isolated_expression(region, names, exports, *, start=4):
     """Prove each qualified source lookup/call before using the native object ABI."""
     stack = []
-    for op, _, arg, spelling in region["instructions"][4:]:
+    for op, _, arg, spelling in region["instructions"][start:]:
         if op == "PUSH_NULL":
             stack.append(None)
         elif op == "LOAD_NAME":
