@@ -3208,6 +3208,17 @@ def test_source_dispatch_seals_import_result_and_conditional_callee_for_b1(tmp_p
             reason["qualification"]["evidence"]["source_dispatch"]
             == occurrence["source_dispatch"]
         )
+        component = read_member(out, physical["source_frame_schedule"])
+        [region] = read_member(out, component["regions"])
+        assert occurrence["source_dispatch"]["import_binding_verified"]
+        assert region["resume_offset"] == region["instructions"][-1][1] + 2
+        if occurrence["source_dispatch"]["missing"]:
+            assert [row[0] for row in region["instructions"]][-2:] == [
+                "IMPORT_NAME",
+                "STORE_NAME",
+            ]
+        else:
+            assert region["instructions"][-1][0] == "POP_TOP"
         return occurrence["source_dispatch"]
 
     detail = inspect()

@@ -560,6 +560,7 @@ def _dispatch_sites(dispatch, ledger):
                 gaps.append("conditional_loader_body_or_continuation")
             else:
                 matched[symbol] = c["code_sha256"]
+        import_binding_verified = not gaps
         for call, load, attribute, previous in calls[owner, row["id"]]:
             binding = bindings.get((previous["site"], previous["slot"]), {})
             attribute = attribute or {}
@@ -634,6 +635,7 @@ def _dispatch_sites(dispatch, ledger):
         )
         results[key] = dict(
             status="missing_source_dataflow" if gaps else completion,
+            import_binding_verified=import_binding_verified,
             missing=sorted(set(gaps)),
             loaders=sorted(matched),
             calls=consumers,

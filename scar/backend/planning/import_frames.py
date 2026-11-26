@@ -89,7 +89,8 @@ def regions(dispatch, checked):
             if stmt.get("op") != "expr" or op.get("op") != "module_import_publish":
                 continue
             key = fn["symbol"], op["site"]
-            if key not in checked or checked[key]["missing"]:
+            review = checked.get(key)
+            if not review or not review["import_binding_verified"]:
                 continue
             proof = op.get("source_import_store")
             name = op["request"]["module"]
@@ -118,7 +119,13 @@ def regions(dispatch, checked):
                 ]
                 for i in instructions
             ]
-            if pos + 1 < len(body) and body[pos + 1].get("op") == "expr":
+            # A later unresolved callable ends this component at the source
+            # store. Its host resumes with the actual published object.
+            if (
+                not review["missing"]
+                and pos + 1 < len(body)
+                and body[pos + 1].get("op") == "expr"
+            ):
                 suffix = _expression(body[pos + 1]["value"], code, minor)
                 if suffix and suffix[0][1] == program[-1][1] + 2:
                     program.extend(suffix)
@@ -130,6 +137,7 @@ def regions(dispatch, checked):
                     code_sha256=code["code_sha256"],
                     minor=minor,
                     instructions=program,
+                    resume_offset=program[-1][1] + 2,
                 )
             )
     return result
