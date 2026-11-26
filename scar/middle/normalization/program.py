@@ -504,13 +504,14 @@ def _derive_artifacts(module, *, phase):
         module.setdefault("resource_model", {})["artifact_flow"] = flow
 
 
-def normalize(bound):
+def normalize(bound, *, consume=False):
+    """Normalize an M1 product, transferring ownership only when explicitly given."""
     from .protocols import normalize_protocols
     from .mpi import qualify as qualify_mpi
     from scar.contract import validate_numeric_contract
 
     require_program(bound, "M1")
-    module = deepcopy(bound)
+    module = bound if consume else deepcopy(bound)
     module, protocol_changes, issues = normalize_protocols(module)
     for function in module["functions"]:
         validate_numeric_contract(function)

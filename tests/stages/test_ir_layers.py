@@ -10861,3 +10861,35 @@ def test_module_subscription_keeps_source_order_folded_values_and_write_successo
     assert "python.object.state" in store["writes"]
     # A list of source data dependencies cannot stand in for different literals.
     assert python_pool_items(region["instructions"][1], []) is None
+
+
+def test_planning_images_isolate_shared_unit_and_platform_facts(tmp_path, monkeypatch):
+    from scar import middle
+    from scar.frontend import build
+
+    (tmp_path / "shared.c").write_text("int main(void) { return 0; }\n")
+    unit = {"path": "shared.c", "language": "c", "flags": ["-std=c99"]}
+    images = [
+        dict(id=name, entry="main", output=name, units=[unit])
+        for name in ("left", "right")
+    ]
+    request = tmp_path / "request.json"
+    request.write_text(
+        json.dumps(dict(source_root=str(tmp_path), images=images, root_image="left"))
+    )
+    graph = tmp_path / "graph"
+    build(request, graph)
+    captured = json.loads((graph / "graph.json").read_bytes())
+    assert [image["units"] for image in captured["images"]] == [[0], [0]]
+    plan_image = middle._plan_image
+
+    def consume(view, *args, **kwargs):
+        files = view["units"][0]["source_facts"]["files"]
+        assert "shared.c" in files and "consumed_by" not in view["platform"]
+        result = plan_image(view, *args, **kwargs)
+        files.clear()
+        view["platform"]["consumed_by"] = view["current_image"]
+        return result
+
+    monkeypatch.setattr(middle, "_plan_image", consume)
+    assert middle.plan(graph, tmp_path / "plan")["status"] == "READY"

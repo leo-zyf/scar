@@ -1,6 +1,7 @@
 """Publish logical rewrites and a closed execution IR using only the graph package."""
 
 from collections import Counter
+from copy import deepcopy
 from pathlib import Path
 
 from scar.contract import (
@@ -36,14 +37,14 @@ def _plan_image(graph, folder, revision, out, *, shape, trip_count):
             raise ValueError("expected nonnegative array dimensions")
         abi = {
             **abi,
-            "shape": shape if shape is not None else abi["shape"],
+            "shape": list(shape) if shape is not None else abi["shape"],
             "count": trip_count if trip_count is not None else abi["count"],
         }
     if abi is not None:
         graph = dict(graph, entry_abi=abi)
     module, issues, count = bind(graph, folder)
     binding_issues = len(issues)
-    module, normalized_issues = normalize(module)
+    module, normalized_issues = normalize(module, consume=True)
     issues.extend(normalized_issues)
     status = "INCOMPLETE" if issues else "READY"
     module, changes = rewrite(module)
@@ -178,16 +179,27 @@ def plan(graph_path, out, *, shape=None, trip_count=None):
 
     images, root = graph["images"], graph["root_image"]
     validate_images(images, root, unit_count=len(graph["units"]))
+    # M1 can lend input records to its output. M2 consumes that output, so
+    # each image owns its view. A unit used by one image needs no copy.
+    inputs = dict(graph)
+    units = inputs.pop("units")
+    remaining = Counter(index for image in images for index in image["units"])
     plans, products = [], []
     for image in images:
         identity = {key: image[key] for key in ("id", "entry", "output")}
-        view = dict(
-            graph,
-            current_image=image["id"],
-            entry=image["entry"],
-            entry_abi=image.get("entry_abi"),
-            units=[graph["units"][index] for index in image["units"]],
+        view = deepcopy(
+            dict(
+                inputs,
+                current_image=image["id"],
+                entry=image["entry"],
+                entry_abi=image.get("entry_abi"),
+            )
         )
+        remaining.subtract(image["units"])
+        view["units"] = [
+            deepcopy(units[index]) if remaining[index] else units[index]
+            for index in image["units"]
+        ]
         child_dir = out / "images" / image["id"]
         report, child_ir = _plan_image(
             view,
