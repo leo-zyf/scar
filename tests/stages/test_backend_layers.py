@@ -3309,6 +3309,26 @@ def test_nested_import_region_requires_a_matching_loader_frame(tmp_path):
     review, owners = regions()
     assert owners == {"__main__", parent["symbol"]}
     assert review["activation_scope"] == "matching_loader_frame_at_site"
+    # The same guarded import may sit inside an arm. The frame remains
+    # responsible for taking the branch and resuming past its final store.
+    body = parent["function"]["body"]
+    position = next(
+        i
+        for i, stmt in enumerate(body)
+        if stmt.get("value", {}).get("op") == "module_import_publish"
+    )
+    imported = body[position]
+    body[position] = dict(op="if", then=[imported], **{"else": []})
+    effects = import_effects(module, {})
+    region = next(
+        r for r in effects["native_frame_regions"] if r["owner"] == parent["symbol"]
+    )
+    assert region["instructions"][-1][0] in {"STORE_NAME", "STORE_GLOBAL"}
+    assert (
+        region["resume_offset"]
+        == imported["value"]["source_import_store"]["store"]["offset"] + 2
+    )
+    assert effects["coverage"] == "INCOMPLETE"
     parent["entry"]["code"] = dict(parent["entry"]["code"], code_sha256="0" * 64)
     assert regions() == (None, set())
 

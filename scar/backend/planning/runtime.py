@@ -553,14 +553,21 @@ def _dispatch_sites(dispatch, ledger):
     conditional_sites = defaultdict(list)
     statements = {}
     for owner, fn, code in bodies.values():
-        sequence = fn["body"]
-        for pos, stmt in enumerate(sequence):
-            op = stmt.get("value", {})
-            if stmt["op"] == "expr" and op.get("op") == "module_import_publish":
-                following = sequence[pos + 1] if pos + 1 < len(sequence) else {}
-                statements[owner, id(op)] = (
-                    following.get("value") if following.get("op") == "expr" else None
-                )
+        # Each control arm owns its own source continuation. At the end of an
+        # arm, hand control back to the active frame at the next source offset.
+        scopes = [fn["body"]]
+        while scopes:
+            sequence = scopes.pop()
+            for pos, stmt in enumerate(sequence):
+                scopes.extend(block[field] for block, field, _ in control_regions(stmt))
+                op = stmt.get("value", {})
+                if stmt["op"] == "expr" and op.get("op") == "module_import_publish":
+                    following = sequence[pos + 1] if pos + 1 < len(sequence) else {}
+                    statements[owner, id(op)] = (
+                        following.get("value")
+                        if following.get("op") == "expr"
+                        else None
+                    )
         for op in walk_operations(fn["body"], exclude_fields=EXECUTION_ANNOTATIONS):
             if op["op"] == "module_import_publish":
                 key = owner, op["site"]
