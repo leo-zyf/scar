@@ -14,6 +14,8 @@ from scar.contract import (
 from .model import (
     Decl,
     Expr,
+    Stmt,
+    call,
     Type,
     Unit,
     construct,
@@ -337,9 +339,34 @@ def lower_library(path, revision, scheduled, destination):
     if scheduled["status"] != "READY" or scheduled["entry_abi"] != "live_native_frame":
         raise ValueError("source-frame library lacks a qualified component schedule")
     rows = read_member(path.parent, scheduled["regions"])
+    destination = Path(destination).resolve()
+    bodies = (
+        read_member(path.parent, scheduled["bodies"]) if "bodies" in scheduled else []
+    )
+    tree = _frame_tree(rows, bodies)
+    support = Path(__file__).with_name("import.hpp").read_bytes()
+    product = document(
+        "scar.cpp20-target-ir",
+        kind="source_frame_library",
+        scheduled_ir_sha256=revision,
+        ir_sha256=scheduled["ir_sha256"],
+        units=[
+            dict(
+                output="regions.hpp",
+                tree=member(destination, "target-units", encode_unit(tree)),
+            )
+        ],
+        runtime=_publish_blob(destination, "runtime", support, digest(support), ".hpp"),
+        sites=[{k: r[k] for k in ("owner", "site", "occurrence")} for r in rows],
+    )
+    target = destination / "target-ir.json"
+    write_json(target, product)
+    return target
+
+
+def _frame_tree(rows, bodies, modules=None):
     if not rows:
         raise ValueError("source-frame library has no scheduled regions")
-    destination = Path(destination).resolve()
     definitions, entries = [], []
     instruction, region = named("instruction"), named("region")
     for i, row in enumerate(rows):
@@ -381,34 +408,95 @@ def lower_library(path, revision, scheduled, destination):
                 form="brace",
             )
         )
-    _body_tables(
-        read_member(path.parent, scheduled["bodies"]) if "bodies" in scheduled else [],
-        definitions,
-    )
+    _body_tables(bodies, definitions)
     definitions.append(_array("regions", region, entries))
+    if modules is not None:
+        module_type = named("project_module")
+        definitions.append(
+            _array(
+                "modules",
+                module_type,
+                [
+                    construct(
+                        module_type,
+                        *(
+                            Expr("string", value=row[k])
+                            for k in ("name", "symbol", "code_sha256")
+                        ),
+                        form="brace",
+                    )
+                    for row in modules
+                ],
+            )
+        )
     declarations = tuple(definitions)
     for ns in ("generated", "imports", "scar"):
         declarations = (Decl("namespace", name=ns, members=declarations),)
-    tree = Unit(
+    return Unit(
         once=True,
-        includes=(("system", "array"), ("local", "import.hpp")),
+        includes=(
+            ("system", "array"),
+            ("local", "import.hpp" if modules is None else "scar/project_import.hpp"),
+        ),
         declarations=declarations,
     )
-    support = Path(__file__).with_name("import.hpp").read_bytes()
-    product = document(
-        "scar.cpp20-target-ir",
-        kind="source_frame_library",
-        scheduled_ir_sha256=revision,
-        ir_sha256=scheduled["ir_sha256"],
-        units=[
-            dict(
-                output="regions.hpp",
-                tree=member(destination, "target-units", encode_unit(tree)),
-            )
-        ],
-        runtime=_publish_blob(destination, "runtime", support, digest(support), ".hpp"),
-        sites=[{k: r[k] for k in ("owner", "site", "occurrence")} for r in rows],
+
+
+def isolated_units(folder, physical, module):
+    from scar.contract import digest, json_bytes
+
+    effects = physical.get("source_import_effects", {})
+    certificate = effects.get("isolated_entry")
+    if (
+        not isinstance(certificate, dict)
+        or module.get("isolated_entry_binding_sha256")
+        != digest(json_bytes(certificate))
+        or certificate.get("entry_environment_sha256")
+        != digest(json_bytes(module.get("python_entry_environment")))
+        or effects.get("ledger") != module.get("source_imports")
+        or certificate.get("ledger_sha256") != effects.get("ledger_sha256")
+        or certificate.get("ledger_sha256")
+        != digest(json_bytes(read_member(folder, module["source_imports"])))
+    ):
+        raise ValueError(
+            "local module entry does not match its sealed execution domain"
+        )
+    schedule = read_member(folder, physical["source_frame_schedule"])
+    if (
+        schedule["kind"] != "source_frame_library"
+        or schedule["ir_sha256"] != physical["ir_sha256"]
+    ):
+        raise ValueError("local module provider belongs to another schedule")
+    rows = read_member(folder, schedule["regions"])
+    bodies = read_member(folder, schedule["bodies"])
+    if certificate["deployment"] != "isolated_project_modules_v1" or certificate[
+        "frame_tables_sha256"
+    ] != digest(json_bytes([rows, bodies])):
+        raise ValueError("local module entry and frame tables disagree")
+    rows = sorted(rows, key=lambda r: r["instructions"][0][1])
+    if rows[-1]["resume_offset"] != certificate["exit_offset"] or any(
+        r["code_sha256"] != certificate["code_sha256"] for r in rows
+    ):
+        raise ValueError("local module entry does not reach its sealed exit")
+    tree = _frame_tree(rows, bodies, certificate["modules"])
+    main = Decl(
+        "function",
+        name="main",
+        type=named("int"),
+        body=(
+            Stmt(
+                "return",
+                value=call(
+                    "scar::imports::run_project",
+                    name("scar::imports::generated::regions"),
+                    name("scar::imports::generated::modules"),
+                ),
+            ),
+        ),
     )
-    target = destination / "target-ir.json"
-    write_json(target, product)
-    return target
+    return {
+        "include/scar/program.hpp": tree,
+        "src/program.cpp": Unit(
+            includes=(("local", "scar/program.hpp"),), declarations=(main,)
+        ),
+    }

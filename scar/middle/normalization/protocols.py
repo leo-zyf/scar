@@ -4057,6 +4057,10 @@ def _source_dispatch(module, project):
         trial.sequences.freeze(trial, partial=True)
     # A newly modeled handler can reach an import that the nominal attempt
     # never visited. Its published result still has its own loader candidate.
+    nominal = {
+        (row["owner"], row["site"]): row
+        for row in module["source_imports"]["occurrences"]
+    }
     source_regions = [(name, region["body"]) for name, region in trial.closed.items()]
     source_regions.extend(
         (region["symbol"], region["body"]) for region in trial.prefixes
@@ -4067,8 +4071,18 @@ def _source_dispatch(module, project):
                 candidate := _published_loader_candidate(trial, owner, op)
             ):
                 key = owner, op["site"]
+                row = nominal.get(key)
+                if row is None:
+                    continue
                 trial.loader_activations.setdefault(key, candidate)
-                refinements.setdefault(key, candidate)
+                refinements.setdefault(
+                    key,
+                    (
+                        dict(candidate, activation="conditional_source_path")
+                        if row["activation"] == "unvisited"
+                        else candidate
+                    ),
+                )
     loaders, callees = _conditional_activations(trial)
     reached = {(f["owner"], f["site"]) for f in loaders}
     for candidate in loaders:
@@ -4131,7 +4145,16 @@ def _dispatch_product(entry, project, loaders, callees, required_sites, issue):
         ],
         callees=callees,
         required_imports=[
-            dict(owner=owner, site=site) for owner, site in required_sites
+            dict(
+                owner=owner,
+                site=site,
+                **(
+                    {"activation": "conditional_source_path"}
+                    if row.get("activation") == "conditional_source_path"
+                    else {}
+                ),
+            )
+            for (owner, site), row in required_sites.items()
         ],
         provider_obligations=[
             "preserve_original_import_call_and_arbitrary_callable_or_code_mismatch",

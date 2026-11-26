@@ -15,6 +15,8 @@ SDK_HEADERS = {
         "fourier.hpp",
         "host.hpp",
         "integer.hpp",
+        "import.hpp",
+        "project_import.hpp",
         "mapping.hpp",
         "sequence.hpp",
         "text.hpp",

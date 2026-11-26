@@ -10,6 +10,8 @@ scar compile --ir work/plan/exec-ir.json --out work/delivery
 ./work/delivery/project/bin/scar_entry
 ```
 
+显式声明 `"entry_environment": {"kind": "standalone_script", "deployment": "isolated_project_modules_v1"}` 可为一类封闭的本地 Python 模块生成独立 C++20 入口。源对照以 `python -E -S -B entry.py` 从干净的项目源码目录启动，所选项目模块使用封存的源码，部署没有预加载模块或自定义导入钩子。后端核验完整的入口、加载、名称发布和函数调用，再生成进程内模块注册表。当前原生规则覆盖本地模块、零参数字面量返回函数与普通打印，允许重复导入复用同一模块对象。
+
 C/C++ 分析需要 libclang 18，Fortran 分析需要 gfortran。生成工程使用 clang-format、CMake 3.20 以上和 C++20 编译器。并行区域需要 OpenMP，MPI 目标需要对应的开发库和启动器。GNU 格式化、无格式 I/O 使用声明的 libgfortran.so.5 接口。安装配置中的 Python extras 只安装 Python 包。
 
 MPI C 接口沿同一三阶段处理。前端记录编译器实际读取的外部头摘要，中端给已绑定的 MPI 调用补充通信和生命周期合同，后端用独立探针核对目标 SDK 的类型、函数 ABI、头及直接链接库。生成工程随附 `mpi-sdk.json`，CMake 再核对实际选择的 SDK。探针不调用 `MPI_Init`。源程序已有的通信调用、参数和顺序保留；当前验证覆盖本机 Open MPI 的双 rank 非阻塞收发与归约。自动 MPI 分区、最优 rank 选择和通信时序成本仍未实现，原生 Fortran MPI 接口也未统一到该 C 接口合同。

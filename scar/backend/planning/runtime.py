@@ -506,13 +506,30 @@ def _body_returns_to_caller(fragment):
 
 
 def _dispatch_sites(dispatch, ledger):
-    required = {(r["owner"], r["site"]) for r in dispatch["required_imports"]}
+    requirements = dispatch["required_imports"]
+    required = {(r["owner"], r["site"]) for r in requirements}
     occurrences = {(r["owner"], r["site"]): r for r in ledger["occurrences"]}
-    if not all(
-        key in occurrences and occurrences[key]["activation"] == "visited"
-        for key in required
-    ):
-        raise ValueError("source dispatch import lacks a visited source occurrence")
+    conditional_paths = set()
+    if len(required) != len(requirements):
+        raise ValueError("duplicate source dispatch requirement")
+    for requirement in requirements:
+        key = requirement["owner"], requirement["site"]
+        row = occurrences.get(key, {})
+        if requirement.get("activation") == "conditional_source_path":
+            ports = row.get("loader_ports", {})
+            if (
+                row.get("activation") != "unvisited"
+                or ports.get("site") != key[1]
+                or not ports.get("body", {}).get("candidates")
+                or ports.get("binding", {}).get("input") != "import_result"
+                or ports["binding"].get("on_import_exception") != "skip"
+            ):
+                raise ValueError(
+                    "conditional source dispatch lacks its unvisited loader ports"
+                )
+            conditional_paths.add(key)
+        elif "activation" in requirement or row.get("activation") != "visited":
+            raise ValueError("source dispatch import lacks a visited source occurrence")
     complete = dispatch["completion"] == "modeled_source_entry"
     if not complete and dispatch["completion"] != "source_prefix":
         raise ValueError("invalid source dispatch completion")
@@ -643,6 +660,10 @@ def _dispatch_sites(dispatch, ledger):
             else:
                 matched[symbol] = c["code_sha256"]
         import_binding_verified = not gaps
+        if key in conditional_paths and (not import_binding_verified or not matched):
+            raise ValueError(
+                "conditional source dispatch lacks a verified publication and loader"
+            )
         if import_binding_verified:
             position = owner, id(imported)
             if position in statements:
@@ -729,6 +750,11 @@ def _dispatch_sites(dispatch, ledger):
         results[key] = dict(
             status="missing_source_dataflow" if gaps else completion,
             import_binding_verified=import_binding_verified,
+            **(
+                {"activation_scope": "conditional_source_path"}
+                if key in conditional_paths
+                else {}
+            ),
             **(
                 {"activation_scope": "matching_loader_frame_at_site"}
                 if key not in required
@@ -832,6 +858,17 @@ def import_effects(module, bindings):
                 ),
             )
         )
+    entry = None
+    if dispatch and frame_regions:
+        from .import_frames import isolated_project_entry
+
+        entry = isolated_project_entry(
+            module, ledger, dispatch, rows, frame_regions, frame_bodies
+        )
+    if entry is not None:
+        for row in rows:
+            row["complete_effect_equivalence"] = "proven"
+            row["implementation"] = "isolated_project_modules_v1"
     return dict(
         semantics_version=1,
         scope="source_import_occurrences",
@@ -840,6 +877,7 @@ def import_effects(module, bindings):
             if dispatch and frame_regions
             else {}
         ),
+        **({"isolated_entry": entry} if entry else {}),
         ledger_sha256=digest(json_bytes(ledger)),
         **(
             {
@@ -864,13 +902,21 @@ def import_effects(module, bindings):
             else {}
         ),
         coverage=(
-            "INCOMPLETE"
-            if counts["visited"] or counts["unvisited"]
-            else "NO_VISITED_IMPORTS"
+            "QUALIFIED"
+            if entry
+            else (
+                "INCOMPLETE"
+                if counts["visited"] or counts["unvisited"]
+                else "NO_VISITED_IMPORTS"
+            )
         ),
         activation_counts=counts,
         occurrences=rows,
-        qualification="Existing native API qualification does not discharge omitted initialization, callbacks, audit or failure effects",
+        qualification=(
+            "Closed C++20 entry, process-owned module registry, sealed source initializers and complete call continuations under the declared standalone deployment"
+            if entry
+            else "Existing native API qualification does not discharge omitted initialization, callbacks, audit or failure effects"
+        ),
     )
 
 

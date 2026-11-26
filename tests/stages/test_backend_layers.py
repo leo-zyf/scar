@@ -4709,3 +4709,84 @@ int main(){
         check=True,
     )
     subprocess.run([str(binary)], check=True)
+
+
+def test_project_import_entry_binds_its_domain_and_rolls_back_failed_load(tmp_path):
+    from copy import deepcopy
+
+    from scar.backend.cpp20 import lower_scheduled, print_target
+    from scar.backend.planning import schedule_ir
+    from scar.contract import read_member
+    from scar.frontend import build
+    from scar.middle import plan
+
+    source = tmp_path / "src"
+    source.mkdir()
+    (source / "entry.py").write_text("import leaf\nprint(leaf.value())\n")
+    (source / "leaf.py").write_text("def value():\n    return 'sealed'\n")
+    request = tmp_path / "request.json"
+    request.write_text(
+        json.dumps(
+            dict(
+                source_root="src",
+                source="entry.py",
+                entry_environment=dict(
+                    kind="standalone_script", deployment="isolated_project_modules_v1"
+                ),
+            )
+        )
+    )
+    graph, execution, schedule = (
+        tmp_path / k for k in ("graph", "execution", "schedule")
+    )
+    build(request, graph)
+    assert plan(graph, execution)["status"] == "READY"
+    package = schedule_ir(execution, schedule, policy="serial")
+    sealed = json.loads(package.read_bytes())
+    physical = read_member(schedule, sealed["physical"])
+    assert sealed["status"] == "READY"
+    target = lower_scheduled(package, tmp_path / "target")
+    project = print_target(target, tmp_path / "delivery")
+    probe = tmp_path / "verify.cpp"
+    probe.write_text("""#include "scar/program.hpp"
+using namespace scar::imports;
+int main() {
+  isolated::process domain(generated::modules);
+  auto key = generated::modules.front().name;
+  auto &region = generated::regions.front();
+  try {
+    default_absolute(domain, key, region.minor, {});
+    return 1;
+  } catch (const std::logic_error &) {}
+  if (domain.lookup_module(key)) return 2;
+  auto cold = default_absolute(domain, key, region.minor, region.bodies);
+  auto hit = default_absolute(domain, key, region.minor, {});
+  return cold == hit && !hit->initializing && hit->members.contains("value") ? 0 : 3;
+}
+""")
+    binary = tmp_path / "verify"
+    subprocess.run(
+        [
+            "c++",
+            "-std=c++20",
+            "-Werror",
+            "-I",
+            Path(project["project"]) / "include",
+            probe,
+            "-o",
+            binary,
+        ],
+        check=True,
+    )
+    subprocess.run([binary], check=True)
+    for change in ("missing", "altered"):
+        forged = deepcopy(physical)
+        effects = forged["source_import_effects"]
+        if change == "missing":
+            del effects["isolated_entry"]
+        else:
+            effects["isolated_entry"]["modules"][0]["name"] = "different"
+        sealed["physical"] = member(schedule, "scheduled-units", forged)
+        write_json(package, sealed)
+        with pytest.raises(ValueError, match="sealed execution domain"):
+            lower_scheduled(package, tmp_path / change)

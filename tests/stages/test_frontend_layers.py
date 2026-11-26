@@ -4313,7 +4313,31 @@ def test_definition_binds_each_runtime_default_to_the_parent_frame(tmp_path):
     assert {k for k, n in definitions.items() if "source_definition" in n} == {
         "selected",
         "pooled",
+        "keyword",
     }
+    kw = definitions["keyword"]["source_definition"]
+    assert kw["keyword_defaults"]["names"] == ["a"] and "positional_defaults" not in kw
+    kwrows = kw["instructions"]
+    assert [(r["offset"], r["opcode"], r.get("oparg")) for r in kwrows] == [
+        (r.offset, r.opname, r.arg)
+        for r in real
+        if kwrows[0]["offset"] <= r.offset <= kwrows[-1]["offset"]
+    ]
+    (operand,) = [r for r in kwrows if r["opcode"] == "LOAD_NAME"]
+    assert parent.co_names[operand["index"]] == operand["name"] == "left"
+    map_build = next(
+        r for r in kwrows if r["offset"] == kw["keyword_defaults"]["build_offset"]
+    )
+    assert map_build["oparg"] == 1
+    if map_build["opcode"] == "BUILD_CONST_KEY_MAP":
+        key = kwrows[kwrows.index(map_build) - 1]
+        assert parent.co_consts[key["index"]] == tuple(key["names"]) == ("a",)
+    else:
+        assert (
+            map_build["opcode"] == "BUILD_MAP"
+            and parent.co_consts[kwrows[0]["index"]] == "a"
+        )
+    assert kwrows[-1]["name"] == "keyword"
     node = definitions["selected"]
     proof = node["source_definition"]
     rows = proof["instructions"]

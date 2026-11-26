@@ -970,55 +970,31 @@ def _default_items_sha256(defaults):
     return digest(json_bytes(tokens)) if all(t is not None for t in tokens) else None
 
 
-def _bind_positional_defaults(node, rows, declared, scope):
+def _bind_positional_defaults(node, prefix, declared, scope, child):
     defaults = node["defaults"]
     proof = node["source_definition"]
     port = proof.get("positional_defaults")
     parent = scope["source_code"]
-    compiler = parent["compiler"]
-    attached = compiler.startswith(("cpython 3.13.", "cpython 3.14."))
-    tail = 4 if attached else 3
     params = [
         p for p in declared["params"] if p["binding"] in {"positional", "posonly"}
     ]
     cut = len(params) - len(defaults)
     if not (
-        isinstance(defaults, list)
-        and isinstance(port, dict)
+        isinstance(port, dict)
         and type(port.get("count")) is int
         and port["count"] == len(defaults)
+        and prefix
         and cut >= 0
+        and "parameters" in proof["child"]
         and all(
             p.get("default_from")
             == (None if i < cut else {"field": "defaults", "index": i - cut})
             for i, p in enumerate(params)
         )
-        and "parameters" in proof["child"]
-        and (attached or compiler.startswith("cpython 3.12."))
-        and len(rows) > tail
-        and all(a["offset"] < b["offset"] for a, b in zip(rows, rows[1:]))
+        and prefix[-1]["position"] == proof["position"]
     ):
         raise ValueError("invalid source positional defaults window")
-    prefix, suffix = rows[:-tail], rows[-tail:]
     result = prefix[-1]
-    child, make = suffix[:2]
-    if not (
-        all(r["position"] == proof["position"] for r in [result, *suffix])
-        and all(
-            b["offset"] == a["offset"] + 2 for a, b in zip([result, *suffix], suffix)
-        )
-        and (
-            "oparg" not in make
-            and suffix[2].get("opcode") == "SET_FUNCTION_ATTRIBUTE"
-            and type(suffix[2].get("oparg")) is int
-            and suffix[2]["oparg"] == 1
-            if attached
-            else type(make.get("oparg")) is int and make["oparg"] == 1
-        )
-    ):
-        raise ValueError(
-            "source positional defaults disagree with their function window"
-        )
     if "build_offset" in port:
         if not (
             set(port) == {"count", "build_offset"}
@@ -1066,7 +1042,71 @@ def _bind_positional_defaults(node, rows, declared, scope):
         raise ValueError(
             "source positional defaults disagree with their function and operands"
         )
-    return child, make, suffix[-1]
+
+
+def _bind_keyword_defaults(node, prefix, declared, scope):
+    proof = node["source_definition"]
+    port = proof["keyword_defaults"]
+    values = node["keyword_defaults"]
+    parameters = [p for p in declared["params"] if p["binding"] == "keywordonly"]
+    if len(parameters) != len(values) or not all(
+        p.get("default_from")
+        == (None if v is None else {"field": "keyword_defaults", "index": i})
+        for i, (p, v) in enumerate(zip(parameters, values))
+    ):
+        raise ValueError("keyword defaults do not bind the declared parameters")
+    pairs = [(p["name"], v) for p, v in zip(parameters, values) if v is not None]
+    names = [name for name, _ in pairs]
+    if not prefix or not pairs:
+        raise ValueError("missing source keyword defaults window")
+    build = prefix[-1]
+    if not (
+        isinstance(port, dict)
+        and set(port) == {"names", "build_offset"}
+        and port["names"] == names
+        and type(port["build_offset"]) is int
+        and port["build_offset"] == build["offset"]
+        and build.get("opcode") in {"BUILD_MAP", "BUILD_CONST_KEY_MAP"}
+        and build["position"] == proof["position"]
+        and type(build.get("oparg")) is int
+        and build["oparg"] == len(names)
+    ):
+        raise ValueError("invalid keyword default map builder")
+    end = len(prefix) - 1
+
+    def take_key(end, name):
+        if end < 1:
+            raise ValueError("missing keyword default key")
+        key = prefix[end - 1]
+        if not (
+            key["opcode"] == "LOAD_CONST"
+            and key["position"] == proof["position"]
+            and type(key.get("index")) is int
+            and type(key.get("oparg")) is int
+            and key["index"] == key["oparg"] >= 0
+            and (
+                key.get("type") == "tuple" and key.get("names") == names
+                if name is None
+                else key.get("type") == "str"
+                and key.get("value_sha256") == digest(json_bytes(name))
+            )
+        ):
+            raise ValueError("keyword default key disagrees with original name or slot")
+        return end - 1
+
+    packed = build["opcode"] == "BUILD_CONST_KEY_MAP"
+    if packed:
+        end = take_key(end, None)
+    for name, operand in reversed(pairs):
+        pos = _graph_position(operand, scope["source_code"])
+        start = end
+        while start and _inside_source(pos, prefix[start - 1]["position"]):
+            start -= 1
+        if start == end:
+            raise ValueError("missing source operand for keyword default")
+        _bind_operand_instructions(operand, scope, pos, prefix[start:end])
+        end = start if packed else take_key(start, name)
+    return prefix[:end]
 
 
 def bind_source_definition(node, scope, declarations):
@@ -1098,7 +1138,6 @@ def bind_source_definition(node, scope, declarations):
         and child.get("first_line") == location["line"]
         and child.get("name") == child.get("qualname")
         and not any(node.get(k) for k in ("decorators", "annotations", "type_params"))
-        and not any(v is not None for v in node.get("keyword_defaults", ()))
     ):
         raise ValueError(
             "source definition disagrees with its child code or declaration"
@@ -1139,16 +1178,70 @@ def bind_source_definition(node, scope, declarations):
         )
     ):
         raise ValueError("source definition has invalid instruction positions")
-    if node.get("defaults"):
-        load, make, store = _bind_positional_defaults(node, rows, declared, scope)
-    elif len(rows) == 3 and "positional_defaults" not in proof:
-        load, make, store = rows
-        if "oparg" in make and (type(make["oparg"]) is not int or make["oparg"] != 0):
-            raise ValueError("source definition has unexpected MAKE_FUNCTION flags")
-    else:
+    positional = bool(node.get("defaults"))
+    keywords = any(v is not None for v in node.get("keyword_defaults", ()))
+    flags = [flag for present, flag in ((keywords, 2), (positional, 1)) if present]
+    compiler = parent["compiler"]
+    attached = compiler.startswith(("cpython 3.13.", "cpython 3.14."))
+    end = 3 + (len(flags) if attached else 0)
+    if (
+        not (attached or compiler.startswith("cpython 3.12."))
+        or len(rows) < end
+        or positional != ("positional_defaults" in proof)
+        or keywords != ("keyword_defaults" in proof)
+        or not all(a["offset"] < b["offset"] for a, b in zip(rows, rows[1:]))
+    ):
         raise ValueError(
-            "source definition disagrees with its defaults or instructions"
+            "invalid source positional defaults or keyword defaults window"
         )
+    prefix, suffix = rows[:-end], rows[-end:]
+    load, make = suffix[:2]
+    store = suffix[-1]
+    if not (
+        all(r["position"] == proof["position"] for r in suffix)
+        and all(
+            b["offset"] == a["offset"] + 2
+            for a, b in zip(rows[-end - 1 :], rows[-end - 1 :][1:])
+        )
+        and (
+            "oparg" not in make
+            and all(type(a.get("oparg")) is int for a in suffix[2:-1])
+            and [(a["opcode"], a.get("oparg")) for a in suffix[2:-1]]
+            == [("SET_FUNCTION_ATTRIBUTE", flag) for flag in flags]
+            if attached
+            else type(make.get("oparg")) is int and make["oparg"] == sum(flags)
+        )
+    ):
+        raise ValueError(
+            "source positional defaults or keyword defaults disagree with their function window"
+        )
+    if keywords:
+        slots = {load.get("index"): ("code", child["code_sha256"])}
+        for row in prefix:
+            if row["opcode"] not in {"LOAD_CONST", "KW_NAMES"}:
+                continue
+            kind = row.get("type")
+            identity = (
+                row.get("items_sha256") if kind == "tuple" else row.get("value_sha256")
+            )
+            if kind == "tuple" and "names" in row:
+                identity = digest(
+                    json_bytes([["literal", "str", name] for name in row["names"]])
+                )
+            index = row.get("index")
+            if index == load.get("index") or (
+                identity is not None
+                and slots.setdefault(index, (kind, identity)) != (kind, identity)
+            ):
+                raise ValueError(
+                    "keyword defaults have conflicting frame constant slots"
+                )
+    if keywords:
+        prefix = _bind_keyword_defaults(node, prefix, declared, scope)
+    if positional:
+        _bind_positional_defaults(node, prefix, declared, scope, load)
+    elif prefix:
+        raise ValueError("source definition contains unbound default operands")
     if not (
         0 <= load["offset"] < make["offset"] < store["offset"]
         and all(r["position"] == proof["position"] for r in (load, make, store))

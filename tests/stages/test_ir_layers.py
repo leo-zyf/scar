@@ -214,7 +214,9 @@ def test_binding_checks_original_positional_defaults_tuple_and_creation_window(
         for n in mod["nodes"]
         if "source_definition" in n
     }
-    assert set(definitions) == {"sample", "mutable", "evaluated"}
+    assert set(definitions) == {"sample", "mutable", "evaluated", "kw"}
+    assert definitions["kw"]["source_definition"]["keyword_defaults"]["names"] == ["x"]
+    assert "positional_defaults" not in definitions["kw"]["source_definition"]
     creation = definitions["sample"]
     proof = creation["source_definition"]
     window = proof["instructions"]
@@ -257,6 +259,142 @@ def test_binding_checks_original_positional_defaults_tuple_and_creation_window(
         with pytest.raises(ValueError, match="positional defaults"):
             bind(graph, folder)
         obj[key] = previous
+
+
+def test_keyword_defaults_preserve_evaluation_mapping_and_attribute_order(tmp_path):
+    from scar.contract import read_member
+    from scar.frontend import build
+    from scar.middle import plan
+    from scar.middle.binding import _definition
+
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    entry, child, init = tmp_path / "entry.py", pkg / "child.py", pkg / "__init__.py"
+    entry.write_text("import pkg\n")
+    child.write_text("pass\n")
+    init.write_text(
+        "from . import child as old\ndel old\n"
+        "def selected(x=observe('x'), *, a=observe('a'), required, b=observe('b')): pass\n"
+    )
+    subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-B",
+            "-c",
+            """import builtins,sys
+sys.path.insert(0,sys.argv[1])
+events=[]
+objects={}
+def observe(name):
+    events.append(name)
+    if name == "b" and failing:
+        raise RuntimeError("rejected b")
+    objects[name]=object()
+    return objects[name]
+builtins.observe=observe
+failing=True
+try: import pkg
+except RuntimeError as exc: assert str(exc) == "rejected b"
+else: raise AssertionError("no exception")
+assert events == ["x","a","b"] and "pkg" not in sys.modules
+failing=False
+import pkg
+assert events == ["x","a","b"]*2
+assert pkg.selected.__defaults__[0] is objects["x"]
+assert list(pkg.selected.__kwdefaults__)==["a","b"]
+assert all(pkg.selected.__kwdefaults__[k] is objects[k] for k in ("a","b"))
+""",
+            str(tmp_path),
+        ],
+        check=True,
+    )
+    graph, middle = tmp_path / "graph", tmp_path / "ir"
+    build(entry, graph)
+    for path in (entry, init, child):
+        path.unlink()
+    index = json.loads((graph / "graph.json").read_bytes())
+    unit = next(u for u in index["units"] if u["path"].endswith("pkg/__init__.py"))
+    fns = read_member(graph, unit["graph"])["functions"]
+    module = next(f for f in fns if f["signature"]["python_scope"]["kind"] == "module")
+    declared = {f["signature"]["name"]: f["signature"] for f in fns}
+    proof = next(
+        n["source_definition"] for n in module["nodes"] if "source_definition" in n
+    )
+    assert proof["keyword_defaults"]["names"] == ["a", "b"]
+    plan(graph, middle)
+    execution = json.loads((middle / "exec-ir.json").read_bytes())
+    dispatch = read_member(middle, execution["module"]["source_dispatch"])
+    loader = next(d for d in dispatch["loaders"] if d["symbol"] == "py:pkg:<init>")
+    fn = read_member(middle, loader["function"])
+    op = next(
+        s["value"] for s in fn["body"] if s.get("value", {}).get("source_definition")
+    )
+    steps = op["evaluation"]
+
+    def ref(step):
+        return {"from_offset": step["offset"]}
+
+    calls = [s for s in steps if s["op"] == "source_object_call"]
+    pos = next(s for s in steps if s["op"] == "source_object_build_sequence")
+    mapping = next(
+        s for s in steps if s["op"] == "source_object_build_keyword_defaults"
+    )
+    make = next(s for s in steps if s["op"] == "source_object_make_function")
+    assert pos["items"] == [ref(calls[0])] and mapping["values"] == [
+        ref(c) for c in calls[1:]
+    ]
+    assert (
+        mapping["offset"] == proof["keyword_defaults"]["build_offset"]
+        and mapping["may_raise"]
+    )
+    if mapping["opcode"] == "BUILD_CONST_KEY_MAP":
+        assert (
+            steps[steps.index(mapping) - 1]["offset"]
+            == mapping["keys_tuple"]["from_offset"]
+        )
+    else:
+        assert (
+            mapping["opcode"] == "BUILD_MAP"
+            and len(mapping["keys"]) == len(mapping["values"]) == 2
+        )
+    if sys.version_info.minor == 12:
+        assert (make["defaults"], make["kwdefaults"], op["value"]) == (
+            ref(pos),
+            ref(mapping),
+            ref(make),
+        )
+    else:
+        kw, defaults = steps[-2:]
+        assert kw["op"] == "source_object_set_function_kwdefaults" and kw[
+            "function"
+        ] == ref(make)
+        assert kw["kwdefaults"] == ref(mapping) and kw["same_identity"] is True
+        assert (
+            defaults["function"] == ref(kw)
+            and defaults["defaults"] == ref(pos)
+            and op["value"] == ref(defaults)
+        )
+    fields = proof["keyword_defaults"]
+    fields["names"].reverse()
+    with pytest.raises(ValueError, match="keyword default"):
+        _definition(module, declared)
+    fields["names"].reverse()
+    ins = proof["instructions"]
+    build = next(r for r in ins if r["offset"] == fields["build_offset"])
+    key = (
+        ins[ins.index(build) - 1]
+        if build["opcode"] == "BUILD_CONST_KEY_MAP"
+        else next(
+            r
+            for r in ins
+            if r.get("position") == proof["position"] and r.get("type") == "str"
+        )
+    )
+    code = ins[ins.index(build) + 1]["index"]
+    key["index"] = key["oparg"] = code
+    with pytest.raises(ValueError, match="constant slots"):
+        _definition(module, declared)
 
 
 def test_function_construction_uses_the_declared_child_code(tmp_path):
@@ -1337,6 +1475,9 @@ consumer=document(ARTIFACT_FLOW,nodes=[
     dict(id='input',kind='FILE_LOCATOR',path=None,cwd='process_cwd_at_open'),
     dict(id='read',kind='FILE_VERSION_REQUIREMENT',locator='input',value=None,
          consumer='read-op',role='runtime_stream_read',requires=['file_bytes_consulted']),
+    dict(id='named-input',kind='FILE_LOCATOR',path='input.par',cwd='process_cwd_at_open'),
+    dict(id='named-read',kind='FILE_VERSION_REQUIREMENT',locator='named-input',value=None,
+         consumer='read-op',role='runtime_stream_read',requires=['file_bytes_consulted']),
 ],edges=[])
 images=[]
 for name,flow in [('driver',data['flow']),('worker',consumer)]:
@@ -1362,15 +1503,18 @@ print(json.dumps(link_images(relocated,images,'driver')))
     assert all(e["binding_time"] == "process_entry" for e in bindings)
     waits = [e for e in workflow["edges"] if e["kind"] == "WAITS_FOR"]
     assert len(waits) == 2 and all(e["descendants_completed"] is False for e in waits)
-    (read,) = [node for node in nodes.values() if node["kind"] == "FILE_READ"]
-    assert read["path"] is None
+    reads = {
+        node["path"]: node for node in nodes.values() if node["kind"] == "FILE_READ"
+    }
+    assert set(reads) == {None, "input.par"}
     assert any(node["kind"] == "FILE_COPY" for node in nodes.values())
     assert workflow["file_version_equivalence_established"] is False
-    assert not any(
-        nodes[e["source"]]["kind"] == "FILE_COPY"
-        and nodes[e["target"]]["kind"] == "FILE_READ"
-        for e in workflow["edges"]
-    )
+    [candidate] = [
+        edge for edge in workflow["edges"] if edge["kind"] == "MAY_SUPPLY_CHILD_READ"
+    ]
+    assert candidate["target"] == reads["input.par"]["id"]
+    assert candidate["conditional"] and not candidate["establishes_current_version"]
+    assert candidate["invalidated_by"]
 
 
 def _layer(name, code, data=None):

@@ -567,3 +567,218 @@ def activation_bodies(dispatch, checked):
                         )
                     bodies[key] = body
     return list(bodies.values())
+
+
+def isolated_project_entry(module, ledger, dispatch, rows, regions, bodies):
+    """Prove total coverage of a closed, single-threaded local import program."""
+    import _imp
+    import platform
+    import sys
+
+    from scar.contract import digest, json_bytes
+
+    env = module.get("python_entry_environment")
+    if (
+        not env
+        or ledger.get("entry_environment") != env
+        or not dispatch
+        or module.get("layer_contract", {}).get("completion") != "complete"
+        or module.get("entry_abi") is not None
+    ):
+        return None
+    entries = env.get("entries", ())
+    if len(entries) != 1 or entries[0].get("image") != module.get("current_image"):
+        return None
+    decl = entries[0]["declaration"]
+    if decl.get("flags", []) not in ([], ["-E", "-S", "-B"]):
+        return None
+    if (decl.get("kind"), decl.get("deployment")) != (
+        "standalone_script",
+        "isolated_project_modules_v1",
+    ):
+        return None
+    by_code = {row["code_sha256"]: row for row in bodies}
+    if not bodies or len(by_code) != len(bodies):
+        return None
+    entry = dispatch["entry_frame"]["code"]
+    # Built-in and frozen names can pre-empt disk resolution. The executing
+    # compiler supplies only this exclusion list, never initial application state.
+    if (
+        entry.get("compiler") != "cpython " + platform.python_version()
+        or sys.implementation.name != "cpython"
+    ):
+        return None
+    entry_exit = dispatch["entry_frame"].get("frame_exit", {})
+    exits = entry_exit.get("instructions", ())
+    if (
+        dispatch["completion"] != "modeled_source_entry"
+        or [step.get("opcode") for step in exits]
+        not in (["RETURN_CONST"], ["LOAD_CONST", "RETURN_VALUE"])
+        or len(exits) == 2
+        and exits[1]["offset"] != exits[0]["offset"] + 2
+        or exits[0].get("type") != "NoneType"
+        or exits[0].get("value_sha256") != digest(json_bytes(None))
+        or entry_exit.get("code_sha256") != entry["code_sha256"]
+        or not regions
+        or not (len(regions) == len(rows) == len(ledger["occurrences"]))
+    ):
+        return None
+    loader_at = {(row["owner"], row["site"]): row for row in dispatch["loaders"]}
+    occurrences = {row["id"]: row for row in ledger["occurrences"]}
+    if set(occurrences) != {region["occurrence"] for region in regions}:
+        return None
+    if any(
+        row["activation"] != "visited"
+        or (row.get("source_dispatch") or {}).get("status")
+        != "modeled_source_path_requires_native_implementation"
+        for row in rows
+    ):
+        return None
+    # Only literal-return zero-argument functions and plain module publications
+    # are admitted. Calls, custom objects, hooks and handler transitions would
+    # require a different set of process/frame services.
+    functions = {}
+    for row in dispatch["callees"]:
+        code = row["entry"]["code"]["code_sha256"]
+        body = by_code.get(code, {})
+        steps = body.get("instructions", ())
+        if (
+            row["entry"].get("parameters") != []
+            or body.get("kind") != "function"
+            or [step[0] for step in steps]
+            not in (
+                ["RETURN_CONST"],
+                ["LOAD_CONST", "RETURN_VALUE"],
+                ["LOAD_SMALL_INT", "RETURN_VALUE"],
+            )
+            or body.get("resume_offset") is not None
+        ):
+            return None
+        result = (
+            {"kind": "int", "value": steps[0][2]}
+            if steps[0][0] == "LOAD_SMALL_INT"
+            else body["constants"][str(steps[0][2])]
+        )
+        if result["kind"] not in {"str", "NoneType", "bool", "int"}:
+            return None
+        if type(result["value"]) is int and result["value"].bit_length() > 63:
+            return None
+        if isinstance(result["value"], str) and not result["value"].isascii():
+            return None
+        functions[code] = "scalar"
+    modules, slots, previous, names = {}, {}, 2, {}
+    for region in sorted(regions, key=lambda row: row["instructions"][0][1]):
+        steps = region["instructions"]
+        occurrence = occurrences[region["occurrence"]]
+        effect = occurrence["import_effects"]
+        identity = effect["source_identity"]
+        loader = loader_at.get((region["owner"], region["site"]), {})
+        key = identity["module"]
+        code = loader.get("entry", {}).get("code", {})
+        body = by_code.get(code.get("code_sha256"), {})
+        if (
+            (occurrence["owner"], occurrence["site"])
+            != (region["owner"], region["site"])
+            or not key.isidentifier()
+            or key in sys.stdlib_module_names
+            or _imp.is_builtin(key)
+            or _imp.is_frozen(key)
+            or identity["status"] != "project"
+            or code.get("source_key") != key + ".py"
+            or body.get("kind") != "module"
+            or body["symbol"] != loader["symbol"]
+            or body["resume_offset"] is not None
+            or not body["instructions"]
+            or body["instructions"][-1][0] not in {"RETURN_CONST", "RETURN_VALUE"}
+            or region["owner"] != module["entry"]
+            or region["code_sha256"] != entry["code_sha256"]
+            or steps[0][1] != previous
+            or len(steps) < 4
+            or steps[2][0] != "IMPORT_NAME"
+            or steps[2][3] != key
+            or steps[3][0] not in {"STORE_NAME", "STORE_GLOBAL"}
+        ):
+            return None
+        exports = {}
+        tail = 1 if body["instructions"][-1][0] == "RETURN_CONST" else 2
+        if tail == 2 and (
+            len(body["instructions"]) < 2 or body["instructions"][-2][0] != "LOAD_CONST"
+        ):
+            return None
+        publications = body["instructions"][:-tail]
+        if len(publications) % 3:
+            return None
+        for i in range(0, len(publications), 3):
+            make_code, create, store = publications[i : i + 3]
+            if (
+                make_code[0] != "LOAD_CHILD_CODE"
+                or make_code[3] not in functions
+                or create[0] != "MAKE_FUNCTION"
+                or create[2] != 0
+                or create[3] != make_code[3]
+                or store[0] not in {"STORE_NAME", "STORE_GLOBAL"}
+            ):
+                return None
+            exports[store[3]] = make_code[3]
+        info = dict(name=key, symbol=body["symbol"], code_sha256=body["code_sha256"])
+        if key in modules and modules[key] != info:
+            return None
+        modules[key], slots[key] = info, exports
+        names[steps[3][3]] = ("module", key)
+        if not _isolated_expression(region, names, slots):
+            return None
+        previous = region["resume_offset"]
+    if previous != exits[0]["offset"]:
+        return None
+    return dict(
+        deployment=decl["deployment"],
+        code_sha256=entry["code_sha256"],
+        ledger_sha256=digest(json_bytes(ledger)),
+        entry_environment_sha256=digest(json_bytes(env)),
+        modules=list(modules.values()),
+        exit_offset=previous,
+        frame_tables_sha256=digest(json_bytes([regions, bodies])),
+    )
+
+
+def _isolated_expression(region, names, exports):
+    """Prove each qualified source lookup/call before using the native object ABI."""
+    stack = []
+    for op, _, arg, spelling in region["instructions"][4:]:
+        if op == "PUSH_NULL":
+            stack.append(None)
+        elif op == "LOAD_NAME":
+            value = names.get(
+                spelling, ("builtin", "print") if spelling == "print" else None
+            )
+            if value is None:
+                return False
+            stack.append(value)
+        elif op == "LOAD_ATTR" and stack and stack[-1] and stack[-1][0] == "module":
+            child = exports[stack.pop()[1]].get(spelling)
+            if child is None:
+                return False
+            stack.append(("function", child))
+        elif op == "CALL" and len(stack) >= arg + 2:
+            group = stack[-(arg + 2) :]
+            del stack[-(arg + 2) :]
+            called, null = (
+                (group[1], group[0]) if region["minor"] == 12 else (group[0], group[1])
+            )
+            if (
+                null is not None
+                or called is None
+                or not (
+                    called[0] == "function"
+                    and arg == 0
+                    or called == ("builtin", "print")
+                    and all(v == ("scalar", None) for v in group[2:])
+                )
+            ):
+                return False
+            stack.append(("scalar", None))
+        elif op == "POP_TOP" and stack:
+            stack.pop()
+        else:
+            return False
+    return not stack

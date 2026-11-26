@@ -983,6 +983,9 @@ def _schedule_image(
     linkage = runtime.ImageLinkage(module)
     requirements, bindings, issues = _qualify(module, image_context, linkage=linkage)
     import_effects = runtime.import_effects(module, bindings)
+    module.pop("isolated_entry_binding_sha256", None)
+    if import_effects and (entry := import_effects.get("isolated_entry")):
+        module["isolated_entry_binding_sha256"] = digest(json_bytes(entry))
     module.pop("source_dispatch", None)
     if not issues and (missing := runtime.import_effect_issue(import_effects)):
         issues.append(missing)

@@ -1146,6 +1146,16 @@ def analyze(module):
                     edges.append(dict(kind="HAS_CONTENT", source=version, target=value))
                 if not ambiguous and key is not None and not external_process_effects:
                     file_versions[key] = version
+                elif key is not None:
+                    file_candidates.add(
+                        version,
+                        key,
+                        locator,
+                        requires=(
+                            *nodes[version]["requires"],
+                            "candidate_is_current_at_consumer",
+                        ),
+                    )
                 templates.append(
                     dict(
                         symbol=symbol,

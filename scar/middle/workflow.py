@@ -1,5 +1,6 @@
 """M4 cross-image entry and lifecycle graph over independently sealed image IRs."""
 
+from collections import defaultdict
 from pathlib import Path
 
 from scar.contract import (
@@ -24,6 +25,7 @@ def link_images(folder, images, root_image):
     validate_images(images, root_image)
     image_ids = {image["id"] for image in images}
     nodes, edges, catalog = {}, [], []
+    launch_files, copies, reads = [], {}, defaultdict(list)
 
     def add(kind, image, key, **fields):
         identity = "workflow:" + digest(json_bytes([kind, image, key]))
@@ -103,6 +105,10 @@ def link_images(folder, images, root_image):
                 process_launches[environment["process_template"]] = launch
             if child is None:
                 continue
+            if environment.get("directory") and environment.get(
+                "conditional_candidates"
+            ):
+                launch_files.append((identity, child, launch, environment))
             edges.append(
                 dict(
                     kind="LAUNCHES_IMAGE",
@@ -151,6 +157,14 @@ def link_images(folder, images, root_image):
                     requires=node.get("requires", []),
                 )
                 expand(identity, selected)
+                locator = records[node["locator"]]
+                path = locator.get("path")
+                if isinstance(path, str) and (name := path.rsplit("/", 1)[-1]):
+                    copies[identity, node["id"]] = (
+                        selected,
+                        locator.get("directory"),
+                        name,
+                    )
             elif (
                 node["kind"] == "FILE_VERSION_REQUIREMENT"
                 and node.get("role") == "runtime_stream_read"
@@ -166,6 +180,15 @@ def link_images(folder, images, root_image):
                     requires=node.get("requires", []),
                 )
                 expand(identity, selected)
+                locator = records[node["locator"]]
+                path = locator.get("path")
+                if (
+                    isinstance(path, str)
+                    and path not in {"", ".", ".."}
+                    and "/" not in path
+                    and locator.get("cwd") == "process_cwd_at_open"
+                ):
+                    reads[identity, path].append(selected)
             elif (
                 node["kind"] == "COMMAND_REQUEST"
                 and node.get("request_kind") != "processor_availability_query"
@@ -207,6 +230,35 @@ def link_images(folder, images, root_image):
                     time_constraint="finish(wait) >= exit(direct_child)",
                 )
             )
+
+    for parent, child, launch, environment in launch_files:
+        directory = environment["directory"]
+        for candidate in environment["conditional_candidates"]:
+            copy = copies.get((parent, candidate["version"]))
+            if copy is None or copy[1] != directory:
+                continue
+            source, _, basename = copy
+            for target in reads[child, basename]:
+                edges.append(
+                    dict(
+                        kind="MAY_SUPPLY_CHILD_READ",
+                        source=source,
+                        target=target,
+                        launch=launch,
+                        conditional=True,
+                        establishes_current_version=False,
+                        parent_directory=directory,
+                        invalidated_by=candidate["invalidated_by"],
+                        requires=sorted(
+                            set(candidate["requires"])
+                            | set(environment["requires"])
+                            | {
+                                "child_read_resolves_in_inherited_entry_directory",
+                                "selected_copy_instance_is_current_at_child_read",
+                            }
+                        ),
+                    )
+                )
 
     return validate_workflow(
         document(

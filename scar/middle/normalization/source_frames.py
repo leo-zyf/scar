@@ -1096,8 +1096,13 @@ class SourceExpressionRegion:
         receipt = node["source_definition"]
         child = receipt["child"]
         defaults = receipt.get("positional_defaults")
+        keywords = receipt.get("keyword_defaults")
         if (
-            not objects.plain_definition(node, positional_defaults=defaults is not None)
+            not objects.plain_definition(
+                node,
+                positional_defaults=defaults is not None,
+                keyword_defaults=keywords is not None,
+            )
             or definition.get("name") != symbol
             or definition.get("owner_class")
             or definition.get("call_protocol", {}).get("kind") != "regular"
@@ -1143,9 +1148,79 @@ class SourceExpressionRegion:
                 operand=pool["index"],
                 expected_tuple={"count": defaults["count"]},
             )
-        return self.make_function(node, symbol, child, default_ref)
+        keyword_ref = (
+            self.keyword_default_map(node, keywords) if keywords is not None else None
+        )
+        return self.make_function(node, symbol, child, default_ref, keyword_ref)
 
-    def make_function(self, node, symbol, child, default_ref=None, **ports):
+    def keyword_default_map(self, node, port):
+        names = port["names"]
+        defaults = [v for v in node["keyword_defaults"] if v is not None]
+        build = next(
+            (
+                r
+                for r in self.instructions[self.index :]
+                if r["offset"] == port["build_offset"]
+            ),
+            {},
+        )
+        if (
+            build.get("opcode") not in {"BUILD_MAP", "BUILD_CONST_KEY_MAP"}
+            or build.get("oparg") != len(names)
+            or len(names) != len(defaults)
+        ):
+            raise ValueError("keyword defaults need their ordered source map")
+        packed = build["opcode"] == "BUILD_CONST_KEY_MAP"
+        keys, values = [], []
+        for name, operand in zip(names, defaults):
+            if not packed:
+                key = self.take("LOAD_CONST", source=node)
+                if key.get("type") != "str" or key.get("value_sha256") != digest(
+                    json_bytes(name)
+                ):
+                    raise ValueError("keyword default uses the wrong key")
+                keys.append(
+                    self.emit(
+                        key,
+                        "source_object_constant",
+                        node,
+                        source="current_frame_co_consts",
+                        operand=key["index"],
+                    )
+                )
+            values.append(self.value(operand))
+        if packed:
+            key = self.take("LOAD_CONST", source=node)
+            if key.get("type") != "tuple" or key.get("names") != names:
+                raise ValueError("keyword default uses the wrong source key tuple")
+            pairs = dict(
+                keys_tuple=self.emit(
+                    key,
+                    "source_object_constant",
+                    node,
+                    source="current_frame_co_consts",
+                    operand=key["index"],
+                )
+            )
+        else:
+            pairs = dict(keys=keys)
+        ins = self.take(build["opcode"], source=node)
+        if ins["offset"] != port["build_offset"]:
+            raise ValueError("keyword default map belongs to another operation")
+        return self.emit(
+            ins,
+            "source_object_build_keyword_defaults",
+            node,
+            opcode=ins["opcode"],
+            values=values,
+            **pairs,
+            may_raise=True,
+            allocation="fresh_mapping_with_actual_key_and_value_objects_in_source_order",
+        )
+
+    def make_function(
+        self, node, symbol, child, default_ref=None, keyword_ref=None, **ports
+    ):
         load = self.take("LOAD_CONST", source=node)
         code = self.emit(
             load,
@@ -1158,7 +1233,8 @@ class SourceExpressionRegion:
         make = self.take("MAKE_FUNCTION", source=node)
         if (
             self.minor == 12
-            and make.get("oparg") != int(default_ref is not None)
+            and make.get("oparg")
+            != int(default_ref is not None) + 2 * int(keyword_ref is not None)
             or self.minor >= 13
             and "oparg" in make
         ):
@@ -1180,23 +1256,36 @@ class SourceExpressionRegion:
             may_raise=True,
             **ports,
             **(
+                {"kwdefaults": keyword_ref}
+                if self.minor == 12 and keyword_ref is not None
+                else {}
+            ),
+            **(
                 {"defaults": default_ref}
                 if self.minor == 12 and default_ref is not None
                 else {}
             ),
         )
-        if self.minor >= 13 and default_ref is not None:
-            attribute = self.take("SET_FUNCTION_ATTRIBUTE", source=node)
-            if attribute.get("oparg") != 1:
-                raise ValueError("function attribute must select positional defaults")
-            return self.emit(
-                attribute,
-                "source_object_set_function_defaults",
-                node,
-                function=function,
-                defaults=default_ref,
-                same_identity=True,
-            )
+        if self.minor >= 13:
+            for flag, op, attr, reference in (
+                (2, "source_object_set_function_kwdefaults", "kwdefaults", keyword_ref),
+                (1, "source_object_set_function_defaults", "defaults", default_ref),
+            ):
+                if reference is None:
+                    continue
+                instruction = self.take("SET_FUNCTION_ATTRIBUTE", source=node)
+                if instruction.get("oparg") != flag:
+                    raise ValueError(
+                        "source defaults attach to the wrong function attribute"
+                    )
+                function = self.emit(
+                    instruction,
+                    op,
+                    node,
+                    function=function,
+                    **{attr: reference},
+                    same_identity=True,
+                )
         return function
 
     def class_value(self, node):

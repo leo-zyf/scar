@@ -502,7 +502,16 @@ def _lower_image(path, revision, scheduled, destination):
     lowerer = Lowerer(
         module, physical, pending_math=pending_math, numeric_options=options_by_function
     )
-    units = lowerer.units()
+    if (
+        physical.get("source_import_effects", {}).get("isolated_entry")
+        or "isolated_entry_binding_sha256" in module
+    ):
+        from .imports import isolated_units
+
+        units = isolated_units(path.parent, physical, module)
+        lowerer.used_sdk_headers.update({"import.hpp", "project_import.hpp"})
+    else:
+        units = lowerer.units()
     if pending_math:
         raise ValueError("scheduled math path does not refer to a lowered operation")
     members = [

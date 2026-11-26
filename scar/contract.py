@@ -49,10 +49,12 @@ MODULE_REGISTRY_OPERATIONS = frozenset(
         "source_object_load_build_class",
         "source_object_make_function",
         "source_object_set_function_defaults",
+        "source_object_set_function_kwdefaults",
         "source_object_convert",
         "source_object_format",
         "source_object_build_string",
         "source_object_build_sequence",
+        "source_object_build_keyword_defaults",
         "source_object_build_slice",
         "source_object_getitem",
         "source_object_setitem",
@@ -1562,6 +1564,7 @@ def validate_workflow(flow):
         "LAUNCHES_IMAGE": ({"LAUNCH"}, {"IMAGE"}),
         "BINDS_ENTRY_STATE": ({"LAUNCH"}, {"ENTRY_STATE"}),
         "WAITS_FOR": ({"LAUNCH"}, {"WAIT"}),
+        "MAY_SUPPLY_CHILD_READ": ({"FILE_COPY"}, {"FILE_READ"}),
     }
     for edge in flow["edges"]:
         types = relationships.get(edge.get("kind"))
@@ -1586,6 +1589,26 @@ def validate_workflow(flow):
             or edge.get("descendants_completed") is not False
         ):
             raise ValueError("a wait only closes the direct process")
+        if edge["kind"] == "MAY_SUPPLY_CHILD_READ":
+            launch = nodes.get(edge.get("launch"), {})
+            if not (
+                launch.get("kind") == "LAUNCH"
+                and launch.get("image_id") == source["image_id"]
+                and launch.get("child_image") == target["image_id"]
+                and edge.get("conditional") is True
+                and edge.get("establishes_current_version") is False
+                and isinstance(edge.get("parent_directory"), str)
+                and isinstance(edge.get("invalidated_by"), list)
+                and all(isinstance(x, str) for x in edge["invalidated_by"])
+                and isinstance(edge.get("requires"), list)
+                and "child_read_resolves_in_inherited_entry_directory"
+                in edge["requires"]
+                and "selected_copy_instance_is_current_at_child_read"
+                in edge["requires"]
+            ):
+                raise ValueError(
+                    "child read candidates require launch and file-version conditions"
+                )
     if flow.get("file_version_equivalence_established") is not False:
         raise ValueError("entry bindings do not prove child file-version equality")
     return flow
@@ -1834,6 +1857,8 @@ def source_function_publication(store, parent_code_sha256):
     if not parent_code_sha256 or proof.get("code_sha256") != parent_code_sha256:
         return None
     defaults = proof.get("positional_defaults")
+    if "keyword_defaults" in proof:
+        return None
     if len(source) < 3 or not steps:
         return None
     split_attributes = source[-2].get("opcode") == "SET_FUNCTION_ATTRIBUTE"

@@ -2263,6 +2263,45 @@ def test_local_provider_name_does_not_select_an_unrelated_library(tmp_path):
     assert "operator_backends" not in physical
 
 
+def test_isolated_project_modules_run_without_python(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    entry = source / "entry.py"
+    entry.write_text(
+        "import numpy\nimport numpy as second\nprint(numpy.zeros(), second.zeros())\n"
+    )
+    (source / "numpy.py").write_text("def zeros():\n    return 'local provider'\n")
+    expected = _run([sys.executable, "-E", "-S", "-B", entry], source)
+    assert expected == b"local provider local provider\n"
+    request = tmp_path / "request.json"
+    request.write_text(
+        json.dumps(
+            {
+                "source_root": source.name,
+                "source": entry.name,
+                "entry_environment": {
+                    "kind": "standalone_script",
+                    "deployment": "isolated_project_modules_v1",
+                },
+            }
+        )
+    )
+    graph, plan, delivery = (tmp_path / name for name in ("graph", "plan", "delivery"))
+    _stage(tmp_path, "frontend", "build", "--manifest", request, "--out", graph)
+    shutil.rmtree(source)
+    _stage(tmp_path, "middle", "plan", "--graph", graph, "--out", plan)
+    shutil.rmtree(graph)
+    result = _stage(tmp_path, "backend", "compile", "--ir", plan, "--out", delivery)
+    shutil.rmtree(plan)
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    binary = shutil.copy2(result["executable"], runtime / "entry")
+    actual = subprocess.run(
+        [binary], cwd=runtime, env={"PATH": ""}, capture_output=True, timeout=30
+    )
+    assert (actual.returncode, actual.stdout, actual.stderr) == (0, expected, b"")
+
+
 def test_python_protocol_closure_never_assumes_mutable_bindings_constant(tmp_path):
     sources = {
         "global": "x = 'one'\ndef show():\n    print(x)\nshow()\nx = 'two'\nshow()\n",

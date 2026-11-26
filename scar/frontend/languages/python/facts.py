@@ -1797,42 +1797,142 @@ def _default_tuple_items(value, defaults):
     return None
 
 
-def _default_expression_rows(program, instructions, node, build, loads):
-    """Match each source default to one contiguous stack value consumed by BUILD_TUPLE."""
-    groups = []
-    stop = build
-    for default in reversed(node.args.defaults):
-        start = stop
-        span = tuple_position(default)
-        while start and _within_position(instructions[start - 1].positions, span):
-            start -= 1
-        if start == stop:
+def _definition_instruction(ins):
+    row = _positioned_instruction(ins)
+    row.pop("value", None)
+    return row
+
+
+def _default_operand(program, instructions, default, stop, loads):
+    """Match one original expression producing a single defining-frame stack value."""
+    start = stop
+    span = tuple_position(default)
+    while start and _within_position(instructions[start - 1].positions, span):
+        start -= 1
+    parts = _expression_parts(default, allow_indexed=True)
+    if start == stop or parts is None:
+        return None
+    operands, keywords, _ = parts
+    rows, depth = [], 0
+    for ins in instructions[start:stop]:
+        if ins.positions not in operands:
             return None
-        operands = _expression_parts(default, allow_indexed=True)
-        if operands is None:
+        row = _expression_instruction(
+            program, ins, operands[ins.positions], keywords.get(ins.positions, ())
+        )
+        if row is None or (
+            row["opcode"] in {"LOAD_NAME", "LOAD_GLOBAL"}
+            and loads.get(ins.positions, {}).get("offset") != ins.offset
+        ):
             return None
-        parts, keywords, _ = operands
-        rows, depth = [], 0
-        for ins in instructions[start:stop]:
-            if ins.positions not in parts:
+        depth += dis.stack_effect(ins.opcode, ins.arg)
+        if depth < 0:
+            return None
+        rows.append(row)
+    return (start, rows) if depth == 1 else None
+
+
+def _definition_default_window(program, instructions, node, stop, loads):
+    """Decode the positional tuple and keyword map in actual stack order."""
+    keywords = [
+        (a.arg, v)
+        for a, v in zip(node.args.kwonlyargs, node.args.kw_defaults)
+        if v is not None
+    ]
+    groups, ports = [], {}
+    position = tuple_position(node)
+    if keywords:
+        stop -= 1
+        if stop < 0:
+            return None
+        build = instructions[stop]
+        names = [name for name, _ in keywords]
+        if (
+            build.opname not in {"BUILD_CONST_KEY_MAP", "BUILD_MAP"}
+            or build.arg != len(names)
+            or build.positions != position
+        ):
+            return None
+        ports["keyword_defaults"] = dict(names=names, build_offset=build.offset)
+        groups.append([_definition_instruction(build)])
+        packed = build.opname == "BUILD_CONST_KEY_MAP"
+        if packed:
+            stop -= 1
+            if stop < 0:
                 return None
-            row = _expression_instruction(
-                program, ins, parts[ins.positions], keywords.get(ins.positions, ())
-            )
-            if row is None or (
-                row["opcode"] in {"LOAD_NAME", "LOAD_GLOBAL"}
-                and loads.get(ins.positions, {}).get("offset") != ins.offset
+            key = instructions[stop]
+            if (
+                key.opname != "LOAD_CONST"
+                or key.positions != position
+                or program.co_consts[key.arg] != tuple(names)
             ):
                 return None
-            depth += dis.stack_effect(ins.opcode, ins.arg)
-            if depth < 0:
+            groups.append(
+                [
+                    dict(
+                        _definition_instruction(key),
+                        index=key.arg,
+                        type="tuple",
+                        names=names,
+                    )
+                ]
+            )
+        for name, expression in reversed(keywords):
+            part = _default_operand(program, instructions, expression, stop, loads)
+            if part is None:
                 return None
-            rows.append(row)
-        if depth != 1:
+            stop, rows = part
+            groups.append(rows)
+            if not packed:
+                stop -= 1
+                if stop < 0:
+                    return None
+                key = instructions[stop]
+                if (
+                    key.opname != "LOAD_CONST"
+                    or key.positions != position
+                    or program.co_consts[key.arg] != name
+                ):
+                    return None
+                groups.append(
+                    [
+                        dict(
+                            _definition_instruction(key),
+                            index=key.arg,
+                            type="str",
+                            value_sha256=digest(json_bytes(name)),
+                        )
+                    ]
+                )
+    defaults = node.args.defaults
+    if defaults:
+        stop -= 1
+        if stop < 0:
             return None
-        groups.append(rows)
-        stop = start
-    return stop, [row for group in reversed(groups) for row in group]
+        tail = instructions[stop]
+        if tail.positions != position:
+            return None
+        if tail.opname == "LOAD_CONST" and (
+            items := _default_tuple_items(program.co_consts[tail.arg], defaults)
+        ):
+            ports["positional_defaults"] = dict(index=tail.arg, count=len(defaults))
+            groups.append(
+                [dict(_definition_instruction(tail), index=tail.arg, **items)]
+            )
+        elif tail.opname == "BUILD_TUPLE" and tail.arg == len(defaults):
+            ports["positional_defaults"] = dict(
+                count=len(defaults), build_offset=tail.offset
+            )
+            groups.append([_definition_instruction(tail)])
+            for expression in reversed(defaults):
+                part = _default_operand(program, instructions, expression, stop, loads)
+                if part is None:
+                    return None
+                stop, rows = part
+                groups.append(rows)
+        else:
+            return None
+    return stop, [r for group in reversed(groups) for r in group], ports
 
 
 def _definition_sites(program, instructions, definitions, handlers, loads):
@@ -1857,47 +1957,30 @@ def _definition_sites(program, instructions, definitions, handlers, loads):
         if make.positions in seen:
             repeated.add(make.positions)
         seen.add(make.positions)
-        start, end = i - 1, i + 1
-        defaults = node.args.defaults
-        tail = start
-        value_rows = []
-        pool_fields = {}
-        default_ports = {}
-        if defaults:
-            if sys.version_info[:2] == (3, 12) and make.arg == 1:
-                pass
-            elif (
-                sys.version_info[:2] in ((3, 13), (3, 14))
-                and make.arg is None
-                and instructions[end].opname == "SET_FUNCTION_ATTRIBUTE"
-                and instructions[end].arg == 1
-            ):
-                end += 1
-            else:
-                continue
-            start -= 1
-            if not (0 <= start and end < len(instructions)):
-                continue
-            tail = start
-            first = instructions[tail]
-            if first.opname == "LOAD_CONST" and (
-                items := _default_tuple_items(program.co_consts[first.arg], defaults)
-            ):
-                default_ports = dict(index=first.arg, count=len(defaults))
-                pool_fields = dict(items, index=first.arg)
-            elif first.opname == "BUILD_TUPLE" and first.arg == len(defaults):
-                matched = _default_expression_rows(
-                    program, instructions, node, start, loads
-                )
-                if matched is None:
-                    continue
-                start, value_rows = matched
-                default_ports = dict(count=len(defaults), build_offset=first.offset)
-            else:
-                continue
-        elif make.arg not in (None, 0):
+        matched = _definition_default_window(program, instructions, node, i - 1, loads)
+        if matched is None:
             continue
-        window = instructions[tail : end + 1]
+        start, value_rows, ports = matched
+        attributes = [
+            flag
+            for field, flag in (("keyword_defaults", 2), ("positional_defaults", 1))
+            if field in ports
+        ]
+        end = i + 1
+        if sys.version_info[:2] == (3, 12):
+            if make.arg != sum(attributes):
+                continue
+        elif sys.version_info[:2] in ((3, 13), (3, 14)) and make.arg is None:
+            if [
+                (r.opname, r.arg) for r in instructions[end : end + len(attributes)]
+            ] != [("SET_FUNCTION_ATTRIBUTE", flag) for flag in attributes]:
+                continue
+            end += len(attributes)
+        else:
+            continue
+        if end >= len(instructions):
+            continue
+        window = instructions[i - 1 : end + 1]
         store = window[-1]
         if not (
             all(op.positions == make.positions for op in window)
@@ -1920,23 +2003,14 @@ def _definition_sites(program, instructions, definitions, handlers, loads):
             & (inspect.CO_GENERATOR | inspect.CO_COROUTINE | inspect.CO_ASYNC_GENERATOR)
         ):
             continue
-        rows = [
-            dict(
-                opcode=op.opname,
-                offset=op.offset,
-                position=list(op.positions),
-                **({"oparg": op.arg} if op.arg is not None else {}),
-            )
-            for op in window
-        ]
-        rows[0].update(pool_fields)
-        rows[i - 1 - tail]["index"] = load.arg
+        rows = [_definition_instruction(op) for op in window]
+        rows[0]["index"] = load.arg
         rows[-1].update(index=store.arg, name=node.name)
         proof = dict(
             semantics_version=1,
             position=list(make.positions),
             instructions=value_rows + rows,
-            **({"positional_defaults": default_ports} if defaults else {}),
+            **ports,
             child=dict(
                 name=child.co_name,
                 qualname=child.co_qualname,
@@ -2253,7 +2327,6 @@ def _compiler_sites(tree, path, relative, source_hash):
         elif (
             isinstance(node, ast.FunctionDef)
             and not node.decorator_list
-            and not any(node.args.kw_defaults)
             and node.returns is None
             and not getattr(node, "type_params", ())
             and not any(
