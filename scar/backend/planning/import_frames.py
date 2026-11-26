@@ -213,6 +213,130 @@ def _function_store(op, code, offset):
     return group
 
 
+def _subscript_store(op, code):
+    """Match each live operand in a complete module STORE_SUBSCR statement."""
+    from scar.contract import valid_python_source_successor
+
+    receipt = op.get("source_expression", {})
+    region = op.get("expression", {})
+    source = receipt.get("instructions", ())
+    steps = region.get("steps", ())
+    if (
+        op.get("op") != "module_object_expression"
+        or op.get("source_code") != code
+        or code.get("kind") != "module"
+        or receipt.get("semantics_version") != 1
+        or receipt.get("code_sha256") != code["code_sha256"]
+        or region.get("op") != "source_object_region"
+        or region.get("type") != "unit"
+        or not source
+        or len(steps) != len(source)
+        or source[-1]["opcode"] != "STORE_SUBSCR"
+        or not valid_python_source_successor(
+            source[-1]["offset"], receipt.get("normal_successor")
+        )
+    ):
+        return []
+    stack, lists, program = [], set(), []
+    for ins, step in zip(source, steps):
+        pc, opcode = ins["offset"], ins["opcode"]
+        kind, arg, name = step.get("op"), ins.get("oparg", 0), ""
+        # No supported interior opcode has inline caches. A hole could contain
+        # another producer or EXTENDED_ARG, so do not admit that interval.
+        if (
+            type(arg) is not int
+            or not 0 <= arg < 2**32
+            or type(pc) is not int
+            or pc < 2
+            or pc % 2
+            or step.get("offset") != pc
+            or (program and pc != program[-1][1] + 2)
+        ):
+            return []
+        if opcode in {"LOAD_CONST", "LOAD_SMALL_INT"}:
+            pool = opcode == "LOAD_CONST"
+            if (
+                kind != "source_object_constant"
+                or step.get("source")
+                != ("current_frame_co_consts" if pool else "source_small_integer")
+                or step.get("operand") != arg
+                or pool
+                and ins.get("index") != arg
+                or not pool
+                and (not code["compiler"].startswith("cpython 3.14.") or arg > 255)
+            ):
+                return []
+            if pool:
+                opcode = "LOAD_FRAME_CONST"
+                name = (
+                    ins.get("items_sha256")
+                    if ins.get("type") == "tuple"
+                    else ins.get("value_sha256")
+                )
+                if not isinstance(name, str) or len(name) != 64:
+                    return []
+            stack.append({"from_offset": pc})
+        elif opcode == "LOAD_NAME":
+            field = step.get("instruction", {})
+            name = ins.get("name")
+            if (
+                kind != "module_name_load"
+                or step.get("lookup_order")
+                != ["frame.locals", "frame.globals", "frame.builtins"]
+                or field.get("code_sha256") != code["code_sha256"]
+                or any(
+                    field.get(k) != ins.get(k)
+                    for k in ("opcode", "offset", "position", "oparg", "index", "name")
+                )
+                or ins.get("index") != arg
+                or not isinstance(name, str)
+                or not name.isidentifier()
+            ):
+                return []
+            stack.append({"from_offset": pc})
+        elif opcode == "BUILD_LIST":
+            if (
+                kind != "source_object_build_sequence"
+                or step.get("opcode") != opcode
+                or step.get("may_raise") is not True
+                or type(arg) is not int
+                or not 0 <= arg <= len(stack)
+                or step.get("items") != (stack[-arg:] if arg else [])
+            ):
+                return []
+            if arg:
+                del stack[-arg:]
+            stack.append({"from_offset": pc})
+            lists.add(pc)
+        elif opcode == "LIST_EXTEND":
+            if (
+                kind != "source_object_list_update"
+                or step.get("opcode") != opcode
+                or step.get("may_raise") is not True
+                or arg != 1
+                or len(stack) < 2
+                or stack[-2]["from_offset"] not in lists
+                or (step.get("target"), step.get("value")) != tuple(stack[-2:])
+            ):
+                return []
+            stack.pop()
+        elif opcode == "STORE_SUBSCR":
+            if (
+                kind != "source_object_setitem"
+                or step.get("opcode") != opcode
+                or step.get("may_raise") is not True
+                or len(stack) != 3
+                or [step.get(k) for k in ("value", "base", "key")] != stack
+                or ins is not source[-1]
+            ):
+                return []
+            stack.clear()
+        else:
+            return []
+        program.append([opcode, pc, arg, name])
+    return program
+
+
 def _module_intervals(loader, slots):
     """Yield contiguous, independently enterable runs of whole source statements."""
     from scar.contract import digest, json_bytes
@@ -233,9 +357,13 @@ def _module_intervals(loader, slots):
         else:
             group = []
         if steps and (not group or group[0][1] != steps[-1][1] + 2):
-            yield steps
+            yield steps, None
             steps = []
         steps.extend(group)
+        if op.get("op") == "module_object_expression":
+            subscript = _subscript_store(op, entry["code"])
+            if subscript:
+                yield subscript, op["source_expression"]["normal_successor"]
     # Only attach a return reached directly from the last admitted statement,
     # or the entry of an empty module. A source gap needs its own continuation.
     if body and not steps:
@@ -249,13 +377,13 @@ def _module_intervals(loader, slots):
         or tail[0].get("index") != tail[0].get("oparg")
     ):
         if steps:
-            yield steps
+            yield steps, None
         return
     if tail[0].get("type") != "NoneType" or tail[0].get("value_sha256") != digest(
         json_bytes(None)
     ):
         if steps:
-            yield steps
+            yield steps, None
         return
     slot = str(tail[0]["index"])
     if slot in slots and slots[slot]["value"] is not None:
@@ -275,7 +403,7 @@ def _module_intervals(loader, slots):
             ]
         )
     if steps:
-        yield steps
+        yield steps, None
 
 
 def _callee_return(fragment):
@@ -342,8 +470,8 @@ def activation_bodies(dispatch, checked):
             else:
                 if symbol not in callees:
                     continue
-                intervals = [_callee_return(row)]
-            for steps in intervals:
+                intervals = [(_callee_return(row), None)]
+            for steps, successor in intervals:
                 if not steps:
                     continue
                 code = row["entry"]["code"]
@@ -380,6 +508,9 @@ def activation_bodies(dispatch, checked):
                             else None
                         ),
                     )
+                    if successor:
+                        body["normal_successor"] = successor
+                        body["resume_offset"] = successor["offset"]
                     if steps[0][1] != 2:
                         body["entry_offset"] = steps[0][1]
                     if any(step[0] == "LOAD_DEFAULT_TUPLE" for step in steps):

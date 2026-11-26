@@ -2,7 +2,14 @@
 
 from pathlib import Path
 
-from scar.contract import digest, document, member, read_member, write_json
+from scar.contract import (
+    digest,
+    document,
+    member,
+    read_member,
+    valid_python_source_successor,
+    write_json,
+)
 from .model import (
     Decl,
     Expr,
@@ -41,6 +48,11 @@ def _array(symbol, element, items):
 
 _BODY_OPERATIONS = {
     "LOAD_DEFAULT_TUPLE": "default_tuple",
+    "LOAD_FRAME_CONST": "constant",
+    "LOAD_NAME": "load_name",
+    "BUILD_LIST": "build_list",
+    "LIST_EXTEND": "list_extend",
+    "STORE_SUBSCR": "store_subscript",
     "LOAD_CHILD_CODE": "child_code",
     "SET_FUNCTION_ATTRIBUTE": "set_function_defaults",
     "MAKE_FUNCTION": "make_function",
@@ -79,6 +91,54 @@ def _publication_end(row, pos):
     return stop
 
 
+def _validate_subscript(row):
+    program = row["instructions"]
+    if (
+        row["kind"] != "module"
+        or program[-1][0] != "STORE_SUBSCR"
+        or not valid_python_source_successor(program[-1][1], row["normal_successor"])
+        or row["resume_offset"] != row["normal_successor"]["offset"]
+    ):
+        raise ValueError("invalid module subscription continuation")
+    stack = []
+    for i, (op, _, n, text) in enumerate(program):
+        if type(n) is not int or not 0 <= n < 2**32:
+            raise ValueError("invalid subscription instruction argument")
+        if (
+            op == "LOAD_NAME"
+            and isinstance(text, str)
+            and text.isidentifier()
+            or op == "LOAD_FRAME_CONST"
+            and is_digest(text)
+            or op == "LOAD_SMALL_INT"
+            and n < 256
+            and not text
+        ):
+            stack.append("object")
+        elif op == "BUILD_LIST" and not text and n <= len(stack):
+            if n:
+                del stack[-n:]
+            stack.append("list")
+        elif (
+            op == "LIST_EXTEND"
+            and not text
+            and n == 1
+            and len(stack) >= 2
+            and stack[-2] == "list"
+        ):
+            stack.pop()
+        elif (
+            op == "STORE_SUBSCR"
+            and not text
+            and n == 0
+            and len(stack) == 3
+            and i == len(program) - 1
+        ):
+            stack.clear()
+        else:
+            raise ValueError("invalid operand stack in module subscription")
+
+
 def _body_tables(rows, definitions):
     instruction, slot, body_type = (
         named(n) for n in ("body_instruction", "constant_slot", "body_program")
@@ -104,13 +164,13 @@ def _body_tables(rows, definitions):
             or any(next_[1] != prev[1] + 2 for prev, next_ in zip(program, program[1:]))
         ):
             raise ValueError("invalid activation body instruction interval")
-        intervals.setdefault((row["symbol"], row["code_sha256"]), []).append(
-            (start, program[-1][1])
-        )
         # Each declaration consumes one code object and publishes the function
         # before the next declaration. A prefix can stop only after its store.
         pos = 0
-        if row["kind"] == "module":
+        if "normal_successor" in row:
+            _validate_subscript(row)
+            pos = len(program)
+        elif row["kind"] == "module":
             while pos < len(program):
                 if (
                     program[pos][0] == "LOAD_CONST"
@@ -140,7 +200,7 @@ def _body_tables(rows, definitions):
                 if type(spelling) is not int or not 0 < spelling < 2**32:
                     raise ValueError("invalid exact tuple arity in activation body")
                 tuple_size, spelling = spelling, ""
-            if opcode in {"LOAD_DEFAULT_TUPLE", "LOAD_CHILD_CODE"}:
+            if opcode in {"LOAD_DEFAULT_TUPLE", "LOAD_CHILD_CODE", "LOAD_FRAME_CONST"}:
                 identity = (opcode, tuple_size or spelling)
                 if slot_types.setdefault(operand, identity) != identity:
                     raise ValueError(
@@ -205,8 +265,20 @@ def _body_tables(rows, definitions):
                 )
             )
         returns = program[-1][0] in {"RETURN_CONST", "RETURN_VALUE"}
-        if row["resume_offset"] != (None if returns else program[-1][1] + 2):
+        if "normal_successor" not in row and row["resume_offset"] != (
+            None if returns else program[-1][1] + 2
+        ):
             raise ValueError("invalid activation continuation")
+        intervals.setdefault((row["symbol"], row["code_sha256"]), []).append(
+            (
+                start,
+                (
+                    row["resume_offset"] - 2
+                    if "normal_successor" in row
+                    else program[-1][1]
+                ),
+            )
+        )
         definitions.extend(
             (_array(steps_name, instruction, steps), _array(slots_name, slot, slots))
         )

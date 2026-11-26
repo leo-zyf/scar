@@ -56,6 +56,10 @@ public:
 };
 
 enum class body_opcode {
+  load_name,
+  build_list,
+  list_extend,
+  store_subscript,
   default_tuple,
   child_code,
   set_function_defaults,
@@ -325,6 +329,30 @@ outcome run_body(Frame &frame, const body_program &program) {
            ins.operation == body_opcode::set_function_defaults))
         return outcome::unmatched;
   }
+  constexpr bool loads_names = requires { frame.load_name(0u); };
+  constexpr bool builds_lists =
+      requires { frame.build_list(std::span(stack)); };
+  constexpr bool extends_lists =
+      requires { frame.extend_list(*stack.back(), *stack.back()); };
+  constexpr bool stores_items = requires {
+    frame.admit_subscript_region(program);
+    frame.store_subscript(*stack.back(), *stack.back(), *stack.back());
+  };
+  if (program.instructions.back().operation == body_opcode::store_subscript) {
+    if constexpr (stores_items) {
+      for (const auto &ins : program.instructions)
+        if ((!loads_names && ins.operation == body_opcode::load_name) ||
+            (!builds_lists && ins.operation == body_opcode::build_list) ||
+            (!extends_lists && ins.operation == body_opcode::list_extend))
+          return outcome::unmatched;
+      // Admission guarantees source-equivalent dispatch for this live frame.
+      // It must precede allocation, mapping lookups and all source callbacks.
+      if (!frame.admit_subscript_region(program))
+        return outcome::unmatched;
+    } else {
+      return outcome::unmatched;
+    }
+  }
   const auto base = stack.size();
   bool pending_defaults = false;
   for (const auto &ins : program.instructions) {
@@ -332,6 +360,38 @@ outcome run_body(Frame &frame, const body_program &program) {
       if (!frame.before(ins.offset))
         return outcome::continued_in_host;
       switch (ins.operation) {
+      case body_opcode::load_name:
+        if constexpr (loads_names)
+          stack.emplace_back(frame.load_name(ins.operand));
+        break;
+      case body_opcode::build_list:
+        if constexpr (builds_lists) {
+          if (stack.size() < base || ins.operand > stack.size() - base)
+            return outcome::continued_in_host;
+          auto items = std::span(stack).last(ins.operand);
+          auto list = frame.build_list(items);
+          frame.replace(ins.operand, std::move(list));
+        }
+        break;
+      case body_opcode::list_extend:
+        if constexpr (extends_lists) {
+          if (stack.size() < base + 2 || !stack.back() ||
+              !stack[stack.size() - 2])
+            return outcome::continued_in_host;
+          frame.extend_list(*stack[stack.size() - 2], *stack.back());
+          frame.replace(1, std::nullopt);
+        }
+        break;
+      case body_opcode::store_subscript:
+        if constexpr (stores_items) {
+          if (stack.size() != base + 3 || !stack[base] || !stack[base + 1] ||
+              !stack[base + 2])
+            return outcome::continued_in_host;
+          frame.store_subscript(*stack[base + 1], *stack[base + 2],
+                                *stack[base]);
+          frame.replace(3, std::nullopt);
+        }
+        break;
       case body_opcode::default_tuple:
         if constexpr (checks_tuple) {
           if (stack.size() != base)

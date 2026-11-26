@@ -3463,7 +3463,7 @@ def test_native_import_frame_uses_live_registry_and_dispatches_returned_objects(
     published = loader["function"]["body"][0]["value"]
     published["constant_value"]["value"] += " altered"
     assert all(
-        steps[0][1] > instructions[1][1] for steps in _module_intervals(loader, {})
+        steps[0][1] > instructions[1][1] for steps, _ in _module_intervals(loader, {})
     )
     source_code = read_member(execution, index["functions"][0]["body"])
     code = source_code["body"][0]["value"]["source_code"]["code_sha256"]
@@ -3530,6 +3530,160 @@ def test_native_import_frame_uses_live_registry_and_dispatches_returned_objects(
         run = subprocess.run([native, mode, code, "replacement"], capture_output=True)
         assert (run.returncode, run.stdout) == reference[mode], (mode, run.stderr)
         assert run.stderr.decode().strip() == state
+
+
+def test_module_subscription_interval_preserves_live_operands_and_failure_pc(tmp_path):
+    from copy import deepcopy
+    from scar.backend import compile_ir
+    from scar.backend.cpp20.imports import _body_tables
+    from scar.backend.planning.import_frames import _subscript_store
+    from scar.contract import read_member
+    from scar.frontend import build
+    from scar.middle import plan
+
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    (pkg / "child.py").write_text("pass\n")
+    source = pkg / "__init__.py"
+    source.write_text(
+        "from . import child as old\ndel old\nbox = [None]\n"
+        "box[0] = [1.0 / 4, 0.0, +0.5]\nbox[0] = 'next'\n"
+    )
+    source_code = compile(source.read_bytes(), str(source), "exec")
+    entry = tmp_path / "main.py"
+    entry.write_text("import pkg\n")
+    graph, middle, physical = (tmp_path / n for n in ("graph", "middle", "physical"))
+    build(entry, graph)
+    plan(graph, middle)
+    ir = json.loads((middle / "exec-ir.json").read_bytes())
+    dispatch = read_member(middle, ir["module"]["source_dispatch"])
+    loader = next(r for r in dispatch["loaders"] if r["symbol"] == "py:pkg:<init>")
+    fn = read_member(middle, loader["function"])
+    ops = [
+        s["value"]
+        for s in fn["body"]
+        if s.get("value", {}).get("op") == "module_object_expression"
+        and s["value"]["expression"]["steps"][-1]["op"] == "source_object_setitem"
+    ]
+    assert len(ops) == 2
+    damaged = deepcopy(ops[0])
+    write = damaged["expression"]["steps"][-1]
+    write["value"], write["base"] = write["base"], write["value"]
+    assert not _subscript_store(damaged, loader["entry"]["code"])
+    source.unlink()
+    (pkg / "child.py").unlink()
+    entry.unlink()
+    result = compile_ir(middle, physical, policy="serial")
+    component = result["source_frame_components"]
+    schedule = read_member(physical, component["schedule"])
+    bodies = read_member(physical, schedule["bodies"])
+    seq, scalar = [b for b in bodies if b.get("normal_successor")]
+    steps = seq["instructions"]
+    assert [s[0] for s in steps] == [
+        "BUILD_LIST",
+        "LOAD_FRAME_CONST",
+        "LIST_EXTEND",
+        "LOAD_NAME",
+        "LOAD_FRAME_CONST" if sys.version_info.minor == 12 else "LOAD_SMALL_INT",
+        "STORE_SUBSCR",
+    ]
+    assert scalar["instructions"][0][0] == "LOAD_FRAME_CONST"
+    for row, op in zip((seq, scalar), ops, strict=True):
+        assert row["normal_successor"] == op["source_expression"]["normal_successor"]
+        assert row["resume_offset"] == row["normal_successor"]["offset"]
+    bad = deepcopy(seq)
+    bad["normal_successor"]["cache_offsets"][0] += 1
+    with pytest.raises(ValueError, match="subscription continuation"):
+        _body_tables([bad], [])
+    bad = deepcopy(seq)
+    bad["instructions"][0] = ["LOAD_NAME", steps[0][1], steps[3][2], steps[3][3]]
+    with pytest.raises(ValueError, match="operand stack"):
+        _body_tables([bad], [])
+    items = source_code.co_consts[steps[1][2]]
+    assert items == (0.25, 0.0, 0.5)
+
+    src = tmp_path / "store.cpp"
+    src.write_text(r"""
+#define main import_host_main
+#include "import_frame_host.cpp"
+#undef main
+#include <cassert>
+struct live : activation {
+  handle box=object_value("receiver"), tuple=object_value("tuple"), key=object_value("0"), rhs{};
+  text mode{};
+  std::vector<unsigned> visited{};
+  unsigned error=0, resume=0;
+  bool enter_body(const body_program &p) { return &active==&p && values.empty(); }
+  bool admit_subscript_region(const body_program &) { return mode!="decline"; }
+  bool before(unsigned pc) { visited.push_back(pc); return true; }
+  handle build_list(std::span<slot> items) {
+    assert(items.empty()); return rhs=object_value("fresh list");
+  }
+  void extend_list(const handle &list,const handle &values) {
+    assert(list==rhs && values==tuple); list->attributes=values->attributes;
+  }
+  handle load_name(unsigned i) {
+    assert(i==active.instructions[3].operand && rhs->attributes==tuple->attributes);
+    if(mode=="lookup") throw std::runtime_error("lookup");
+    return box;
+  }
+  handle small_int(unsigned i) { assert(i==0); return key; }
+  void store_subscript(const handle &receiver,const handle &index,const handle &value) {
+    assert(receiver==box && index==key && value==rhs && value!=tuple);
+    if(mode=="before") throw std::runtime_error("before write");
+    receiver->attributes[index->text]=value;
+    if(mode=="after") throw std::runtime_error("after write");
+  }
+  void resume_at(unsigned pc) { resume=pc; }
+  void unwind(unsigned pc,std::exception_ptr) { error=pc; }
+};
+int main(int argc,char **argv){
+  assert(argc==6);
+  body_provider provider{generated::bodies};
+  const auto &p=provider.programs[std::stoul(argv[2])];const auto &a=p.instructions;
+  live f{activation{p,provider,object_value("module"),object_value("None")}};
+  f.mode=argv[1]; f.constants[a[1].operand]=f.tuple;
+  if(a[4].operation==body_opcode::constant) f.constants[a[4].operand]=f.key;
+  for(int i=3;i<argc;++i) f.tuple->attributes[std::to_string(i-3)]=object_value(argv[i]);
+  auto status=provider.enter_at(f,f.mode=="frame" ? "" : p.code_sha256,p.symbol,
+                                a.front().offset+(f.mode=="pc" ? 2 : 0));
+  if(f.mode=="frame" || f.mode=="pc" || f.mode=="decline"){
+    assert(status==outcome::unmatched && f.visited.empty() && !f.rhs);return 0;
+  }
+  assert(status==outcome::continued_in_host && bool(f.rhs));
+  assert(f.box->attributes.contains("0")==(f.mode=="ok" || f.mode=="after"));
+  if(f.mode=="ok") assert(f.values.empty() && f.resume==p.resume_offset && !f.error);
+  else {
+    assert(!f.resume && f.error==f.visited.back());
+    assert(f.error==a[f.mode=="lookup" ? 3 : 5].offset);
+    assert(f.values.size()==(f.mode=="lookup" ? 1u : 3u));
+  }
+  for(size_t i=0;i<f.visited.size();++i) assert(f.visited[i]==a[i].offset);
+}
+""")
+    binary = tmp_path / "store"
+    subprocess.run(
+        [
+            "c++",
+            "-std=c++20",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-pedantic",
+            "-I",
+            str(Path(__file__).resolve().parents[1] / "fixtures"),
+            "-I",
+            str((physical / component["regions"]["path"]).parent),
+            str(src),
+            "-o",
+            str(binary),
+        ],
+        check=True,
+    )
+    for mode in ("ok", "before", "after", "lookup", "frame", "pc", "decline"):
+        subprocess.run(
+            [binary, mode, str(bodies.index(seq)), *map(str, items)], check=True
+        )
 
 
 def test_native_definition_uses_original_positional_defaults(tmp_path):
