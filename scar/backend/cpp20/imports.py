@@ -481,6 +481,22 @@ def isolated_units(folder, physical, certificate):
         "frame_tables_sha256"
     ] != digest(json_bytes([rows, bodies])):
         raise ValueError("local module entry and frame tables disagree")
+    by_code = {b["code_sha256"]: b for b in bodies}
+    if len(by_code) != len(bodies):
+        raise ValueError("isolated entry requires one complete body per code identity")
+    for module in certificate["modules"]:
+        body = by_code.get(module["code_sha256"], {})
+        if (
+            body.get("kind") != "module"
+            or body["symbol"] != module["symbol"]
+            or body.get("entry_offset", 2) != 2
+            or body["resume_offset"] is not None
+            or not body["instructions"]
+            or body["instructions"][0][1] != 2
+        ):
+            raise ValueError(
+                "isolated module requires a complete initializer starting at frame entry"
+            )
     rows = sorted(rows, key=lambda r: r["instructions"][0][1])
     if rows[-1]["resume_offset"] != certificate["exit_offset"] or any(
         r["code_sha256"] != certificate["code_sha256"] for r in rows

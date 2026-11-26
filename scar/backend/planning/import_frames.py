@@ -605,6 +605,66 @@ def _project_name(key):
     )
 
 
+def _native_scalar(slot):
+    """Values represented exactly by the isolated import object's display ABI."""
+    kind, value = slot.get("kind"), slot.get("value")
+    return type(value).__name__ == kind and (
+        kind in {"NoneType", "bool"}
+        or kind == "int"
+        and value.bit_length() <= 63
+        or kind == "str"
+        and value.isascii()
+    )
+
+
+def _module_exports(body, functions):
+    """Evaluate literal and function publications of a complete plain module."""
+    steps = body["instructions"]
+    tail = 1 if steps[-1][0] == "RETURN_CONST" else 2
+    if (
+        steps[0][1] != 2
+        or body.get("entry_offset", 2) != 2
+        or (
+            tail == 2
+            and (
+                len(steps) < 2
+                or steps[-2][0] != "LOAD_CONST"
+                or steps[-1][0] != "RETURN_VALUE"
+            )
+        )
+        or body["constants"].get(str(steps[-tail][2]))
+        != {"kind": "NoneType", "value": None}
+    ):
+        return None
+    exports = {}
+    cursor, stop = 0, len(steps) - tail
+    while cursor < stop:
+        load = steps[cursor]
+        if load[0] == "LOAD_CONST" and _native_scalar(
+            body["constants"].get(str(load[2]), {})
+        ):
+            value = ("scalar", None)
+            cursor += 1
+        elif (
+            load[0] == "LOAD_CHILD_CODE" and load[3] in functions and cursor + 1 < stop
+        ):
+            create = steps[cursor + 1]
+            if create[0] != "MAKE_FUNCTION" or create[2] != 0 or create[3] != load[3]:
+                return None
+            value = ("function", load[3])
+            cursor += 2
+        else:
+            return None
+        if cursor >= stop or steps[cursor][0] not in {"STORE_NAME", "STORE_GLOBAL"}:
+            return None
+        key = steps[cursor][3]
+        if key.startswith("__") and key.endswith("__") and key != "__doc__":
+            return None
+        exports[key] = value
+        cursor += 1
+    return exports
+
+
 def isolated_project_entry(module, ledger, dispatch, rows, regions, bodies):
     """Prove total coverage of a closed, single-threaded local import program."""
     import platform
@@ -678,11 +738,7 @@ def isolated_project_entry(module, ledger, dispatch, rows, regions, bodies):
             if steps[0][0] == "LOAD_SMALL_INT"
             else body["constants"][str(steps[0][2])]
         )
-        if result["kind"] not in {"str", "NoneType", "bool", "int"}:
-            return None
-        if type(result["value"]) is int and result["value"].bit_length() > 63:
-            return None
-        if isinstance(result["value"], str) and not result["value"].isascii():
+        if not _native_scalar(result):
             return None
         functions[code] = "scalar"
     modules, slots, previous, names = {}, {}, 2, {}
@@ -715,27 +771,9 @@ def isolated_project_entry(module, ledger, dispatch, rows, regions, bodies):
             or steps[3][0] not in {"STORE_NAME", "STORE_GLOBAL"}
         ):
             return None
-        exports = {}
-        tail = 1 if body["instructions"][-1][0] == "RETURN_CONST" else 2
-        if tail == 2 and (
-            len(body["instructions"]) < 2 or body["instructions"][-2][0] != "LOAD_CONST"
-        ):
+        exports = _module_exports(body, functions)
+        if exports is None:
             return None
-        publications = body["instructions"][:-tail]
-        if len(publications) % 3:
-            return None
-        for i in range(0, len(publications), 3):
-            make_code, create, store = publications[i : i + 3]
-            if (
-                make_code[0] != "LOAD_CHILD_CODE"
-                or make_code[3] not in functions
-                or create[0] != "MAKE_FUNCTION"
-                or create[2] != 0
-                or create[3] != make_code[3]
-                or store[0] not in {"STORE_NAME", "STORE_GLOBAL"}
-            ):
-                return None
-            exports[store[3]] = make_code[3]
         info = dict(name=key, symbol=body["symbol"], code_sha256=body["code_sha256"])
         if key in modules and modules[key] != info:
             return None
@@ -774,7 +812,7 @@ def _isolated_expression(region, names, exports):
             child = exports[stack.pop()[1]].get(spelling)
             if child is None:
                 return False
-            stack.append(("function", child))
+            stack.append(child)
         elif op == "CALL" and len(stack) >= arg + 2:
             group = stack[-(arg + 2) :]
             del stack[-(arg + 2) :]

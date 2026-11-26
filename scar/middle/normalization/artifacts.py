@@ -27,7 +27,7 @@ from .values import (
     evidence_scalar,
     _UNKNOWN,
 )
-from .file_state import Directories, FileCandidates
+from .file_state import Directories, FileCandidates, calls_libc_exit
 
 _FILE_FREE_OPERATIONS = {
     "literal",
@@ -195,15 +195,23 @@ def analyze(module):
         for fragment in candidates
         if fragment["completion"] == "complete"
     }
+    externs = {
+        row["name"]: row
+        for row in module.get("externs", ())
+        if row["name"] not in functions
+    }
     stable_globals = set(protocol.get("single_bind_globals", ()))
     summaries = result_summaries(functions)
     file_calls, file_effects, dependents = {}, {}, defaultdict(set)
+    unstructured = set()
     summary_operations = 0
     for name, fn in functions.items():
         dependencies, effects = set(), set()
         for node in walk_operations(fn["body"]):
             summary_operations += 1
             op = node["op"]
+            if op in {"goto", "label"}:
+                unstructured.add(name)
             if op == "call" and node.get("callee") in functions:
                 dependencies.add(node["callee"])
             elif op == "host_call":
@@ -2539,9 +2547,17 @@ def analyze(module):
                 elif op == "expr":
                     expression(statement["value"])
                     value = statement["value"]
-                    if value.get("noreturn") is True or (
-                        value.get("op") == "call"
-                        and functions.get(value.get("callee"), {}).get("noreturn")
+                    if (
+                        (
+                            symbol in functions
+                            and symbol not in unstructured
+                            and calls_libc_exit(value, externs)
+                        )
+                        or value.get("noreturn") is True
+                        or (
+                            value.get("op") == "call"
+                            and functions.get(value.get("callee"), {}).get("noreturn")
+                        )
                     ):
                         return "noreturn"
                 elif op == "if":

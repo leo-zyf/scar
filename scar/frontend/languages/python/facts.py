@@ -704,6 +704,9 @@ def _expression_instruction(program, ins, parts, keywords):
             return None
         if opcode != "TO_BOOL":
             row["target"] = ins.argval
+    elif opcode == "EXTENDED_ARG":
+        if not any(isinstance(n, ast.If) for n in parts):
+            return None
     elif opcode == "NOP":
         if not any(isinstance(n, ast.Constant) for n in parts):
             return None
@@ -745,7 +748,7 @@ def _condition_operand(test, *, function_frame=False):
     if isinstance(test, ast.Compare) and len(test.ops) != 1:
         return None
     if (
-        isinstance(test, ast.Call)
+        isinstance(test, (ast.Call, ast.Compare))
         or function_frame
         and type(test) in _CONDITION_PRODUCERS
     ):
@@ -895,14 +898,15 @@ def _branch_receipt(
     # exact bool first. A separate UNARY_NOT is not interchangeable with this lowering.
     truth = int(sys.version_info >= (3, 13) and not isinstance(operand, ast.Compare))
     opcode = _CONDITION_PRODUCERS[type(operand)]
+    operands = [row for row in rows if row["opcode"] != "EXTENDED_ARG"]
     if (
-        len(rows) < 2 + truth
-        or rows[-2 - truth]["opcode"] not in opcode
+        len(operands) < 2 + truth
+        or operands[-2 - truth]["opcode"] not in opcode
         or isinstance(operand, ast.Compare)
-        and rows[-2]["force_bool"] != (sys.version_info >= (3, 13))
+        and operands[-2]["force_bool"] != (sys.version_info >= (3, 13))
         or truth
-        and rows[-2]["opcode"] != "TO_BOOL"
-        or any(row["position"] != list(pos) for row in rows[-2 - truth :])
+        and operands[-2]["opcode"] != "TO_BOOL"
+        or any(row["position"] != list(pos) for row in operands[-2 - truth :])
     ):
         return None
     fall = end + 1
@@ -1140,12 +1144,14 @@ _JUMP_OPCODES = frozenset(
 )
 
 
-def _expression_parts(expr, *, allow_indexed):
+def _expression_parts(expr, *, allow_indexed, allow_comparison=False):
     parts, keywords = defaultdict(list), defaultdict(list)
     object_ports = False
     for node in ast.walk(expr):
-        if not allow_indexed and isinstance(
-            node, (ast.Subscript, ast.Slice, ast.Compare)
+        if not allow_indexed and (
+            isinstance(node, (ast.Subscript, ast.Slice))
+            or isinstance(node, ast.Compare)
+            and not allow_comparison
         ):
             return None
         if isinstance(
@@ -1228,7 +1234,11 @@ def _statement_expression(
     allow_indexed = function_frame or (
         isinstance(root, ast.Assign) and isinstance(root.targets[0], ast.Subscript)
     )
-    operands = _expression_parts(expr, allow_indexed=allow_indexed)
+    operands = _expression_parts(
+        expr,
+        allow_indexed=allow_indexed,
+        allow_comparison=isinstance(root, ast.If) and isinstance(expr, ast.Compare),
+    )
     if operands is None:
         return None
     parts, keywords, object_ports = operands
@@ -1247,6 +1257,21 @@ def _statement_expression(
             break
         start -= 1
     rows, depth = [], 0
+    jump_prefix = end
+    if isinstance(root, ast.If):
+        while (
+            jump_prefix > start
+            and instructions[jump_prefix - 1].opname == "EXTENDED_ARG"
+        ):
+            jump_prefix -= 1
+        jump = instructions[end]
+        if any(
+            ins.positions != jump.positions
+            or ins.offset != jump.offset - 2 * (end - i)
+            or ins.arg != jump.arg >> (8 * (end - i))
+            for i, ins in enumerate(instructions[jump_prefix:end], jump_prefix)
+        ):
+            return None
     for index in range(start, end + 1):
         ins = instructions[index]
         if (
@@ -1255,8 +1280,12 @@ def _statement_expression(
             and (ins.is_jump_target or ins.offset in handlers)
         ):
             return None
+        if ins.opname == "EXTENDED_ARG" and not jump_prefix <= index < end:
+            return None
         if ins.opname in _STATEMENT_END[ast.If] or ins.opname == "TO_BOOL":
-            if depth != 1 or index != end - int(ins.opname == "TO_BOOL"):
+            if depth != 1 or index != (
+                jump_prefix - 1 if ins.opname == "TO_BOOL" else end
+            ):
                 return None
         row = _expression_instruction(
             program, ins, parts[ins.positions], keywords.get(ins.positions, ())
@@ -2015,8 +2044,24 @@ def _definition_default_window(program, instructions, node, stop, loads):
     return stop, [r for group in reversed(groups) for r in group], ports
 
 
-def _definition_sites(program, instructions, definitions, handlers, loads):
-    """Plain module definitions whose code object is loaded, constructed and stored."""
+def _plain_definition(node):
+    return (
+        isinstance(node, ast.FunctionDef)
+        and not node.decorator_list
+        and node.returns is None
+        and not getattr(node, "type_params", ())
+        and not any(
+            arg.annotation is not None
+            for arg in ast.walk(node.args)
+            if isinstance(arg, ast.arg)
+        )
+    )
+
+
+def _definition_sites(
+    program, instructions, definitions, handlers, loads, *, owner=None
+):
+    """Plain definitions whose code object is loaded, constructed and stored."""
     found, seen, repeated = {}, set(), set()
     for i, make in enumerate(instructions):
         node = definitions.get(make.positions)
@@ -2076,7 +2121,8 @@ def _definition_sites(program, instructions, definitions, handlers, loads):
         child = load.argval
         if (
             child.co_firstlineno != node.lineno
-            or child.co_qualname != node.name
+            or child.co_qualname
+            != (node.name if owner is None else f"{owner}.{node.name}")
             or child.co_name != node.name
             or child.co_freevars
             or child.co_flags
@@ -2134,11 +2180,131 @@ def _module_frame_exit(instructions, code_sha256):
     return dict(code_sha256=code_sha256, instructions=rows)
 
 
+def _class_member_rows(code, instructions, suite, start):
+    """Bind a straight-line class suite to complete source assignments and methods."""
+    methods = {tuple_position(s): s for s in suite if _plain_definition(s)}
+    if any(
+        not isinstance(s, ast.Assign) and tuple_position(s) not in methods
+        for s in suite
+    ):
+        return None
+    names = {
+        tuple_position(n): n.id
+        for n in scope_nodes(methods.values())
+        if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)
+    }
+    definitions = (
+        _definition_sites(
+            code,
+            instructions,
+            methods,
+            set(),
+            _name_load_sites(code, instructions, names) if names else {},
+            owner=code.co_qualname,
+        )
+        if methods
+        else {}
+    )
+    rows, statements = [], []
+    for stmt in suite:
+        if start >= len(instructions):
+            return None
+        pos = tuple_position(stmt)
+        begin = start
+        if pos in definitions:
+            proof, child = definitions[pos]
+            window = proof["instructions"]
+            # 3.12 may retain line events for a pool-folded default tuple.
+            defaults = {tuple_position(v) for v in stmt.args.defaults}
+            while (
+                start < len(instructions)
+                and instructions[start].offset < window[0]["offset"]
+            ):
+                ins = instructions[start]
+                if ins.opname != "NOP" or ins.positions not in defaults:
+                    return None
+                rows.append(_positioned_instruction(ins))
+                start += 1
+            if (
+                start >= len(instructions)
+                or instructions[start].offset != window[0]["offset"]
+            ):
+                return None
+            if window[-1]["opcode"] != "STORE_NAME":
+                return None
+            rows.extend(window)
+            start += len(window)
+            statement = dict(
+                kind="method",
+                name=stmt.name,
+                child=proof["child"],
+                freevars=list(child.co_freevars),
+                **{
+                    k: proof[k]
+                    for k in ("positional_defaults", "keyword_defaults")
+                    if k in proof
+                },
+            )
+        elif (
+            isinstance(stmt, ast.Assign)
+            and len(stmt.targets) == 1
+            and isinstance(target := stmt.targets[0], ast.Name)
+            and start + 1 < len(instructions)
+        ):
+            load, store = instructions[start : start + 2]
+            if not (
+                load.opname == "LOAD_CONST"
+                and load.positions == tuple_position(stmt.value)
+                and code.co_consts[load.arg] is load.argval
+                and store.opname == "STORE_NAME"
+                and store.argval == target.id
+                and store.positions == tuple_position(target)
+            ):
+                return None
+            if isinstance(stmt.value, ast.Tuple):
+                literal = _pool_literal_items(load.argval, stmt.value.elts)
+            elif (
+                isinstance(stmt.value, ast.Constant)
+                and type(stmt.value.value) is str
+                and load.argval == stmt.value.value
+            ):
+                literal = dict(type="str", value=load.argval)
+            else:
+                return None
+            if literal is None:
+                return None
+            rows.extend(
+                [
+                    dict(_definition_instruction(load), index=load.arg, **literal),
+                    _positioned_instruction(store),
+                ]
+            )
+            start += 2
+            statement = dict(
+                kind="assign",
+                name=target.id,
+                target_position=list(store.positions),
+                value_position=list(load.positions),
+            )
+        else:
+            return None
+        statements.append(
+            dict(
+                statement,
+                position=list(pos),
+                start_offset=instructions[begin].offset,
+                store_offset=rows[-1]["offset"],
+            )
+        )
+    return rows, statements
+
+
 def _class_body_site(code, node, code_sha256):
-    """Witness every opcode of a plain class suite containing a docstring or passes."""
+    """Witness the complete instruction window of a straight-line class namespace."""
     doc = ast.get_docstring(node, clean=False)
-    passes = node.body[int(doc is not None) :]
-    if any(not isinstance(stmt, ast.Pass) for stmt in passes) or code.co_exceptiontable:
+    suite = node.body[int(doc is not None) :]
+    has_members = any(not isinstance(stmt, ast.Pass) for stmt in suite)
+    if code.co_exceptiontable or has_members and sys.version_info[:2] != (3, 12):
         return None
     ops = list(dis.get_instructions(code))
     if not ops or ops[0].positions.lineno != code.co_firstlineno:
@@ -2176,16 +2342,30 @@ def _class_body_site(code, node, code_sha256):
         expected.extend(
             [("LOAD_CONST", str if newer else doc, pos), ("STORE_NAME", "__doc__", pos)]
         )
-    statements.extend(
-        dict(kind="pass", position=list(tuple_position(stmt))) for stmt in passes
+    members = []
+    member_start = len(expected)
+    if has_members:
+        matched = _class_member_rows(code, ops, suite, member_start)
+        if matched is None:
+            return None
+        members, sites = matched
+        statements.extend(sites)
+    else:
+        statements.extend(
+            dict(kind="pass", position=list(tuple_position(stmt))) for stmt in suite
+        )
+        expected.extend(("NOP", None, tuple_position(stmt)) for stmt in suite[:-1])
+    end = (
+        tuple(members[-1]["position"])
+        if members
+        else tuple_position(suite[-1] if suite else node.body[0].value)
     )
-    expected.extend(("NOP", None, tuple_position(stmt)) for stmt in passes[:-1])
-    end = tuple_position(passes[-1] if passes else node.body[0].value)
     # On a single physical line a final pass can have no instruction of its
     # own. In 3.12 an otherwise empty suite can return at its prologue span.
     if (
         doc is None
-        and len(passes) == 1
+        and not has_members
+        and len(suite) == 1
         and end[0] == head.lineno
         and ops[-1].positions == head
     ):
@@ -2201,14 +2381,20 @@ def _class_body_site(code, node, code_sha256):
         )
     else:
         expected.append(("RETURN_CONST", None, end))
-    if len(ops) != len(expected) or len(code.co_code) != 2 * len(ops):
+    if (
+        len(ops) != len(expected) + len(members)
+        or len(code.co_code) != 2 * len(ops)
+        or any(
+            ins.offset != 2 * index or ins.is_jump_target
+            for index, ins in enumerate(ops)
+        )
+    ):
         return None
     rows = []
-    for index, (ins, (opcode, value, position)) in enumerate(zip(ops, expected)):
+    framing = ops[:member_start] + ops[member_start + len(members) :]
+    for ins, (opcode, value, position) in zip(framing, expected, strict=True):
         if (
-            ins.offset != 2 * index
-            or ins.is_jump_target
-            or None in ins.positions
+            None in ins.positions
             or ins.positions != position
             or (
                 ins.opname not in opcode
@@ -2233,6 +2419,7 @@ def _class_body_site(code, node, code_sha256):
                 value=list(ins.argval) if type(ins.argval) is tuple else ins.argval,
             )
         rows.append(row)
+    rows[member_start:member_start] = members
     return dict(
         semantics_version=1,
         code_sha256=code_sha256,
@@ -2404,17 +2591,7 @@ def _compiler_sites(tree, path, relative, source_hash):
                 node.value
             ):
                 assignments.append(node)
-        elif (
-            isinstance(node, ast.FunctionDef)
-            and not node.decorator_list
-            and node.returns is None
-            and not getattr(node, "type_params", ())
-            and not any(
-                x.annotation is not None
-                for x in ast.walk(node.args)
-                if isinstance(x, ast.arg)
-            )
-        ):
+        elif _plain_definition(node):
             definitions[tuple_position(node)] = node
         elif (
             isinstance(node, ast.ClassDef)

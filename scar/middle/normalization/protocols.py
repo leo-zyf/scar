@@ -4216,6 +4216,56 @@ def _dispatch_product(entry, project, loaders, callees, required_sites, issue):
     )
 
 
+def _actual_entry_prefix(module, project):
+    """Analyze from process entry with the import callable and cache left open."""
+    env = module.get("python_entry_environment") or {}
+    if env.get("analysis", {}).get("application_initial_cache") != "unproven":
+        return None
+    entry = module["entry"]
+    trial, issue = _attempt_protocol_entry(
+        module, project.functions, {}, project.source_index, open_entry=True
+    )
+    trial.finish_imports()
+    try:
+        trial.sequences.freeze(trial, partial=issue is not None)
+    except ValueError as error:
+        issue = _Unclosed(
+            entry, project.functions[entry], "sequence_element_type", str(error)
+        ).issue
+        trial.sequences.freeze(trial, partial=True)
+    body = trial.closed.get(entry) or next(
+        (fn for fn in trial.prefixes if fn["symbol"] == entry), None
+    )
+    if body is None:
+        return None
+    imports = []
+    for op in walk_operations(body["body"], exclude_fields=EXECUTION_ANNOTATIONS):
+        if op["op"] not in {"module_import_publish", "module_fromlist_publish"}:
+            continue
+        port = (
+            op.get("source_import_store")
+            or op.get("source_import_projection")
+            or op.get("source_fromlist", {})
+        )
+        imports.append(
+            dict(
+                occurrence=op["occurrence"],
+                request=op["request"],
+                instruction_offset=port.get("import_name", {}).get("offset"),
+                **values.source_site(op),
+            )
+        )
+    imports.sort(key=lambda row: (row["location"]["line"], row["location"]["column"]))
+    return dict(
+        entry=entry,
+        state="actual_entry_frame_and_module_registry",
+        completion="source_prefix" if issue else "modeled_source_entry",
+        function=body,
+        imports=imports,
+        **({"first_gap": issue} if issue else {}),
+    )
+
+
 def normalize_protocols(module):
     """Certify each reachable protocol, retaining closed signatures on a partial result."""
     functions = {
@@ -4407,6 +4457,8 @@ def normalize_protocols(module):
             ],
             prefix_fragments=list(reversed(project.prefixes)),
         )
+        if conditional and (entry_prefix := _actual_entry_prefix(module, project)):
+            module["protocol_analysis"]["actual_entry"] = entry_prefix
         return module, project.decisions, [issue]
     changes = project.decisions + [
         dict(

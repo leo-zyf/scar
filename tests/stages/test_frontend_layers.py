@@ -4453,6 +4453,7 @@ def test_definition_binds_each_runtime_default_to_the_parent_frame(tmp_path):
 
 def test_class_namespace_writes_and_exit_belong_to_the_child_code(tmp_path):
     import dis
+    import sys
     from types import CodeType
 
     from scar.contract import digest, json_bytes, read_member
@@ -4486,7 +4487,11 @@ def test_class_namespace_writes_and_exit_belong_to_the_child_code(tmp_path):
         scope = body["signature"]["python_scope"]
         code = children[name]
         assert scope["source_code"]["code_sha256"] == code_digest(code)
-        if name in {"Explicit", "Conditional"}:
+        if (
+            name == "Conditional"
+            or name == "Explicit"
+            and sys.version_info[:2] != (3, 12)
+        ):
             assert "source_class_body" not in scope
             continue
         proof = scope["source_class_body"]
@@ -4546,8 +4551,104 @@ def test_class_namespace_writes_and_exit_belong_to_the_child_code(tmp_path):
             assert body_literal["value"] == doc.value.value
             [doc_store] = [r for r in rows if r.get("name") == "__doc__"]
             assert doc_store["position"] == position(doc.value)
+        elif name == "Explicit":
+            [stmt] = proof["statements"]
+            assert stmt["kind"] == "assign" and stmt["name"] == "__module__"
+            assert stores.count("__module__") == 2
         else:
             assert [s["kind"] for s in proof["statements"]] == ["pass"]
+
+
+def test_class_method_creation_matches_active_namespace_and_defaults(tmp_path):
+    import dis
+    import sys
+    from types import CodeType
+
+    from scar.contract import read_member
+    from scar.frontend import build
+    from scar.frontend.languages.python.environment import code_digest
+
+    path = tmp_path / "records.py"
+    path.write_text(
+        "class Record:\n"
+        "    fields = ('text', 2, False)\n"
+        "    def create(self, tag=True,\n"
+        "               extra=None):\n"
+        "        return tag\n"
+        "    def update(self, *, codec=policy, count=3):\n"
+        "        return codec\n"
+        "class Closure:\n    def cls(self): return __class__\n"
+        "class Decorated:\n    @wrap\n    def operation(self): pass\n"
+    )
+    module = compile(path.read_bytes(), str(path), "exec", dont_inherit=True)
+    classes = {c.co_name: c for c in module.co_consts if type(c) is CodeType}
+    out = tmp_path / "graph"
+    build(path, out)
+    [unit] = json.loads((out / "graph.json").read_bytes())["units"]
+    functions = {
+        f["signature"]["name"]: f for f in read_member(out, unit["graph"])["functions"]
+    }
+
+    def body(name):
+        return next(
+            f for s, f in functions.items() if s.endswith(f":{name}.<class_body>")
+        )
+
+    for rejected in ("Closure", "Decorated"):
+        assert "source_class_body" not in body(rejected)["signature"]["python_scope"]
+    scope = body("Record")["signature"]["python_scope"]
+    if sys.version_info[:2] != (3, 12):
+        assert "source_class_body" not in scope
+        return
+    proof = scope["source_class_body"]
+    code = classes["Record"]
+    assert proof["code_sha256"] == code_digest(code)
+    native = {r.offset: r for r in dis.get_instructions(code)}
+    rows = {r["offset"]: r for r in proof["instructions"]}
+    assert [
+        (r["offset"], r["opcode"], r.get("oparg"), r["position"]) for r in rows.values()
+    ] == [(i.offset, i.opname, i.arg, list(i.positions)) for i in native.values()]
+    assign, create, update = proof["statements"]
+    assert assign["kind"] == "assign" and code.co_consts[
+        rows[assign["start_offset"]]["index"]
+    ] == ("text", 2, False)
+    assert rows[assign["store_offset"]]["name"] == "fields"
+    assert create["positional_defaults"]["count"] == 2
+    assert code.co_consts[create["positional_defaults"]["index"]] == (True, None)
+    assert update["keyword_defaults"]["names"] == ["codec", "count"]
+    assert (
+        rows[update["keyword_defaults"]["build_offset"]]["opcode"]
+        == "BUILD_CONST_KEY_MAP"
+    )
+    nodes = body("Record")["nodes"]
+    creates = {
+        nodes[n["target"]["port"]]["name"]: n
+        for n in nodes
+        if n["op"] == "python_define"
+    }
+    for method, flags in [(create, 1), (update, 2)]:
+        assert method["freevars"] == []
+        pc = method["store_offset"]
+        assert native[pc].argval == method["name"]
+        assert (native[pc - 2].opname, native[pc - 2].arg) == ("MAKE_FUNCTION", flags)
+        child = code.co_consts[rows[pc - 4]["index"]]
+        decl = functions[creates[method["name"]]["symbol"]]["signature"]["python_scope"]
+        assert method["child"] == decl["definition_code"]
+        assert (
+            method["child"]["code_sha256"]
+            == decl["source_code"]["code_sha256"]
+            == code_digest(child)
+        )
+    [read] = [
+        n["source_name_load"]
+        for n in body("Record")["nodes"]
+        if n.get("source_name_load", {}).get("name") == "policy"
+    ]
+    assert read["opcode"] == "LOAD_NAME" and read["code_sha256"] == proof["code_sha256"]
+    assert (
+        native[read["offset"]].argval == "policy"
+        and read["offset"] < update["keyword_defaults"]["build_offset"]
+    )
 
 
 def test_named_handler_witnesses_definition_and_post_cleanup_continuation(tmp_path):

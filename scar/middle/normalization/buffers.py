@@ -10,6 +10,7 @@ from scar.contract import (
     json_bytes,
     walk_operations,
 )
+from .file_state import calls_libc_exit
 
 # F2 supplies the actual selected C ABI, role positions and its byte semantics.
 # Only these public bindings have a transfer function at this layer.
@@ -340,6 +341,63 @@ def _effect(node, externs):
     return effect
 
 
+def _cstring_copy(node, effect, roles, declaration, capacity):
+    """Identify an unadorned narrow %s conversion at the actual call."""
+    api = node["callee"]
+    if api not in {"sprintf", "snprintf"} or set(roles) != (
+        {"dst", "format", "value_0"} | ({"capacity"} if api == "snprintf" else set())
+    ):
+        return None
+    parameters = [p["type"] for p in declaration["params"]]
+    if (
+        declaration.get("result") != "i32"
+        or parameters[0] != {"kind": "ptr", "to": "char"}
+        or parameters[-1] != {"kind": "ptr", "to": {"kind": "const", "of": "char"}}
+        or api == "snprintf"
+        and parameters[1] not in ("u32", "u64")
+    ):
+        return None
+    literal = node["args"][effect["operands"]["format"][1]]
+    if literal.get("op") == "cast" and literal.get("conversion") == "array_decay":
+        literal = literal["value"]
+    if literal.get("op") == "array_decay":
+        literal = literal["value"] if "value" in literal else literal["base"]
+    source = roles["value_0"]
+    if (
+        literal.get("op") != "string"
+        or literal.get("value") != "%s"
+        or roles["format"].text != "%s"
+        or not source.ref
+        or source.null
+        or source.integer is not None
+        or effect["contract"].get("format_family") != "c_printf"
+        or effect["contract"].get("overlap") != "forbidden_for_formatted_copy_sources"
+        or roles["dst"].locator is not None
+        and roles["dst"].locator == source.locator
+    ):
+        return None
+    limit = roles.get("capacity")
+    if any(
+        bound is not None
+        and (bound <= 0 or source.text is not None and len(source.text) >= bound)
+        for bound in (capacity, limit.integer if limit else None)
+    ):
+        return None
+    return dict(
+        source_operand=effect["operands"]["value_0"],
+        destination_operand=effect["operands"]["dst"],
+        source_value=source.ref,
+        extent="through_first_nul_inclusive",
+        requires=[
+            "selected_libc_call_returns_successfully",
+            "variadic_source_is_a_live_readable_narrow_c_string_at_conversion",
+            "destination_is_writable_for_source_length_plus_nul",
+            "source_and_destination_do_not_overlap",
+            *(["capacity_exceeds_source_length"] if limit else []),
+        ],
+    )
+
+
 def _common_prefix(a, b):
     length = next(
         (i for i, (left, right) in enumerate(zip(a, b)) if left != right),
@@ -418,11 +476,13 @@ class _Function:
                     stream=identity, stream_pointer=kind == "pointer"
                 )
                 state.escaped_streams.add(identity)
-        usedglobals = {
-            n["name"]
-            for n in walk_operations(fn["body"])
-            if n["op"] == "var" and n.get("scope") == "global"
-        }
+        usedglobals = set()
+        self.structured = True
+        for operation in walk_operations(fn["body"]):
+            if operation["op"] in {"goto", "label"}:
+                self.structured = False
+            elif operation["op"] == "var" and operation.get("scope") == "global":
+                usedglobals.add(operation["name"])
         for name in sorted(usedglobals & module_globals.keys()):
             row = module_globals[name]
             if _storage(row["type"]):
@@ -1175,11 +1235,19 @@ class _Function:
             prefix = src.prefix[:length]
             text = src.text if src.text is not None and len(src.text) < length else None
             term = "proven" if text is not None else "not_guaranteed"
+        copy = _cstring_copy(
+            node,
+            effect,
+            roles,
+            self.externs[api],
+            g.nodes.get(dest.locator, {}).get("capacity_bytes"),
+        )
         expression = g.node(
             "BYTE_EXPRESSION",
             [self.symbol, site],
             operation=site,
             interface=effect["interface"],
+            **({"c_string_copy": copy} if copy else {}),
             source_interface=api,
             inputs={key: v.ref for key, v in roles.items()},
             integer_inputs={
@@ -1374,6 +1442,8 @@ class _Function:
                 self.store(stmt["target"], value, state, stmt, here)
             elif op == "expr":
                 self.expr(stmt["value"], state, (*here, "value"))
+                if self.structured and calls_libc_exit(stmt["value"], self.externs):
+                    state = None
             elif op == "return":
                 self.expr(stmt.get("value"), state, (*here, "value"))
                 state = None

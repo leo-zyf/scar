@@ -34,9 +34,15 @@ def _namespace_target(instruction, target, scope):
         and location.get("file") == scope["source_code"]["source_key"]
         and instruction.get("position") == _source_position(location)
         and target.get("op") == "var"
-        and target.get("scope") == "global"
         and not target.get("cell")
-        and target.get("name") == f"py:{scope['module']}:{name}"
+        and (
+            target.get("scope") == "global"
+            and target.get("name") == f"py:{scope['module']}:{name}"
+            or scope.get("kind") == "class"
+            and instruction.get("opcode") == "STORE_NAME"
+            and target.get("scope") is None
+            and target.get("name") == name
+        )
     )
 
 
@@ -312,6 +318,22 @@ def _bind_condition_edges(node, proof, code, successor, loop):
     rows = proof["instructions"]
     jump = rows[-1]
     operand_pos = _graph_position(operand, code)
+    arg = jump.get("oparg")
+    prefixes = [row for row in rows[:-1] if row["opcode"] == "EXTENDED_ARG"]
+    if (
+        type(arg) is not int
+        or arg < 0
+        or len(prefixes) != max(0, (arg.bit_length() - 1) // 8)
+        or prefixes
+        and prefixes != rows[-len(prefixes) - 1 : -1]
+        or not all(
+            row.get("oparg") == arg >> (8 * distance)
+            and row["offset"] == jump["offset"] - 2 * distance
+            and row["position"] == operand_pos
+            for distance, row in enumerate(reversed(prefixes), 1)
+        )
+    ):
+        raise ValueError("source branch extended operands disagree with its jump")
     taken = branch.get("taken", "else") if isinstance(branch, dict) else None
     fallthrough = "then" if taken == "else" else "else"
     if not (
@@ -1147,7 +1169,7 @@ def _bind_keyword_defaults(node, prefix, declared, scope):
     return prefix[:end]
 
 
-def bind_source_definition(node, scope, declarations):
+def bind_source_definition(node, scope, declarations, *, owner_class=None):
     """Tie the code constant and the published object to the declared function."""
     proof = node["source_definition"]
     parent = scope.get("source_code", {})
@@ -1158,7 +1180,16 @@ def bind_source_definition(node, scope, declarations):
     if not (
         isinstance(child, dict)
         and node["op"] == "python_define"
-        and parent.get("kind") == "module"
+        and (
+            parent.get("kind") == "module"
+            and owner_class is None
+            and child.get("name") == child.get("qualname")
+            or parent.get("kind") == "class"
+            and owner_class is not None
+            and declared.get("owner_class") == owner_class
+            and child.get("qualname")
+            == f"{scope['definition_code']['qualname']}.{child.get('name')}"
+        )
         and parent.get("source_key") == location["file"]
         and type(proof.get("semantics_version")) is int
         and proof["semantics_version"] == 1
@@ -1174,7 +1205,6 @@ def bind_source_definition(node, scope, declarations):
         and len(child["code_sha256"]) == 64
         and all(c in "0123456789abcdef" for c in child["code_sha256"])
         and child.get("first_line") == location["line"]
-        and child.get("name") == child.get("qualname")
         and not any(node.get(k) for k in ("decorators", "annotations", "type_params"))
     ):
         raise ValueError(
@@ -1431,7 +1461,92 @@ def _class_body_name(row, opcode, name):
     )
 
 
-def bind_source_class_body(definition):
+def _bind_class_member(node, statement, rows, cursor, definition, declarations):
+    scope = definition["python_scope"]
+    code = scope["source_code"]
+    end = statement.get("store_offset")
+    if not (
+        type(end) is int
+        and end % 2 == 0
+        and 2 * cursor <= end < rows[-1]["offset"]
+        and statement.get("start_offset") == 2 * cursor
+    ):
+        raise ValueError("source class member has an invalid instruction range")
+    stop = end // 2 + 1
+    store = rows[stop - 1]
+    if not (
+        statement.get("name") == store.get("name")
+        and _class_body_name(store, "STORE_NAME", statement["name"])
+        and _namespace_target(store, node.get("target"), scope)
+    ):
+        raise ValueError("source class member has a mismatched local store")
+    if statement["kind"] == "assign" and node["op"] == "assign":
+        value, load = node["value"], rows[cursor]
+        kind = load.get("type")
+        if not (
+            stop == cursor + 2
+            and load.get("opcode") == "LOAD_CONST"
+            and type(load.get("index")) is int
+            and 0 <= load["index"] == load.get("oparg")
+            and load["position"]
+            == statement.get("value_position")
+            == _graph_position(value, code)
+            and store["position"] == statement.get("target_position")
+            and (
+                kind == "str"
+                and value.get("op") == "literal"
+                and value.get("type", {}).get("class") == "str"
+                and _class_body_literal(load, value.get("value"), kind)
+                or kind == "tuple"
+                and value.get("op") == "aggregate"
+                and value.get("kind") == "tuple"
+                and load.get("item_count") == len(value["items"])
+                and load.get("items_sha256")
+                and load["items_sha256"]
+                == python_literal_sequence_sha256(value["items"])
+            )
+        ):
+            raise ValueError(
+                "source class assignment disagrees with its value or store"
+            )
+    elif statement["kind"] == "method" and node["op"] == "python_define":
+        if statement.get("freevars") != [] or "source_definition" in node:
+            raise ValueError(
+                "source method has unsupported closure or duplicate evidence"
+            )
+        default_positions = [_graph_position(v, code) for v in node["defaults"]]
+        while cursor < stop and rows[cursor]["opcode"] == "NOP":
+            row = rows[cursor]
+            if row["position"] not in default_positions or "oparg" in row:
+                raise ValueError(
+                    "source method NOP has no corresponding default operand"
+                )
+            cursor += 1
+        receipt = dict(
+            semantics_version=1,
+            code_sha256=code["code_sha256"],
+            position=statement["position"],
+            child=statement["child"],
+            instructions=rows[cursor:stop],
+            **{
+                key: statement[key]
+                for key in ("positional_defaults", "keyword_defaults")
+                if key in statement
+            },
+        )
+        bind_source_definition(
+            dict(node, source_definition=receipt),
+            scope,
+            declarations,
+            owner_class=definition["owner_class"],
+        )
+        node["source_definition"] = receipt
+    else:
+        raise ValueError("source class member has no corresponding graph statement")
+    return stop
+
+
+def bind_source_class_body(definition, declarations):
     """Validate the class namespace instruction sequence against its graph body."""
     scope = definition["python_scope"]
     code, child = scope["source_code"], scope["definition_code"]
@@ -1442,6 +1557,15 @@ def bind_source_class_body(definition):
     compiler = code.get("compiler", "")
     legacy = compiler.startswith("cpython 3.12.")
     extended = compiler.startswith(("cpython 3.13.", "cpython 3.14."))
+    body = [
+        node
+        for node in definition["body"]
+        if not (
+            node["op"] == "decl"
+            and node.get("initial_binding") == "unbound"
+            and "init" not in node
+        )
+    ]
     if not (
         scope.get("kind") == code.get("kind") == "class"
         and child["code_sha256"] == proof.get("code_sha256") == code["code_sha256"]
@@ -1463,19 +1587,23 @@ def bind_source_class_body(definition):
             for offset, row in enumerate(rows)
         )
         and isinstance(source, list)
-        and len(source) == len(definition["body"])
+        and len(source) == len(body)
     ):
         raise ValueError(
             "source class body disagrees with its scope or instruction region"
         )
     doc = None
     passes = set()
-    for index, (statement, node) in enumerate(zip(source, definition["body"])):
+    members = []
+    for index, (statement, node) in enumerate(zip(source, body)):
         pos = _graph_position(node, code)
         if not isinstance(statement, dict) or pos != statement.get("position"):
             raise ValueError("source class body syntax disagrees with graph statements")
         if statement.get("kind") == "pass" and node["op"] == "pass":
             passes.add(tuple(pos))
+            continue
+        if legacy and statement.get("kind") in {"assign", "method"}:
+            members.append((statement, node))
             continue
         value = node.get("value", {})
         if not (
@@ -1522,6 +1650,13 @@ def bind_source_class_body(definition):
         ):
             raise ValueError("source class body has invalid docstring publication")
         cursor += 2
+    if members:
+        if passes:
+            raise ValueError("source class members disagree with pass regions")
+        for statement, node in members:
+            cursor = _bind_class_member(
+                node, statement, rows, cursor, definition, declarations
+            )
     while cursor < len(rows) and rows[cursor].get("opcode") == "NOP":
         pos = tuple(rows[cursor]["position"])
         if pos not in passes:

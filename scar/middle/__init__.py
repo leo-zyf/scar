@@ -88,6 +88,11 @@ def _plan_image(graph, folder, revision, out, *, shape, trip_count):
     protocol_analysis = module.get("protocol_analysis")
     if protocol_analysis is not None:
         protocol_analysis = dict(protocol_analysis)
+        if actual := protocol_analysis.get("actual_entry"):
+            protocol_analysis["actual_entry"] = {
+                **actual,
+                "function": member(out, "functions", actual["function"]),
+            }
         for group in (
             "closed_fragments",
             "conditional_loader_fragments",

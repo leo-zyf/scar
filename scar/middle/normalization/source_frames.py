@@ -57,10 +57,13 @@ def _name_operand(module, publications, node, code):
         return None
     slot = f"py:{module}:{load['name']}"
     if node["op"] == "var":
-        if (
-            node.get("scope") != "global"
-            or node.get("cell")
-            or node.get("name") != slot
+        if node.get("cell") or not (
+            node.get("scope") == "global"
+            and node.get("name") == slot
+            or code.get("kind") == "class"
+            and load["opcode"] == "LOAD_NAME"
+            and node.get("scope") is None
+            and node.get("name") == load["name"]
         ):
             return None
     elif node.get("name") != load["name"]:
@@ -129,8 +132,9 @@ def object_operand(module, publications, node, code):
     return None
 
 
-def class_body_activation(symbol, scope):
+def class_body_activation(symbol, definition, definitions):
     """Describe entry into the actual created body, conditional on its invocation."""
+    scope = definition["python_scope"]
     code = scope["source_code"]
     result = dict(
         selection="when_the_actual_created_body_is_invoked_in_a_matching_source_frame",
@@ -152,9 +156,27 @@ def class_body_activation(symbol, scope):
         or rows[0]["opcode"] != "RESUME"
     ):
         raise ValueError("class body program does not match its class frame")
-    steps, stack = [], []
+    methods = {
+        receipt["instructions"][0]["offset"]: (node, receipt)
+        for node in definition.get("body", ())
+        if (receipt := node.get("source_definition")) is not None
+    }
+    if len(methods) != sum(s["kind"] == "method" for s in proof["statements"]):
+        raise ValueError("class body lacks its bound method creation operands")
+    steps, stack, store_offset = [], [], -1
     for row in rows[1:]:
         opcode, pc = row["opcode"], row["offset"]
+        if pc < store_offset:
+            continue
+        if method := methods.get(pc):
+            node, receipt = method
+            region = SourceExpressionRegion(scope, receipt, definitions=definitions)
+            stack.append(region.function(node, owner_class=definition["owner_class"]))
+            store = region.take("STORE_NAME", source=node)
+            region.finish()
+            store_offset = store["offset"]
+            steps.extend(region.steps)
+            continue
         step = dict(offset=pc, instruction=row)
         if opcode == "LOAD_NAME":
             step.update(
@@ -1041,6 +1063,9 @@ class SourceExpressionRegion:
         fall = ports.get("fallthrough", "then")
         if {taken, fall} != {"then", "else"}:
             raise ValueError("source branch requires two distinct control successors")
+        prefixes = []
+        while self.next_opcode() == "EXTENDED_ARG":
+            prefixes.append(self.take("EXTENDED_ARG", source=operand))
         jump = self.take(
             "POP_JUMP_IF_TRUE" if (taken == "then") != negated else "POP_JUMP_IF_FALSE",
             source=operand,
@@ -1048,23 +1073,34 @@ class SourceExpressionRegion:
         self.finish()
         if jump["target"] != ports[taken]["offset"]:
             raise ValueError("conditional jump does not enter its sealed successor")
-        truth = (
-            value
-            if already_bool
-            else self.emit(
-                conversion or jump,
+        truth = value
+        conditions = [conversion, *prefixes] if conversion is not None else prefixes
+        if not already_bool and conversion is None:
+            conditions.append(jump)
+        for instruction in conditions:
+            if instruction["opcode"] == "EXTENDED_ARG":
+                self.steps.append(
+                    dict(
+                        op="pass",
+                        offset=instruction["offset"],
+                        instruction=instruction,
+                        **source_site(operand),
+                    )
+                )
+                continue
+            truth = self.emit(
+                instruction,
                 "source_object_truth",
                 operand,
                 type="bool",
                 value=value,
-                opcode=(conversion or jump)["opcode"],
+                opcode=instruction["opcode"],
                 dispatch=(
                     "consume_actual_call_result_at_source_truth_instruction_including_bool_or_len_and_release"
                     if operand["op"] in {"call", "python_invoke", "library_call"}
                     else "apply_source_truth_to_actual_operand_including_bool_or_len_and_release"
                 ),
             )
-        )
         return dict(
             op="source_object_region",
             type="bool",
@@ -1115,7 +1151,7 @@ class SourceExpressionRegion:
             **source_site(target),
         )
 
-    def function(self, node):
+    def function(self, node, *, owner_class=None):
         symbol = node["symbol"]
         definition = self.definitions.get(symbol, {})
         scope = definition.get("python_scope", {})
@@ -1130,7 +1166,8 @@ class SourceExpressionRegion:
                 keyword_defaults=keywords is not None,
             )
             or definition.get("name") != symbol
-            or definition.get("owner_class")
+            or definition.get("owner_class") != owner_class
+            or self.scope["kind"] != ("class" if owner_class else "module")
             or definition.get("call_protocol", {}).get("kind") != "regular"
             or scope.get("kind") != "function"
             or scope.get("initializer") != self.scope["initializer"]
@@ -1138,7 +1175,12 @@ class SourceExpressionRegion:
             or scope.get("source_key") != self.code["source_key"]
             or scope.get("definition_code") != child
             or not isinstance(child, dict)
-            or child.get("qualname") != child.get("name")
+            or child.get("qualname")
+            != (
+                f"{self.scope['definition_code']['qualname']}.{child.get('name')}"
+                if owner_class
+                else child.get("name")
+            )
         ):
             raise ValueError(
                 "function creation requires the sealed ordinary definition in this module"
@@ -1345,7 +1387,10 @@ class SourceExpressionRegion:
         if self.minor >= 13:
             self.take("PUSH_NULL", source=node)
         function = self.make_function(
-            node, symbol, child, body_activation=class_body_activation(symbol, scope)
+            node,
+            symbol,
+            child,
+            body_activation=class_body_activation(symbol, definition, self.definitions),
         )
         label = self.take("LOAD_CONST", source=node)
         if label.get("value") != child["name"]:

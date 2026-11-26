@@ -4883,3 +4883,66 @@ def test_isolated_import_retries_through_typed_exception_handlers(tmp_path):
     write_json(other, corrupted)
     with pytest.raises(ValueError, match="certified function bodies"):
         lower_scheduled(other, tmp_path / "rejected")
+
+
+@pytest.mark.parametrize("with_prefix", [False, True])
+def test_isolated_module_publications_cover_the_initializer(tmp_path, with_prefix):
+    from scar.backend.build import build as build_binary
+    from scar.backend.cpp20 import lower_scheduled, print_target
+    from scar.backend.planning import schedule_ir
+    from scar.frontend import build
+    from scar.middle import plan
+
+    root = tmp_path / "src"
+    root.mkdir()
+    (root / "entry.py").write_text(
+        "import provider\nprint(provider.value, provider.fetch())\n"
+    )
+    prefix = "print('initializing')\n" if with_prefix else ""
+    (root / "provider.py").write_text(
+        prefix + "value = 'first'\nvalue = 'last'\ndef fetch():\n    return 'called'\n"
+    )
+    request = tmp_path / "request.json"
+    request.write_text(
+        json.dumps(
+            dict(
+                source_root="src",
+                source="entry.py",
+                entry_environment=dict(
+                    kind="standalone_script", deployment="isolated_project_modules_v1"
+                ),
+            )
+        )
+    )
+    source = subprocess.run(
+        [sys.executable, "-E", "-S", "-B", "entry.py"],
+        cwd=root,
+        capture_output=True,
+        check=True,
+    )
+    build(request, tmp_path / "graph")
+    root.rename(tmp_path / "offline")
+    assert plan(tmp_path / "graph", tmp_path / "ir")["status"] == "READY"
+    product = schedule_ir(tmp_path / "ir", tmp_path / "schedule", policy="serial")
+    physical = json.loads((tmp_path / "schedule/physical-plan.json").read_bytes())
+    if with_prefix:
+        assert source.stdout == b"initializing\nlast called\n"
+        assert physical["status"] == "INCOMPLETE"
+        assert "isolated_entry" not in physical["source_import_effects"]
+        return
+    assert physical["status"] == "READY"
+    target = lower_scheduled(product, tmp_path / "target")
+    project = print_target(target, tmp_path / "out")
+    build_binary(tmp_path / "out/cpp20.json")
+    result = subprocess.run(
+        [Path(project["project"]) / "bin/scar_entry"],
+        cwd=tmp_path,
+        env={"PATH": "/no-python"},
+        capture_output=True,
+        check=True,
+    )
+    assert (
+        (source.stdout, source.stderr)
+        == (result.stdout, result.stderr)
+        == (b"last called\n", b"")
+    )

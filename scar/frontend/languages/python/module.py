@@ -633,6 +633,7 @@ class _Scope:
         self.code = unit.source_code if globals_only else {}
         self.expression_sites = unit.statement_expressions if globals_only else {}
         self.load_sites = unit.name_loads if globals_only else {}
+        self.method_codes = {}
         self.class_scope = class_scope
         self.table = table
         self.parent = parent
@@ -1925,12 +1926,26 @@ class _Scope:
                     creation["source_class"] = dict(
                         receipt, code_sha256=self.code["code_sha256"]
                     )
+                body_proof = (
+                    self.unit.class_body_sites.get(tuple_position(node))
+                    if receipt
+                    else None
+                )
+                if body_proof:
+                    nested.method_codes = {
+                        tuple(s["position"]): s["child"]
+                        for s in body_proof["statements"]
+                        if s["kind"] == "method"
+                    }
+                    nested.load_sites = {
+                        tuple(r["position"]): dict(r, semantics_version=1)
+                        for r in body_proof["instructions"]
+                        if r["opcode"] in {"LOAD_NAME", "LOAD_GLOBAL"}
+                    }
                 body = nested.definition(node, node.body, [], {})
                 if receipt:
                     body["python_scope"]["definition_code"] = child
-                    if body_proof := self.unit.class_body_sites.get(
-                        tuple_position(node)
-                    ):
+                    if body_proof:
                         body["python_scope"]["source_class_body"] = body_proof
                 body.update(scope_kind="class", owner_class=symbol)
                 self.unit.functions.append(body)
@@ -2036,18 +2051,25 @@ class _Scope:
                 if self.module_scope
                 else None
             )
-            if receipt:
+            child_code = (
+                receipt["child"]
+                if receipt
+                else self.method_codes.get(tuple_position(node))
+            )
+            if child_code:
                 nested.code = dict(
                     self.code,
                     kind="function",
-                    code_sha256=receipt["child"]["code_sha256"],
+                    code_sha256=child_code["code_sha256"],
                 )
+            if receipt:
                 nested.expression_sites, nested.load_sites = (
                     self.unit.function_expression_sites[tuple_position(node)]
                 )
             definition = nested.definition(node, node.body, params, facts)
+            if child_code:
+                definition["python_scope"]["definition_code"] = child_code
             if receipt:
-                definition["python_scope"]["definition_code"] = receipt["child"]
                 creation["source_definition"] = dict(
                     receipt, code_sha256=self.unit.source_code["code_sha256"]
                 )

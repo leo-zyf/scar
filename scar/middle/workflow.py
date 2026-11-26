@@ -174,18 +174,29 @@ def link_images(folder, images, root_image):
                 node["kind"] == "FILE_VERSION_REQUIREMENT"
                 and node.get("role") == "runtime_stream_read"
             ):
+                locator = records[node["locator"]]
+                operand = records.get(locator.get("operand_value"), {})
+                expression = (
+                    operand.get("expression")
+                    if operand.get("kind") == "BUFFER_VERSION"
+                    else None
+                )
                 selected = add(
                     "FILE_READ",
                     identity,
                     node["id"],
                     origin=origin(node["id"]),
                     locator=node["locator"],
-                    path=records[node["locator"]].get("path"),
+                    path=locator.get("path"),
+                    **(
+                        {"path_byte_expression": origin(expression)}
+                        if expression
+                        else {}
+                    ),
                     acquisition=node.get("acquisition"),
                     requires=node.get("requires", []),
                 )
                 expand(identity, selected)
-                locator = records[node["locator"]]
                 path = locator.get("path")
                 if (
                     isinstance(path, str)

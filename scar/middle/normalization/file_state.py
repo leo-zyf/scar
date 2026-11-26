@@ -8,6 +8,21 @@ operation interpretation remain in the caller of this state domain.
 import posixpath
 
 
+def calls_libc_exit(node, externs):
+    """A direct call to the selected C exit(int) has no ordinary return edge."""
+    if node.get("op") != "call" or node.get("callee") != "exit":
+        return False
+    decl = externs.get("exit", {})
+    return (
+        (decl.get("provider"), decl.get("header"), decl.get("result"))
+        == ("libc", "stdlib.h", "void")
+        and not decl.get("variadic")
+        and [p["type"] for p in decl.get("params", ())] == ["i32"]
+        and node.get("parameter_types") == ["i32"]
+        and len(node.get("args", ())) == 1
+    )
+
+
 class Directories:
     def __init__(self, create, parent_edge, scope):
         self.create, self.parent_edge, self.scope = create, parent_edge, scope

@@ -500,10 +500,18 @@ def test_open_class_publishes_actual_builder_result_and_conditional_namespace(tm
     child = pkg / "child.py"
     child.write_text("pass\n")
     init = pkg / "__init__.py"
+    methods = sys.version_info[:2] == (3, 12)
     init.write_text(
         "from . import child as old\ndel old\n"
-        "class Issue(Exception):\n    'doc'\n    pass\n"
-        "class Later(object):\n    flag = 7\n"
+        "class Issue(Exception):\n    'doc'\n"
+        + (
+            "    label = ('left', 'right')\n"
+            "    def read(self, key=None, *, category=Warning):\n"
+            "        pass\n"
+            if methods
+            else "    pass\n"
+        )
+        + "class Later(object):\n    flag = 7\n"
     )
     subprocess.run(
         [
@@ -587,7 +595,22 @@ else:
     assert steps[0]["instruction"]["name"] == "__name__"
     stores = [s for s in steps if s["op"] == "source_frame_namespace_store"]
     expected = ["__module__", "__qualname__", "__doc__"]
-    if sys.version_info.minor >= 13:
+    if methods:
+        expected += ["label", "read"]
+        [function] = [s for s in steps if s["op"] == "source_object_make_function"]
+        assert function["symbol"] == "py:pkg:Issue.read"
+        defaults = next(s for s in steps if ref(s) == function["defaults"])
+        assert defaults["source"] == "current_frame_co_consts"
+        keywords = next(s for s in steps if ref(s) == function["kwdefaults"])
+        assert keywords["op"] == "source_object_build_keyword_defaults"
+        [load] = [s for s in steps if s.get("instruction", {}).get("name") == "Warning"]
+        assert load["lookup_order"] == [
+            "frame.locals",
+            "frame.globals",
+            "frame.builtins",
+        ]
+        assert keywords["values"] == [ref(load)]
+    elif sys.version_info.minor >= 13:
         expected = [
             "__module__",
             "__qualname__",
@@ -607,6 +630,56 @@ else:
     assert (
         incomplete["completion"] == "source_body_required" and "steps" not in incomplete
     )
+
+
+def test_open_module_comparison_retains_large_jump_operand(tmp_path):
+    from scar.contract import read_member
+    from scar.frontend import build
+    from scar.middle import plan
+    from scar.middle.binding import _definition
+
+    entry = tmp_path / "entry.py"
+    entry.write_text("import pkg\n")
+    package = tmp_path / "pkg"
+    package.mkdir()
+    child = package / "child.py"
+    child.write_text("pass\n")
+    init = package / "__init__.py"
+    init.write_text(
+        "value = 'discard'\nfrom . import child as old\ndel old\nif value == 'keep':\n"
+        + "    print('inside')\n" * 40
+        + "print('outside')\n"
+    )
+    graph, middle = tmp_path / "graph", tmp_path / "ir"
+    build(entry, graph)
+    for source in (entry, child, init):
+        source.unlink()
+    plan(graph, middle)
+    report = json.loads((middle / "plan.json").read_bytes())
+    dispatch = read_member(middle, report["source_dispatch"])
+    [loader] = [d for d in dispatch["loaders"] if d["symbol"] == "py:pkg:<init>"]
+    fn = read_member(middle, loader["function"])
+    [region] = [
+        n["init"]["expression"]
+        for n in fn["body"]
+        if n.get("init", {}).get("expression", {}).get("branch")
+    ]
+    steps = region["steps"]
+    [prefix] = [
+        s for s in steps if s.get("instruction", {}).get("opcode") == "EXTENDED_ARG"
+    ]
+    [comparison] = [s for s in steps if s["op"] == "source_object_compare"]
+    jump = region["branch"]["instruction"]
+    assert comparison["offset"] < prefix["offset"] == jump["offset"] - 2
+    assert prefix["instruction"]["oparg"] == jump["oparg"] >> 8
+
+    index = json.loads((graph / "graph.json").read_bytes())
+    unit = next(u for u in index["units"] if u["path"] == "pkg/__init__.py")
+    [initializer] = read_member(graph, unit["graph"])["functions"]
+    [conditional] = [n for n in initializer["nodes"] if n["op"] == "if"]
+    conditional["source_expression"]["instructions"][-2]["oparg"] += 1
+    with pytest.raises(ValueError, match="extended operands"):
+        _definition(initializer)
 
 
 @pytest.mark.parametrize("failing", [False, True])
@@ -5641,6 +5714,96 @@ def test_iteration_bindings_and_reachable_loop_predecessors():
         state_flow(graph["nodes"], graph["entry"], graph["accesses"])["status"]
         == "conservative_iterator_protocol"
     )
+
+
+def test_direct_c_string_format_reaches_stream_only_along_normal_return(tmp_path):
+    from scar.contract import (
+        ARTIFACT_FLOW,
+        document,
+        file_receipt,
+        read_member,
+        validate_artifact_flow,
+    )
+    from scar.frontend import build
+    from scar.middle import plan
+    from scar.middle.normalization.buffers import analyze_buffers
+    from scar.middle.workflow import link_images
+
+    source = tmp_path / "entry.cpp"
+    source.write_text(
+        "#include <cstdio>\n#include <cstdlib>\n#include <fstream>\n#include <string>\n"
+        "int main(int argc, char **argv) { char path[16], line[8]; std::string selected(argv[0]);\n"
+        'if (argc < 3) std::sprintf(path, "%s", selected.c_str()); else std::exit(1);\n'
+        'std::ifstream stream(path); stream.getline(line, 8); std::sprintf(path, "[%s]", argv[0]);\n'
+        'std::snprintf(path, 2, "%s", "long"); std::snprintf(path, sizeof path, "%s", argv[0]); }\n'
+    )
+    request = tmp_path / "request.json"
+    request.write_text(
+        json.dumps(
+            dict(
+                source_root=str(tmp_path),
+                entry="main",
+                units=[dict(path=source.name, language="c++", flags=["-std=c++17"])],
+            )
+        )
+    )
+    graph, out = tmp_path / "graph", tmp_path / "plan"
+    build(request, graph)
+    source.unlink()
+    assert plan(graph, out)["status"] == "READY"
+    ir_path = out / "exec-ir.json"
+    ir = json.loads(ir_path.read_bytes())
+    module = ir["module"]
+    flow_ref = module["resource_model"]["artifact_flow"]
+    flow = validate_artifact_flow(read_member(out, flow_ref))
+
+    def locate(graph):
+        nodes = {n["id"]: n for n in graph["nodes"]}
+        [read] = [n for n in nodes.values() if n.get("role") == "runtime_stream_read"]
+        locator = nodes[read["locator"]]
+        assert (
+            read["historical_instance"] == "not_established" and locator["path"] is None
+        )
+        return nodes, nodes[locator["operand_value"]]
+
+    nodes, buf = locate(flow)
+    assert buf["form"] == "write"
+    expr = nodes[buf["expression"]]
+    copy = expr["c_string_copy"]
+    assert copy["extent"] == "through_first_nul_inclusive" and copy[
+        "source_operand"
+    ] == ["args", 2]
+    assert (
+        copy["source_value"] == expr["inputs"]["value_0"]
+        and nodes[copy["source_value"]]["kind"] == "SOURCE_OPERATION"
+    )
+    formatted = [n for n in nodes.values() if n.get("interface") == "bytes.format_into"]
+    assert len(formatted) == 4
+    bounded = [n for n in formatted if n["source_interface"] == "snprintf"]
+    assert sum("c_string_copy" in n for n in bounded) == 1
+    assert "capacity_exceeds_source_length" in next(
+        n["c_string_copy"]["requires"] for n in bounded if "c_string_copy" in n
+    )
+    assert "c_string_copy" not in next(
+        n for n in formatted if n["literal_format"] == "[%s]"
+    )
+    image = dict(
+        id="worker", entry="main", output="worker", ir=file_receipt(tmp_path, ir_path)
+    )
+    workflow = link_images(tmp_path, [image], "worker")
+    [read] = [n for n in workflow["nodes"] if n["kind"] == "FILE_READ"]
+    assert read["path"] is None and read["path_byte_expression"] == {
+        "artifact_flow_sha256": flow_ref["sha256"],
+        "node": expr["id"],
+    }
+
+    # An unqualified function with the same spelling can return to the caller.
+    module["functions"] = [read_member(out, ref) for ref in ir["functions"]]
+    next(e for e in module["externs"] if e["name"] == "exit")["provider"] = "user"
+    _, buffered = locate(
+        analyze_buffers(module, document(ARTIFACT_FLOW, nodes=[], edges=[]))["graph"]
+    )
+    assert buffered["form"] == "phi" and buffered["expression"] is None
 
 
 def test_native_stream_input_ports_preserve_conditional_buffer_versions():

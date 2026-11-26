@@ -1224,6 +1224,36 @@ def validate_artifact_flow(flow):
                 and records.get(node["expression"], {}).get("kind") != "BYTE_EXPRESSION"
             ):
                 raise ValueError("buffer version references an absent byte expression")
+        if "c_string_copy" in node:
+            copy = node["c_string_copy"]
+            source = copy.get("source_value") if isinstance(copy, dict) else None
+            bounded = node.get("source_interface") == "snprintf"
+            guards = {
+                "selected_libc_call_returns_successfully",
+                "variadic_source_is_a_live_readable_narrow_c_string_at_conversion",
+                "destination_is_writable_for_source_length_plus_nul",
+                "source_and_destination_do_not_overlap",
+            }
+            if bounded:
+                guards.add("capacity_exceeds_source_length")
+            if not (
+                isinstance(copy, dict)
+                and node["kind"] == "BYTE_EXPRESSION"
+                and node.get("interface") == "bytes.format_into"
+                and node.get("source_interface") in {"sprintf", "snprintf"}
+                and copy.get("extent") == "through_first_nul_inclusive"
+                and copy.get("source_operand") == ["args", 3 if bounded else 2]
+                and copy.get("destination_operand") == ["args", 0]
+                and isinstance(source, str)
+                and source in records
+                and source == node.get("inputs", {}).get("value_0")
+                and isinstance(copy.get("requires"), list)
+                and all(isinstance(guard, str) for guard in copy["requires"])
+                and set(copy["requires"]) == guards
+            ):
+                raise ValueError(
+                    "C string relation requires its inputs and defined-copy guards"
+                )
         if node["kind"] == "COMMAND_REQUEST":
             if (
                 node.get("source_version") is not None
@@ -1593,7 +1623,7 @@ def validate_workflow(flow):
     """Check cross-image entry bindings without assuming file-version equality."""
     if (flow.get("schema"), flow.get("schema_version")) != (WORKFLOW, VERSION):
         raise ValueError("unsupported workflow graph contract")
-    images = {image["id"] for image in flow["images"]}
+    images = {image["id"]: image for image in flow["images"]}
     if len(images) != len(flow["images"]) or flow["root_image"] not in images:
         raise ValueError("workflow requires distinct declared images and its root")
     kinds = {"IMAGE", "ENTRY_STATE", "LAUNCH", "WAIT", "FILE_COPY", "FILE_READ"}
@@ -1603,6 +1633,23 @@ def validate_workflow(flow):
         for node in nodes.values()
     ):
         raise ValueError("workflow nodes require a declared image and explicit kind")
+    for node in nodes.values():
+        if "path_byte_expression" in node:
+            ref = node["path_byte_expression"]
+            if not (
+                node["kind"] == "FILE_READ"
+                and isinstance(ref, dict)
+                and set(ref) == {"artifact_flow_sha256", "node"}
+                and isinstance(ref["artifact_flow_sha256"], str)
+                and re.fullmatch("[0-9a-f]{64}", ref["artifact_flow_sha256"])
+                and ref["artifact_flow_sha256"]
+                == images[node["image_id"]].get("artifact_flow_sha256")
+                and isinstance(ref["node"], str)
+                and ref["node"].startswith("artifact:byte_expression:")
+            ):
+                raise ValueError(
+                    "file read path expression requires its image artifact flow"
+                )
     relationships = {
         "EXPANDS_TO": ({"IMAGE"}, kinds - {"IMAGE"}),
         "LAUNCHES_IMAGE": ({"LAUNCH"}, {"IMAGE"}),

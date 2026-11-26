@@ -241,7 +241,7 @@ def _definition(graph, declarations=None):
 
     definition = {**read(graph["signature"]), "body": read(graph["entry"])}
     if "source_class_body" in definition.get("python_scope", {}):
-        bind_source_class_body(definition)
+        bind_source_class_body(definition, declarations or {})
     return definition
 
 
