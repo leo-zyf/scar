@@ -697,16 +697,24 @@ class _Scope:
 
     def source_expression(self, node, operands=None):
         if receipt := self.expression_sites.get(tuple_position(node)):
-            if self.code.get("kind") == "function":
-                fast = {
+            unpack = isinstance(node, ast.Assign) and isinstance(
+                node.targets[0], (ast.Tuple, ast.List)
+            )
+            if self.code.get("kind") == "function" or unpack:
+                reads = (
+                    _FAST_READS | {"LOAD_NAME", "LOAD_GLOBAL"}
+                    if unpack
+                    else _FAST_READS
+                )
+                required = {
                     row["offset"]
                     for row in receipt["instructions"]
-                    if row["opcode"] in _FAST_READS
+                    if row["opcode"] in reads
                 }
-                if fast and not fast.issubset(
+                if required and not required.issubset(
                     load["offset"]
                     for operand in walk_operations(operands)
-                    if operand["op"] == "var"
+                    if operand["op"] in {"var", "python_builtin"}
                     and (load := operand.get("source_name_load"))
                 ):
                     return {}

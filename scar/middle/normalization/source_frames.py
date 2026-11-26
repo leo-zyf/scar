@@ -281,8 +281,8 @@ class SourceExpressionRegion:
         self.index += 1
         return instruction
 
-    def emit(self, instruction, op, node, **fields):
-        offset = instruction["offset"]
+    def emit(self, ins, op, node, **fields):
+        offset = ins["offset"]
         self.steps.append(dict(op=op, offset=offset, **source_site(node), **fields))
         return {"from_offset": offset}
 
@@ -1157,6 +1157,61 @@ class SourceExpressionRegion:
             **source_site(target),
         )
 
+    def unpack(self, target, value):
+        """Consume a fixed-width unpack once, then assign in source target order."""
+        ins = self.take("UNPACK_SEQUENCE", source=target)
+        items = target["items"]
+        if type(ins.get("oparg")) is not int or ins["oparg"] != len(items):
+            raise ValueError("source unpack arity disagrees with its targets")
+        results = self.emit(
+            ins,
+            "source_object_unpack",
+            target,
+            opcode=ins["opcode"],
+            arity=len(items),
+            value=value,
+            may_raise=True,
+            dispatch="source_UNPACK_SEQUENCE_of_actual_operand_with_exact_arity",
+            on_error="preserve_iterator_effects_and_unwind_before_consuming_any_result_of_this_unpack",
+        )
+        for index, item in enumerate(items):
+            output = {**results, "result_index": index}
+            if item["op"] == "index":
+                self.subscription(item, stored=output)
+            elif item["op"] == "unpack":
+                self.unpack(item, output)
+            elif item["op"] == "var" and self.next_opcode() == "STORE_FAST":
+                store = self.take("STORE_FAST", source=item)
+                self.emit(
+                    store,
+                    "frame_local_store",
+                    item,
+                    **self.fast_local(item, store),
+                    value=output,
+                    ownership="install_result_before_releasing_previous_slot_object",
+                )
+            elif item["op"] == "var":
+                port = self.target(item, "STORE_NAME", "STORE_GLOBAL")
+                store = port["instruction"]
+                self.emit(
+                    store,
+                    "source_frame_namespace_store",
+                    item,
+                    instruction=store,
+                    slot=port["slot"],
+                    name=port["name"],
+                    namespace=port["namespace"],
+                    index=store["index"],
+                    value=output,
+                    may_raise=True,
+                    publication="use_source_store_opcode_on_actual_frame_mapping_with_current_co_names_key",
+                )
+                # Subsequent targets execute after this store (and the release
+                # of the old value), including loads of this very same name.
+                self.publications.pop(port["slot"], None)
+            else:
+                raise ValueError("unsupported fixed-width unpack target")
+
     def function(self, node, *, owner_class=None):
         symbol = node["symbol"]
         definition = self.definitions.get(symbol, {})
@@ -1412,7 +1467,23 @@ class SourceExpressionRegion:
         return self.call_result(node, builder, None, args)
 
     def statement(self, node):
-        if node["op"] == "assign" and node["target"]["op"] == "index":
+        if node["op"] == "assign" and node["target"]["op"] == "unpack":
+            # Keep the abstract outer frame unchanged if this region fails to
+            # validate; publish its normal-edge writes only after finish().
+            self.publications = self.publications.copy()
+            self.unpack(node["target"], self.value(node["value"]))
+            opcode = "module_unpack_store"
+            ports = dict(
+                writes=list(
+                    dict.fromkeys(
+                        step["namespace"]
+                        for step in self.steps
+                        if step["op"] == "source_frame_namespace_store"
+                    )
+                ),
+                assignment="consume_each_owned_unpack_result_at_its_source_target_preserving_completed_stores_on_failure",
+            )
+        elif node["op"] == "assign" and node["target"]["op"] == "index":
             value = self.value(node["value"])
             self.subscription(node["target"], stored=value)
             opcode = "module_object_expression"

@@ -38,7 +38,9 @@ def _suite(nodes, scope, constants, output):
             elif op == "assign":
                 value = region.value(node["value"])
                 target = node["target"]
-                if target["op"] == "index":
+                if target["op"] == "unpack":
+                    region.unpack(target, value)
+                elif target["op"] == "index":
                     region.subscription(target, stored=value)
                 else:
                     ins = region.take("STORE_FAST", source=target)

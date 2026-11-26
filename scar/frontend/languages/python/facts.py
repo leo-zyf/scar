@@ -590,6 +590,14 @@ def _expression_instruction(program, ins, parts, keywords):
             )
         else:
             return None
+    elif opcode == "UNPACK_SEQUENCE":
+        if not any(
+            isinstance(n, (ast.List, ast.Tuple))
+            and isinstance(n.ctx, ast.Store)
+            and len(n.elts) == arg
+            for n in parts
+        ):
+            return None
     elif (
         opcode in {"BINARY_SUBSCR", "STORE_SUBSCR"}
         or opcode == "BINARY_OP"
@@ -1194,8 +1202,12 @@ def _expression_parts(expr, *, allow_indexed, allow_comparison=False):
             return None
         if isinstance(node, ast.Dict) and None in node.keys:
             return None
-        if isinstance(node, (ast.List, ast.Tuple)) and any(
-            isinstance(elt, (ast.List, ast.Tuple, ast.Starred)) for elt in node.elts
+        if (
+            isinstance(node, (ast.List, ast.Tuple))
+            and isinstance(node.ctx, ast.Load)
+            and any(
+                isinstance(elt, (ast.List, ast.Tuple, ast.Starred)) for elt in node.elts
+            )
         ):
             return None
         if isinstance(node, ast.Constant) and type(node.value) not in (
@@ -1221,6 +1233,56 @@ def _expression_parts(expr, *, allow_indexed, allow_comparison=False):
     return parts, keywords, object_ports
 
 
+def _assignment_ports(target):
+    """Fixed targets in the order CPython obtains and publishes their items."""
+    pending, ports = [target], []
+    while pending:
+        target = pending.pop()
+        if isinstance(target, (ast.List, ast.Tuple)) and target.elts:
+            pending.extend(reversed(target.elts))
+        elif not isinstance(target, (ast.Name, ast.Subscript)):
+            return []
+        ports.append(target)
+    return ports
+
+
+def _fixed_unpack_window(program, root, window):
+    """Match one RHS, then each target's operands and write, at actual source spans."""
+    ports = _assignment_ports(root.targets[0])
+    cursor = 0
+    for i, target in enumerate(ports):
+        inputs = ()
+        if i == 0:
+            inputs = (root.value,)
+        elif isinstance(target, ast.Subscript):
+            inputs = (target.value, target.slice)
+        for expr in inputs:
+            begin, span = cursor, tuple_position(expr)
+            while cursor < len(window) and _within_position(
+                window[cursor].positions, span
+            ):
+                cursor += 1
+            if begin == cursor:
+                return False
+        if cursor == len(window) or window[cursor].positions != tuple_position(target):
+            return False
+        opcode = window[cursor].opname
+        if isinstance(target, (ast.List, ast.Tuple)):
+            if opcode != "UNPACK_SEQUENCE" or window[cursor].arg != len(target.elts):
+                return False
+        elif isinstance(target, ast.Subscript):
+            if opcode != "STORE_SUBSCR":
+                return False
+        elif opcode not in {"STORE_NAME", "STORE_GLOBAL", "STORE_FAST"}:
+            return False
+        cursor += 1
+    return cursor == len(window) and all(
+        program.co_code[pc : pc + 2] == bytes((dis.opmap["CACHE"], 0))
+        for left, right in zip(window, window[1:])
+        for pc in range(left.offset + 2, right.offset, 2)
+    )
+
+
 def _statement_expression(
     program, instructions, root, end, handlers, *, function_frame=False
 ):
@@ -1235,6 +1297,9 @@ def _statement_expression(
     allow_indexed = function_frame or (
         isinstance(root, ast.Assign) and isinstance(root.targets[0], ast.Subscript)
     )
+    unpack = isinstance(root, ast.Assign) and isinstance(
+        root.targets[0], (ast.Tuple, ast.List)
+    )
     indexed_rhs = (
         isinstance(root, ast.Assign)
         and len(root.targets) == 1
@@ -1243,7 +1308,7 @@ def _statement_expression(
     )
     operands = _expression_parts(
         expr,
-        allow_indexed=allow_indexed or indexed_rhs,
+        allow_indexed=allow_indexed or indexed_rhs or unpack,
         allow_comparison=allow_indexed
         or isinstance(root, ast.If)
         and isinstance(expr, ast.Compare),
@@ -1316,6 +1381,10 @@ def _statement_expression(
         if depth < 0:
             return None
         rows.append(row)
+    if unpack and not _fixed_unpack_window(
+        program, root, instructions[start : end + 1]
+    ):
+        return None
     if isinstance(root, ast.Constant) and [row["opcode"] for row in rows] != ["NOP"]:
         return None
     if isinstance(root, ast.Delete) and [row["position"] for row in rows] != [
@@ -1334,7 +1403,7 @@ def _statement_expression(
     proof = dict(
         semantics_version=1, position=list(tuple_position(root)), instructions=rows
     )
-    if rows[-1]["opcode"] in {"STORE_SUBSCR", "STORE_SLICE"}:
+    if unpack or rows[-1]["opcode"] in {"STORE_SUBSCR", "STORE_SLICE"}:
         if end + 1 >= len(instructions):
             return None
         following = instructions[end + 1]
@@ -1803,9 +1872,9 @@ def _function_expression_sites(program, node, following, inherited, code_sha256)
         elif (
             isinstance(stmt, ast.Assign)
             and len(stmt.targets) == 1
-            and isinstance(stmt.targets[0], (ast.Name, ast.Subscript))
+            and (ports := _assignment_ports(stmt.targets[0]))
         ):
-            expressions[tuple_position(stmt.targets[0])] = stmt
+            expressions[tuple_position(ports[-1])] = stmt
         elif isinstance(stmt, ast.If) and (
             operand := _condition_operand(stmt.test, function_frame=True)
         ):
@@ -2607,9 +2676,9 @@ def _compiler_sites(tree, path, relative, source_hash):
         if (
             isinstance(node, ast.Assign)
             and len(node.targets) == 1
-            and isinstance(node.targets[0], (ast.Name, ast.Subscript))
+            and (ports := _assignment_ports(node.targets[0]))
         ):
-            expressions[tuple_position(node.targets[0])] = node
+            expressions[tuple_position(ports[-1])] = node
             if isinstance(node.targets[0], ast.Name) and _constant_store_rhs(
                 node.value
             ):

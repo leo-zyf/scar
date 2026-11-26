@@ -839,6 +839,10 @@ def _open_namespace_after(frame, action):
     frame.project.names.clear()
     if action["op"] == "module_global_store":
         frame.project.imports.publications.pop(action["slot"], None)
+    elif action["op"] == "module_unpack_store":
+        for step in action["evaluation"]:
+            if step["op"] == "source_frame_namespace_store":
+                frame.project.imports.publications.pop(step["slot"], None)
     elif action["op"] == "module_global_delete":
         for target in action["targets"]:
             frame.project.imports.publications.pop(target["slot"], None)

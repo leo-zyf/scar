@@ -870,6 +870,69 @@ def _bind_operand_instructions(node, scope, position, instructions):
                     raise ValueError("missing literal identity in source call")
 
 
+def _assignment_store(instruction, target, scope):
+    code = scope["source_code"]
+    opcode = instruction["opcode"]
+    if opcode in {"STORE_NAME", "STORE_GLOBAL"}:
+        return _namespace_target(instruction, target, scope)
+    if opcode == "STORE_FAST":
+        return _fast_operand(instruction, target, code)
+    return (
+        opcode in {"STORE_SUBSCR", "STORE_SLICE"}
+        and target.get("op") == "index"
+        and target.get("protocol") == "python_subscription"
+        and _graph_position(target, code) == instruction["position"]
+    )
+
+
+def _bind_unpack_assignment(node, scope, instructions):
+    """Match every captured unpack and store to its ordered graph target."""
+    code = scope["source_code"]
+    pending = iter(instructions)
+    effects = {
+        "UNPACK_SEQUENCE",
+        "UNPACK_EX",
+        "STORE_FAST",
+        "STORE_NAME",
+        "STORE_GLOBAL",
+        "STORE_SUBSCR",
+        "STORE_SLICE",
+        "STORE_ATTR",
+        "STORE_DEREF",
+    }
+
+    def operand_until_effect(span):
+        for instruction in pending:
+            if instruction["opcode"] in effects:
+                return instruction
+            if span is None or not _inside_source(span, instruction["position"]):
+                break
+        return {}
+
+    def target_matches(target, evaluated):
+        span = _graph_position(target, code)
+        if target.get("op") != "unpack":
+            store = operand_until_effect(span)
+            return bool(store and _assignment_store(store, target, scope))
+        unpack = next(pending, {}) if evaluated is None else evaluated
+        items = target.get("items")
+        return bool(
+            unpack.get("opcode") == "UNPACK_SEQUENCE"
+            and span is not None
+            and unpack.get("position") == span
+            and isinstance(items, list)
+            and unpack.get("oparg") == len(items)
+            and all(target_matches(item, None) for item in items)
+        )
+
+    target = node["target"]
+    first = operand_until_effect(_graph_position(node["value"], code))
+    if not target_matches(target, first) or next(pending, None) is not None:
+        raise ValueError(
+            "source unpack arity or store order disagrees with its graph targets"
+        )
+
+
 def bind_source_expression(node, scope, successor=None, loop=None):
     """Bind positioned instruction evidence; M2 verifies semantic evaluation order."""
     proof, code = node["source_expression"], scope.get("source_code") or {}
@@ -930,14 +993,21 @@ def bind_source_expression(node, scope, successor=None, loop=None):
             )
         if last["opcode"] not in {"STORE_SUBSCR", "STORE_SLICE"}:
             exit_rows = scope.get("frame_exit", {}).get("instructions", [])
-            if not (
+            unpack_tail = (
+                operation == "assign"
+                and node.get("target", {}).get("op") == "unpack"
+                and last["opcode"] in {"STORE_FAST", "STORE_NAME", "STORE_GLOBAL"}
+                and not edge["cache_offsets"]
+            )
+            frame_exit = (
                 code["kind"] == "function"
                 and last["opcode"] in {"NOP", "STORE_FAST", "POP_TOP"}
                 and not edge["cache_offsets"]
                 and exit_rows
                 and edge["offset"] == exit_rows[0]["offset"]
                 and edge["opcode"] == exit_rows[0]["opcode"]
-            ):
+            )
+            if not (unpack_tail or frame_exit):
                 raise ValueError(
                     "source expression continuation disagrees with the frame exit"
                 )
@@ -973,19 +1043,13 @@ def bind_source_expression(node, scope, successor=None, loop=None):
             raise ValueError("source return disagrees with its function operand")
     elif operation == "assign":
         target = node.get("target", {})
-        if not (
-            isinstance(node.get("value"), dict)
-            and len(proof["instructions"]) > 1
-            and (
-                last["opcode"] in {"STORE_NAME", "STORE_GLOBAL"}
-                and _namespace_target(last, target, scope)
-                or last["opcode"] == "STORE_FAST"
-                and _fast_operand(last, target, code)
-                or last["opcode"] in {"STORE_SUBSCR", "STORE_SLICE"}
-                and target.get("op") == "index"
-                and target.get("protocol") == "python_subscription"
-                and _graph_position(target, code) == last["position"]
-            )
+        if not (isinstance(node.get("value"), dict) and len(proof["instructions"]) > 1):
+            raise ValueError("source expression store disagrees with its target")
+        if target.get("op") == "unpack":
+            _bind_unpack_assignment(node, scope, proof["instructions"])
+        elif not _assignment_store(last, target, scope) or any(
+            ins["opcode"] in {"UNPACK_SEQUENCE", "UNPACK_EX"}
+            for ins in proof["instructions"]
         ):
             raise ValueError("source expression store disagrees with its target")
     elif operation == "unbind":

@@ -4980,3 +4980,80 @@ def test_module_indexed_arithmetic_witnesses_ordered_reads_and_store(tmp_path):
         and rows[-1]["name"] == "answer"
         and rows[-1]["opcode"] == "STORE_NAME"
     )
+
+
+def test_fixed_unpack_receipt_binds_rhs_then_each_target(tmp_path):
+    import dataclasses
+    import dis
+
+    from scar.contract import walk_operations
+    from scar.frontend.languages import python
+
+    path = tmp_path / "destructure.py"
+    path.write_text(
+        "one, table[key()], (two, other[index]) = source()\n"
+        "left[0], right[1] = source()\n"
+        "[first, last] = source()\n"
+        "one, *rest = source()\n"
+        "a, b = left, right\n"
+        "a, other.field = source()\n"
+    )
+    code = compile(path.read_bytes(), str(path), "exec", dont_inherit=True)
+    actual = list(dis.get_instructions(code))
+    parsed = python.parse_unit(path, root=tmp_path, abi={"module": path.stem})
+
+    def stores(unit):
+        [fn] = python.normalize_unit(unit)["functions"]
+        return {
+            n["location"]["line"]: n
+            for n in walk_operations(fn["partial_body"])
+            if n["op"] == "assign"
+        }
+
+    nodes = stores(parsed)
+    assert set(nodes) == set(range(1, 7))
+    for line in (1, 2, 3):
+        node = nodes[line]
+        proof = node["source_expression"]
+        rows = proof["instructions"]
+        start = next(i for i, r in enumerate(actual) if r.offset == rows[0]["offset"])
+        window = actual[start : start + len(rows)]
+        for row, ins in zip(rows, window, strict=True):
+            assert (
+                row["opcode"],
+                row["offset"],
+                row.get("oparg"),
+                row["position"],
+            ) == (ins.opname, ins.offset, ins.arg, list(ins.positions))
+        following = actual[start + len(rows)]
+        caches = list(range(rows[-1]["offset"] + 2, following.offset, 2))
+        assert proof["normal_successor"] == dict(
+            offset=following.offset, opcode=following.opname, cache_offsets=caches
+        )
+        assert node["target"]["op"] == "unpack"
+    effects = [
+        (row["opcode"], row.get("name", row.get("oparg")))
+        for row in nodes[1]["source_expression"]["instructions"]
+        if row["opcode"] in {"CALL", "UNPACK_SEQUENCE", "STORE_NAME", "STORE_SUBSCR"}
+    ]
+    assert effects == [
+        ("CALL", 0),
+        ("UNPACK_SEQUENCE", 3),
+        ("STORE_NAME", "one"),
+        ("CALL", 0),
+        ("STORE_SUBSCR", None),
+        ("UNPACK_SEQUENCE", 2),
+        ("STORE_NAME", "two"),
+        ("STORE_SUBSCR", None),
+    ]
+    assert [r["opcode"] for r in nodes[2]["source_expression"]["instructions"]].count(
+        "STORE_SUBSCR"
+    ) == 2
+    assert all("source_expression" not in nodes[i] for i in (4, 5, 6))
+    trimmed = dict(parsed.name_loads)
+    missing = next(k for k, v in trimmed.items() if k[0] == 2 and v["name"] == "right")
+    del trimmed[missing]
+    assert (
+        "source_expression"
+        not in stores(dataclasses.replace(parsed, name_loads=trimmed))[2]
+    )

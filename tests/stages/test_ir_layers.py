@@ -9970,6 +9970,115 @@ def test_open_sequence_displays_keep_allocation_order_and_tuple_identity(tmp_pat
     )
 
 
+def test_open_unpack_assigns_each_result_in_the_current_namespace(tmp_path):
+    from scar.contract import read_member
+    from scar.frontend import build
+    from scar.middle import plan
+
+    (tmp_path / "provider.py").write_text("enabled = False\n")
+    src = tmp_path / "main.py"
+    src.write_text(
+        "import provider as obj\n"
+        "if obj.enabled == True:\n"
+        "    obj, obj[0], obj[1] = obj.produce()\n"
+        "    obj.finish()\n"
+    )
+    source = compile(src.read_bytes(), str(src), "exec")
+    graph, out = tmp_path / "graph", tmp_path / "plan"
+    build(src, graph)
+    src.unlink()
+    plan(graph, out)
+    ir = json.loads((out / "exec-ir.json").read_bytes())
+    dispatch = read_member(out, ir["module"]["source_dispatch"])
+    entry = next(f for f in dispatch["functions"] if f["symbol"] == dispatch["entry"])
+    body = read_member(out, entry["body"])["body"]
+    branch = next(s for s in body if s["op"] == "if")
+    assign, after = [s["value"] for s in branch["then"]]
+    assert branch["else"] == [] and assign["op"] == "module_unpack_store"
+    initial, attr, call, unpack, replace, first, a, store_a, second, b, store_b = (
+        assign["evaluation"]
+    )
+    assert initial["source_evidence"]["prior_publication"]["name"] == "obj"
+    assert attr["base"] == {"from_offset": initial["offset"]}
+    assert call["target"] == {"from_offset": attr["offset"]}
+    assert (
+        unpack["op"] == "source_object_unpack"
+        and unpack["arity"] == 3
+        and unpack["value"] == {"from_offset": call["offset"]}
+    )
+    assert [store["value"] for store in (replace, store_a, store_b)] == [
+        {"from_offset": unpack["offset"], "result_index": i} for i in range(3)
+    ]
+    assert (
+        replace["op"] == "source_frame_namespace_store"
+        and replace["namespace"] == "frame.locals"
+    )
+    for name, key, store in ((first, a, store_a), (second, b, store_b)):
+        assert name["op"] == "module_name_load" and "source_evidence" not in name
+        assert store["op"] == "source_object_setitem" and store["may_raise"]
+        assert store["base"] == {"from_offset": name["offset"]}
+        assert store["key"] == {"from_offset": key["offset"]}
+    later = after["expression"]["steps"][0]
+    assert later["op"] == "module_name_load" and "source_evidence" not in later
+    assert assign["may_raise"] and assign["external_effect"] == "UNKNOWN"
+    assert (
+        assign["source_expression"]["instructions"][-1]["offset"] == store_b["offset"]
+    )
+
+    for mode in ("success", "short", "long", "iterator_error", "second_store_error"):
+        events = []
+        items = {}
+
+        class Receiver:
+            def __setitem__(self, key, value):
+                events.append(("set", key))
+                if key == 1 and mode == "second_store_error":
+                    raise LookupError("second target")
+                items[key] = value
+
+            def finish(self):
+                events.append("finish")
+
+        receiver = Receiver()
+
+        class Provider:
+            enabled = True
+
+            def produce(self):
+                events.append("call")
+
+                def values():
+                    for i, value in enumerate((receiver, left, right, None)):
+                        if i == 2 and mode == "iterator_error":
+                            raise LookupError("iterator")
+                        if i == 2 and mode == "short" or i == 3 and mode != "long":
+                            return
+                        events.append(i)
+                        yield value
+
+                return values()
+
+        left, right = object(), object()
+        provider = Provider()
+        scope = {"__builtins__": {"__import__": lambda *args: provider}}
+        if mode == "success":
+            exec(source, scope)
+        else:
+            with pytest.raises(
+                ValueError if mode in {"short", "long"} else LookupError
+            ):
+                exec(source, scope)
+        assert events.count("call") == 1
+        if mode in {"success", "second_store_error"}:
+            assert scope["obj"] is receiver and items[0] is left
+            assert events[:6] == ["call", 0, 1, 2, ("set", 0), ("set", 1)]
+            assert (items.get(1) is right) == (mode == "success")
+            assert ("finish" in events) == (mode == "success")
+        else:
+            assert scope["obj"] is provider and not items
+            assert not any(isinstance(event, tuple) for event in events)
+
+
 def test_open_module_subscript_rhs_reloads_the_imported_binding(tmp_path):
     from scar.contract import read_member
     from scar.frontend import build
@@ -11796,6 +11905,40 @@ def test_frame_exits_and_folded_operands_follow_their_own_graph_ports(tmp_path):
     receipt["rhs_sha256"] = "0" * 64
     with pytest.raises(ValueError, match="folded constant"):
         _definition(changed)
+
+
+def test_unpack_binding_preserves_captured_arity_and_store_order(tmp_path):
+    from scar.contract import read_member
+    from scar.frontend import build
+    from scar.middle.binding import _definition
+
+    source = tmp_path / "entry.py"
+    source.write_text("first[0], saved, second[1] = producer()\n")
+    folder = tmp_path / "graph"
+    build(source, folder)
+    graph = json.loads((folder / "graph.json").read_bytes())
+    unit = next(u for u in graph["units"] if u["path"] == source.name)
+    function = next(
+        f
+        for f in read_member(folder, unit["graph"])["functions"]
+        if f["signature"]["name"] == "__main__"
+    )
+    source.unlink()
+    _definition(function)
+    broken = deepcopy(function)
+    assignment = next(n for n in broken["nodes"] if n["op"] == "assign")
+    unpack = next(
+        r
+        for r in assignment["source_expression"]["instructions"]
+        if r["opcode"] == "UNPACK_SEQUENCE"
+    )
+    unpack["oparg"] -= 1
+    with pytest.raises(ValueError, match="source unpack arity or store order"):
+        _definition(broken)
+    unpack["oparg"] += 1
+    broken["nodes"][assignment["target"]["port"]]["items"].reverse()
+    with pytest.raises(ValueError, match="source unpack arity or store order"):
+        _definition(broken)
 
 
 def test_binding_reads_direct_unique_unit_once_and_resolves_late_and_conflicting_symbols(
