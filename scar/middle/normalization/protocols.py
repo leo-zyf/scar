@@ -3681,6 +3681,7 @@ class _Frame:
 def _loader_handoff(trial, candidate, function, issue):
     """Record source dependencies at their producing operation, without calling them."""
     symbol = candidate["symbol"]
+    scope = trial.functions[symbol]["python_scope"]
     nested, functions = [], []
     unresolved = [dict(kind="match_actual_frame_or_resume_source")]
     operations = list(
@@ -3761,7 +3762,8 @@ def _loader_handoff(trial, candidate, function, issue):
         status="INCOMPLETE",
         entry=dict(
             selection=candidate["loader_ports"]["body"]["selection"],
-            code=trial.functions[symbol]["python_scope"]["source_code"],
+            code=scope["source_code"],
+            **({"frame_exit": scope["frame_exit"]} if "frame_exit" in scope else {}),
             inputs=[
                 "active_frame",
                 "actual_frame_locals",
@@ -4006,9 +4008,20 @@ def _dispatch_product(entry, project, loaders, callees, required_sites, issue):
         functions.append(
             dict(symbol=entry, body=dict(symbol=entry, completion="prefix", body=[]))
         )
+    scope = project.functions[entry].get("python_scope", {})
     return dict(
         semantics_version=1,
         entry=entry,
+        **(
+            {
+                "entry_frame": {
+                    "code": scope["source_code"],
+                    "frame_exit": scope["frame_exit"],
+                }
+            }
+            if "frame_exit" in scope
+            else {}
+        ),
         completion="source_prefix" if issue else "modeled_source_entry",
         functions=functions,
         loaders=[
@@ -4155,7 +4168,9 @@ def normalize_protocols(module):
             project.loader_activations,
             issue,
         )
-    elif issue is None:
+    else:
+        # A later specialization failure does not erase an earlier import.
+        # The source path keeps its own completion status and first missing edge.
         dispatch = _source_dispatch(module, project)
         if dispatch is not None:
             module["source_dispatch"] = dispatch

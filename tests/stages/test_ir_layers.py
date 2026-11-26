@@ -10325,3 +10325,78 @@ def test_conditional_frame_joins_branches_and_retains_one_iterator_body(tmp_path
     assert any(op.get("slot") == loop["target"]["slot"] for op in visit["steps"])
     assert exit_["steps"][-1]["op"] == "frame_return"
     assert not ir["functions"]
+
+
+def test_frame_exits_and_folded_operands_follow_their_own_graph_ports(tmp_path):
+    import dis
+    import math
+    from copy import deepcopy
+
+    from scar.contract import read_member
+    from scar.frontend import build
+    from scar.middle import plan
+    from scar.middle.binding import _definition
+
+    source = tmp_path / "lib.py"
+    source.write_text(
+        "def visit(values):\n"
+        "    for item in values:\n"
+        "        if item == 0:\n            print(-0.0)\n"
+        "        elif item == 1:\n            print(+(2 * 3))\n"
+        "    return 0\n"
+    )
+    expected = list(
+        dis.get_instructions(compile(source.read_bytes(), str(source), "exec"))
+    )[-1]
+    entry = tmp_path / "entry.py"
+    entry.write_text("import lib\nlib.visit(range(3))\n")
+    graph, out = tmp_path / "graph", tmp_path / "plan"
+    build(entry, graph)
+    index = json.loads((graph / "graph.json").read_bytes())
+    unit = next(u for u in index["units"] if u["path"] == source.name)
+    functions = read_member(graph, unit["graph"])["functions"]
+    graph_fn = next(f for f in functions if f["signature"]["name"] == "py:lib:visit")
+    source.unlink()
+    entry.unlink()
+    plan(graph, out)
+    ir = json.loads((out / "exec-ir.json").read_bytes())
+    dispatch = read_member(out, ir["module"]["source_dispatch"])
+    loader = dispatch["loaders"][0]["entry"]
+    assert loader["frame_exit"]["code_sha256"] == loader["code"]["code_sha256"]
+    [*_, ret] = loader["frame_exit"]["instructions"]
+    assert (ret["offset"], ret["opcode"]) == (expected.offset, expected.opname)
+    assert (
+        dispatch["entry_frame"]["code"]["code_sha256"] != loader["code"]["code_sha256"]
+    )
+    [callee] = dispatch["callees"]
+    assert callee["completion"] == "conditional_source_body"
+    body = read_member(out, callee["function"])
+    loop = body["body"][0]
+    outer = loop["body"][0]
+    inner = outer["else"][0]
+    assert inner["branch"]["taken_arm"] == "then"
+    assert (
+        inner["branch"]["fallthrough"]["target"]
+        == loop["edges"]["backedges"][0]["target"]
+    )
+    zero = [c["value"] for c in body["constants"].values() if c["kind"] == "float"]
+    assert len(zero) == 1 and math.copysign(1, zero[0]) == -1
+    changed = deepcopy(graph_fn)
+    condition = next(
+        n
+        for n in changed["nodes"]
+        if n.get("source_expression", {}).get("branch", {}).get("taken") == "then"
+    )
+    condition["source_expression"]["branch"]["else"]["target"] += 2
+    with pytest.raises(ValueError, match="source condition"):
+        _definition(changed)
+    changed = deepcopy(graph_fn)
+    receipt = next(
+        ins
+        for n in changed["nodes"]
+        for ins in n.get("source_expression", {}).get("instructions", ())
+        if "folded_value" in ins
+    )
+    receipt["rhs_sha256"] = "0" * 64
+    with pytest.raises(ValueError, match="folded constant"):
+        _definition(changed)

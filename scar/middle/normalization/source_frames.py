@@ -2,7 +2,12 @@
 
 import re
 
-from scar.contract import digest, json_bytes, python_literal_sequence_sha256
+from scar.contract import (
+    digest,
+    json_bytes,
+    python_constant_rhs_sha256,
+    python_literal_sequence_sha256,
+)
 from scar.source_contracts import python_binary_operator
 from . import objects
 from .values import source_site
@@ -256,6 +261,13 @@ class SourceExpressionRegion:
         )
 
     def check_literal(self, node, ins):
+        if "folded_value" in ins:
+            if not (
+                ins.get("rhs_sha256")
+                and python_constant_rhs_sha256(node) == ins["rhs_sha256"]
+            ):
+                raise ValueError("folded operand disagrees with its source expression")
+            node = {"type": {"class": ins["type"]}, "value": ins["folded_value"]}
         typ = node.get("type")
         kind = typ.get("class") if isinstance(typ, dict) else None
         if (
@@ -520,6 +532,15 @@ class SourceExpressionRegion:
         if not isinstance(node, dict):
             raise ValueError("missing source expression operand")
         op = node.get("op")
+        if (
+            op in {"unary", "binary"}
+            and self.index < len(self.instructions)
+            and "folded_value" in self.instructions[self.index]
+            and matches_position(
+                self.instructions[self.index], node, self.code["source_key"]
+            )
+        ):
+            return self.constant(node), None
         if (
             op in {"aggregate", "slice"}
             and self.instructions[self.index].get("constant_key")
@@ -877,12 +898,17 @@ class SourceExpressionRegion:
             if self.minor >= 13 and not already_bool
             else None
         )
+        taken = ports.get("taken", "else")
+        fall = ports.get("fallthrough", "then")
+        if {taken, fall} != {"then", "else"}:
+            raise ValueError("source branch requires two distinct control successors")
         jump = self.take(
-            "POP_JUMP_IF_TRUE" if negated else "POP_JUMP_IF_FALSE", source=operand
+            "POP_JUMP_IF_TRUE" if (taken == "then") != negated else "POP_JUMP_IF_FALSE",
+            source=operand,
         )
         self.finish()
-        if jump["target"] != ports["else"]["offset"]:
-            raise ValueError("conditional jump does not enter the sealed alternative")
+        if jump["target"] != ports[taken]["offset"]:
+            raise ValueError("conditional jump does not enter its sealed successor")
         truth = (
             value
             if already_bool
@@ -904,14 +930,14 @@ class SourceExpressionRegion:
             op="source_object_region",
             type="bool",
             steps=self.steps,
-            # The surrounding structured if consumes this exact boolean. The
-            # source conditional jumps to the alternative when it does not match.
+            # Source truth and physical jump direction are independent.
             result=dict(value=truth, equals=not negated),
             branch=dict(
                 instruction=jump,
                 input=truth,
-                taken=ports["else"],
-                fallthrough=ports["then"],
+                taken=ports[taken],
+                fallthrough=ports[fall],
+                taken_arm=taken,
                 fallthrough_marker=ports["fallthrough_marker"],
             ),
             ownership="source_truth_consumes_owned_result_and_only_exact_boolean_reaches_the_two_edges",

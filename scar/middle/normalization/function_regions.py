@@ -88,8 +88,13 @@ def _suite(nodes, scope, constants, output):
             if yes and node.get("else") and not receipt["branch"].get("join"):
                 raise _FrameGap(node, "branch_join_after_true_suite")
             if "join" in receipt["branch"]:
-                for key in ("then_exit", "else_exit", "join"):
-                    record["branch"][key] = receipt["branch"][key]
+                record["branch"].update(
+                    {
+                        k: v
+                        for k, v in receipt["branch"].items()
+                        if k in ("then_exit", "else_exit", "exits", "join")
+                    }
+                )
             if not (yes or no):
                 return False
         if op == "for":
@@ -163,12 +168,7 @@ def conditional_function_body(definition, descriptor):
         falls = _suite(definition["body"], scope, constants, regions)
     except _FrameGap as error:
         return stop(error.node, str(error))
-    if (
-        not falls
-        and regions
-        and regions[-1]["steps"]
-        and regions[-1]["steps"][-1]["op"] == "frame_return"
-    ):
+    if not falls:
         result["completion"] = "conditional_source_body"
         return result
     return stop(definition, "source_return_and_frame_exit")

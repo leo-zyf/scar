@@ -159,7 +159,162 @@ def _source_return(other, operand_pos):
     )
 
 
-def _bind_condition_edges(node, proof, code, successor):
+def _folded_value_type(value):
+    if isinstance(value, dict):
+        if set(value) == {"float_hex"} and value["float_hex"] in ("inf", "-inf", "nan"):
+            return "float"
+        if set(value) == {"integer_hex"} and isinstance(value["integer_hex"], str):
+            token = value["integer_hex"]
+            try:
+                return "int" if hex(int(token, 16)) == token else None
+            except ValueError:
+                pass
+        return None
+    return type(value).__name__
+
+
+def bind_module_exit(scope):
+    """Validate the captured terminal region independently of paths reaching it."""
+    exit_ = scope["frame_exit"]
+    code = scope.get("source_code", {})
+    rows = exit_.get("instructions") if isinstance(exit_, dict) else None
+    if not (
+        scope.get("kind") == code.get("kind") == "module"
+        and code.get("code_sha256")
+        and isinstance(rows, list)
+        and code["code_sha256"] == exit_.get("code_sha256")
+        and all(
+            isinstance(row, dict)
+            and type(row.get("offset")) is int
+            and row["offset"] >= 0
+            and row["offset"] % 2 == 0
+            for row in rows
+        )
+        and [r.get("opcode") for r in rows]
+        in (["RETURN_CONST"], ["LOAD_CONST", "RETURN_VALUE"])
+        and (len(rows) == 1 or rows[0]["offset"] + 2 == rows[1]["offset"])
+        and rows[0].get("type") == "NoneType"
+        and rows[0].get("value_sha256") == digest(json_bytes(None))
+        and type(rows[0].get("index")) is int
+        and type(rows[0].get("oparg")) is int
+        and 0 <= rows[0]["index"] == rows[0]["oparg"] <= 255
+    ):
+        raise ValueError("source module exit disagrees with its code or None return")
+
+
+def _is_loop_backedge(edge, loop, code):
+    if loop is None or edge.get("kind") != "loop_backedge":
+        return False
+    ports = loop.get("source_expression", {}).get("iteration", {})
+    backs = ports.get("backedges", [ports.get("backedge")])
+    prefixes = edge.get("prefixes", [])
+    if not isinstance(prefixes, list) or not all(isinstance(p, dict) for p in prefixes):
+        return False
+    for back in backs:
+        if not isinstance(back, dict) or edge.get("backedge_offset") != back.get(
+            "offset"
+        ):
+            continue
+        first = (prefixes or [back])[0]
+        return (
+            edge.get("statement_position") == _graph_position(loop, code)
+            and edge.get("target") == back.get("target")
+            and all(
+                edge.get(k) == first.get(k) for k in ("offset", "opcode", "position")
+            )
+            and all(
+                p.get("opcode") == "EXTENDED_ARG"
+                and p.get("offset") == back["offset"] - 2 * (len(prefixes) - i)
+                and p.get("oparg") == back["oparg"] >> (8 * (len(prefixes) - i))
+                and p.get("position") == back.get("position")
+                for i, p in enumerate(prefixes)
+            )
+        )
+    return False
+
+
+def _bind_suite_exits(branch, node, successor, loop, code):
+    """Bind both arms to one following statement or the enclosing iterator header."""
+    join = branch.get("join", {})
+    exits = branch["exits"]
+    if not (
+        isinstance(exits, dict)
+        and set(exits) == {"then", "else"}
+        and node.get("else")
+        and "then_exit" not in branch
+        and "else_exit" not in branch
+    ):
+        raise ValueError("source branch has incompatible exit tables")
+    iterator = (loop or {}).get("source_expression", {}).get("iteration", {})
+    backward = join.get("kind") == "loop_header"
+    if backward:
+        header = (iterator.get("next_prefix") or [iterator.get("next")])[0]
+        if (
+            successor is not None
+            or not header
+            or join.get("statement_position") != _graph_position(loop, code)
+            or any(join.get(k) != header[k] for k in ("opcode", "offset", "position"))
+        ):
+            raise ValueError("source branch does not join its enclosing iterator")
+    elif not successor or not _edge_enters(join, successor, "continuation", code):
+        raise ValueError("source branch does not join its graph successor")
+    seen = set()
+    for side in ("then", "else"):
+        sites = [_graph_position(statement, code) for statement in node[side]]
+        rows = exits[side]
+        if not isinstance(rows, list) or not rows:
+            raise ValueError("source branch arm has no normal exit")
+        for row in rows:
+            if not (
+                isinstance(row, dict)
+                and type(row.get("offset")) is int
+                and row["offset"] >= branch[side]["offset"]
+                and row["offset"] not in seen
+                and any(_inside_source(span, row.get("position")) for span in sites)
+            ):
+                raise ValueError("source branch exit lies outside its arm")
+            seen.add(row["offset"])
+            if backward:
+                backs = iterator.get("backedges", [iterator.get("backedge")])
+                valid = row.get("target") == join["offset"] and any(
+                    back
+                    and all(
+                        row.get(k) == back.get(k)
+                        for k in ("opcode", "offset", "position", "oparg", "target")
+                    )
+                    for back in backs
+                )
+            elif "target" in row:
+                valid = (
+                    row.get("opcode")
+                    in {"JUMP_FORWARD", "POP_JUMP_IF_TRUE", "POP_JUMP_IF_FALSE"}
+                    and row["target"] == join["offset"] > row["offset"]
+                )
+            else:
+                valid = row.get("fallthrough") == join["offset"] > row[
+                    "offset"
+                ] and row.get("opcode") not in {
+                    "JUMP_FORWARD",
+                    "JUMP_BACKWARD",
+                    "RETURN_VALUE",
+                    "RETURN_CONST",
+                    "RAISE_VARARGS",
+                    "RERAISE",
+                }
+            if not valid:
+                raise ValueError("source branch exit disagrees with its join")
+        if backward:
+            expected = {
+                back["offset"]
+                for back in iterator.get("backedges", [iterator.get("backedge")])
+                if back
+                and any(_inside_source(span, back.get("position")) for span in sites)
+            }
+            if {row["offset"] for row in rows} != expected:
+                raise ValueError("source branch arm omits an enclosing loop backedge")
+
+
+def _bind_condition_edges(node, proof, code, successor, loop):
     branch = proof.get("branch")
     condition = node.get("condition", {})
     negated = condition.get("op") == "unary" and condition.get("operator") == "not"
@@ -168,13 +323,18 @@ def _bind_condition_edges(node, proof, code, successor):
     rows = proof["instructions"]
     jump = rows[-1]
     operand_pos = _graph_position(operand, code)
+    taken = branch.get("taken", "else") if isinstance(branch, dict) else None
+    fallthrough = "then" if taken == "else" else "else"
     if not (
         isinstance(branch, dict)
+        and taken in ("then", "else")
+        and branch.get("fallthrough", "then") == fallthrough
         and operand_pos
         and branch.get("condition_position") == _graph_position(condition, code)
         and branch.get("operand_position") == operand_pos
         and branch.get("negated") is negated
-        and jump["opcode"] == ("POP_JUMP_IF_TRUE" if negated else "POP_JUMP_IF_FALSE")
+        and jump["opcode"]
+        == ("POP_JUMP_IF_TRUE" if (taken == "then") != negated else "POP_JUMP_IF_FALSE")
         and jump["position"] == operand_pos
         and type(jump.get("target")) is int
     ):
@@ -190,7 +350,10 @@ def _bind_condition_edges(node, proof, code, successor):
         raise ValueError("source condition has invalid successor instructions")
     marker = branch.get("fallthrough_marker")
     if not (
-        jump["offset"] < then["offset"] < other["offset"] == jump["target"]
+        jump["offset"]
+        < branch[fallthrough]["offset"]
+        < branch[taken]["offset"]
+        == jump["target"]
         and (
             marker is None
             or (
@@ -198,7 +361,7 @@ def _bind_condition_edges(node, proof, code, successor):
                 and marker.get("opcode") == "NOT_TAKEN"
                 and marker.get("position") == operand_pos
                 and type(marker.get("offset")) is int
-                and jump["offset"] < marker["offset"] < then["offset"]
+                and jump["offset"] < marker["offset"] < branch[fallthrough]["offset"]
             )
         )
         and node.get("then")
@@ -218,9 +381,15 @@ def _bind_condition_edges(node, proof, code, successor):
             raise ValueError(
                 "source condition disagrees with its alternative or continuation"
             )
-    elif not _source_return(other, operand_pos):
-        raise ValueError("source condition lacks the module's implicit return")
-    if any(key in branch for key in ("join", "then_exit", "else_exit")):
+    elif not (
+        _is_loop_backedge(other, loop, code)
+        if loop is not None
+        else _source_return(other, operand_pos)
+    ):
+        raise ValueError("source condition lacks its enclosing continuation")
+    if "exits" in branch:
+        _bind_suite_exits(branch, node, successor, loop, code)
+    elif any(key in branch for key in ("join", "then_exit", "else_exit")):
         destination = branch.get("join", {})
         yes, no = branch.get("then_exit", {}), branch.get("else_exit", {})
         if not (
@@ -246,7 +415,7 @@ def _bind_condition_edges(node, proof, code, successor):
             )
 
 
-def _bind_iteration_edges(node, proof, scope, successor):
+def _bind_iteration_edges(node, proof, scope, successor, enclosing_loop):
     code = scope["source_code"]
     loop = proof.get("iteration")
     body = node.get("body")
@@ -378,8 +547,12 @@ def _bind_iteration_edges(node, proof, scope, successor):
             raise ValueError(
                 "source iteration disagrees with its exhaustion continuation"
             )
-    elif not _source_return(exit_edge, pos):
-        raise ValueError("source iteration lacks the implicit module return")
+    elif not (
+        _is_loop_backedge(exit_edge, enclosing_loop, code)
+        if enclosing_loop is not None
+        else _source_return(exit_edge, pos)
+    ):
+        raise ValueError("source iteration lacks its enclosing continuation")
 
 
 def _fast_operand(row, node, code):
@@ -392,7 +565,7 @@ def _fast_operand(row, node, code):
     )
 
 
-def bind_source_expression(node, scope, successor=None):
+def bind_source_expression(node, scope, successor=None, loop=None):
     """Bind positioned instruction evidence; M2 verifies semantic evaluation order."""
     proof, code = node["source_expression"], scope.get("source_code") or {}
     loc = node["location"]
@@ -447,6 +620,7 @@ def bind_source_expression(node, scope, successor=None):
     previous = -1
     sequences = None
     binary_ports = fast_reads = None
+    folded_ports = None
     for instruction in proof["instructions"]:
         if not isinstance(instruction, dict):
             raise ValueError("invalid source instruction in call region")
@@ -469,6 +643,33 @@ def bind_source_expression(node, scope, successor=None):
         ):
             raise ValueError("invalid source instruction position or operand")
         previous = offset
+        if "folded_value" in instruction or "rhs_sha256" in instruction:
+            if folded_ports is None:
+                folded_ports = {}
+                for operand in walk_operations(
+                    node, exclude_fields={"source_expression"}
+                ):
+                    if operand["op"] not in {"binary", "unary"}:
+                        continue
+                    pos = _graph_position(operand, code)
+                    if pos is not None:
+                        key = tuple(pos)
+                        folded_ports[key] = None if key in folded_ports else operand
+            expression = folded_ports.get(tuple(span))
+            if not (
+                expression
+                and opcode in {"LOAD_CONST", "LOAD_SMALL_INT", "RETURN_CONST"}
+                and "folded_value" in instruction
+                and instruction.get("type")
+                == _folded_value_type(instruction["folded_value"])
+                and instruction.get("rhs_sha256")
+                and instruction["rhs_sha256"] == python_constant_rhs_sha256(expression)
+                and instruction.get("value_sha256")
+                == digest(json_bytes(instruction["folded_value"]))
+            ):
+                raise ValueError(
+                    "compiler-folded constant disagrees with its graph operands"
+                )
         aggregate_opcode = opcode in {
             "BUILD_LIST",
             "BUILD_TUPLE",
@@ -664,9 +865,14 @@ def bind_source_expression(node, scope, successor=None):
                 and len(proof["instructions"]) > 1
                 or last["opcode"] == "RETURN_CONST"
                 and len(proof["instructions"]) == 1
-                and value.get("op") == "literal"
-                and value.get("type", {}).get("class") == last.get("type")
-                and digest(json_bytes(value.get("value"))) == last.get("value_sha256")
+                and (
+                    "folded_value" in last
+                    and last["rhs_sha256"] == python_constant_rhs_sha256(value)
+                    or value.get("op") == "literal"
+                    and value.get("type", {}).get("class") == last.get("type")
+                    and digest(json_bytes(value.get("value")))
+                    == last.get("value_sha256")
+                )
             )
         ):
             raise ValueError("source return disagrees with its function operand")
@@ -700,9 +906,9 @@ def bind_source_expression(node, scope, successor=None):
         ):
             raise ValueError("source deletion disagrees with its ordered targets")
     elif operation == "for":
-        _bind_iteration_edges(node, proof, scope, successor)
+        _bind_iteration_edges(node, proof, scope, successor, loop)
     elif operation == "if":
-        _bind_condition_edges(node, proof, code, successor)
+        _bind_condition_edges(node, proof, code, successor, loop)
     elif operation != "literal" and last["opcode"] != "POP_TOP":
         raise ValueError("source call region has no final result discard")
 

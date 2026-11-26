@@ -6,6 +6,7 @@ from .source_binding import (
     bind_constant_store,
     bind_exception_arms,
     bind_import_store,
+    bind_module_exit,
     bind_named_fromlist,
     bind_source_expression,
     bind_source_definition,
@@ -124,13 +125,21 @@ _SITE_OPERATIONS = {
 
 def _definition(graph, declarations=None):
     nodes = graph["nodes"]
+    scope = graph["signature"].get("python_scope", {})
+    if "frame_exit" in scope:
+        bind_module_exit(scope)
     active = set()
 
-    def read(value, successor=None, *, in_sequence=False):
+    def read(value, successor=None, loop=None, *, in_sequence=False):
         if isinstance(value, list):
             # Control-flow receipts can name the next statement in this suite.
             items = [
-                read(v, value[i + 1] if i + 1 < len(value) else None, in_sequence=True)
+                read(
+                    v,
+                    value[i + 1] if i + 1 < len(value) else successor,
+                    loop,
+                    in_sequence=True,
+                )
                 for i, v in enumerate(value)
             ]
             for i, item in enumerate(items):
@@ -150,7 +159,7 @@ def _definition(graph, declarations=None):
             if type(port) is not int or not 0 <= port < len(nodes) or port in active:
                 raise ValueError(f"invalid operand port {port} in {graph['id']}")
             active.add(port)
-            result = read(nodes[port])
+            result = read(nodes[port], successor, loop)
             if "source_fromlist" in result and (
                 not in_sequence or result["op"] != "python_import"
             ):
@@ -191,13 +200,25 @@ def _definition(graph, declarations=None):
                         )
                     following = nodes[next_port]
                 bind_source_expression(
-                    result, graph["signature"].get("python_scope", {}), following
+                    result, graph["signature"].get("python_scope", {}), following, loop
                 )
             if result["op"] == "try":
                 bind_exception_arms(result, graph["signature"].get("python_scope", {}))
             if result["op"] in _SITE_OPERATIONS or "source_name_load" in result:
                 result["site"] = f"{graph['id']}/{port}"
             active.remove(port)
+            return result
+        # Leaving a branch suite resumes its parent's successor. Leaving a
+        # loop body advances that particular iterator, including nested loops.
+        if scope and value.get("op") in ("if", "for"):
+            result = {}
+            for key, field in value.items():
+                if key in ("then", "else"):
+                    result[key] = read(field, successor, loop)
+                elif key == "body" and value["op"] == "for":
+                    result[key] = read(field, None, value)
+                else:
+                    result[key] = read(field)
             return result
         return {key: read(field) for key, field in value.items()}
 
