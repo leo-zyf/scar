@@ -87,6 +87,7 @@ class ParsedUnit:
     import_stores: dict = field(default_factory=dict)
     statement_expressions: dict = field(default_factory=dict)
     definition_sites: dict = field(default_factory=dict)
+    class_sites: dict = field(default_factory=dict)
     function_expression_sites: dict = field(default_factory=dict)
     exception_handlers: dict = field(default_factory=dict)
 
@@ -1978,6 +1979,111 @@ def _module_frame_exit(instructions, code_sha256):
     return dict(code_sha256=code_sha256, instructions=rows)
 
 
+def _class_sites(program, instructions, classes, handlers, loads):
+    """Find the original builder, class code and publication for direct class sites."""
+    sites, seen, repeated = {}, set(), set()
+    before_make = (
+        ("PUSH_NULL", "LOAD_BUILD_CLASS", "LOAD_CONST")
+        if sys.version_info[:2] == (3, 12)
+        else ("LOAD_BUILD_CLASS", "PUSH_NULL", "LOAD_CONST")
+    )
+    if sys.version_info[:2] not in ((3, 12), (3, 13), (3, 14)):
+        return {}
+    for index, make in enumerate(instructions):
+        node = classes.get(make.positions)
+        if node is None or make.opname != "MAKE_FUNCTION" or index < 3:
+            continue
+        if make.positions in seen:
+            repeated.add(make.positions)
+        seen.add(make.positions)
+        end = index + 3 + len(node.bases)
+        if end + 1 >= len(instructions):
+            continue
+        start = index - 3
+        window = instructions[start : end + 1]
+        if (
+            tuple(ins.opname for ins in window[:3]) != before_make
+            or make.arg != (0 if sys.version_info[:2] == (3, 12) else None)
+            or start
+            and instructions[start - 1].opname == "EXTENDED_ARG"
+            or any(ins.is_jump_target or ins.offset in handlers for ins in window[1:])
+        ):
+            continue
+        null, builder, code, _, name = window[:5]
+        call, store = window[-2:]
+        tail = instructions[end + 1]
+        child = code.argval
+        if not (
+            type(child) is CodeType
+            and child is program.co_consts[code.arg]
+            and child.co_name == child.co_qualname == node.name
+            and child.co_firstlineno == node.lineno
+            and not child.co_freevars
+            and not child.co_cellvars
+            and name.opname == "LOAD_CONST"
+            and name.argval == node.name
+            and call.opname == "CALL"
+            and call.arg == 2 + len(node.bases)
+            and store.opname in {"STORE_NAME", "STORE_GLOBAL"}
+            and store.argval == node.name
+            and all(
+                ins.positions == make.positions
+                for ins in (null, builder, code, name, call, store)
+            )
+        ):
+            continue
+        if any(
+            operand.opname not in {"LOAD_NAME", "LOAD_GLOBAL"}
+            or operand.argval != base.id
+            or operand.opname == "LOAD_GLOBAL"
+            and operand.arg & 1
+            or loads.get(tuple_position(base), {}).get("offset") != operand.offset
+            for base, operand in zip(node.bases, window[5:-2])
+        ):
+            continue
+        edges = [
+            dict(
+                offset=b.offset,
+                opcode=b.opname,
+                cache_offsets=list(range(a.offset + 2, b.offset, 2)),
+            )
+            for a, b in pairwise([*window, tail])
+        ]
+        if any(
+            program.co_code[pc : pc + 2] != bytes((dis.opmap["CACHE"], 0))
+            for edge in edges
+            for pc in edge["cache_offsets"]
+        ):
+            continue
+        rows = []
+        for ins in window:
+            if ins is code:
+                rows.append(
+                    dict(
+                        opcode=ins.opname,
+                        offset=ins.offset,
+                        position=list(ins.positions),
+                        oparg=ins.arg,
+                        index=ins.arg,
+                    )
+                )
+            else:
+                rows.append(_positioned_instruction(ins))
+        sites[make.positions] = dict(
+            semantics_version=1,
+            position=list(make.positions),
+            instructions=rows,
+            successors=edges,
+            child=dict(
+                name=child.co_name,
+                qualname=child.co_qualname,
+                first_line=child.co_firstlineno,
+                code_sha256=code_digest(child),
+            ),
+        )
+    return {span: site for span, site in sites.items() if span not in repeated}
+
+
 def _compiler_sites(tree, path, relative, source_hash):
     """Capture positioned construction and binding facts from one compilation."""
     if sys.implementation.name != "cpython" or not hasattr(CodeType, "co_positions"):
@@ -2016,7 +2122,7 @@ def _compiler_sites(tree, path, relative, source_hash):
         ):
             nodes[tuple_position(node)] = node
     assignments, names, imports, expressions, tries = [], {}, {}, {}, []
-    definitions = {}
+    definitions, classes = {}, {}
     for node in scope_nodes(tree.body):
         if (
             isinstance(node, ast.Assign)
@@ -2041,6 +2147,14 @@ def _compiler_sites(tree, path, relative, source_hash):
             )
         ):
             definitions[tuple_position(node)] = node
+        elif (
+            isinstance(node, ast.ClassDef)
+            and not node.decorator_list
+            and not node.keywords
+            and not getattr(node, "type_params", ())
+            and all(isinstance(base, ast.Name) for base in node.bases)
+        ):
+            classes[tuple_position(node)] = node
         elif isinstance(node, ast.Delete) and all(
             isinstance(t, ast.Name) for t in node.targets
         ):
@@ -2081,6 +2195,7 @@ def _compiler_sites(tree, path, relative, source_hash):
         or expressions
         or tries
         or definitions
+        or classes
         or docstring is not None
         else ()
     )
@@ -2090,6 +2205,9 @@ def _compiler_sites(tree, path, relative, source_hash):
         _definition_sites(program, instructions, definitions, handlers, loads)
         if definitions
         else {}
+    )
+    class_sites = (
+        _class_sites(program, instructions, classes, handlers, loads) if classes else {}
     )
     stores, document = (
         _constant_store_sites(program, instructions, assignments, handlers, docstring)
@@ -2190,6 +2308,7 @@ def _compiler_sites(tree, path, relative, source_hash):
         import_stores=import_stores,
         statement_expressions=statement_expressions,
         definition_sites={span: proof for span, (proof, _) in definition_sites.items()},
+        class_sites=class_sites,
         function_expression_sites={
             span: _function_expression_sites(
                 child, definitions[span], following, inherited

@@ -8,6 +8,7 @@ from .source_binding import (
     bind_import_store,
     bind_module_exit,
     bind_named_fromlist,
+    bind_source_class,
     bind_source_expression,
     bind_source_definition,
     loader_ports,
@@ -182,6 +183,12 @@ def _definition(graph, declarations=None):
                     result["loader_ports"] = dispatch
             if "source_definition" in result:
                 bind_source_definition(
+                    result,
+                    graph["signature"].get("python_scope", {}),
+                    declarations or {},
+                )
+            if "source_class" in result:
+                bind_source_class(
                     result,
                     graph["signature"].get("python_scope", {}),
                     declarations or {},
@@ -860,7 +867,7 @@ def bind(graph, folder):
                     and (
                         code["kind"] == "module"
                         and name == scope.get("initializer")
-                        or code["kind"] == "function"
+                        or code["kind"] in {"class", "function"}
                         and code.get("code_sha256")
                         == scope.get("definition_code", {}).get("code_sha256")
                     )

@@ -438,6 +438,7 @@ class _ModuleGraph:
         self.import_stores = parsed.import_stores
         self.statement_expressions = parsed.statement_expressions
         self.definition_sites = parsed.definition_sites
+        self.class_sites = parsed.class_sites
         self.function_expression_sites = parsed.function_expression_sites
         self.exception_handlers = parsed.exception_handlers
         self.source_lines = parsed.source_text.splitlines()
@@ -1910,7 +1911,22 @@ class _Scope:
                     class_scope=True,
                     definition_path=link,
                 )
+                receipt = (
+                    self.unit.class_sites.get(tuple_position(node))
+                    if self.module_scope
+                    else None
+                )
+                if receipt:
+                    child = receipt["child"]
+                    nested.code = dict(
+                        self.code, kind="class", code_sha256=child["code_sha256"]
+                    )
+                    creation["source_class"] = dict(
+                        receipt, code_sha256=self.code["code_sha256"]
+                    )
                 body = nested.definition(node, node.body, [], {})
+                if receipt:
+                    body["python_scope"]["definition_code"] = child
                 body.update(scope_kind="class", owner_class=symbol)
                 self.unit.functions.append(body)
                 self.calls.add(body_symbol)

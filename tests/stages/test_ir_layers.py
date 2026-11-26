@@ -294,6 +294,54 @@ def test_function_construction_uses_the_declared_child_code(tmp_path):
         bind(index, folder)
 
 
+def test_class_builder_binds_actual_base_child_and_publish_without_source(tmp_path):
+    import dis
+    from types import CodeType
+
+    from scar.contract import read_member
+    from scar.frontend import build
+    from scar.middle.binding import bind
+
+    source = tmp_path / "entry.py"
+    text = 'class Issue(Exception):\n    "doc"\n    pass\n'
+    source.write_text(text)
+    program = compile(text, str(source), "exec")
+    graph = tmp_path / "graph"
+    build(source, graph)
+    index = json.loads((graph / "graph.json").read_bytes())
+    unit = index["units"][0]
+    payload = read_member(graph, unit["graph"])
+    owner = next(
+        f for f in payload["functions"] if f["signature"]["name"] == "__main__"
+    )
+    [site] = [n for n in owner["nodes"] if n.get("op") == "python_define_class"]
+    receipt = site["source_class"]
+    rows = receipt["instructions"]
+    actual = list(dis.get_instructions(program))
+    start = next(i for i, ins in enumerate(actual) if ins.offset == rows[0]["offset"])
+    assert [(r["opcode"], r["offset"]) for r in rows] == [
+        (ins.opname, ins.offset) for ins in actual[start : start + len(rows)]
+    ]
+    assert type(program.co_consts[rows[2]["index"]]) is CodeType
+    assert rows[5]["name"] == "Exception" and rows[-1]["name"] == "Issue"
+    assert receipt["successors"][-1]["offset"] == actual[start + len(rows)].offset
+    source.unlink()
+    assert not bind(index, graph)[1]
+
+    for port, key, wrong in (
+        (rows[5], "name", "other"),
+        (rows[-2], "oparg", 2),
+        (receipt["successors"][-2], "cache_offsets", []),
+        (receipt["child"], "code_sha256", "0" * 64),
+    ):
+        original = port[key]
+        port[key] = wrong
+        unit["graph"] = member(graph, "units", payload)
+        with pytest.raises(ValueError, match="source class"):
+            bind(index, graph)
+        port[key] = original
+
+
 def test_loader_owns_result_separately_from_conditional_source_body(tmp_path):
     from scar.frontend import build
     from scar.middle.binding import bind

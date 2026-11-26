@@ -1169,6 +1169,108 @@ def bind_source_definition(node, scope, declarations):
         )
 
 
+def bind_source_class(node, scope, declarations):
+    """Join the builder's operands and result store to the declared class body."""
+    proof = node["source_class"]
+    parent = scope.get("source_code", {})
+    position = _graph_position(node, parent) if parent else None
+    bases = node.get("bases")
+    body = declarations.get(node.get("body_symbol"), {})
+    child_scope = body.get("python_scope", {})
+    child = proof.get("child", {})
+    name = node.get("source_name")
+    rows = proof.get("instructions")
+    successors = proof.get("successors")
+    if not (
+        node["op"] == "python_define_class"
+        and parent.get("kind") == "module"
+        and proof.get("semantics_version") == 1
+        and proof.get("code_sha256") == parent.get("code_sha256")
+        and position is not None
+        and proof.get("position") == position
+        and not any(node.get(k) for k in ("decorators", "keywords", "type_params"))
+        and child.get("name") == child.get("qualname") == name
+        and child.get("first_line") == position[0]
+        and child_scope.get("kind") == "class"
+        and child_scope.get("initializer") == scope.get("initializer")
+        and child_scope.get("module") == scope.get("module")
+        and body.get("owner_class") == node.get("symbol")
+        and child_scope.get("definition_code") == child
+        and child_scope.get("source_code")
+        == dict(parent, kind="class", code_sha256=child.get("code_sha256"))
+        and isinstance(bases, list)
+        and isinstance(rows, list)
+        and len(rows) == 7 + len(bases)
+        and isinstance(successors, list)
+        and len(successors) == len(rows)
+        and all(isinstance(row, dict) for row in rows)
+        and all(
+            valid_python_source_successor(row.get("offset"), edge)
+            for row, edge in zip(rows, successors)
+        )
+        and all(
+            (edge["offset"], edge["opcode"]) == (row.get("offset"), row.get("opcode"))
+            for edge, row in zip(successors, rows[1:])
+        )
+    ):
+        raise ValueError("source class disagrees with its body, activation or control")
+    compiler = parent.get("compiler", "")
+    legacy = compiler.startswith("cpython 3.12.")
+    setup = (
+        ("PUSH_NULL", "LOAD_BUILD_CLASS")
+        if legacy
+        else ("LOAD_BUILD_CLASS", "PUSH_NULL")
+    )
+    code, make, label = rows[2:5]
+    call, store = rows[-2:]
+    if not (
+        (legacy or compiler.startswith(("cpython 3.13.", "cpython 3.14.")))
+        and tuple(r.get("opcode") for r in rows[:2]) == setup
+        and all(r.get("position") == position for r in [*rows[:5], call, store])
+        and code.get("opcode") == label.get("opcode") == "LOAD_CONST"
+        and not "value" in code
+        and label.get("value") == name
+        and make.get("opcode") == "MAKE_FUNCTION"
+        and (make.get("oparg") == 0 if legacy else "oparg" not in make)
+        and call.get("opcode") == "CALL"
+        and call.get("oparg") == 2 + len(bases)
+        and store.get("opcode") in {"STORE_NAME", "STORE_GLOBAL"}
+        and store.get("name") == name
+        and _namespace_target(store, node.get("target"), scope)
+        and all(
+            type(row.get("index")) is int
+            and row["index"] >= 0
+            and row["index"] == row.get("oparg")
+            for row in (code, label, store)
+        )
+        and code["index"] != label["index"]
+    ):
+        raise ValueError(
+            "source class has invalid construction or publication operands"
+        )
+    for base, row in zip(bases, rows[5:-2]):
+        load = base.get("source_name_load", {})
+        opcode, arg = row.get("opcode"), row.get("oparg")
+        if not (
+            opcode in {"LOAD_NAME", "LOAD_GLOBAL"}
+            and type(arg) is int
+            and arg >= 0
+            and (opcode != "LOAD_GLOBAL" or not arg & 1)
+            and row.get("index") == (arg >> 1 if opcode == "LOAD_GLOBAL" else arg)
+            and row.get("position") == _graph_position(base, parent)
+            and isinstance(row.get("name"), str)
+            and (
+                base["op"] == "var"
+                and base.get("scope") == "global"
+                and base.get("name") == f"py:{scope['module']}:{row['name']}"
+                or base["op"] == "python_builtin"
+                and base.get("name") == row["name"]
+            )
+            and load == dict(row, semantics_version=1, code_sha256=proof["code_sha256"])
+        ):
+            raise ValueError("source class base disagrees with its live name operand")
+
+
 def _bind_import_request(proof, node, scope, *, named):
     request, loc = node["request"], node["location"]
     if not isinstance(proof, dict) or not all(
