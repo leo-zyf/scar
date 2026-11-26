@@ -129,7 +129,45 @@ def regions(candidates, checked):
     return result
 
 
-def _module_body(loader):
+def _constant_store(op, code, offset, slots):
+    from scar.contract import digest, json_bytes
+
+    port = op.get("source_constant_store", {})
+    load, store = port.get("load", {}), port.get("store", {})
+    literal = op.get("constant_value", {})
+    idx = load.get("index")
+    if (
+        op.get("op") != "module_global_store"
+        or port.get("code") != code
+        or "value" not in literal
+        or type(literal["value"]).__name__ != literal.get("kind")
+        or literal["kind"] != load.get("type")
+        or digest(json_bytes(literal["value"])) != load.get("value_sha256")
+        or load.get("opcode") != "LOAD_CONST"
+        or type(idx) is not int
+        or idx < 0
+        or load.get("offset") != offset
+        or store.get("offset") != load["offset"] + 2
+        or store.get("opcode") not in {"STORE_NAME", "STORE_GLOBAL"}
+        or store["opcode"] != op.get("store_opcode")
+        or store.get("name") != op.get("name")
+        or not isinstance(store.get("name"), str)
+        or op.get("namespace")
+        != ("frame.locals" if store["opcode"] == "STORE_NAME" else "frame.globals")
+        or type(store.get("index")) is not int
+        or store["index"] < 0
+    ):
+        return []
+    if str(idx) in slots and json_bytes(slots[str(idx)]) != json_bytes(literal):
+        raise ValueError("conflicting values for a module constant slot")
+    slots[str(idx)] = literal
+    return [
+        ["LOAD_CONST", load["offset"], idx, ""],
+        [store["opcode"], store["offset"], store["index"], store["name"]],
+    ]
+
+
+def _module_body(loader, slots):
     from scar.contract import digest, json_bytes, source_function_publication
 
     entry = loader["entry"]
@@ -137,6 +175,14 @@ def _module_body(loader):
     steps = []
     for stmt in loader["function"]["body"]:
         op = stmt.get("value", {})
+        if stmt["op"] == "expr" and "source_constant_store" in op:
+            stores = _constant_store(
+                op, entry["code"], steps[-1][1] + 2 if steps else 2, slots
+            )
+            if not stores:
+                return steps
+            steps.extend(stores)
+            continue
         published = (
             source_function_publication(op, code) if stmt["op"] == "expr" else None
         )
@@ -182,6 +228,10 @@ def _module_body(loader):
         json_bytes(None)
     ):
         return steps
+    slot = str(tail[0]["index"])
+    if slot in slots and slots[slot]["value"] is not None:
+        raise ValueError("module return slot conflicts with its published constant")
+    slots[slot] = {"kind": "NoneType", "value": None}
     opcodes = [t["opcode"] for t in tail]
     if opcodes == ["RETURN_CONST"]:
         steps.append(["RETURN_CONST", tail[0]["offset"], tail[0]["index"], ""])
@@ -253,11 +303,12 @@ def activation_bodies(dispatch, checked):
     for role in ("loaders", "callees"):
         for row in dispatch[role]:
             symbol = row["symbol"]
+            slots = dict(row["function"].get("constants", {}))
             if role == "loaders":
                 site = checked.get((row["owner"], row["site"]), {})
                 if symbol not in site.get("loaders", ()):
                     continue
-                steps = _module_body(row)
+                steps = _module_body(row, slots)
             else:
                 if symbol not in callees:
                     continue
@@ -265,15 +316,10 @@ def activation_bodies(dispatch, checked):
             if not steps:
                 continue
             code = row["entry"]["code"]
-            slots = row["function"].get("constants", {})
             used = {}
             for op, _, index, _ in steps:
                 if op in {"LOAD_CONST", "RETURN_CONST"}:
-                    literal = (
-                        {"kind": "NoneType", "value": None}
-                        if role == "loaders"
-                        else slots.get(str(index), {})
-                    )
+                    literal = slots.get(str(index), {})
                     kind = literal.get("kind")
                     if type(literal.get("value")).__name__ != kind or kind not in {
                         "NoneType",

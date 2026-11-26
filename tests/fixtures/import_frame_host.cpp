@@ -9,9 +9,9 @@
 using namespace scar::imports;
 struct value {
   std::string text;
-  std::map<std::string, std::shared_ptr<value>> attributes;
+  std::map<std::string, std::shared_ptr<value>> attributes{};
   const body_program *code = nullptr;
-  std::weak_ptr<value> defining_namespace;
+  std::weak_ptr<value> defining_namespace{};
 };
 using handle = std::shared_ptr<value>;
 using slot = std::optional<handle>;
@@ -25,9 +25,9 @@ handle object_value(text label) {
 struct activation {
   const body_program &active;
   body_provider provider;
-  handle module, none, returned;
-  std::vector<slot> values;
-  std::map<unsigned, handle> constants;
+  handle module, none, returned{};
+  std::vector<slot> values{};
+  std::map<unsigned, handle> constants{};
 
   bool enter_body(const body_program &candidate) {
     return &candidate == &active && values.empty() &&

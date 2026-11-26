@@ -74,7 +74,18 @@ def _body_tables(rows, definitions):
         # before the next declaration. A prefix can stop only after its store.
         pos = 0
         if row["kind"] == "module":
-            while pos < len(program) and program[pos][0] == "LOAD_CHILD_CODE":
+            while pos < len(program):
+                if (
+                    program[pos][0] == "LOAD_CONST"
+                    and pos + 1 < len(program)
+                    and program[pos + 1][0] in {"STORE_NAME", "STORE_GLOBAL"}
+                ):
+                    if not program[pos + 1][3]:
+                        raise ValueError("module constant publication lacks a name")
+                    pos += 2
+                    continue
+                if program[pos][0] != "LOAD_CHILD_CODE":
+                    break
                 group = program[pos : pos + 3]
                 if (
                     len(group) != 3
@@ -134,7 +145,12 @@ def _body_tables(rows, definitions):
                 "int",
             }:
                 raise ValueError("invalid activation constant")
-            if row["kind"] == "module" and value is not None:
+            if (
+                row["kind"] == "module"
+                and tail
+                and str(program[pos][2]) == index
+                and value is not None
+            ):
                 raise ValueError("invalid module return constant")
             spelling = (
                 value.hex() if kind == "float" else "" if value is None else str(value)

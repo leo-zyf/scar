@@ -451,6 +451,12 @@ def store_open_module_constant(frame, node, steps):
     ):
         return False
     mapping = "frame.locals" if store["opcode"] == "STORE_NAME" else "frame.globals"
+    literal = value.get("value") if value.get("op") == "literal" else load.get("value")
+    captured = {}
+    if type(literal).__name__ == load.get("type") and digest(
+        json_bytes(literal)
+    ) == load.get("value_sha256"):
+        captured["constant_value"] = dict(kind=load["type"], value=literal)
     namespace_effect(
         frame,
         node,
@@ -463,6 +469,7 @@ def store_open_module_constant(frame, node, steps):
         ),
         writes=[mapping],
         source_constant_store=port,
+        **captured,
         name=store["name"],
         slot=target["name"],
         store_opcode=store["opcode"],

@@ -3365,7 +3365,9 @@ def test_native_import_frame_uses_live_registry_and_dispatches_returned_objects(
     name, member_name = "source_dep", "describe"
     entry, leaf = tmp_path / "entry.py", tmp_path / f"{name}.py"
     entry.write_text(f"import {name}\nprint({name}.{member_name}())\n")
-    leaf.write_text("def describe():\n    return 'value from sealed source'\n")
+    leaf.write_text(
+        "'module documentation'\ndef describe():\n    return 'value from sealed source'\n"
+    )
     graph, execution, delivery = (tmp_path / n for n in ("graph", "ir", "delivery"))
     build(entry, graph)
     assert plan(graph, execution)["status"] == "READY"
@@ -3439,12 +3441,28 @@ def test_native_import_frame_uses_live_registry_and_dispatches_returned_objects(
     bodies = read_member(delivery, schedule["bodies"])
     module, function = sorted(bodies, key=lambda b: b["kind"] != "module")
     assert all(body["resume_offset"] is None for body in bodies)
-    assert module["instructions"][0][0] == "LOAD_CHILD_CODE"
-    assert module["instructions"][0][3] == function["code_sha256"]
-    assert module["instructions"][1][0] == "MAKE_FUNCTION"
-    assert module["instructions"][2] == ["STORE_NAME", 6, 0, member_name]
+    instructions = module["instructions"]
+    assert instructions[0][0] == "LOAD_CONST"
+    assert module["constants"][str(instructions[0][2])] == {
+        "kind": "str",
+        "value": "module documentation",
+    }
+    assert instructions[1][0] == "STORE_NAME" and instructions[1][3] == "__doc__"
+    assert (
+        instructions[2][0] == "LOAD_CHILD_CODE"
+        and instructions[2][3] == function["code_sha256"]
+    )
+    assert instructions[3][0] == "MAKE_FUNCTION"
+    assert instructions[4][0] == "STORE_NAME" and instructions[4][3] == member_name
     assert any(value["kind"] == "NoneType" for value in module["constants"].values())
     assert function["constants"] == constants
+    from scar.backend.planning.import_frames import _module_body
+
+    loader = dict(index["loaders"][0])
+    loader["function"] = read_member(execution, loader["function"])
+    published = loader["function"]["body"][0]["value"]
+    published["constant_value"]["value"] += " altered"
+    assert _module_body(loader, {}) == []
     source_code = read_member(execution, index["functions"][0]["body"])
     code = source_code["body"][0]["value"]["source_code"]["code_sha256"]
     import shutil
@@ -3481,6 +3499,10 @@ def test_native_import_frame_uses_live_registry_and_dispatches_returned_objects(
         [
             "c++",
             "-std=c++20",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-pedantic",
             "-I",
             str(printed / "project"),
             str(source),
