@@ -190,6 +190,8 @@ enum class opcode {
   constant,
   small_int,
   import_name,
+  import_request,
+  import_from,
   store_name,
   store_global,
   push_null,
@@ -210,6 +212,7 @@ struct region {
   unsigned minor;
   std::span<const instruction> instructions;
   body_provider bodies{};
+  bool named_request{};
 };
 
 // The host supplies the actual active frame and live owned operand slots, one
@@ -221,6 +224,15 @@ template <class Frame> outcome run(Frame &frame, const region &program) {
       (program.minor != 12 && program.minor != 14) || !frame.enter(program))
     return outcome::unmatched;
   auto &stack = frame.stack();
+  // A legacy frame can decline the entire named-import region before taking
+  // ownership of operands. The two services use the actual source importer
+  // and IMPORT_FROM lookup (including its circular-import fallback).
+  if constexpr (!requires {
+                  frame.import_request(0u, *stack.back(), *stack.back());
+                  frame.import_from(*stack.back(), 0u);
+                })
+    if (program.named_request)
+      return outcome::unmatched;
   const auto base = stack.size();
   for (auto ins : program.instructions) {
     try {
@@ -250,6 +262,33 @@ template <class Frame> outcome run(Frame &frame, const region &program) {
         frame.replace(2, std::move(value));
         break;
       }
+      case opcode::import_request:
+        if constexpr (requires {
+                        frame.import_request(ins.operand, *stack.back(),
+                                             *stack.back());
+                      }) {
+          if (!program.named_request || slots.size() < 2 ||
+              !slots[slots.size() - 2] || !slots.back())
+            return outcome::continued_in_host;
+          auto returned = frame.import_request(
+              ins.operand, *slots[slots.size() - 2], *slots.back());
+          frame.replace(2, std::move(returned));
+          break;
+        } else {
+          return outcome::unmatched;
+        }
+      case opcode::import_from:
+        if constexpr (requires {
+                        frame.import_from(*stack.back(), ins.operand);
+                      }) {
+          if (!program.named_request || slots.empty() || !slots.back())
+            return outcome::continued_in_host;
+          auto value = frame.import_from(*slots.back(), ins.operand);
+          stack.emplace_back(std::move(value));
+          break;
+        } else {
+          return outcome::unmatched;
+        }
       case opcode::store_name:
       case opcode::store_global:
         if (slots.empty() || !slots.back())

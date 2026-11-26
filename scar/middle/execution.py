@@ -467,6 +467,7 @@ def _seal_source_dispatch(out, dispatch, entry):
     ):
         raise ValueError("invalid source dispatch entry")
     index = dict(dispatch)
+    bodies = {}
     for table, field in (
         ("functions", "body"),
         ("loaders", "function"),
@@ -481,7 +482,10 @@ def _seal_source_dispatch(out, dispatch, entry):
                 or not isinstance(function.get("body"), list)
             ):
                 raise ValueError("source dispatch body disagrees with its symbol")
-            index[table].append({**row, field: member(out, "functions", function)})
+            identity = id(function)
+            if identity not in bodies:
+                bodies[identity] = member(out, "functions", function)
+            index[table].append({**row, field: bodies[identity]})
     return member(out, "analysis", index)
 
 

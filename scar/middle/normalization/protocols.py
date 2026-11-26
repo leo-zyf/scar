@@ -3731,47 +3731,60 @@ class _Frame:
         )
 
 
-def _published_loader_candidate(project, owner, op):
-    """Match a finalized IMPORT_NAME to its visited source occurrence and module code."""
-    row = project.source_imports.rows.get(op["occurrence"], {})
+def _published_loaders(trial, owner, op):
+    """Bind the original import request to its matching candidate frames."""
+    row = trial.source_imports.rows.get(op["occurrence"], {})
     ports = row.get("loader_ports")
+    named = op["op"] == "module_fromlist_publish"
+    proof = (
+        op.get("source_fromlist")
+        if named
+        else op.get("source_import_projection") or op.get("source_import_store")
+    )
     body = op["import_call"].get("body", {})
     candidates = body.get("candidates", ())
-    proof = op.get("source_import_projection") or op.get("source_import_store")
     if not (
         ports
         and proof
-        and len(candidates) == 1
+        and (named or len(candidates) == 1)
         and row["owner"] == owner
         and row["site"] == ports["site"] == op["site"]
         and row["activation"] == "visited"
-        and proof["code_sha256"]
-        == project.functions[owner]["python_scope"]["source_code"]["code_sha256"]
+        and row["request"] == op["request"]
+        and op["source_code"]["code_sha256"]
+        == proof["code_sha256"]
+        == trial.functions[owner]["python_scope"]["source_code"]["code_sha256"]
         and proof["import_name"]["offset"] == ports["dispatch"]["instruction"]
         and body == ports["body"]
     ):
-        return None
-    candidate = candidates[0]
-    symbol = candidate["initializer"]
-    scope = project.functions.get(symbol, {}).get("python_scope", {})
-    code = scope.get("source_code", {})
-    if not (
-        scope.get("initializer") == symbol
-        and scope.get("kind") == code.get("kind") == "module"
-        and scope.get("module") == candidate["module"]
-        and code.get("source_key") == candidate["source_key"]
-        and code.get("code_sha256") == candidate["code_sha256"]
-    ):
-        return None
-    # publish_plain_import already matched the owner's active-code receipt to
-    # this instruction. Matching the ledger excludes unvisited imports and
-    # preserves the dispatcher's original identity-failure evidence if any.
-    return project.loader_activations.get((owner, op["site"])) or dict(
-        owner=owner,
-        symbol=symbol,
-        loader_ports=ports,
-        **values.source_site(op),
-    )
+        return []
+    loads = []
+    for candidate in candidates:
+        symbol = candidate["initializer"]
+        scope = trial.functions.get(symbol, {}).get("python_scope", {})
+        code = scope.get("source_code", {})
+        if (
+            scope.get("initializer") == symbol
+            and scope.get("kind") == code.get("kind") == "module"
+            and scope.get("module") == candidate["module"]
+            and code.get("source_key") == candidate["source_key"]
+            and code.get("code_sha256") == candidate["code_sha256"]
+        ):
+            earlier = (
+                None if named else trial.loader_activations.get((owner, op["site"]))
+            )
+            loads.append(
+                earlier
+                or dict(
+                    owner=owner,
+                    symbol=symbol,
+                    **({"route": "fromlist"} if named else {}),
+                    **({"when": candidate["when"]} if "when" in candidate else {}),
+                    loader_ports=ports,
+                    **values.source_site(op),
+                )
+            )
+    return loads
 
 
 def _loader_handoff(trial, candidate, function, issue):
@@ -3787,14 +3800,13 @@ def _loader_handoff(trial, candidate, function, issue):
         site = values.source_site(op)
         kind = op["op"]
         if kind == "module_import_publish":
-            selected = _published_loader_candidate(trial, symbol, op)
-            if selected:
-                nested.append(selected)
+            selected = _published_loaders(trial, symbol, op)
+            nested.extend(selected)
             candidates = op["import_call"].get("body", {}).get("candidates", ())
             remaining = [
                 c
                 for c in candidates
-                if not selected or c["initializer"] != selected["symbol"]
+                if not selected or c["initializer"] != selected[0]["symbol"]
             ]
             if remaining:
                 unresolved.append(
@@ -3805,6 +3817,8 @@ def _loader_handoff(trial, candidate, function, issue):
                     )
                 )
         elif kind == "module_fromlist_publish":
+            selected = _published_loaders(trial, symbol, op)
+            nested.extend(selected)
             checks = [
                 check
                 for check in op["fromlist_checks"]
@@ -3816,6 +3830,7 @@ def _loader_handoff(trial, candidate, function, issue):
                         kind="importer_selected_fromlist_activations",
                         initializers=op["initializers"],
                         checks=checks,
+                        matching_frame_candidates=[c["symbol"] for c in selected],
                         **site,
                     )
                 )
@@ -3923,7 +3938,16 @@ def _conditional_module(project, candidate):
     return (
         dict(
             nested_imports=[
-                dict(owner=edge["owner"], site=edge["site"]) for edge in nested
+                dict(
+                    owner=edge["owner"],
+                    site=edge["site"],
+                    **(
+                        {"symbol": edge["symbol"], "route": edge["route"]}
+                        if "route" in edge
+                        else {}
+                    ),
+                )
+                for edge in nested
             ],
             completion=(
                 "conditional_source_prefix" if issue else "conditional_source_body"
@@ -3944,20 +3968,31 @@ def _conditional_module(project, candidate):
 
 def _conditional_loader_fragments(project):
     """Rebuild only candidates reached by finalized source imports, in their own scopes."""
-    pending = list(reversed(project.loader_activations.values()))
-    result, templates = {}, {}
+    pending = [(c, False) for c in reversed(project.loader_activations.values())]
+    result, templates, expanded = {}, {}, set()
     while pending:
-        candidate = pending.pop()
-        site = candidate["owner"], candidate["site"]
-        if site in result:
-            continue
-        [source] = candidate["loader_ports"]["body"]["candidates"]
+        candidate, fromlist_context = pending.pop()
+        site = candidate["owner"], candidate["site"], candidate["symbol"]
+        source = next(
+            c
+            for c in candidate["loader_ports"]["body"]["candidates"]
+            if c["initializer"] == candidate["symbol"]
+        )
+        fromlist_context |= candidate.get("route") == "fromlist"
         identity = candidate["symbol"], source["code_sha256"]
         if identity not in templates:
-            template, nested = _conditional_module(project, candidate)
-            templates[identity] = template
-            pending.extend(reversed(nested))
-        result[site] = {**candidate, **templates[identity]}
+            templates[identity] = _conditional_module(project, candidate)
+        template, nested = templates[identity]
+        if site not in result or not fromlist_context:
+            result[site] = {
+                **candidate,
+                **template,
+                "fromlist_context": fromlist_context,
+            }
+        expansion = identity, fromlist_context
+        if expansion not in expanded:
+            expanded.add(expansion)
+            pending.extend((c, fromlist_context) for c in reversed(nested))
     return list(result.values())
 
 
@@ -4120,8 +4155,9 @@ def _source_dispatch(module, project):
     for owner, body in source_regions:
         for op in walk_operations(body, exclude_fields=EXECUTION_ANNOTATIONS):
             if op["op"] == "module_import_publish" and (
-                candidate := _published_loader_candidate(trial, owner, op)
+                selected := _published_loaders(trial, owner, op)
             ):
+                [candidate] = selected
                 key = owner, op["site"]
                 row = nominal.get(key)
                 if row is None:
@@ -4138,7 +4174,8 @@ def _source_dispatch(module, project):
     loaders, callees = _conditional_activations(trial)
     reached = {(f["owner"], f["site"]) for f in loaders}
     for candidate in loaders:
-        issue = issue or candidate["activation_handoff"].get("source_issue")
+        if not candidate["fromlist_context"]:
+            issue = issue or candidate["activation_handoff"].get("source_issue")
     for callee in callees:
         if not issue and callee["completion"] != "conditional_source_body":
             frontier = callee["frontier"]
@@ -4192,6 +4229,8 @@ def _dispatch_product(entry, project, loaders, callees, required_sites, issue):
                 symbol=f["symbol"],
                 function=f["function"],
                 entry=f["activation_handoff"]["entry"],
+                **({"route": f["route"]} if "route" in f else {}),
+                **({"when": f["when"]} if "when" in f else {}),
             )
             for f in loaders
         ],
@@ -4287,18 +4326,20 @@ def normalize_protocols(module):
                 f["activation_handoff"]["source_issue"]
                 for f in conditional
                 if "source_issue" in f["activation_handoff"]
+                and not f["fromlist_context"]
             ),
             None,
         )
     if issue is None:
         try:
             if conditional:
-                candidate = conditional[0]
+                direct = [f for f in conditional if not f["fromlist_context"]]
+                candidate = direct[0]
                 error = _Unclosed(
                     candidate["owner"],
                     candidate,
                     "loader_activation_contract",
-                    f"{len(conditional)} caller-owned conditional module activation(s) need matching live frames or source continuations; "
+                    f"{len(direct)} caller-owned conditional module activation(s) need matching live frames or source continuations; "
                     f"{len(callee_fragments)} published function(s) are linked to conditional source calls; native dispatch and continuations remain open",
                 )
                 error.issue["source_evidence"] = {
@@ -4306,8 +4347,9 @@ def normalize_protocols(module):
                     "loader_ports": candidate["loader_ports"],
                     "conditional_entries": [
                         {key: f[key] for key in ("owner", "site", "symbol")}
-                        for f in conditional
+                        for f in direct
                     ],
+                    "fromlist_dependent_activations": len(conditional) - len(direct),
                 }
                 raise error
             omitted = set(module.get("python_candidate_only", ())).difference(
@@ -4402,13 +4444,24 @@ def normalize_protocols(module):
         )
         for name, fn in project.closed.items()
     ]
+    fromlist_fragments = [f for f in conditional if f["fromlist_context"]]
+    direct_fragments = [f for f in conditional if not f["fromlist_context"]]
     module["protocol_analysis"] = dict(
         entry=module["entry"],
         closed=contracts,
         single_bind_globals=sorted(project.single_bind_globals),
         status="INCOMPLETE" if issue else "READY",
         source_obligation_groups=obligation_analysis["groups"],
-        **({"conditional_loader_fragments": conditional} if conditional else {}),
+        **(
+            {"conditional_loader_fragments": direct_fragments}
+            if direct_fragments
+            else {}
+        ),
+        **(
+            {"fromlist_loader_fragments": fromlist_fragments}
+            if fromlist_fragments
+            else {}
+        ),
         **(
             {"conditional_function_fragments": callee_fragments}
             if callee_fragments

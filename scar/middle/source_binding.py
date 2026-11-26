@@ -1778,7 +1778,7 @@ def bind_import_store(node, scope):
     return proof
 
 
-def bind_named_fromlist(body, start, scope, references, function_id):
+def bind_named_fromlist(body, start, scope, references, function_id, declarations):
     """Bind the single IMPORT_NAME result to the sibling read/store ports in source order."""
     first = body[start]
     if first.get("op") != "python_import" or not isinstance(first.get("request"), dict):
@@ -1856,6 +1856,8 @@ def bind_named_fromlist(body, start, scope, references, function_id):
         raise ValueError("source fromlist repeats a binding port")
     _bind_import_offsets([*ordered, release])
     first["fromlist_binding_sites"] = sites
+    if ports := _fromlist_loader_ports(first, declarations):
+        first["loader_ports"] = ports
 
 
 def _bind_import_projection(proof, members):
@@ -1914,33 +1916,26 @@ def _bind_import_offsets(ordered):
             raise ValueError("source import has a discontinuous instruction path")
 
 
-def loader_ports(node, site, declarations, proof):
-    """Connect a resolved source body to its optional activation inside IMPORT_NAME."""
-    symbols = node.get("initializers", ())
-    if not node.get("graph_backed") or not symbols:
+def _loader_candidate(symbol, declarations):
+    scope = declarations.get(symbol, {}).get("python_scope", {})
+    code = scope.get("source_code", {})
+    if not (
+        scope.get("initializer") == symbol
+        and scope.get("kind") == code.get("kind") == "module"
+        and code.get("source_key") == scope.get("source_key")
+        and code.get("code_sha256")
+        and code.get("source_sha256")
+    ):
         return None
-    candidates = []
-    for symbol in symbols:
-        scope = declarations.get(symbol, {}).get("python_scope", {})
-        code = scope.get("source_code", {})
-        if not (
-            scope.get("initializer") == symbol
-            and scope.get("kind") == code.get("kind") == "module"
-            and code.get("source_key") == scope.get("source_key")
-            and code.get("code_sha256")
-            and code.get("source_sha256")
-        ):
-            return None
-        candidates.append(
-            dict(
-                initializer=symbol,
-                module=scope["module"],
-                source_key=code["source_key"],
-                code_sha256=code["code_sha256"],
-            )
-        )
-    if candidates[-1]["module"] != node["module"]:
-        return None
+    return dict(
+        initializer=symbol,
+        module=scope["module"],
+        source_key=code["source_key"],
+        code_sha256=code["code_sha256"],
+    )
+
+
+def _loader_ports(site, proof, candidates, binding):
     return dict(
         site=site,
         importer=dict(frame="builtins", key="__import__"),
@@ -1953,13 +1948,97 @@ def loader_ports(node, site, declarations, proof):
             completion="return_to_loader_or_propagate",
             candidates=candidates,
         ),
-        binding=dict(
+        binding=binding,
+    )
+
+
+def loader_ports(node, site, declarations, proof):
+    """Connect a resolved source body to its optional activation inside IMPORT_NAME."""
+    candidates = [
+        _loader_candidate(s, declarations) for s in node.get("initializers", ())
+    ]
+    if not (
+        node.get("graph_backed")
+        and candidates
+        and all(candidates)
+        and candidates[-1]["module"] == node["module"]
+    ):
+        return None
+    return _loader_ports(
+        site,
+        proof,
+        candidates,
+        dict(
             instruction=proof["store"]["offset"],
             input=(
                 "projected_import_member" if "projection" in proof else "import_result"
             ),
             on_import_exception="skip",
             **({"on_projection_exception": "skip"} if "projection" in proof else {}),
+        ),
+    )
+
+
+def _fromlist_loader_ports(node, declarations):
+    """Bind available package and child frames without predicting importer selection."""
+    module = node["module"]
+    names = node["request"]["fromlist"]
+    candidates = []
+    for symbol in node.get("initializers", ()):
+        if candidate := _loader_candidate(symbol, declarations):
+            name = candidate["module"]
+            if not (name == module or module.startswith(name + ".")):
+                raise ValueError(
+                    "fromlist initializer does not belong to its package path"
+                )
+            if candidate not in candidates:
+                candidates.append(candidate)
+    checks = (node.get("fromlist_checks") or {}).get("items", ())
+    for edge in node.get("conditional_initializers", ()):
+        when, symbol = edge["when"], edge["initializer"]
+        name = when.get("name")
+        if not (
+            name in names
+            and when == dict(kind="package_attribute_missing", module=module, name=name)
+            and edge["module"] == f"{module}.{name}"
+        ):
+            raise ValueError("fromlist child does not match its bound member condition")
+        if candidate := _loader_candidate(symbol, declarations):
+            source_hash = declarations[symbol]["python_scope"]["source_code"][
+                "source_sha256"
+            ]
+            if candidate["module"] != edge["module"] or any(
+                child.get("sha256", source_hash) != source_hash
+                for check in checks
+                if check.get("when") == when
+                if (child := check.get("child")) and child.get("initializer") == symbol
+            ):
+                raise ValueError(
+                    "fromlist child differs from its captured source identity"
+                )
+            candidate["when"] = when
+            if candidate not in candidates:
+                candidates.append(candidate)
+    if not candidates:
+        return None
+    proof = node["source_fromlist"]
+    return _loader_ports(
+        node["site"],
+        proof,
+        candidates,
+        dict(
+            input="import_result",
+            reads=[
+                dict(site=site, member=member, **pair)
+                for site, member, pair in zip(
+                    node["fromlist_binding_sites"],
+                    names,
+                    proof["bindings"],
+                    strict=True,
+                )
+            ],
+            release=proof["release"]["offset"],
+            on_import_exception="skip",
         ),
     )
 

@@ -152,6 +152,7 @@ def _definition(graph, declarations=None):
                         graph["signature"].get("python_scope", {}),
                         value,
                         graph["id"],
+                        declarations or {},
                     )
             return items
         if not isinstance(value, dict):
@@ -168,10 +169,8 @@ def _definition(graph, declarations=None):
                 raise ValueError(
                     "source fromlist requires ordered import statement ports"
                 )
-            if "fromlist_binding_sites" in result:
-                raise ValueError(
-                    "source fromlist binding sites must come from graph ports"
-                )
+            if "fromlist_binding_sites" in result or "loader_ports" in result:
+                raise ValueError("source import bindings must come from graph ports")
             if result["op"] == "python_import" and (
                 "source_import_store" in result or "source_import_projection" in result
             ):

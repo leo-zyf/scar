@@ -813,10 +813,15 @@ def import_effects(module, bindings):
     dispatch = module.get("source_dispatch")
     sites, candidates = _dispatch_sites(dispatch, ledger) if dispatch else ({}, {})
     if dispatch:
-        from .import_frames import activation_bodies, regions
+        from .import_frames import activation_bodies, named_regions, regions
 
         frame_regions = regions(candidates, sites)
-        frame_bodies = activation_bodies(dispatch, sites) if frame_regions else []
+        live_named, named_loaders = named_regions(dispatch, ledger, sites)
+        frame_bodies = (
+            activation_bodies(dispatch, sites | named_loaders)
+            if frame_regions or live_named
+            else []
+        )
     rows, identities = [], set()
     counts = dict(visited=0, unvisited=0, proven_inactive=0)
     for occurrence in ledger["occurrences"]:
@@ -866,7 +871,7 @@ def import_effects(module, bindings):
             )
         )
     entry = None
-    if dispatch and frame_regions:
+    if dispatch and frame_regions and not live_named:
         from .import_frames import isolated_project_entry
 
         entry = isolated_project_entry(
@@ -876,6 +881,9 @@ def import_effects(module, bindings):
         from .import_frames import compiled_project_entry
 
         entry = compiled_project_entry(module, ledger, dispatch, sites)
+    if dispatch and entry is None:
+        # Host-only from-lists never extend a standalone entry certificate.
+        frame_regions.extend(live_named)
     if entry is not None:
         for row in rows:
             row["complete_effect_equivalence"] = "proven"

@@ -129,6 +129,241 @@ def regions(candidates, checked):
     return result
 
 
+def _named_region(owner, code, op, occurrence):
+    """Bind a from-list to one IMPORT_NAME, ordered lookup/store pairs and POP_TOP."""
+    port, call = op.get("source_fromlist", {}), op.get("import_call", {})
+    request, bindings = op.get("request", {}), op.get("bindings", [])
+    members, level = request.get("fromlist", []), port.get("level", {})
+    names, enter, release = (
+        port.get(key, {}) for key in ("fromlist", "import_name", "release")
+    )
+    if (
+        op.get("source_code") != code
+        or port.get("code_sha256") != code.get("code_sha256")
+        or port.get("semantics_version") != 1
+        or not isinstance(code.get("compiler"), str)
+        or code["compiler"].split(".")[:2]
+        not in (["cpython 3", "12"], ["cpython 3", "14"])
+        or occurrence.get("id") != op.get("source_import_occurrence")
+        or op.get("occurrence") != occurrence.get("id")
+        or (op.get("site"), owner) != (occurrence.get("site"), occurrence.get("owner"))
+        or occurrence.get("activation") not in {"visited", "unvisited"}
+        or occurrence.get("request") != request
+        or request.get("form") != "from"
+        or type(request.get("level")) is not int
+        or request["level"] < 0
+        or level.get("value") != request["level"]
+        or not isinstance(request.get("module"), str)
+        or not isinstance(members, list)
+        or not members
+        or not all(isinstance(n, str) and n.isidentifier() for n in members)
+        or names.get("opcode") != "LOAD_CONST"
+        or names.get("value") != members
+        or enter.get("opcode") != "IMPORT_NAME"
+        or enter.get("name") != request["module"]
+        or release.get("opcode") != "POP_TOP"
+        or not (
+            len(bindings)
+            == len(port.get("bindings", []))
+            == len(occurrence.get("bindings", []))
+            == len(members)
+        )
+        or op.get("after_store")
+        != {"instruction": release, "release": {"result": "import_result"}}
+        or op.get("unwind")
+        != "on_import_lookup_or_store_failure_unwind_live_references_at_that_opcode_preserve_completed_effects_and_skip_later_bindings"
+        or op.get("lookup")
+        != "successive_IMPORT_FROM_on_retained_actual_return_including_circular_registry_fallback"
+        or op.get("publication")
+        != "for_each_binding_read_then_store_its_value_in_the_source_mapping_before_next_read"
+        or op.get("code_match")
+        != "require_current_activation_code_and_instruction_operands_match_before_first_source_import_operand"
+        or op.get("exceptional_exit")
+        != "propagate_at_failing_source_operation_preserving_completed_effects"
+        or op.get("dispatch")
+        != "call_current_frame_importer_once_with_original_arguments"
+        or op.get("initialization")
+        != "only_as_invoked_by_actual_importer_including_ordered_fromlist_prechecks"
+        or op.get("on_code_mismatch")
+        != "resume_source_equivalent_execution_before_first_source_import_operand"
+    ):
+        return None
+    minor = int(code["compiler"].split(".")[1])
+    if (
+        level.get("opcode") == "LOAD_SMALL_INT"
+        and minor == 14
+        and level.get("oparg") == request["level"]
+    ):
+        argument = {"opcode": "LOAD_SMALL_INT", "oparg": level["oparg"]}
+    elif level.get("opcode") == "LOAD_CONST":
+        argument = {"table": "co_consts", "index": level.get("index")}
+    else:
+        return None
+    if (
+        call.get("opcode") != "IMPORT_NAME"
+        or call.get("importer") != {"mapping": "frame.builtins", "key": "__import__"}
+        or call.get("result") != "import_result"
+        or call.get("registry")
+        != "actual_importer_controls_cache_initialization_hooks_and_audit"
+        or call.get("arguments")
+        != [
+            {"table": "co_names", "index": enter.get("index")},
+            {"frame": "globals"},
+            {"frame": "locals"},
+            {"table": "co_consts", "index": names.get("index")},
+            argument,
+        ]
+    ):
+        return None
+    instructions = [level, names, enter]
+    projections = []
+    for i, (spelling, binding, pair, record) in enumerate(
+        zip(members, bindings, port["bindings"], occurrence["bindings"], strict=True)
+    ):
+        read, store = pair["read"], pair["store"]
+        target = {"from_offset": read.get("offset")}
+        if (
+            read.get("opcode") != "IMPORT_FROM"
+            or read.get("name") != spelling
+            or binding.get("member") != spelling
+            or binding.get("binding_index") != i
+            or binding.get("read")
+            != {
+                "receiver": {"result": "import_result"},
+                "instruction": read,
+                "result": target,
+            }
+            or store.get("opcode") not in {"STORE_NAME", "STORE_GLOBAL"}
+            or binding.get("value") != target
+            or binding.get("namespace")
+            != ("frame.locals" if store["opcode"] == "STORE_NAME" else "frame.globals")
+            or any(binding.get(k) != store.get(k) for k in ("opcode", "offset", "name"))
+            or binding.get("key") != {"table": "co_names", "index": store.get("index")}
+            or (record.get("member"), record.get("site"), record.get("name"))
+            != (spelling, binding.get("site"), binding.get("slot"))
+        ):
+            return None
+        instructions.extend((read, store))
+        projections.append(
+            dict(site=binding["site"], member=spelling, read=read, store=store)
+        )
+    instructions.append(release)
+    if "body" in call and not occurrence.get("loader_ports"):
+        return None
+    if (ports := occurrence.get("loader_ports")) is not None:
+        binding = ports.get("binding", {})
+        if (
+            ports.get("site") != op["site"]
+            or ports.get("dispatch", {}).get("instruction") != enter["offset"]
+            or call.get("body") != ports.get("body")
+            or binding.get("input") != "import_result"
+            or binding.get("reads") != projections
+            or binding.get("on_import_exception") != "skip"
+            or binding.get("release") != release["offset"]
+        ):
+            return None
+    start = level.get("offset")
+    if (
+        type(start) is not int
+        or start < 2
+        or start % 2
+        or any(
+            ins.get("offset") != start + 2 * i
+            or type(ins.get("index", ins.get("oparg", 0))) is not int
+            or not 0 <= ins.get("index", ins.get("oparg", 0)) < 2**32
+            for i, ins in enumerate(instructions)
+        )
+    ):
+        return None
+    steps = [
+        [
+            ins["opcode"],
+            ins["offset"],
+            ins.get("index", ins.get("oparg", 0)),
+            ins.get("name", ""),
+        ]
+        for ins in instructions
+    ]
+    return dict(
+        profile="live_fromlist",
+        owner=owner,
+        site=op["site"],
+        occurrence=op["occurrence"],
+        code_sha256=code["code_sha256"],
+        minor=minor,
+        instructions=steps,
+        resume_offset=release["offset"] + 2,
+    )
+
+
+def named_regions(dispatch, ledger, checked):
+    """A region can only be entered at its observed code identity and source PC."""
+    from collections import deque
+    from scar.contract import control_regions
+
+    occurrences = {o["id"]: o for o in ledger["occurrences"]}
+    loaders = {(r["owner"], r["site"], r["symbol"]): r for r in dispatch["loaders"]}
+    entry = dispatch.get("entry_frame", {}).get("code")
+    pending = deque(
+        (r["symbol"], entry, r["body"])
+        for r in dispatch["functions"]
+        if entry and r["symbol"] == dispatch["entry"]
+    )
+
+    def activate(row):
+        pending.append((row["symbol"], row["entry"]["code"], row["function"]))
+
+    for key, review in checked.items():
+        if review.get("import_binding_verified"):
+            for symbol in review["loaders"]:
+                activate(loaders[(*key, symbol)])
+    regions, seen, providers = {}, set(), {}
+    while pending:
+        owner, code, fn = pending.popleft()
+        key = owner, code["code_sha256"], id(fn)
+        if key in seen:
+            continue
+        seen.add(key)
+        scopes = [fn["body"]]
+        while scopes:
+            for stmt in scopes.pop():
+                scopes.extend(block[field] for block, field, _ in control_regions(stmt))
+                op = stmt.get("value", {})
+                if stmt["op"] != "expr" or op.get("op") != "module_fromlist_publish":
+                    continue
+                row = occurrences.get(op.get("occurrence"), {})
+                site = _named_region(owner, code, op, row)
+                if site is None:
+                    continue
+                if regions.setdefault(row["id"], site) != site:
+                    raise ValueError("conflicting source fromlist occurrence")
+                for candidate in (
+                    row.get("loader_ports", {}).get("body", {}).get("candidates", ())
+                ):
+                    child = loaders.get((owner, op["site"], candidate["initializer"]))
+                    entry = (
+                        child["entry"]
+                        if child and child.get("route") == "fromlist"
+                        else {}
+                    )
+                    selected = entry.get("code", {})
+                    if (
+                        selected.get("source_key") == candidate.get("source_key")
+                        and selected.get("code_sha256") == candidate["code_sha256"]
+                        and entry.get("selection")
+                        == "each_actual_matching_code_activation"
+                        and entry.get("on_mismatch")
+                        == "resume_source_equivalent_execution_before_module_body"
+                    ):
+                        route = providers.setdefault(
+                            (owner, op["site"]), dict(loaders=[], calls=[])
+                        )
+                        if child["symbol"] not in route["loaders"]:
+                            route["loaders"].append(child["symbol"])
+                        activate(child)
+    return list(regions.values()), providers
+
+
 def _constant_store(op, code, offset, slots):
     from scar.contract import digest, json_bytes
 

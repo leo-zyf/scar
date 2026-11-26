@@ -32,6 +32,7 @@ _OPERATIONS = dict(
     LOAD_CONST="constant",
     LOAD_SMALL_INT="small_int",
     IMPORT_NAME="import_name",
+    IMPORT_FROM="import_from",
     STORE_NAME="store_name",
     STORE_GLOBAL="store_global",
     PUSH_NULL="push_null",
@@ -373,9 +374,39 @@ def _frame_tree(rows, bodies, modules=None):
         code, minor = row["code_sha256"], row["minor"]
         if not is_digest(code) or minor not in (12, 14) or not row["instructions"]:
             raise ValueError("invalid source-frame code identity")
+        program = row["instructions"]
+        named_request = row.get("profile") == "live_fromlist"
+        if named_request:
+            # The request keeps its actual result on the operand stack while
+            # each member is looked up and stored. End with its source POP_TOP.
+            if (
+                modules is not None
+                or len(program) < 6
+                or len(program) % 2
+                or program[0][0]
+                not in (
+                    {"LOAD_CONST", "LOAD_SMALL_INT"} if minor == 14 else {"LOAD_CONST"}
+                )
+                or [step[0] for step in program[1:3]] != ["LOAD_CONST", "IMPORT_NAME"]
+                or program[-1][0] != "POP_TOP"
+                or row.get("resume_offset") != program[-1][1] + 2
+                or any(
+                    step[1] != program[0][1] + i * 2 for i, step in enumerate(program)
+                )
+                or any(
+                    a[0] != "IMPORT_FROM"
+                    or not a[3].isidentifier()
+                    or b[0] not in {"STORE_NAME", "STORE_GLOBAL"}
+                    or not b[3].isidentifier()
+                    for a, b in zip(program[3:-1:2], program[4:-1:2], strict=True)
+                )
+            ):
+                raise ValueError("invalid live fromlist instruction protocol")
+        elif "profile" in row or any(ins[0] == "IMPORT_FROM" for ins in program):
+            raise ValueError("named member lookup requires a live fromlist region")
         steps = []
         previous = -1
-        for opcode, offset, operand, spelling in row["instructions"]:
+        for opcode, offset, operand, spelling in program:
             if (
                 opcode not in _OPERATIONS
                 or type(offset) is not int
@@ -388,7 +419,11 @@ def _frame_tree(rows, bodies, modules=None):
             steps.append(
                 construct(
                     instruction,
-                    name("opcode::" + _OPERATIONS[opcode]),
+                    name(
+                        "opcode::import_request"
+                        if named_request and opcode == "IMPORT_NAME"
+                        else "opcode::" + _OPERATIONS[opcode]
+                    ),
                     integer(offset),
                     integer(operand),
                     Expr("string", value=spelling),
@@ -405,6 +440,7 @@ def _frame_tree(rows, bodies, modules=None):
                 integer(minor),
                 name(symbol),
                 construct(named("body_provider"), name("bodies"), form="brace"),
+                Expr("literal", value=named_request),
                 form="brace",
             )
         )

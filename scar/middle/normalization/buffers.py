@@ -218,6 +218,7 @@ class _State:
     exposed_names: set = field(default_factory=set)
     streams: dict = field(default_factory=dict)
     escaped_streams: set = field(default_factory=set)
+    map_origins: dict = field(default_factory=dict)
 
     def copy(self):
         return _State(
@@ -228,6 +229,7 @@ class _State:
             self.exposed_names.copy(),
             self.streams.copy(),
             self.escaped_streams.copy(),
+            self.map_origins.copy(),
         )
 
 
@@ -461,6 +463,249 @@ def _system_boundary(node, declaration, operation, request):
     node["external_effect"] = "UNKNOWN"
 
 
+def _standard(name, *args):
+    return dict(kind="library", provider="cxx_standard", name=name, args=list(args))
+
+
+_STRING = _standard(
+    "basic_string",
+    "char",
+    _standard("char_traits", "char"),
+    _standard("allocator", "char"),
+)
+_MAP_PAIR = _standard("pair", {"kind": "const", "of": _STRING}, _STRING)
+_STRING_MAP = _standard(
+    "map",
+    _STRING,
+    _STRING,
+    _standard("less", _STRING),
+    _standard("allocator", _MAP_PAIR),
+)
+_MAP_ITER = _standard("map_iterator", _STRING, _STRING)
+
+
+def _library_call(node, name, modes):
+    return (
+        node.get("op") == "library_call"
+        and node.get("provider") == "cxx_standard"
+        and node.get("name") == name
+        and node.get("parameter_modes") == modes
+        and len(node.get("args", ())) == len(modes)
+    )
+
+
+def _library_construct(node, type_, modes):
+    return (
+        node.get("op") == "library_construct"
+        and node.get("provider") == "cxx_standard"
+        and node.get("type") == type_
+        and node.get("parameter_modes") == modes
+        and len(node.get("args", ())) == len(modes)
+    )
+
+
+def _unqualify(node):
+    if (
+        node.get("op") == "library_value"
+        and node.get("provider") == "cxx_standard"
+        and node.get("mode") == "qualify"
+    ):
+        return node["value"]
+    return node
+
+
+def _string_key(node):
+    if _library_construct(node, _STRING, ["pointer"]):
+        node = node["args"][0]
+        if node.get("op") == "cast" and node.get("conversion") == "array_decay":
+            node = node["value"]
+    if (
+        node.get("op") == "string"
+        and isinstance(node.get("value"), str)
+        and node["value"].isascii()
+        and "\0" not in node["value"]
+    ):
+        return node["value"]
+    return None
+
+
+class _StringMap:
+    """Conditional definitions for standard string copies and single map insertions."""
+
+    def __init__(self, frame, declarations):
+        self.frame = frame
+        self.types = declarations
+
+    def slot(self, node, type_):
+        node = _unqualify(node)
+        key = node.get("scope"), node.get("name")
+        return key if node.get("op") == "var" and self.types.get(key) == type_ else None
+
+    def edges(self, sources, target, kind, *conditions, **facts):
+        for source in sorted(sources):
+            self.frame.g.edge(
+                kind,
+                source,
+                target,
+                conditional=True,
+                requires=list(conditions),
+                **facts,
+            )
+
+    def statement(self, stmt, facts, path):
+        op = stmt["op"]
+        field = {"decl": "init", "expr": "value", "if": "condition"}.get(op)
+        node = stmt.get(field)
+        if not node:
+            if op not in {"block", "decl", "expr", "if", "return"}:
+                facts.clear()
+            return
+        port = (*path, field)
+        args = node.get("args", [])
+        recv = node.get("receiver", {})
+        if (
+            op == "decl"
+            and stmt["type"] == _STRING
+            and _library_construct(node, _STRING, ["pointer"])
+        ):
+            # Only ordinary address/index/load operands can retain earlier map candidates.
+            if not any(
+                p["op"] in _CALLS or p["op"] == "update" for p in walk_operations(args)
+            ):
+                target = self.frame.op(node, port)
+                arg = self.frame.op(args[0], (*port, "args", 0))
+                self.edges(
+                    [arg],
+                    target,
+                    "CONSTRUCTS_STRING_FROM_C_STRING",
+                    "normal_construction_from_live_terminated_character_array",
+                    operand_path=[*port, "args", 0],
+                )
+                facts[("string", (stmt.get("scope"), stmt["name"]))] = frozenset(
+                    {target}
+                )
+                return
+        map_slot = self.slot(recv, _STRING_MAP)
+        if _library_call(node, "insert", ["reference"]) and map_slot:
+            pair = args[0]
+            if _library_construct(pair, _MAP_PAIR, ["reference", "reference"]):
+                key = _string_key(pair["args"][0])
+                source = self.slot(pair["args"][1], _STRING)
+                if key is not None and source:
+                    site = self.frame.op(node, port)
+                    operand = self.frame.op(
+                        pair["args"][1], (*port, "args", 0, "args", 1)
+                    )
+                    self.edges(
+                        [operand],
+                        site,
+                        "PROPOSES_MAPPED_VALUE",
+                        "value_type_constructed_from_current_mapped_operand",
+                        key=key,
+                    )
+                    self.edges(
+                        facts.get(("string", source), ()),
+                        operand,
+                        "MAY_SUPPLY_STRING_OPERAND",
+                        "same_string_instance_and_contents_reach_this_read",
+                    )
+                    entry = ("insert", map_slot, key)
+                    facts[entry] = facts.get(entry, frozenset()) | {site}
+                    return
+        if _library_call(node, "operator=", ["reference"]) and self.assignment(
+            node, facts, port
+        ):
+            return
+        if op == "if" and _library_call(node, "operator!=", ["reference", "reference"]):
+            end = _unqualify(args[1])
+            if (
+                self.slot(args[0], _MAP_ITER)
+                and _library_call(end, "end", [])
+                and self.slot(end.get("receiver", {}), _STRING_MAP)
+            ):
+                return
+        if any(
+            n["op"] in _CALLS
+            or n["op"] in {"update", "store_bytes", "release", "opaque", "unsupported"}
+            or n["op"] == "unary"
+            and n.get("operator") in {"preinc", "postinc", "predec", "postdec"}
+            for n in walk_operations(node)
+        ):
+            facts.clear()
+
+    def assignment(self, node, facts, port):
+        rhs = _unqualify(node["args"][0])
+        recv = node["receiver"]
+        iterator = self.slot(recv, _MAP_ITER)
+        if (
+            iterator
+            and _library_call(rhs, "find", ["reference"])
+            and (map_slot := self.slot(rhs.get("receiver", {}), _STRING_MAP))
+        ):
+            key = _string_key(rhs["args"][0])
+            if key is not None:
+                lookup = self.frame.op(rhs, (*port, "args", 0))
+                self.edges(
+                    facts.get(("insert", map_slot, key), ()),
+                    lookup,
+                    "MAY_SUPPLY_MAP_LOOKUP",
+                    "same_dynamic_map_and_comparator_equivalent_key",
+                    "insert_returned_second_true",
+                    "same_entry_survives_without_intervening_replacement_or_mapped_value_write",
+                    key=key,
+                    other_sources="preexisting_entry_or_other_write_or_no_match",
+                )
+                target = self.frame.op(node, port)
+                self.edges(
+                    [lookup],
+                    target,
+                    "ASSIGNS_MAP_ITERATOR",
+                    "find_and_iterator_assignment_return_normally",
+                )
+                facts[("iterator", iterator)] = frozenset({target})
+                return True
+        string = self.slot(recv, _STRING)
+        if (
+            string
+            and rhs.get("op") == "library_member"
+            and rhs.get("provider") == "cxx_standard"
+            and rhs.get("name") == "second"
+        ):
+            deref = rhs.get("receiver", {})
+            pointer = deref.get("value", {})
+            if (
+                deref.get("operator") == "deref"
+                and deref.get("op") == "unary"
+                and _library_call(pointer, "operator->", [])
+                and (iterator := self.slot(pointer.get("receiver", {}), _MAP_ITER))
+            ):
+                target = self.frame.op(node, port)
+                self.edges(
+                    facts.get(("iterator", iterator), ()),
+                    target,
+                    "COPIES_MAPPED_STRING",
+                    "same_live_iterator_reaches_dereference",
+                    "iterator_denotes_an_element_at_the_read",
+                    "mapped_value_unchanged_between_find_and_copy",
+                    "string_copy_assignment_returns_normally",
+                )
+                facts[("string", string)] = frozenset({target})
+                return True
+        return False
+
+    def c_string(self, node, facts, source):
+        if _library_call(node, "c_str", []) and (
+            slot := self.slot(node.get("receiver", {}), _STRING)
+        ):
+            self.edges(
+                facts.get(("string", slot), ()),
+                source,
+                "EXPOSES_STRING_C_STR",
+                "same_live_string_contents_reach_c_str",
+                "returned_pointer_remains_valid_until_conversion",
+            )
+
+
 class _Function:
     def __init__(self, graph, fn, externs, module_globals):
         self.g, self.fn, self.symbol, self.externs = graph, fn, fn["name"], externs
@@ -476,17 +721,27 @@ class _Function:
                     stream=identity, stream_pointer=kind == "pointer"
                 )
                 state.escaped_streams.add(identity)
+        types = {(None, p["name"]): p["type"] for p in fn["params"]}
         usedglobals = set()
         self.structured = True
         for operation in walk_operations(fn["body"]):
+            if operation["op"] == "decl":
+                key = operation.get("scope"), operation["name"]
+                types[key] = None if key in types else operation["type"]
             if operation["op"] in {"goto", "label"}:
                 self.structured = False
             elif operation["op"] == "var" and operation.get("scope") == "global":
                 usedglobals.add(operation["name"])
         for name in sorted(usedglobals & module_globals.keys()):
             row = module_globals[name]
+            types["global", name] = row["type"]
             if _storage(row["type"]):
                 self.declare(row, state, ("global", name), "global")
+        self.map_strings = (
+            _StringMap(self, types)
+            if self.structured and _STRING_MAP in types.values()
+            else None
+        )
         self.sequence(fn["body"], state, ("body",), None, None)
 
     def op(self, node, path):
@@ -586,6 +841,12 @@ class _Function:
         if not states:
             return None
         result = states[0].copy()
+        if self.map_strings and len(states) > 1:
+            for other in states[1:]:
+                for key, refs in other.map_origins.items():
+                    result.map_origins[key] = (
+                        result.map_origins.get(key, frozenset()) | refs
+                    )
         if len(states) == 1:
             return result
         result.escaped = set().union(*(s.escaped for s in states))
@@ -1242,6 +1503,12 @@ class _Function:
             self.externs[api],
             g.nodes.get(dest.locator, {}).get("capacity_bytes"),
         )
+        if copy and self.map_strings:
+            self.map_strings.c_string(
+                node["args"][copy["source_operand"][1]],
+                state.map_origins,
+                copy["source_value"],
+            )
         expression = g.node(
             "BYTE_EXPRESSION",
             [self.symbol, site],
@@ -1334,6 +1601,8 @@ class _Function:
                 break
             here = (*path, i)
             op = stmt["op"]
+            if self.map_strings and op != "expr":
+                self.map_strings.statement(stmt, state.map_origins, here)
             if op == "decl":
                 key = stmt.get("scope"), stmt["name"]
                 if scoped:
@@ -1442,6 +1711,8 @@ class _Function:
                 self.store(stmt["target"], value, state, stmt, here)
             elif op == "expr":
                 self.expr(stmt["value"], state, (*here, "value"))
+                if self.map_strings:
+                    self.map_strings.statement(stmt, state.map_origins, here)
                 if self.structured and calls_libc_exit(stmt["value"], self.externs):
                     state = None
             elif op == "return":
@@ -1645,7 +1916,9 @@ def analyze_buffers(module, flow):
         if row["name"] not in definitions
     }
     globals_ = {
-        row["name"]: row for row in module.get("globals", ()) if _storage(row["type"])
+        row["name"]: row
+        for row in module.get("globals", ())
+        if _storage(row["type"]) or row["type"] == _STRING_MAP
     }
     for fn in functions:
         if fn.get("execution_kind") == "python_protocol":

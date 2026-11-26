@@ -657,7 +657,11 @@ def test_open_module_comparison_retains_large_jump_operand(tmp_path):
     plan(graph, middle)
     report = json.loads((middle / "plan.json").read_bytes())
     dispatch = read_member(middle, report["source_dispatch"])
-    [loader] = [d for d in dispatch["loaders"] if d["symbol"] == "py:pkg:<init>"]
+    [loader] = [
+        d
+        for d in dispatch["loaders"]
+        if d["symbol"] == "py:pkg:<init>" and d["owner"] == "__main__"
+    ]
     fn = read_member(middle, loader["function"])
     [region] = [
         n["init"]["expression"]
@@ -5806,6 +5810,80 @@ def test_direct_c_string_format_reaches_stream_only_along_normal_return(tmp_path
     assert buffered["form"] == "phi" and buffered["expression"] is None
 
 
+def test_string_map_insertions_are_conditional_sources_of_open_operand(tmp_path):
+    from scar.contract import read_member
+    from scar.frontend import build
+    from scar.middle import plan
+
+    source = tmp_path / "entry.cpp"
+    source.write_text(
+        "#include <cstdio>\n#include <fstream>\n#include <map>\n#include <string>\n"
+        "using Files=std::map<std::string,std::string>; Files files;\n"
+        'void replace_entry() { files["chosen"]="replacement"; }\n'
+        "int main(int argc, char **argv) {\n"
+        'if (argc>1) {std::string p(argv[1]); files.insert(Files::value_type("chosen",p));}\n'
+        'else {std::string p("fallback"); files.insert(Files::value_type("chosen",p));}\n'
+        "Files::iterator i; std::string s; char path[100], line[8];\n"
+        'i=files.find("chosen"); if(i!=files.end()) {s=i->second; std::sprintf(path,"%s",s.c_str());\n'
+        "std::ifstream stream(path); stream.getline(line,8); }\n"
+        'i=files.find("different"); replace_entry(); i=files.find("chosen"); }\n'
+    )
+    request = tmp_path / "request.json"
+    request.write_text(
+        json.dumps(
+            dict(
+                source_root=str(tmp_path),
+                entry="main",
+                units=[dict(path=source.name, language="c++", flags=["-std=c++17"])],
+            )
+        )
+    )
+    graph, out = tmp_path / "graph", tmp_path / "plan"
+    build(request, graph)
+    source.unlink()
+    assert plan(graph, out)["status"] == "READY"
+    module = json.loads((out / "exec-ir.json").read_bytes())["module"]
+    flow = read_member(out, module["resource_model"]["artifact_flow"])
+    nodes = {n["id"]: n for n in flow["nodes"]}
+    by_kind = {}
+    for edge in flow["edges"]:
+        by_kind.setdefault(edge["kind"], []).append(edge)
+    candidates = by_kind["MAY_SUPPLY_MAP_LOOKUP"]
+    assert len(candidates) == 2 and len({e["source"] for e in candidates}) == 2
+    assert {e["key"] for e in candidates} == {"chosen"}
+    assert all(
+        e["conditional"]
+        and "insert_returned_second_true" in e["requires"]
+        and "preexisting_entry" in e["other_sources"]
+        for e in candidates
+    )
+    [found] = {e["target"] for e in candidates}
+    iterators = by_kind["ASSIGNS_MAP_ITERATOR"]
+    # The other key and the lookup following a mutating call have no candidate.
+    assert len({e["source"] for e in iterators}) == 3
+    [assigned] = [e["target"] for e in iterators if e["source"] == found]
+    [copied] = by_kind["COPIES_MAPPED_STRING"]
+    [exposed] = by_kind["EXPOSES_STRING_C_STR"]
+    assert assigned == copied["source"] and copied["target"] == exposed["source"]
+    expr = next(n for n in nodes.values() if n.get("c_string_copy"))
+    assert exposed["target"] == expr["c_string_copy"]["source_value"]
+    assert len(by_kind["PROPOSES_MAPPED_VALUE"]) == 2
+    assert all(
+        e["conditional"]
+        for kind in (
+            "MAY_SUPPLY_STRING_OPERAND",
+            "COPIES_MAPPED_STRING",
+            "EXPOSES_STRING_C_STR",
+        )
+        for e in by_kind[kind]
+    )
+    [read] = [n for n in nodes.values() if n.get("role") == "runtime_stream_read"]
+    assert (
+        nodes[read["locator"]]["path"] is None
+        and read["historical_instance"] == "not_established"
+    )
+
+
 def test_native_stream_input_ports_preserve_conditional_buffer_versions():
     from scar.contract import ARTIFACT_FLOW
 
@@ -10233,13 +10311,27 @@ def test_nested_loader_evidence_keeps_conditional_children_out_of_the_active_led
     assert outer["owner"] == "__main__"
     assert outer["symbol"] == child["owner"] == "py:outer:<init>"
     assert outer["nested_imports"] == [{"owner": child["owner"], "site": child["site"]}]
-    assert child["symbol"] == "py:inner:<init>" and not child["nested_imports"]
+    assert child["symbol"] == "py:inner:<init>"
+    named_routes = read_member(
+        out, report["protocol_analysis"]["fromlist_loader_fragments"]
+    )
+    assert {row["symbol"] for row in named_routes} == {
+        child["symbol"],
+        "py:inner.child:<init>",
+    }
+    assert child["nested_imports"] == [
+        {key: row[key] for key in ("owner", "site", "symbol", "route")}
+        for row in named_routes
+    ]
     ledger = read_member(out, report["source_imports"])["occurrences"]
     rows = {(row["owner"], row["site"]): row for row in ledger}
     for candidate, active in ((outer, True), (child, False)):
         row = rows[candidate["owner"], candidate["site"]]
         assert (row["activation"] == "visited") is active
         assert bool(row["producer_sites"]) is active
+    for route in named_routes:
+        row = rows[route["owner"], route["site"]]
+        assert row["activation"] == "unvisited" and not row["producer_sites"]
 
 
 def test_conditional_loaders_share_module_code_across_sites_and_cycles(
@@ -10919,7 +11011,8 @@ def test_conditional_module_rebuilds_from_unknown_bindings_and_owns_its_imports(
     legacy = deepcopy(bound)
     module, _, [gap] = normalize_protocols(bound)
     assert gap["code"] == "python.loader_activation_contract"
-    [candidate] = module["protocol_analysis"]["conditional_loader_fragments"]
+    loaders = module["protocol_analysis"]["conditional_loader_fragments"]
+    [candidate] = [row for row in loaders if row["owner"] == "__main__"]
     handoff = candidate["activation_handoff"]
     assert candidate["completion"] == "conditional_source_body"
     assert handoff["status"] == "INCOMPLETE" and "source_issue" not in handoff
@@ -10948,6 +11041,21 @@ def test_conditional_module_rebuilds_from_unknown_bindings_and_owns_its_imports(
     )
     [child] = unresolved["importer_selected_fromlist_activations"]["checks"]
     assert child["child_candidate"]["module"] == "pkg.child"
+    named = module["protocol_analysis"]["fromlist_loader_fragments"]
+    assert {row["symbol"] for row in named} == {symbol, "py:pkg.child:<init>"}
+    [conditional_child] = [row for row in named if "when" in row]
+    assert conditional_child["when"] == child["when"]
+    action = next(o for o in ops if o["op"] == "module_fromlist_publish")
+    assert action["import_call"]["body"] == conditional_child["loader_ports"]["body"]
+    [read] = conditional_child["loader_ports"]["binding"]["reads"]
+    assert read["read"] == action["bindings"][0]["read"]["instruction"]
+    assert conditional_child["activation_handoff"]["entry"]["code"][
+        "code_sha256"
+    ] == next(
+        f["python_scope"]["source_code"]["code_sha256"]
+        for f in bound["functions"]
+        if f["name"] == conditional_child["symbol"]
+    )
     rows = candidate["source_imports"]["occurrences"]
     assert {row["location"]["line"] for row in rows} == {2, 3}
     assert all(

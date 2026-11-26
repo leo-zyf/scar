@@ -88,33 +88,45 @@ def _plan_image(graph, folder, revision, out, *, shape, trip_count):
     protocol_analysis = module.get("protocol_analysis")
     if protocol_analysis is not None:
         protocol_analysis = dict(protocol_analysis)
+        receipts = {}
+
+        def store(group, product):
+            key = group, id(product)
+            if key not in receipts:
+                receipts[key] = member(out, group, product)
+            return receipts[key]
+
         if actual := protocol_analysis.get("actual_entry"):
             protocol_analysis["actual_entry"] = {
                 **actual,
-                "function": member(out, "functions", actual["function"]),
+                "function": store("functions", actual["function"]),
             }
         for group in (
             "closed_fragments",
             "conditional_loader_fragments",
+            "fromlist_loader_fragments",
             "conditional_function_fragments",
         ):
             if group in protocol_analysis:
-                protocol_analysis[group] = [
-                    {
-                        **fragment,
-                        "function": member(out, "functions", fragment["function"]),
-                        **(
-                            {
-                                "source_imports": member(
-                                    out, "analysis", fragment["source_imports"]
-                                )
-                            }
-                            if "source_imports" in fragment
-                            else {}
-                        ),
-                    }
-                    for fragment in protocol_analysis[group]
-                ]
+                fragments = []
+                for fragment in protocol_analysis[group]:
+                    record = dict(
+                        fragment, function=store("functions", fragment["function"])
+                    )
+                    if "source_imports" in fragment:
+                        record["source_imports"] = store(
+                            "analysis", fragment["source_imports"]
+                        )
+                    if group == "fromlist_loader_fragments":
+                        record["activation_handoff"] = store(
+                            "analysis", fragment["activation_handoff"]
+                        )
+                    fragments.append(record)
+                protocol_analysis[group] = (
+                    member(out, "analysis", fragments)
+                    if group == "fromlist_loader_fragments"
+                    else fragments
+                )
         if "prefix_fragments" in protocol_analysis:
             protocol_analysis["prefix_fragments"] = [
                 {

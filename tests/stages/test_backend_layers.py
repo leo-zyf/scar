@@ -4946,3 +4946,111 @@ def test_isolated_module_publications_cover_the_initializer(tmp_path, with_prefi
         == (result.stdout, result.stderr)
         == (b"last called\n", b"")
     )
+
+
+def test_live_fromlist_stores_each_member_before_fetching_the_next(tmp_path):
+    import shutil
+    from scar.backend.cpp20 import lower_scheduled, print_target
+    from scar.backend.planning import schedule_ir
+    from scar.contract import read_member
+    from scar.frontend import build
+    from scar.middle import plan
+
+    (tmp_path / "entry.py").write_text("import outer\nprint(outer.get())\n")
+    (tmp_path / "outer.py").write_text(
+        "from pair import first as alpha, second as beta\ndef get():\n    return 'ok'\n"
+    )
+    (tmp_path / "pair.py").write_text("first = 'a'\nsecond = 'b'\n")
+    build(tmp_path / "entry.py", tmp_path / "graph")
+    plan(tmp_path / "graph", tmp_path / "ir")
+    dst = tmp_path / "schedule"
+    schedule_ir(tmp_path / "ir", dst, policy="serial")
+    physical = json.loads((dst / "physical-plan.json").read_bytes())
+    assert physical["status"] == "INCOMPLETE"
+    ref = physical["source_frame_schedule"]
+    component = read_member(dst, ref)
+    rows = read_member(dst, component["regions"])
+    [named] = [r for r in rows if r.get("profile") == "live_fromlist"]
+    assert [step[0] for step in named["instructions"][2:]] == [
+        "IMPORT_NAME",
+        "IMPORT_FROM",
+        "STORE_NAME",
+        "IMPORT_FROM",
+        "STORE_NAME",
+        "POP_TOP",
+    ]
+    assert named["resume_offset"] == named["instructions"][-1][1] + 2
+    out = print_target(
+        lower_scheduled(dst / ref["path"], tmp_path / "target"), tmp_path / "out"
+    )
+    include = Path(out["header"]).parent
+    # Provide a C++ test host for the import/lookup/mapping callbacks; the
+    # delivered component itself carries only the sealed instruction schedule.
+    shutil.copyfile(
+        Path(scar.__file__).parent / "backend/cpp20/project_import.hpp",
+        include / "project_import.hpp",
+    )
+    probe = tmp_path / "frame.cpp"
+    probe.write_text("""#include "regions.hpp"
+#include "project_import.hpp"
+using namespace scar::imports;
+using namespace scar::imports::isolated;
+struct frame : process {
+  frame() : process({}) {}
+  unsigned calls{}, reads{}, stores{}, fault{};
+  bool fail{};
+  std::weak_ptr<value> receiver;
+  object constant(unsigned i) {
+    return i == current->instructions[1].operand ? none : zero;
+  }
+  object import_request(unsigned i, const object &level, const object &from) {
+    if (++calls != 1 || name_at(i) != "pair" || level != zero || from != none)
+      throw std::logic_error("incorrect importer operands");
+    auto value = make(isolated::value::type::module); receiver = value; return value;
+  }
+  object import_from(const object &actual, unsigned i) {
+    if (actual != receiver.lock() || reads != stores) throw std::logic_error("lost result or store");
+    ++reads;
+    if (fail && reads == 2) throw std::domain_error("lookup");
+    return make(value::type::scalar, name_at(i));
+  }
+  void publish(unsigned i, bool global, const object &v) {
+    ++stores; process::publish(i,global,v);
+  }
+  void unwind(unsigned pc, std::exception_ptr e) {
+    try { std::rethrow_exception(e); } catch(const std::domain_error &) {fault=pc;}
+    values.clear();
+  }
+};
+int main(){
+  for(auto &r : generated::regions) if(r.named_request){
+    for(bool fail : {false,true}){
+      frame f; f.current=&r; f.fail=fail;
+      auto result=run(f,r);
+      if (f.calls!=1 || f.reads!=2 || f.globals.at("alpha")->display!="first" || !f.receiver.expired()) return 1;
+      if (fail && (result!=outcome::continued_in_host || f.fault!=r.instructions[5].offset || f.globals.contains("beta"))) return 2;
+      if (!fail && (result!=outcome::completed || f.globals.at("beta")->display!="second")) return 3;
+    }
+    process legacy({});legacy.current=&r;
+    return run(legacy,r)==outcome::unmatched && legacy.values.empty() ? 0 : 4;
+  }
+  return 5;
+}
+""")
+    executable = tmp_path / "probe"
+    subprocess.run(
+        [
+            "c++",
+            "-std=c++20",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-I",
+            include,
+            probe,
+            "-o",
+            executable,
+        ],
+        check=True,
+    )
+    subprocess.run([executable], check=True)
