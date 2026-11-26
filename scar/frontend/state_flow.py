@@ -136,17 +136,30 @@ def state_flow(nodes, entry, accesses):
         before = {d: version(env, d) for d in sorted(use | change)}
         token = f"{port}/{phase}"
         after = {d: token for d in sorted(change)}
-        records.append(
-            dict(
-                kind="OPAQUE" if uncertain else "ACCESS",
-                node=port,
-                phase=phase,
-                read=sorted(use),
-                may_write=sorted(change),
-                incoming=before,
-                outgoing=after,
-            )
+        record = dict(
+            kind="OPAQUE" if uncertain else "ACCESS",
+            node=port,
+            phase=phase,
+            read=sorted(use),
+            may_write=sorted(change),
+            incoming=before,
+            outgoing=after,
         )
+        statement = nodes[port]
+        if statement["op"] == "assign" and phase == "effect" and "memory" in after:
+            target = statement.get("target")
+            if (
+                isinstance(target, dict)
+                and type(target.get("port")) is int
+                and nodes[target["port"]].get("protocol") == "python_subscription"
+            ):
+                # The index port identifies the actual receiver and selector.
+                # A custom store can also mutate unrelated state.
+                record["indexed_write"] = {
+                    "target": target,
+                    "extent": "receiver_protocol",
+                }
+        records.append(record)
         env.update(after)
 
     # Conditional writes kill equality facts but do not assert that a write

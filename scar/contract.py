@@ -436,6 +436,85 @@ def python_literal_sequence_sha256(items):
     return digest(json_bytes(projected))
 
 
+def valid_python_source_successor(last_offset, successor):
+    """Check a recorded normal edge over CPython's hidden cache code units."""
+    if not isinstance(successor, dict) or type(last_offset) is not int:
+        return False
+    caches = successor.get("cache_offsets")
+    target = successor.get("offset")
+    opcode = successor.get("opcode")
+    return (
+        isinstance(caches, list)
+        and type(target) is int
+        and 0 <= last_offset < target < 2**32
+        and last_offset % 2 == 0
+        and target == last_offset + 2 * (len(caches) + 1)
+        and isinstance(opcode, str)
+        and opcode.isidentifier()
+        and opcode != "CACHE"
+        and all(
+            type(pc) is int and pc == last_offset + 2 * i
+            for i, pc in enumerate(caches, 1)
+        )
+    )
+
+
+def python_wire_scalar_type(value):
+    if isinstance(value, dict):
+        if set(value) == {"float_hex"} and value["float_hex"] in ("inf", "-inf", "nan"):
+            return "float"
+        if set(value) == {"integer_hex"} and isinstance(value["integer_hex"], str):
+            token = value["integer_hex"]
+            try:
+                return "int" if hex(int(token, 16)) == token else None
+            except ValueError:
+                pass
+        return None
+    return type(value).__name__
+
+
+def python_pool_items(instruction, items):
+    """Match a code-pool tuple to typed graph literals or compiler-folded operands."""
+    if not isinstance(items, list) or instruction.get("item_count") != len(items):
+        return None
+    if "folded_items" not in instruction:
+        tokens = [_python_literal_projection(item) for item in items]
+        if (
+            None in tokens
+            or "item_sources" in instruction
+            or instruction.get("items_sha256") != digest(json_bytes(tokens))
+        ):
+            return None
+        return [dict(kind=kind, value=value) for _, kind, value in tokens]
+    values = instruction["folded_items"]
+    if not isinstance(values, list) or len(values) != len(items):
+        return None
+    sources = [python_constant_rhs_sha256(item) for item in items]
+    if None in sources or sources != instruction.get("item_sources"):
+        return None
+    tokens = []
+    for node, row in zip(items, values):
+        if not isinstance(row, dict) or set(row) != {"kind", "value"}:
+            return None
+        kind, value = row["kind"], row["value"]
+        if (
+            kind not in {"bool", "int", "str", "NoneType", "float"}
+            or python_wire_scalar_type(value) != kind
+        ):
+            return None
+        token = ["literal", kind, value]
+        if node["op"] == "literal" and json_bytes(token) != json_bytes(
+            _python_literal_projection(node)
+        ):
+            return None
+        tokens.append(token)
+    return (
+        values
+        if instruction.get("items_sha256") == digest(json_bytes(tokens))
+        else None
+    )
+
+
 def python_constant_rhs_sha256(node):
     """Identify a closed scalar expression by its ordered graph operands."""
 

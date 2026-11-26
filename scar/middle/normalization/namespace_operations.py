@@ -523,7 +523,7 @@ def open_object_statement(frame, node, steps):
         opcode,
         source_code=code,
         **{field: receipt},
-        evaluation=region.steps,
+        **({} if "expression" in ports else {"evaluation": region.steps}),
         **ports,
         reads=("frame.code", "frame.locals", "python.exception_state"),
         code_match="qualify_current_activation_code_instruction_stack_and_exception_table_before_first_source_instruction",

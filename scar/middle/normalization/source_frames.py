@@ -6,7 +6,7 @@ from scar.contract import (
     digest,
     json_bytes,
     python_constant_rhs_sha256,
-    python_literal_sequence_sha256,
+    python_pool_items,
 )
 from scar.source_contracts import python_binary_operator, python_unary_operator
 from . import objects
@@ -382,7 +382,15 @@ class SourceExpressionRegion:
             operands = dict(key=self.value(key))
             ins = self.subscription_opcode(node, stored)
         if stored is not None:
-            operands["value"] = stored
+            operands.update(
+                value=stored,
+                write_effect={
+                    "receiver": "base",
+                    "selector": "key" if "key" in operands else "bounds",
+                    "extent": "receiver_protocol",
+                    "exceptional_completion": "may_have_written",
+                },
+            )
         return self.emit(
             ins,
             "source_object_getitem" if stored is None else "source_object_setitem",
@@ -426,27 +434,13 @@ class SourceExpressionRegion:
 
     def tuple_constant(self, node, items):
         ins = self.take("LOAD_CONST", source=node)
-        fingerprint = python_literal_sequence_sha256(items)
-        if (
-            not fingerprint
-            or ins.get("type") != "tuple"
-            or ins.get("item_count") != len(items)
-            or ins.get("items_sha256") != fingerprint
-        ):
+        values = python_pool_items(ins, items)
+        if values is None or ins.get("type") != "tuple":
             raise ValueError(
                 "constant tuple slot disagrees with ordered display elements"
             )
         if self.constants is not None:
-            self.record_constant(
-                ins["index"],
-                dict(
-                    kind="tuple",
-                    items=[
-                        dict(kind=item["type"]["class"], value=item["value"])
-                        for item in items
-                    ],
-                ),
-            )
+            self.record_constant(ins["index"], dict(kind="tuple", items=values))
         return self.emit(
             ins,
             "source_object_constant",
@@ -1100,7 +1094,19 @@ class SourceExpressionRegion:
         return function
 
     def statement(self, node):
-        if node["op"] == "raise":
+        if node["op"] == "assign" and node["target"]["op"] == "index":
+            value = self.value(node["value"])
+            self.subscription(node["target"], stored=value)
+            opcode = "module_object_expression"
+            ports = dict(
+                expression=dict(
+                    op="source_object_region",
+                    type="unit",
+                    steps=self.steps,
+                    **source_site(node),
+                )
+            )
+        elif node["op"] == "raise":
             exception = self.value(node["value"]) if node["has_exception"] else None
             cause = self.value(node["cause"]) if node["has_cause"] else None
             instruction = self.take("RAISE_VARARGS", source=node)

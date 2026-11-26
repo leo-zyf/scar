@@ -421,10 +421,33 @@ def _pool_literal_items(value, elements):
 
 def _pool_display_items(value, parts):
     for display in parts:
-        if isinstance(display, (ast.List, ast.Tuple)) and (
-            items := _pool_literal_items(value, display.elts)
+        if not isinstance(display, (ast.List, ast.Tuple)) or len(value) != len(
+            display.elts
         ):
+            continue
+        if items := _pool_literal_items(value, display.elts):
             return items
+        syntax = [_constant_syntax(node) for node in display.elts]
+        if None in syntax or any(
+            type(v) not in (str, int, float, bool, type(None)) for v in value
+        ):
+            continue
+        values = [
+            dict(kind=type(v).__name__, value=numeric_wire_value(v)) for v in value
+        ]
+        tokens = [["literal", v["kind"], v["value"]] for v in values]
+        if any(
+            expr[0] == "literal" and json_bytes(expr) != json_bytes(token)
+            for expr, token in zip(syntax, tokens)
+        ):
+            continue
+        return dict(
+            type="tuple",
+            item_count=len(value),
+            folded_items=values,
+            items_sha256=digest(json_bytes(tokens)),
+            item_sources=[digest(json_bytes(expr)) for expr in syntax],
+        )
     return None
 
 
@@ -1121,8 +1144,13 @@ def _statement_expression(
     discarded_call = isinstance(root, ast.Call)
     needs_object_ports = function_frame or not discarded_call
     for node in ast.walk(expr):
-        if not function_frame and isinstance(
-            node, (ast.Subscript, ast.Slice, ast.Compare)
+        if (
+            not function_frame
+            and isinstance(node, (ast.Subscript, ast.Slice, ast.Compare))
+            and not (
+                isinstance(root, ast.Assign)
+                and isinstance(root.targets[0], ast.Subscript)
+            )
         ):
             return None
         if isinstance(
@@ -1245,9 +1273,22 @@ def _statement_expression(
         )
     ):
         return None
-    return dict(
+    proof = dict(
         semantics_version=1, position=list(tuple_position(root)), instructions=rows
     )
+    if rows[-1]["opcode"] in {"STORE_SUBSCR", "STORE_SLICE"}:
+        if end + 1 >= len(instructions):
+            return None
+        following = instructions[end + 1]
+        caches = list(range(rows[-1]["offset"] + 2, following.offset, 2))
+        if any(
+            program.co_code[i : i + 2] != bytes((dis.opmap["CACHE"], 0)) for i in caches
+        ):
+            return None
+        proof["normal_successor"] = dict(
+            offset=following.offset, opcode=following.opname, cache_offsets=caches
+        )
+    return proof
 
 
 def _statement_expression_sites(
@@ -1925,10 +1966,12 @@ def _compiler_sites(tree, path, relative, source_hash):
         if (
             isinstance(node, ast.Assign)
             and len(node.targets) == 1
-            and isinstance(node.targets[0], ast.Name)
+            and isinstance(node.targets[0], (ast.Name, ast.Subscript))
         ):
             expressions[tuple_position(node.targets[0])] = node
-            if _constant_store_rhs(node.value):
+            if isinstance(node.targets[0], ast.Name) and _constant_store_rhs(
+                node.value
+            ):
                 assignments.append(node)
         elif (
             isinstance(node, ast.FunctionDef)

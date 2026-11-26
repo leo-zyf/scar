@@ -10760,3 +10760,83 @@ def test_open_module_keeps_default_tuple_identity_through_function_publication(
         "from_offset": store["evaluation"][1]["offset"]
     }
     assert source_function_publication(broken, proof["code_sha256"]) is None
+
+
+def test_module_subscription_keeps_source_order_folded_values_and_write_successor(
+    tmp_path,
+):
+    from scar.contract import read_member, python_pool_items
+    from scar.frontend import build
+    from scar.middle import plan
+
+    package = tmp_path / "package"
+    package.mkdir()
+    module = package / "__init__.py"
+    module.write_text(
+        "from . import child as hidden\ndel hidden\n"
+        "target[1] = [5.0 / 8, -0.0, +3]\n"
+        "def unfinished(x=unknown()): pass\n"
+    )
+    (package / "child.py").write_text("")
+    entry = tmp_path / "main.py"
+    entry.write_text("import package\n")
+    graph, output = tmp_path / "graph", tmp_path / "ir"
+    build(entry, graph)
+    graph_index = json.loads((graph / "graph.json").read_bytes())
+    unit = next(
+        u for u in graph_index["units"] if u["path"].endswith("package/__init__.py")
+    )
+    initializer = next(
+        fn
+        for fn in read_member(graph, unit["graph"])["functions"]
+        if fn["signature"]["name"] == "py:package:<init>"
+    )
+    [effect] = [
+        v for v in initializer["state_flow"]["versions"] if "indexed_write" in v
+    ]
+    target_port = effect["indexed_write"]["target"]["port"]
+    assert (
+        "memory" in effect["may_write"]
+        and initializer["nodes"][target_port]["op"] == "index"
+    )
+    code = compile(module.read_bytes(), str(module), "exec")
+    module.unlink()
+    plan(graph, output)
+    report = json.loads((output / "plan.json").read_bytes())
+    ref = next(
+        f
+        for f in report["protocol_analysis"]["prefix_fragments"]
+        if f["symbol"] == "py:package:<init>"
+    )
+    store = next(
+        s["value"]
+        for s in read_member(output, ref["fragment"])["body"]
+        if s.get("value", {}).get("expression", {}).get("steps", [{}])[-1].get("op")
+        == "source_object_setitem"
+    )
+    region = store["source_expression"]
+    import dis
+
+    ins = list(dis.get_instructions(code))
+    terminal = next(i for i, r in enumerate(ins) if r.opname == "STORE_SUBSCR")
+    assert region["normal_successor"]["offset"] == ins[terminal + 1].offset
+    assert region["instructions"][-1]["offset"] == ins[terminal].offset
+    steps = store["expression"]["steps"]
+    build_list, pool, extend, target, index, write = steps
+    assert not store.get("evaluation")
+    assert code.co_consts[pool["operand"]] == (0.625, -0.0, 3)
+    assert extend["target"] == {"from_offset": build_list["offset"]}
+    assert extend["value"] == {"from_offset": pool["offset"]}
+    assert write["base"] == {"from_offset": target["offset"]}
+    assert write["key"] == {"from_offset": index["offset"]}
+    assert write["value"] == {"from_offset": build_list["offset"]}
+    assert write["write_effect"] == dict(
+        receiver="base",
+        selector="key",
+        extent="receiver_protocol",
+        exceptional_completion="may_have_written",
+    )
+    assert write["may_raise"] and store["external_effect"] == "UNKNOWN"
+    assert "python.object.state" in store["writes"]
+    # A list of source data dependencies cannot stand in for different literals.
+    assert python_pool_items(region["instructions"][1], []) is None

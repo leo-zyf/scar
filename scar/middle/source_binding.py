@@ -5,6 +5,9 @@ from scar.contract import (
     json_bytes,
     python_constant_rhs_sha256,
     python_literal_sequence_sha256,
+    python_pool_items,
+    python_wire_scalar_type,
+    valid_python_source_successor,
     walk_operations,
 )
 
@@ -157,20 +160,6 @@ def _source_return(other, operand_pos):
             and other["return_offset"] > other["offset"]
         )
     )
-
-
-def _folded_value_type(value):
-    if isinstance(value, dict):
-        if set(value) == {"float_hex"} and value["float_hex"] in ("inf", "-inf", "nan"):
-            return "float"
-        if set(value) == {"integer_hex"} and isinstance(value["integer_hex"], str):
-            token = value["integer_hex"]
-            try:
-                return "int" if hex(int(token, 16)) == token else None
-            except ValueError:
-                pass
-        return None
-    return type(value).__name__
 
 
 def bind_module_exit(scope):
@@ -661,7 +650,7 @@ def bind_source_expression(node, scope, successor=None, loop=None):
                 and opcode in {"LOAD_CONST", "LOAD_SMALL_INT", "RETURN_CONST"}
                 and "folded_value" in instruction
                 and instruction.get("type")
-                == _folded_value_type(instruction["folded_value"])
+                == python_wire_scalar_type(instruction["folded_value"])
                 and instruction.get("rhs_sha256")
                 and instruction["rhs_sha256"] == python_constant_rhs_sha256(expression)
                 and instruction.get("value_sha256")
@@ -752,7 +741,6 @@ def bind_source_expression(node, scope, successor=None, loop=None):
             count = len(display["items"])
             arg = instruction.get("oparg")
             if pool_aggregate:
-                fingerprint = python_literal_sequence_sha256(display["items"])
                 if not (
                     opcode == "LOAD_CONST"
                     and "names" not in instruction
@@ -760,8 +748,7 @@ def bind_source_expression(node, scope, successor=None, loop=None):
                     and instruction.get("index") == arg
                     and type(instruction.get("item_count")) is int
                     and instruction["item_count"] == count
-                    and fingerprint is not None
-                    and instruction.get("items_sha256") == fingerprint
+                    and python_pool_items(instruction, display["items"]) is not None
                 ):
                     raise ValueError(
                         "source constant tuple disagrees with its ordered display items"
@@ -900,6 +887,15 @@ def bind_source_expression(node, scope, successor=None, loop=None):
             raise ValueError("source return disagrees with its function operand")
     elif operation == "assign":
         target = node.get("target", {})
+        if "normal_successor" in proof and (
+            last["opcode"] not in {"STORE_SUBSCR", "STORE_SLICE"}
+            or not valid_python_source_successor(
+                last["offset"], proof["normal_successor"]
+            )
+        ):
+            raise ValueError(
+                "source subscription continuation disagrees with inline caches"
+            )
         if not (
             isinstance(node.get("value"), dict)
             and len(proof["instructions"]) > 1
