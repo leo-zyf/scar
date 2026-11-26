@@ -5,8 +5,8 @@ from .contracts import publish_program
 from .source_binding import (
     bind_constant_store,
     bind_exception_arms,
+    bind_frame_exit,
     bind_import_store,
-    bind_module_exit,
     bind_named_fromlist,
     bind_source_class,
     bind_source_class_body,
@@ -129,7 +129,7 @@ def _definition(graph, declarations=None):
     nodes = graph["nodes"]
     scope = graph["signature"].get("python_scope", {})
     if "frame_exit" in scope:
-        bind_module_exit(scope)
+        bind_frame_exit(scope)
     active = set()
 
     def read(value, successor=None, loop=None, *, in_sequence=False):

@@ -1148,8 +1148,9 @@ def _expression_parts(expr, *, allow_indexed, allow_comparison=False):
     parts, keywords = defaultdict(list), defaultdict(list)
     object_ports = False
     for node in ast.walk(expr):
-        if not allow_indexed and (
+        if (
             isinstance(node, (ast.Subscript, ast.Slice))
+            and not allow_indexed
             or isinstance(node, ast.Compare)
             and not allow_comparison
         ):
@@ -1234,10 +1235,18 @@ def _statement_expression(
     allow_indexed = function_frame or (
         isinstance(root, ast.Assign) and isinstance(root.targets[0], ast.Subscript)
     )
+    indexed_rhs = (
+        isinstance(root, ast.Assign)
+        and len(root.targets) == 1
+        and isinstance(root.targets[0], ast.Name)
+        and isinstance(root.value, (ast.Subscript, ast.BinOp))
+    )
     operands = _expression_parts(
         expr,
-        allow_indexed=allow_indexed,
-        allow_comparison=isinstance(root, ast.If) and isinstance(expr, ast.Compare),
+        allow_indexed=allow_indexed or indexed_rhs,
+        allow_comparison=allow_indexed
+        or isinstance(root, ast.If)
+        and isinstance(expr, ast.Compare),
     )
     if operands is None:
         return None
@@ -1777,15 +1786,17 @@ def _code_parameters(code):
     return params
 
 
-def _function_expression_sites(program, node, following, inherited):
+def _function_expression_sites(program, node, following, inherited, code_sha256):
     """Collect located expression, assignment and control regions in one child frame."""
     expressions = {}
+    explicit_return = False
     for stmt in scope_nodes(node.body):
         if isinstance(stmt, ast.Expr) and isinstance(
             stmt.value, (ast.Call, ast.Constant)
         ):
             expressions[tuple_position(stmt.value)] = stmt.value
         elif isinstance(stmt, ast.Return):
+            explicit_return = True
             expressions[tuple_position(stmt)] = stmt
             if stmt.value is not None:
                 expressions[tuple_position(stmt.value)] = stmt
@@ -1802,9 +1813,10 @@ def _function_expression_sites(program, node, following, inherited):
         elif isinstance(stmt, ast.For) and isinstance(stmt.target, ast.Name):
             expressions[tuple_position(stmt)] = stmt
             expressions[tuple_position(stmt.iter)] = stmt
-    if not expressions:
-        return {}, {}
     instructions = list(dis.get_instructions(program))
+    exit_ = {} if explicit_return else _frame_exit(instructions, code_sha256)
+    if not expressions:
+        return {}, {}, exit_
     handlers = {entry.target for entry in dis.Bytecode(program).exception_entries}
     regions = _statement_expression_sites(
         program,
@@ -1860,8 +1872,19 @@ def _function_expression_sites(program, node, following, inherited):
             for edge in successors
         ):
             continue
+        if exit_:
+            last, entry = proof["instructions"][-1], exit_["instructions"][0]
+            # These source terminals fall through one code unit, without inline caches.
+            # Indexed stores already capture their cache-aware normal successor.
+            if (
+                last["opcode"] in {"NOP", "POP_TOP", "STORE_FAST"}
+                and last["offset"] + 2 == entry["offset"]
+            ):
+                proof["normal_successor"] = dict(
+                    offset=entry["offset"], opcode=entry["opcode"], cache_offsets=[]
+                )
         verified[span] = proof
-    return verified, loads
+    return verified, loads, exit_
 
 
 def _default_tuple_items(value, defaults):
@@ -1918,7 +1941,7 @@ def _default_operand(program, instructions, default, stop, loads):
     span = tuple_position(default)
     while start and _within_position(instructions[start - 1].positions, span):
         start -= 1
-    parts = _expression_parts(default, allow_indexed=True)
+    parts = _expression_parts(default, allow_indexed=True, allow_comparison=True)
     if start == stop or parts is None:
         return None
     operands, keywords, _ = parts
@@ -2150,7 +2173,7 @@ def _definition_sites(
     return {k: v for k, v in found.items() if k not in repeated}
 
 
-def _module_frame_exit(instructions, code_sha256):
+def _frame_exit(instructions, code_sha256):
     """Locate the unique normal return, even when exception handlers follow it."""
     returns = [
         i
@@ -2759,7 +2782,7 @@ def _compiler_sites(tree, path, relative, source_hash):
         constant_stores=stores,
         module_docstring=document,
         source_code=source_code,
-        frame_exit=_module_frame_exit(instructions, source_code["code_sha256"]),
+        frame_exit=_frame_exit(instructions, source_code["code_sha256"]),
         name_loads=loads,
         import_stores=import_stores,
         statement_expressions=statement_expressions,
@@ -2768,9 +2791,13 @@ def _compiler_sites(tree, path, relative, source_hash):
         class_body_sites=class_body_sites,
         function_expression_sites={
             span: _function_expression_sites(
-                child, definitions[span], following, inherited
+                child,
+                definitions[span],
+                following,
+                inherited,
+                proof["child"]["code_sha256"],
             )
-            for span, (_, child) in definition_sites.items()
+            for span, (proof, child) in definition_sites.items()
         },
         exception_handlers=exception_handlers,
     )

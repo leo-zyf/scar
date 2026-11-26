@@ -168,20 +168,21 @@ def _source_return(other, operand_pos):
     )
 
 
-def bind_module_exit(scope):
+def bind_frame_exit(scope):
     """Validate the captured terminal region independently of paths reaching it."""
     exit_ = scope["frame_exit"]
     code = scope.get("source_code", {})
     rows = exit_.get("instructions") if isinstance(exit_, dict) else None
     if not (
-        scope.get("kind") == code.get("kind") == "module"
+        scope.get("kind") == code.get("kind")
+        and code["kind"] in {"module", "function"}
         and code.get("code_sha256")
         and isinstance(rows, list)
         and code["code_sha256"] == exit_.get("code_sha256")
         and all(
             isinstance(row, dict)
             and type(row.get("offset")) is int
-            and row["offset"] >= 0
+            and 2 <= row["offset"] < 2**32
             and row["offset"] % 2 == 0
             for row in rows
         )
@@ -194,7 +195,7 @@ def bind_module_exit(scope):
         and type(rows[0].get("oparg")) is int
         and 0 <= rows[0]["index"] == rows[0]["oparg"] <= 255
     ):
-        raise ValueError("source module exit disagrees with its code or None return")
+        raise ValueError("source frame exit disagrees with its code or None return")
 
 
 def _is_loop_backedge(edge, loop, code):
@@ -921,6 +922,25 @@ def bind_source_expression(node, scope, successor=None, loop=None):
         raise ValueError("source call region disagrees with its call port")
     _bind_operand_instructions(node, scope, position, proof["instructions"])
     last = proof["instructions"][-1]
+    if "normal_successor" in proof:
+        edge = proof["normal_successor"]
+        if not valid_python_source_successor(last["offset"], edge):
+            raise ValueError(
+                "source expression continuation disagrees with inline caches"
+            )
+        if last["opcode"] not in {"STORE_SUBSCR", "STORE_SLICE"}:
+            exit_rows = scope.get("frame_exit", {}).get("instructions", [])
+            if not (
+                code["kind"] == "function"
+                and last["opcode"] in {"NOP", "STORE_FAST", "POP_TOP"}
+                and not edge["cache_offsets"]
+                and exit_rows
+                and edge["offset"] == exit_rows[0]["offset"]
+                and edge["opcode"] == exit_rows[0]["opcode"]
+            ):
+                raise ValueError(
+                    "source expression continuation disagrees with the frame exit"
+                )
     if operation == "raise":
         if not (
             last["opcode"] == "RAISE_VARARGS"
@@ -953,15 +973,6 @@ def bind_source_expression(node, scope, successor=None, loop=None):
             raise ValueError("source return disagrees with its function operand")
     elif operation == "assign":
         target = node.get("target", {})
-        if "normal_successor" in proof and (
-            last["opcode"] not in {"STORE_SUBSCR", "STORE_SLICE"}
-            or not valid_python_source_successor(
-                last["offset"], proof["normal_successor"]
-            )
-        ):
-            raise ValueError(
-                "source subscription continuation disagrees with inline caches"
-            )
         if not (
             isinstance(node.get("value"), dict)
             and len(proof["instructions"]) > 1

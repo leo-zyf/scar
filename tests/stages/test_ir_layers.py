@@ -9970,6 +9970,102 @@ def test_open_sequence_displays_keep_allocation_order_and_tuple_identity(tmp_pat
     )
 
 
+def test_open_module_subscript_rhs_reloads_the_imported_binding(tmp_path):
+    from scar.contract import read_member
+    from scar.frontend import build
+    from scar.middle import plan
+
+    (tmp_path / "provider.py").write_text("mode = 'off'\n")
+    source = tmp_path / "entry.py"
+    source.write_text(
+        "import provider as selected\n"
+        "if selected.mode == 'on':\n"
+        "    answer = selected.items[0, 1] / selected.items[1, 0]\n"
+    )
+    code = compile(source.read_bytes(), str(source), "exec")
+    graph, out = tmp_path / "graph", tmp_path / "plan"
+    build(source, graph)
+    source.unlink()
+    plan(graph, out)
+    ir = json.loads((out / "exec-ir.json").read_bytes())
+    index = read_member(out, ir["module"]["source_dispatch"])
+    root = next(r for r in index["functions"] if r["symbol"] == index["entry"])
+    body = read_member(out, root["body"])["body"]
+    published = body[0]["value"]
+    branch = next(s for s in body if s["op"] == "if")
+    [store] = [s["value"] for s in branch["then"]]
+    assert branch["else"] == [] and store["op"] == "module_global_store"
+    left, la, lk, li, right, ra, rk, ri, div = store["evaluation"]
+    for load, attr, key, sub in ((left, la, lk, li), (right, ra, rk, ri)):
+        assert load["op"] == "module_name_load"
+        assert load["lookup_order"] == [
+            "frame.locals",
+            "frame.globals",
+            "frame.builtins",
+        ]
+        assert (
+            load["source_evidence"]["prior_publication"]["occurrence"]
+            == published["occurrence"]
+        )
+        assert attr["op"] == "source_object_attribute" and attr["base"] == {
+            "from_offset": load["offset"]
+        }
+        assert key["source"] == "current_frame_co_consts"
+        assert sub["op"] == "source_object_getitem" and sub["may_raise"]
+        assert sub["base"] == {"from_offset": attr["offset"]} and sub["key"] == {
+            "from_offset": key["offset"]
+        }
+    assert li["offset"] < right["offset"] and lk["operand"] != rk["operand"]
+    assert div["op"] == "source_object_binary" and div["operator"] == "div"
+    assert div["left"] == {"from_offset": li["offset"]} and div["right"] == {
+        "from_offset": ri["offset"]
+    }
+    assert store["name"] == "answer" and store["value"] == {
+        "from_offset": div["offset"]
+    }
+    assert (
+        store["target"]["instruction"] == store["source_expression"]["instructions"][-1]
+    )
+    assert (
+        store["external_effect"] == "UNKNOWN"
+        and "preserve_completed_effects" in store["unwind"]
+    )
+
+    for enabled, fail, expected in (
+        (False, False, []),
+        (True, False, [(0, 1), (1, 0)]),
+        (True, True, [(0, 1), (1, 0)]),
+    ):
+        events = []
+
+        class Provider:
+            def __init__(self, rhs):
+                self.rhs = rhs
+                self.mode = "on" if enabled else "off"
+                self.items = self
+
+            def __getitem__(self, key):
+                events.append(key)
+                if not self.rhs:
+                    env["selected"] = Provider(True)
+                    return 8
+                if fail:
+                    raise LookupError("changed receiver")
+                return 2
+
+        env = {
+            "__builtins__": {"__import__": lambda *args: Provider(False)},
+            "answer": "old",
+        }
+        if fail:
+            with pytest.raises(LookupError, match="changed receiver"):
+                exec(code, env)
+        else:
+            exec(code, env)
+        assert events == expected
+        assert env["answer"] == (4 if enabled and not fail else "old")
+
+
 def test_open_condition_consumes_one_actual_truth_and_routes_its_result(tmp_path):
     from types import SimpleNamespace
 
@@ -11322,9 +11418,13 @@ def test_conditional_module_rebuilds_from_unknown_bindings_and_owns_its_imports(
 def test_conditional_callee_reads_bound_slots_and_returns_through_original_call(
     tmp_path,
 ):
+    import dis
+    from types import CodeType
+
     from scar.contract import read_member
     from scar.frontend import build
     from scar.middle import plan
+    from scar.middle.binding import _definition
 
     package = tmp_path / "lib"
     package.mkdir()
@@ -11340,13 +11440,40 @@ def test_conditional_callee_reads_bound_slots_and_returns_through_original_call(
     )
     entry = tmp_path / "run.py"
     early = tmp_path / "early.py"
-    early.write_text("def first():\n    return 'early'\n")
+    early.write_text("def first():\n    print('first')\n    print('second')\n")
+    code = next(
+        c
+        for c in compile(early.read_bytes(), str(early), "exec").co_consts
+        if isinstance(c, CodeType)
+    )
+    expected_return = list(dis.get_instructions(code))[-1]
     entry.write_text(
         "import early as local\nlocal.first()\n"
         "import lib\nlib.transform(get_item())\nlib.label()\n"
     )
     graph, output = tmp_path / "graph", tmp_path / "plan"
     build(entry, graph)
+    captured = json.loads((graph / "graph.json").read_bytes())
+    early_unit = next(u for u in captured["units"] if u["path"] == early.name)
+    early_fn = next(
+        f
+        for f in read_member(graph, early_unit["graph"])["functions"]
+        if f["signature"]["name"] == "py:early:first"
+    )
+    terminal = early_fn["signature"]["python_scope"]["frame_exit"]
+    original = terminal["code_sha256"]
+    terminal["code_sha256"] = "0" * 64
+    with pytest.raises(ValueError, match="source frame exit"):
+        _definition(early_fn)
+    terminal["code_sha256"] = original
+    edge = next(
+        n["source_expression"]["normal_successor"]
+        for n in early_fn["nodes"]
+        if "normal_successor" in n.get("source_expression", {})
+    )
+    edge["opcode"] = "NOP"
+    with pytest.raises(ValueError, match="source expression continuation"):
+        _definition(early_fn)
     early.unlink()
     source.unlink()
     entry.unlink()
@@ -11358,6 +11485,33 @@ def test_conditional_callee_reads_bound_slots_and_returns_through_original_call(
     }
     fragment = fragments["py:lib:transform"]
     label = fragments["py:lib:label"]
+    implicit = fragments["py:early:first"]
+    assert implicit["completion"] == "conditional_source_body"
+    early_body = read_member(output, implicit["function"])
+    first_print, second_print, terminal = early_body["body"]
+    assert (
+        first_print["steps"][-1]["op"]
+        == second_print["steps"][-1]["op"]
+        == "source_object_discard"
+    )
+    assert (
+        second_print["source_expression"]["normal_successor"]["offset"]
+        == terminal["steps"][0]["offset"]
+    )
+    returned = terminal["steps"][-1]
+    assert (
+        returned["op"] == "frame_return" and returned["destination"] == "actual_caller"
+    )
+    assert (returned["offset"], returned["opcode"]) == (
+        expected_return.offset,
+        expected_return.opname,
+    )
+    none_slot = (
+        returned["value"]["index"]
+        if len(terminal["steps"]) == 1
+        else terminal["steps"][0]["operand"]
+    )
+    assert early_body["constants"][str(none_slot)] == dict(kind="NoneType", value=None)
     assert label["completion"] == "conditional_source_body"
     label_body = read_member(output, label["function"])
     label_result = label_body["body"][0]["steps"]

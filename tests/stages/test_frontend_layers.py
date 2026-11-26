@@ -4878,3 +4878,105 @@ def test_named_handler_witnesses_definition_and_post_cleanup_continuation(tmp_pa
             for r in rows
         )
     assert "source_expression" not in body[max(body)]
+
+
+def test_function_implicit_exit_matches_last_source_call(tmp_path):
+    import dis
+    from types import CodeType
+
+    from scar.contract import read_member
+    from scar.frontend import build
+
+    source = tmp_path / "exits.py"
+    source.write_text(
+        "def finish(sink):\n    sink(1)\n    sink(2)\n"
+        "def explicit(sink):\n    sink(1)\n    return None\n"
+        "def alternate(flag):\n    if flag: return 1\n    return None\n"
+        "def quiet():\n    pass\n"
+    )
+    module = compile(source.read_bytes(), str(source), "exec", dont_inherit=True)
+    children = {c.co_name: c for c in module.co_consts if isinstance(c, CodeType)}
+    out = tmp_path / "graph"
+    build(source, out)
+    [unit] = json.loads((out / "graph.json").read_bytes())["units"]
+    for fn in read_member(out, unit["graph"])["functions"]:
+        scope = fn["signature"]["python_scope"]
+        if scope["kind"] != "function":
+            continue
+        name = scope["definition_code"]["name"]
+        if name in {"explicit", "alternate"}:
+            assert "frame_exit" not in scope
+            continue
+        code = children[name]
+        exit_ = scope["frame_exit"]
+        assert exit_["code_sha256"] == scope["definition_code"]["code_sha256"]
+        rows = exit_["instructions"]
+        assert [r["opcode"] for r in rows] in (
+            ["RETURN_CONST"],
+            ["LOAD_CONST", "RETURN_VALUE"],
+        )
+        instructions = list(dis.get_instructions(code))
+        for row, instruction in zip(rows, instructions[-len(rows) :], strict=True):
+            assert (row["opcode"], row["offset"], row["position"]) == (
+                instruction.opname,
+                instruction.offset,
+                list(instruction.positions),
+            )
+        assert code.co_consts[rows[0]["index"]] is None
+        if name == "finish":
+            calls = [
+                n["source_expression"]
+                for n in fn["nodes"]
+                if n.get("source_expression")
+            ]
+            assert len(calls) == 2 and "normal_successor" not in calls[0]
+            assert calls[1]["instructions"][-1]["offset"] + 2 == rows[0]["offset"]
+            assert calls[1]["normal_successor"] == dict(
+                opcode=rows[0]["opcode"], offset=rows[0]["offset"], cache_offsets=[]
+            )
+
+
+def test_module_indexed_arithmetic_witnesses_ordered_reads_and_store(tmp_path):
+    import dis
+
+    from scar.contract import read_member
+    from scar.frontend import build
+
+    source = tmp_path / "reads.py"
+    source.write_text(
+        "answer = first.table[0, 1] / second.table[1, 0]\n"
+        "ambiguous = first[key] if flag else second[key]\n"
+        "comparison = first[key] + (flag == 1)\n"
+    )
+    program = compile(source.read_bytes(), str(source), "exec", dont_inherit=True)
+    out = tmp_path / "graph"
+    build(source, out)
+    [unit] = json.loads((out / "graph.json").read_bytes())["units"]
+    [fn] = read_member(out, unit["graph"])["functions"]
+    stores = [n for n in fn["nodes"] if n["op"] == "assign"]
+    assert len(stores) == 3 and all("source_expression" not in n for n in stores[1:])
+    proof = stores[0]["source_expression"]
+    rows = proof["instructions"]
+    ops = {i.offset: i for i in dis.get_instructions(program)}
+    assert [row["opcode"] for row in rows] == [
+        ops[row["offset"]].opname for row in rows
+    ]
+    assert [r["name"] for r in rows if r["opcode"] in {"LOAD_NAME", "LOAD_ATTR"}] == [
+        "first",
+        "table",
+        "second",
+        "table",
+    ]
+    keys = [r for r in rows if r["opcode"] == "LOAD_CONST"]
+    assert [program.co_consts[row["index"]] for row in keys] == [(0, 1), (1, 0)]
+    assert len({row["items_sha256"] for row in keys}) == 2
+    assert [
+        i
+        for i, r in enumerate(rows)
+        if r["opcode"] == "BINARY_SUBSCR" or r.get("operator") == "subscript"
+    ] == [3, 7]
+    assert (
+        rows[-2]["operator"] == "div"
+        and rows[-1]["name"] == "answer"
+        and rows[-1]["opcode"] == "STORE_NAME"
+    )

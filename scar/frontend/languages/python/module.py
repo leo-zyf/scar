@@ -631,6 +631,7 @@ class _Scope:
         self.definition_path = qualified if definition_path is None else definition_path
         self.module_scope = globals_only
         self.code = unit.source_code if globals_only else {}
+        self.frame_exit = unit.frame_exit if globals_only else {}
         self.expression_sites = unit.statement_expressions if globals_only else {}
         self.load_sites = unit.name_loads if globals_only else {}
         self.method_codes = {}
@@ -854,11 +855,7 @@ class _Scope:
                 ),
                 graph_backed=True,
                 **({"source_code": self.code} if self.code else {}),
-                **(
-                    {"frame_exit": self.unit.frame_exit}
-                    if kind == "module" and self.unit.frame_exit
-                    else {}
-                ),
+                **({"frame_exit": self.frame_exit} if self.frame_exit else {}),
                 **(
                     {"text_profile": self.unit.text_profile}
                     if self.unit.text_profile
@@ -2063,7 +2060,7 @@ class _Scope:
                     code_sha256=child_code["code_sha256"],
                 )
             if receipt:
-                nested.expression_sites, nested.load_sites = (
+                nested.expression_sites, nested.load_sites, nested.frame_exit = (
                     self.unit.function_expression_sites[tuple_position(node)]
                 )
             definition = nested.definition(node, node.body, params, facts)

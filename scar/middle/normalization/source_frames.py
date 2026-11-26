@@ -356,8 +356,10 @@ class SourceExpressionRegion:
             raise ValueError("local operand disagrees with its function frame slot")
         return dict(slot=slot, name=names[slot])
 
-    def constant(self, node):
-        ins = self.take("LOAD_CONST", "LOAD_SMALL_INT", source=node)
+    def constant(self, node, *, positioned=True):
+        ins = self.take(
+            "LOAD_CONST", "LOAD_SMALL_INT", source=node if positioned else None
+        )
         self.check_literal(node, ins)
         return self.emit(
             ins,
@@ -524,13 +526,17 @@ class SourceExpressionRegion:
             raise ValueError("binary operation does not implement source subscription")
         return ins
 
-    def return_value(self, node):
+    def return_value(self, node, *, implicit=False):
         if self.next_opcode() == "RETURN_CONST":
             ins = self.take("RETURN_CONST")
             self.check_literal(node["value"], ins)
             value = dict(source="current_frame_co_consts", index=ins["index"])
         else:
-            value = self.value(node["value"])
+            value = (
+                self.constant(node["value"], positioned=False)
+                if implicit
+                else self.value(node["value"])
+            )
             ins = self.take("RETURN_VALUE")
         self.emit(
             ins,

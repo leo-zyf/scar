@@ -1,6 +1,6 @@
 """Structure the bound statements and control edges of one selected source frame."""
 
-from scar.contract import json_bytes
+from scar.contract import json_bytes, valid_python_source_successor
 from .source_frames import SourceExpressionRegion
 from .values import source_site
 
@@ -79,6 +79,8 @@ def _suite(nodes, scope, constants, output):
             raise _FrameGap(node, str(error)) from error
         constants.update(used)
         record["steps"] = region.steps
+        if record["op"] == "source_object_region":
+            record["source_expression"] = receipt
         output.append(record)
         if op == "return":
             return False
@@ -101,6 +103,48 @@ def _suite(nodes, scope, constants, output):
             _suite(node["body"], scope, constants, record["body"])
             if not _suite(node.get("else", []), scope, constants, record["else"]):
                 return False
+    return True
+
+
+def _implicit_exit(scope, constants, regions, definition):
+    """Append the bound None return only from a verified normal predecessor."""
+    receipt = scope.get("frame_exit")
+    if receipt is None:
+        return False
+    first = receipt["instructions"][0]
+    if regions:
+        predecessor = regions[-1]
+        source = predecessor.get("source_expression", {})
+        edge = source.get("normal_successor", {})
+        if not (
+            predecessor["op"] == "source_object_region"
+            and valid_python_source_successor(
+                source["instructions"][-1]["offset"], edge
+            )
+            and (edge["offset"], edge["opcode"]) == (first["offset"], first["opcode"])
+        ):
+            return False
+    elif first["offset"] != 2:
+        return False
+    region = SourceExpressionRegion(scope, receipt, constants=constants)
+    node = dict(
+        op="return",
+        value=dict(
+            op="literal",
+            type={"kind": "python_object", "class": "NoneType"},
+            value=None,
+        ),
+        **source_site(definition),
+    )
+    region.return_value(node, implicit=True)
+    regions.append(
+        dict(
+            op="source_object_region",
+            steps=region.steps,
+            source_expression=receipt,
+            **source_site(node),
+        )
+    )
     return True
 
 
@@ -166,8 +210,12 @@ def conditional_function_body(definition, descriptor):
     )
     try:
         falls = _suite(definition["body"], scope, constants, regions)
+        if falls:
+            falls = not _implicit_exit(scope, constants, regions, definition)
     except _FrameGap as error:
         return stop(error.node, str(error))
+    except (IndexError, KeyError, TypeError, ValueError) as error:
+        return stop(definition, str(error))
     if not falls:
         result["completion"] = "conditional_source_body"
         return result
