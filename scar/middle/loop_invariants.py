@@ -270,7 +270,7 @@ def summarize_calls(functions):
 
 
 def _project_aliases(node, aliases, visible):
-    """Use a reaching snapshot only where its preheader definition is visible."""
+    """Use the original value only at loop entries where it is available."""
     op = node["op"]
     if op == "var" and node.get("scope") in {None, "local", "parameter"}:
         origin = aliases.get(node["name"])
@@ -483,7 +483,20 @@ def hoist(function, changes, register, called):
         if value and value[0] == kind:
             incoming[name] = value
             if node["op"] == "var" and node.get("scope") != "global":
-                origin = previous_aliases.get(node["name"])
+                source = node["name"]
+                origin = previous_aliases.get(source)
+                if origin is None:
+                    # A copy made inside the loop preserves its input value.
+                    # Follow that definition only across loops that cannot
+                    # change the original slot on any visit.
+                    origin = next(
+                        (
+                            (id(loop), source)
+                            for loop, invariant, _, _ in active
+                            if source in invariant
+                        ),
+                        None,
+                    )
             elif node["op"] == "cast" and node["value"]["op"] == "var":
                 origin = origins.get(node["value"]["name"])
                 if origin and slots[origin[1]][0] != kind:

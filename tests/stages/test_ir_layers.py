@@ -7953,7 +7953,7 @@ def test_loop_invariants_move_to_the_outermost_proven_preheader():
     repeated = binary("mul", var("x"), literal(101), site="invariant")
     local = binary("mul", var("x"), var("i"), site="outer-index")
     division = binary("div", var("x"), var("denominator"), site="may-trap")
-    unstable = binary("mul", var("changed"), literal(5), site="loop-carried")
+    unstable = binary("mul", var("previous_changed"), literal(5), site="loop-carried")
     external = binary("mul", var("aliased"), literal(5), site="address-taken")
     function = _canonical_function(
         dict(
@@ -7979,10 +7979,24 @@ def test_loop_invariants_move_to_the_outermost_proven_preheader():
                             literal(4),
                             [
                                 dict(
+                                    op="decl", name="first", type="u64", init=var("x")
+                                ),
+                                dict(
+                                    op="decl",
+                                    name="second",
+                                    type="u64",
+                                    init=var("first"),
+                                ),
+                                dict(
                                     op="decl",
                                     name="scale",
                                     type="u64",
-                                    init=deepcopy(repeated),
+                                    init=binary(
+                                        "mul",
+                                        var("second"),
+                                        literal(101),
+                                        site="invariant",
+                                    ),
                                 ),
                                 consume(repeated),
                                 consume(deepcopy(repeated)),
@@ -7996,6 +8010,12 @@ def test_loop_invariants_move_to_the_outermost_proven_preheader():
                                     op="if",
                                     condition=var("denominator"),
                                     then=[consume(division)],
+                                ),
+                                dict(
+                                    op="decl",
+                                    name="previous_changed",
+                                    type="u64",
+                                    init=var("changed"),
                                 ),
                                 consume(unstable),
                                 consume(external),
@@ -8028,10 +8048,13 @@ def test_loop_invariants_move_to_the_outermost_proven_preheader():
     ]
     assert inner["body"][0]["value"] == inner["body"][1]["value"]
     assert inner["body"][4]["then"][0]["value"]["operator"] == "div"
+    assert inner["body"][6]["value"]["left"] == var("previous_changed")
     assert {
         r["slot"] for r in rewrites if r["rule"] == "discard_unused_scalar_snapshot"
-    } == {"scale"}
-    assert "scale" not in function["state_contract"]["private_scalars"]
+    } == {"first", "second", "scale"}
+    assert not {"first", "second", "scale"}.intersection(
+        function["state_contract"]["private_scalars"]
+    )
 
 
 def test_loop_motion_requires_rounding_independent_floating_values():
