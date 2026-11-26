@@ -129,6 +129,95 @@ def object_operand(module, publications, node, code):
     return None
 
 
+def class_body_activation(symbol, scope):
+    """Describe entry into the actual created body, conditional on its invocation."""
+    code = scope["source_code"]
+    result = dict(
+        selection="when_the_actual_created_body_is_invoked_in_a_matching_source_frame",
+        symbol=symbol,
+        code=code,
+        locals="actual_entered_frame_locals_including_builder_prepared_mapping",
+        globals="actual_created_function_globals",
+        builtins="actual_created_function_builtins",
+        completion="source_body_required",
+        on_mismatch="continue_actual_body_in_its_source_equivalent_frame",
+    )
+    proof = scope.get("source_class_body")
+    if not proof:
+        return result
+    rows = proof["instructions"]
+    if (
+        proof["code_sha256"] != code["code_sha256"]
+        or not rows
+        or rows[0]["opcode"] != "RESUME"
+    ):
+        raise ValueError("class body program does not match its class frame")
+    steps, stack = [], []
+    for row in rows[1:]:
+        opcode, pc = row["opcode"], row["offset"]
+        step = dict(offset=pc, instruction=row)
+        if opcode == "LOAD_NAME":
+            step.update(
+                op="module_name_load",
+                instruction=dict(
+                    row, semantics_version=1, code_sha256=code["code_sha256"]
+                ),
+                type={"kind": "handle", "resource": "python_object"},
+                lookup_order=["frame.locals", "frame.globals", "frame.builtins"],
+                lookup="source_mapping_lookup_propagate_nonmissing_errors_or_NameError",
+            )
+            stack.append({"from_offset": pc})
+        elif opcode in {"LOAD_CONST", "LOAD_SMALL_INT"}:
+            step.update(
+                op="source_object_constant",
+                source=(
+                    "current_frame_co_consts"
+                    if opcode == "LOAD_CONST"
+                    else "source_small_integer"
+                ),
+                operand=row["oparg"],
+            )
+            stack.append({"from_offset": pc})
+        elif opcode == "STORE_NAME" and stack:
+            step.update(
+                op="source_frame_namespace_store",
+                namespace="frame.locals",
+                name=row["name"],
+                index=row["index"],
+                value=stack.pop(),
+                may_raise=True,
+                publication="use_source_STORE_NAME_on_actual_frame_locals_with_current_co_names_key",
+            )
+        elif opcode == "NOP":
+            step.update(op="pass")
+        elif opcode in {"RETURN_CONST", "RETURN_VALUE"} and row is rows[-1]:
+            value = (
+                dict(source="current_frame_co_consts", index=row["index"])
+                if opcode == "RETURN_CONST"
+                else stack.pop()
+            )
+            step.update(
+                op="frame_return",
+                opcode=opcode,
+                value=value,
+                destination="actual_caller",
+                lifetime="transfer_result_and_release_frame_locals_at_source_exit",
+            )
+        else:
+            raise ValueError("unsupported class namespace instruction or operand stack")
+        steps.append(step)
+    if stack or not steps or steps[-1]["op"] != "frame_return":
+        raise ValueError("class namespace program has no complete source return")
+    result.update(
+        completion="conditional_source_body",
+        entry_instruction=rows[0],
+        steps=steps,
+        callbacks="preserve_RESUME_and_every_instruction_event_including_source_NOP",
+        unwind="propagate_from_failing_class_instruction_in_its_actual_frame_after_completed_mapping_effects",
+    )
+    return result
+
+
 class SourceExpressionRegion:
     """Consume the graph operands and the sealed instructions in lockstep."""
 
@@ -788,10 +877,13 @@ class SourceExpressionRegion:
                 source="current_frame_co_consts",
                 operand=ins["index"],
             )
+        return self.call_result(node, target, pair, args, kwref, values)
+
+    def call_result(self, node, target, pair, args, kwref=None, values=()):
         ins = self.take(
-            "CALL_KW" if names and self.minor >= 13 else "CALL", source=node
+            "CALL_KW" if kwref is not None and self.minor >= 13 else "CALL", source=node
         )
-        if ins["oparg"] != len(args) + len(names):
+        if ins["oparg"] != len(args) + len(values):
             raise ValueError("argument count disagrees with source call")
         return self.emit(
             ins,
@@ -801,7 +893,7 @@ class SourceExpressionRegion:
             target_layout=pair or "callable_with_explicit_NULL",
             args=args,
             keyword_names=kwref,
-            keyword_values=values,
+            keyword_values=list(values),
             dispatch="consume_source_call_slots_including_method_receiver_at_most_once",
         )
 
@@ -1051,6 +1143,9 @@ class SourceExpressionRegion:
                 operand=pool["index"],
                 expected_tuple={"count": defaults["count"]},
             )
+        return self.make_function(node, symbol, child, default_ref)
+
+    def make_function(self, node, symbol, child, default_ref=None, **ports):
         load = self.take("LOAD_CONST", source=node)
         code = self.emit(
             load,
@@ -1083,9 +1178,10 @@ class SourceExpressionRegion:
             ),
             allocation="source_MAKE_FUNCTION_creates_distinct_function_with_source_metadata_each_execution",
             may_raise=True,
+            **ports,
             **(
                 {"defaults": default_ref}
-                if self.minor == 12 and defaults is not None
+                if self.minor == 12 and default_ref is not None
                 else {}
             ),
         )
@@ -1102,6 +1198,52 @@ class SourceExpressionRegion:
                 same_identity=True,
             )
         return function
+
+    def class_value(self, node):
+        receipt = node["source_class"]
+        symbol = node["body_symbol"]
+        definition = self.definitions[symbol]
+        scope = definition["python_scope"]
+        child = receipt["child"]
+        if (
+            self.scope["kind"] != "module"
+            or definition.get("owner_class") != node["symbol"]
+            or scope.get("kind") != "class"
+            or scope.get("definition_code") != child
+            or scope.get("source_code")
+            != dict(self.code, kind="class", code_sha256=child["code_sha256"])
+            or child.get("name") != node["source_name"]
+            or any(node.get(k) for k in ("decorators", "keywords", "type_params"))
+        ):
+            raise ValueError("class construction requires its bound namespace code")
+        if self.minor == 12:
+            self.take("PUSH_NULL", source=node)
+        builder = self.emit(
+            self.take("LOAD_BUILD_CLASS", source=node),
+            "source_object_load_build_class",
+            node,
+            namespace="current_frame_builtins",
+            name="__build_class__",
+            may_raise=True,
+            lookup="source_LOAD_BUILD_CLASS_lookup_and_missing_or_mapping_exception",
+        )
+        if self.minor >= 13:
+            self.take("PUSH_NULL", source=node)
+        function = self.make_function(
+            node, symbol, child, body_activation=class_body_activation(symbol, scope)
+        )
+        label = self.take("LOAD_CONST", source=node)
+        if label.get("value") != child["name"]:
+            raise ValueError("class name constant differs from the bound source label")
+        name = self.emit(
+            label,
+            "source_object_constant",
+            node,
+            source="current_frame_co_consts",
+            operand=label["index"],
+        )
+        args = [function, name, *(self.value(base) for base in node["bases"])]
+        return self.call_result(node, builder, None, args)
 
     def statement(self, node):
         if node["op"] == "assign" and node["target"]["op"] == "index":
@@ -1137,18 +1279,17 @@ class SourceExpressionRegion:
                 reraise="zero_operands_reraises_actual_handled_exception_with_existing_traceback_or_raises_RuntimeError_if_absent",
                 exception_state="preserve_traceback_cause_context_suppression_and_handled_exception_at_source_transfer",
             )
-        elif node["op"] in {"assign", "python_define"}:
-            value = (
-                self.function(node)
-                if node["op"] == "python_define"
-                else self.value(node["value"])
-            )
+        elif node["op"] in {"assign", "python_define", "python_define_class"}:
+            if node["op"] == "python_define_class":
+                value = self.class_value(node)
+            elif node["op"] == "python_define":
+                value = self.function(node)
+            else:
+                value = self.value(node["value"])
             target = self.target(node["target"], "STORE_NAME", "STORE_GLOBAL")
-            if (
-                node["op"] == "python_define"
-                and node["source_definition"]["child"]["name"] != target["name"]
-            ):
-                raise ValueError("the source function name and store target differ")
+            definition = node.get("source_class") or node.get("source_definition")
+            if definition and target["name"] != definition["child"]["name"]:
+                raise ValueError("the source definition name and store target differ")
             opcode = "module_global_store"
             ports = dict(
                 slot=target["slot"],

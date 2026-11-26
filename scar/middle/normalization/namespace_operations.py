@@ -504,9 +504,10 @@ def _object_operand(frame, node, code):
 def open_object_statement(frame, node, steps):
     """Consume a complete source evaluation stack at its actual store, delete or raise."""
     code = _module_code(frame)
-    field = (
-        "source_definition" if node["op"] == "python_define" else "source_expression"
-    )
+    field = {
+        "python_define": "source_definition",
+        "python_define_class": "source_class",
+    }.get(node["op"], "source_expression")
     receipt = node.get(field)
     if not code or not receipt:
         return False
@@ -531,7 +532,7 @@ def open_object_statement(frame, node, steps):
             {
                 "child_code_match": "qualify_actual_code_constant_type_identity_descriptor_and_empty_freevars_before_first_source_instruction"
             }
-            if field == "source_definition"
+            if field in {"source_definition", "source_class"}
             else {}
         ),
         on_code_mismatch="resume_source_equivalent_execution_before_first_instruction_with_original_stack_and_exception_state",

@@ -325,6 +325,13 @@ def test_class_builder_binds_actual_base_child_and_publish_without_source(tmp_pa
     assert type(program.co_consts[rows[2]["index"]]) is CodeType
     assert rows[5]["name"] == "Exception" and rows[-1]["name"] == "Issue"
     assert receipt["successors"][-1]["offset"] == actual[start + len(rows)].offset
+    body = next(
+        f for f in payload["functions"] if f["signature"]["name"] == site["body_symbol"]
+    )
+    child = body["signature"]["python_scope"]["source_class_body"]
+    publication = next(
+        row for row in child["instructions"] if row.get("name") == "__doc__"
+    )
     source.unlink()
     assert not bind(index, graph)[1]
 
@@ -333,6 +340,7 @@ def test_class_builder_binds_actual_base_child_and_publish_without_source(tmp_pa
         (rows[-2], "oparg", 2),
         (receipt["successors"][-2], "cache_offsets", []),
         (receipt["child"], "code_sha256", "0" * 64),
+        (publication, "name", "__module__"),
     ):
         original = port[key]
         port[key] = wrong
@@ -340,6 +348,179 @@ def test_class_builder_binds_actual_base_child_and_publish_without_source(tmp_pa
         with pytest.raises(ValueError, match="source class"):
             bind(index, graph)
         port[key] = original
+
+
+def test_open_class_publishes_actual_builder_result_and_conditional_namespace(tmp_path):
+    from scar.contract import read_member
+    from scar.frontend import build
+    from scar.middle import plan
+
+    entry = tmp_path / "entry.py"
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    entry.write_text("import pkg\n")
+    child = pkg / "child.py"
+    child.write_text("pass\n")
+    init = pkg / "__init__.py"
+    init.write_text(
+        "from . import child as old\ndel old\n"
+        "class Issue(Exception):\n    'doc'\n    pass\n"
+        "class Later(object):\n    flag = 7\n"
+    )
+    subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-B",
+            "-c",
+            """import builtins,sys
+sys.path.insert(0,sys.argv[1])
+original=builtins.__build_class__
+marker=object()
+def build(fn, name, *bases, **kw):
+    if name == "Issue":
+        assert bases == (Exception,)
+        return marker
+    if name == "Later":
+        assert fn.__globals__["Issue"] is marker and "Later" not in fn.__globals__
+        raise RuntimeError("builder rejected Later")
+    return original(fn,name,*bases,**kw)
+builtins.__build_class__=build
+try:
+    import pkg
+except RuntimeError as error:
+    assert str(error) == "builder rejected Later"
+else:
+    raise AssertionError("missing builder error")
+""",
+            str(tmp_path),
+        ],
+        check=True,
+    )
+    graph, middle = tmp_path / "graph", tmp_path / "ir"
+    build(entry, graph)
+    for path in (entry, init, child):
+        path.unlink()
+    plan(graph, middle)
+    execution = json.loads((middle / "exec-ir.json").read_bytes())
+    dispatch = read_member(middle, execution["module"]["source_dispatch"])
+    loader = next(d for d in dispatch["loaders"] if d["symbol"] == "py:pkg:<init>")
+    fn = read_member(middle, loader["function"])
+    publications = [
+        s["value"] for s in fn["body"] if s.get("value", {}).get("source_class")
+    ]
+    assert [p["name"] for p in publications] == ["Issue", "Later"]
+
+    def ref(step):
+        return {"from_offset": step["offset"]}
+
+    for op in publications:
+        load, code, make, label, base, call = op["evaluation"]
+        assert (
+            load["op"] == "source_object_load_build_class"
+            and load["namespace"] == "current_frame_builtins"
+        )
+        assert code["expected_code"] == op["source_class"]["child"]
+        assert make["code"] == ref(code)
+        assert call["target"] == ref(load) and call["args"] == [
+            ref(make),
+            ref(label),
+            ref(base),
+        ]
+        assert base["lookup_order"] == [
+            "frame.locals",
+            "frame.globals",
+            "frame.builtins",
+        ]
+        assert op["op"] == "module_global_store" and op["value"] == ref(call)
+        assert op["target"]["instruction"] == op["source_class"]["instructions"][-1]
+        activation = make["body_activation"]
+        assert (
+            activation["code"]["kind"] == "class"
+            and activation["code"]["code_sha256"]
+            == code["expected_code"]["code_sha256"]
+        )
+        assert activation["selection"].startswith(
+            "when_the_actual_created_body_is_invoked"
+        )
+    first = publications[0]["evaluation"][2]["body_activation"]
+    assert first["completion"] == "conditional_source_body"
+    steps = first["steps"]
+    assert steps[0]["instruction"]["name"] == "__name__"
+    stores = [s for s in steps if s["op"] == "source_frame_namespace_store"]
+    expected = ["__module__", "__qualname__", "__doc__"]
+    if sys.version_info.minor >= 13:
+        expected = [
+            "__module__",
+            "__qualname__",
+            "__firstlineno__",
+            "__doc__",
+            "__static_attributes__",
+        ]
+    assert [s["name"] for s in stores] == expected
+    for store in stores:
+        assert store["namespace"] == "frame.locals" and store["may_raise"]
+        assert store["value"] == ref(steps[steps.index(store) - 1])
+    assert (
+        steps[-1]["op"] == "frame_return"
+        and steps[-1]["destination"] == "actual_caller"
+    )
+    incomplete = publications[1]["evaluation"][2]["body_activation"]
+    assert (
+        incomplete["completion"] == "source_body_required" and "steps" not in incomplete
+    )
+
+
+@pytest.mark.parametrize("failing", [False, True])
+def test_source_dispatch_preserves_repeated_import_sites(tmp_path, failing):
+    from scar.contract import read_member
+    from scar.frontend import build
+    from scar.middle import plan
+
+    source = tmp_path / "entry.py"
+    module = tmp_path / "supplied.py"
+    if failing:
+        source.write_text(
+            'try:\n    import supplied\nexcept ValueError:\n    print("first")\n'
+            'try:\n    import supplied as retry\nexcept ValueError:\n    print("retry")\n'
+        )
+        module.write_text('print("loaded")\nraise ValueError("failed")\n')
+    else:
+        source.write_text(
+            "import supplied\nimport supplied as again\nprint(supplied.run(), again.run())\n"
+        )
+        module.write_text('def run():\n    return "loaded"\n')
+    request = tmp_path / "request.json"
+    request.write_text(
+        json.dumps(
+            {
+                "source": source.name,
+                "entry_environment": {
+                    "kind": "standalone_script",
+                    "deployment": "isolated_project_modules_v1",
+                },
+            }
+        )
+    )
+    graph, out = tmp_path / "graph", tmp_path / "plan"
+    build(request, graph)
+    source.unlink()
+    module.unlink()
+    plan(graph, out)
+    ir = json.loads((out / "exec-ir.json").read_bytes())["module"]
+    environment = ir["python_entry_environment"]
+    assert (
+        environment["entries"][0]["declaration"]["deployment"]
+        == "isolated_project_modules_v1"
+    )
+    assert environment["analysis"]["application_initial_cache"] == "unproven"
+    source_dispatch = read_member(out, ir["source_dispatch"])
+    assert source_dispatch["completion"] == "modeled_source_entry"
+    sites = {row["site"] for row in source_dispatch["required_imports"]}
+    loaders = source_dispatch["loaders"]
+    assert len(sites) == len(loaders) == 2
+    assert sites == {loader["site"] for loader in loaders}
+    assert len({loader["entry"]["code"]["code_sha256"] for loader in loaders}) == 1
 
 
 def test_loader_owns_result_separately_from_conditional_source_body(tmp_path):

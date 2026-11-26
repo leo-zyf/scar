@@ -4365,3 +4365,102 @@ def test_definition_binds_each_runtime_default_to_the_parent_frame(tmp_path):
         "index": pooled["instructions"][0]["index"],
     }
     assert parent.co_consts[pooled["positional_defaults"]["index"]] == ((1, 2),)
+
+
+def test_class_namespace_writes_and_exit_belong_to_the_child_code(tmp_path):
+    import dis
+    from types import CodeType
+
+    from scar.contract import digest, json_bytes, read_member
+    from scar.frontend import build
+    from scar.frontend.languages.python.environment import code_digest
+
+    source = tmp_path / "classes.py"
+    source.write_text(
+        "\n" * 260 + "class Documented(Exception):\n"
+        '    (\n        "  first\\n"\n        "  second"\n    )\n'
+        "    pass\n    pass\n"
+        "class Empty: pass\n"
+        'class Explicit:\n    __module__ = "override"\n'
+        "class Conditional:\n    if choice: pass\n"
+    )
+    text = source.read_bytes()
+    module_code = compile(text, str(source), "exec", dont_inherit=True)
+    ast_classes = {n.name: n for n in ast.parse(text).body}
+    children = {c.co_name: c for c in module_code.co_consts if type(c) is CodeType}
+    out = tmp_path / "graph"
+    build(source, out)
+    [unit] = json.loads((out / "graph.json").read_bytes())["units"]
+    functions = read_member(out, unit["graph"])["functions"]
+    bodies = {
+        f["signature"]["python_scope"]["definition_code"]["name"]: f
+        for f in functions
+        if f["signature"]["python_scope"].get("kind") == "class"
+    }
+    assert set(bodies) == set(ast_classes)
+    for name, body in bodies.items():
+        scope = body["signature"]["python_scope"]
+        code = children[name]
+        assert scope["source_code"]["code_sha256"] == code_digest(code)
+        if name in {"Explicit", "Conditional"}:
+            assert "source_class_body" not in scope
+            continue
+        proof = scope["source_class_body"]
+        rows = proof["instructions"]
+        assert proof["code_sha256"] == scope["definition_code"]["code_sha256"]
+        actual = list(dis.get_instructions(code))
+        assert len(rows) == len(actual)
+        for row, ins in zip(rows, actual):
+            assert (
+                row["opcode"],
+                row["offset"],
+                row["position"],
+                row.get("oparg"),
+            ) == (ins.opname, ins.offset, list(ins.positions), ins.arg)
+            if ins.opname in {"LOAD_NAME", "STORE_NAME"}:
+                assert row["name"] == code.co_names[row["index"]] == ins.argval
+            elif ins.opname in {"LOAD_CONST", "RETURN_CONST", "LOAD_SMALL_INT"}:
+                assert row["type"] == type(ins.argval).__name__
+                assert row["value"] == (
+                    list(ins.argval) if isinstance(ins.argval, tuple) else ins.argval
+                )
+                if ins.opname == "LOAD_SMALL_INT":
+                    assert "index" not in row
+                else:
+                    assert code.co_consts[row["index"]] is ins.argval
+        stores = [r["name"] for r in rows if r["opcode"] == "STORE_NAME"]
+        assert stores[:2] == ["__module__", "__qualname__"]
+        assert ("__doc__" in stores) == (name == "Documented")
+        assert rows[-1]["opcode"] in {"RETURN_CONST", "RETURN_VALUE"}
+        if rows[-1]["opcode"] == "RETURN_VALUE":
+            assert (
+                stores[2] == "__firstlineno__" and stores[-1] == "__static_attributes__"
+            )
+            assert rows[-2]["value"] is None and rows[-2]["type"] == "NoneType"
+        syntax = ast_classes[name]
+        position = lambda n: [n.lineno, n.end_lineno, n.col_offset, n.end_col_offset]
+        assert proof["position"] == position(syntax)
+        assert [s["position"] for s in proof["statements"]] == [
+            position(s) for s in syntax.body
+        ]
+        if name == "Documented":
+            doc = syntax.body[0]
+            assert [s["kind"] for s in proof["statements"]] == [
+                "docstring",
+                "pass",
+                "pass",
+            ]
+            assert (
+                proof["statements"][0]["value_position"]
+                == position(doc.value)
+                != position(doc)
+            )
+            assert proof["statements"][0]["source_value_sha256"] == digest(
+                json_bytes(doc.value.value)
+            )
+            body_literal = next(n for n in body["nodes"] if n.get("op") == "literal")
+            assert body_literal["value"] == doc.value.value
+            [doc_store] = [r for r in rows if r.get("name") == "__doc__"]
+            assert doc_store["position"] == position(doc.value)
+        else:
+            assert [s["kind"] for s in proof["statements"]] == ["pass"]

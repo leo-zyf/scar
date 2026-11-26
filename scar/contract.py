@@ -42,9 +42,11 @@ MODULE_REGISTRY_OPERATIONS = frozenset(
         "source_exception_bind",
         "source_exception_clear",
         "source_exception_raise",
+        "source_frame_namespace_store",
         "source_object_region",
         "source_object_attribute",
         "source_object_constant",
+        "source_object_load_build_class",
         "source_object_make_function",
         "source_object_set_function_defaults",
         "source_object_convert",
@@ -94,7 +96,7 @@ def validate_python_entry_declaration(declaration):
     """Validate a requested launch mode, without granting its startup premises."""
     if (
         not isinstance(declaration, dict)
-        or set(declaration) - {"kind", "interpreter", "flags"}
+        or set(declaration) - {"kind", "interpreter", "flags", "deployment"}
         or not isinstance(declaration.get("kind"), str)
         or declaration.get("kind")
         not in {"standalone_script", "embedded", "unspecified"}
@@ -111,6 +113,14 @@ def validate_python_entry_declaration(declaration):
         not isinstance(flag, str) or not flag or "\0" in flag for flag in flags
     ):
         raise ValueError("Python entry flags must be argument strings")
+    if "deployment" in declaration and (
+        declaration["deployment"] != "isolated_project_modules_v1"
+        or declaration["kind"] != "standalone_script"
+        or flags not in ([], ["-E", "-S", "-B"])
+    ):
+        raise ValueError(
+            "isolated project module deployment requires standalone -E -S -B"
+        )
 
 
 def validate_python_entry_environment(record):

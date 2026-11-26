@@ -88,6 +88,7 @@ class ParsedUnit:
     statement_expressions: dict = field(default_factory=dict)
     definition_sites: dict = field(default_factory=dict)
     class_sites: dict = field(default_factory=dict)
+    class_body_sites: dict = field(default_factory=dict)
     function_expression_sites: dict = field(default_factory=dict)
     exception_handlers: dict = field(default_factory=dict)
 
@@ -1979,16 +1980,124 @@ def _module_frame_exit(instructions, code_sha256):
     return dict(code_sha256=code_sha256, instructions=rows)
 
 
+def _class_body_site(code, node, code_sha256):
+    """Witness every opcode of a plain class suite containing a docstring or passes."""
+    doc = ast.get_docstring(node, clean=False)
+    passes = node.body[int(doc is not None) :]
+    if any(not isinstance(stmt, ast.Pass) for stmt in passes) or code.co_exceptiontable:
+        return None
+    ops = list(dis.get_instructions(code))
+    if not ops or ops[0].positions.lineno != code.co_firstlineno:
+        return None
+    head = ops[0].positions
+    expected = [
+        ("RESUME", 0, head),
+        ("LOAD_NAME", "__name__", head),
+        ("STORE_NAME", "__module__", head),
+        ("LOAD_CONST", code.co_qualname, head),
+        ("STORE_NAME", "__qualname__", head),
+    ]
+    newer = sys.version_info[:2] >= (3, 13)
+    if newer:
+        expected.extend(
+            [
+                ({"LOAD_CONST", "LOAD_SMALL_INT"}, code.co_firstlineno, head),
+                ("STORE_NAME", "__firstlineno__", head),
+            ]
+        )
+    statements = []
+    if doc is not None:
+        statement = node.body[0]
+        pos = tuple_position(statement.value)
+        statements.append(
+            dict(
+                kind="docstring",
+                position=list(tuple_position(statement)),
+                value_position=list(pos),
+                source_value_sha256=digest(json_bytes(doc)),
+            )
+        )
+        # CPython 3.13+ can clean indentation. Keep the actual pool string
+        # and pair its span with the original literal without reformatting it.
+        expected.extend(
+            [("LOAD_CONST", str if newer else doc, pos), ("STORE_NAME", "__doc__", pos)]
+        )
+    statements.extend(
+        dict(kind="pass", position=list(tuple_position(stmt))) for stmt in passes
+    )
+    expected.extend(("NOP", None, tuple_position(stmt)) for stmt in passes[:-1])
+    end = tuple_position(passes[-1] if passes else node.body[0].value)
+    # On a single physical line a final pass can have no instruction of its
+    # own. In 3.12 an otherwise empty suite can return at its prologue span.
+    if (
+        doc is None
+        and len(passes) == 1
+        and end[0] == head.lineno
+        and ops[-1].positions == head
+    ):
+        end = head
+    if newer:
+        expected.extend(
+            [
+                ("LOAD_CONST", (), end),
+                ("STORE_NAME", "__static_attributes__", end),
+                ("LOAD_CONST", None, end),
+                ("RETURN_VALUE", None, end),
+            ]
+        )
+    else:
+        expected.append(("RETURN_CONST", None, end))
+    if len(ops) != len(expected) or len(code.co_code) != 2 * len(ops):
+        return None
+    rows = []
+    for index, (ins, (opcode, value, position)) in enumerate(zip(ops, expected)):
+        if (
+            ins.offset != 2 * index
+            or ins.is_jump_target
+            or None in ins.positions
+            or ins.positions != position
+            or (
+                ins.opname not in opcode
+                if isinstance(opcode, set)
+                else ins.opname != opcode
+            )
+            or (
+                type(ins.argval) is not str
+                if value is str
+                else type(ins.argval) is not type(value) or ins.argval != value
+            )
+        ):
+            return None
+        row = _positioned_instruction(ins)
+        if ins.opname in {"LOAD_CONST", "RETURN_CONST", "LOAD_SMALL_INT"}:
+            if ins.opname != "LOAD_SMALL_INT":
+                if code.co_consts[ins.arg] is not ins.argval:
+                    return None
+                row["index"] = ins.arg
+            row.update(
+                type=type(ins.argval).__name__,
+                value=list(ins.argval) if type(ins.argval) is tuple else ins.argval,
+            )
+        rows.append(row)
+    return dict(
+        semantics_version=1,
+        code_sha256=code_sha256,
+        position=list(tuple_position(node)),
+        instructions=rows,
+        statements=statements,
+    )
+
+
 def _class_sites(program, instructions, classes, handlers, loads):
     """Find the original builder, class code and publication for direct class sites."""
-    sites, seen, repeated = {}, set(), set()
+    sites, bodies, seen, repeated = {}, {}, set(), set()
     before_make = (
         ("PUSH_NULL", "LOAD_BUILD_CLASS", "LOAD_CONST")
         if sys.version_info[:2] == (3, 12)
         else ("LOAD_BUILD_CLASS", "PUSH_NULL", "LOAD_CONST")
     )
     if sys.version_info[:2] not in ((3, 12), (3, 13), (3, 14)):
-        return {}
+        return {}, {}
     for index, make in enumerate(instructions):
         node = classes.get(make.positions)
         if node is None or make.opname != "MAKE_FUNCTION" or index < 3:
@@ -2081,7 +2190,14 @@ def _class_sites(program, instructions, classes, handlers, loads):
                 code_sha256=code_digest(child),
             ),
         )
-    return {span: site for span, site in sites.items() if span not in repeated}
+        if body := _class_body_site(
+            child, node, sites[make.positions]["child"]["code_sha256"]
+        ):
+            bodies[make.positions] = body
+    for span in repeated:
+        sites.pop(span, None)
+        bodies.pop(span, None)
+    return sites, bodies
 
 
 def _compiler_sites(tree, path, relative, source_hash):
@@ -2206,8 +2322,10 @@ def _compiler_sites(tree, path, relative, source_hash):
         if definitions
         else {}
     )
-    class_sites = (
-        _class_sites(program, instructions, classes, handlers, loads) if classes else {}
+    class_sites, class_body_sites = (
+        _class_sites(program, instructions, classes, handlers, loads)
+        if classes
+        else ({}, {})
     )
     stores, document = (
         _constant_store_sites(program, instructions, assignments, handlers, docstring)
@@ -2309,6 +2427,7 @@ def _compiler_sites(tree, path, relative, source_hash):
         statement_expressions=statement_expressions,
         definition_sites={span: proof for span, (proof, _) in definition_sites.items()},
         class_sites=class_sites,
+        class_body_sites=class_body_sites,
         function_expression_sites={
             span: _function_expression_sites(
                 child, definitions[span], following, inherited

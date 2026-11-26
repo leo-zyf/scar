@@ -541,7 +541,11 @@ def seal_product(module, out, *, status, graph_sha256, contract, issues=()):
             ),
             **{
                 k: payload[k]
-                for k in ("source_imports", "source_dispatch")
+                for k in (
+                    "python_entry_environment",
+                    "source_imports",
+                    "source_dispatch",
+                )
                 if k in payload
             },
         }

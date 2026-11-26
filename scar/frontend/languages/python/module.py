@@ -439,6 +439,7 @@ class _ModuleGraph:
         self.statement_expressions = parsed.statement_expressions
         self.definition_sites = parsed.definition_sites
         self.class_sites = parsed.class_sites
+        self.class_body_sites = parsed.class_body_sites
         self.function_expression_sites = parsed.function_expression_sites
         self.exception_handlers = parsed.exception_handlers
         self.source_lines = parsed.source_text.splitlines()
@@ -1927,6 +1928,10 @@ class _Scope:
                 body = nested.definition(node, node.body, [], {})
                 if receipt:
                     body["python_scope"]["definition_code"] = child
+                    if body_proof := self.unit.class_body_sites.get(
+                        tuple_position(node)
+                    ):
+                        body["python_scope"]["source_class_body"] = body_proof
                 body.update(scope_kind="class", owner_class=symbol)
                 self.unit.functions.append(body)
                 self.calls.add(body_symbol)

@@ -9,6 +9,7 @@ from .source_binding import (
     bind_module_exit,
     bind_named_fromlist,
     bind_source_class,
+    bind_source_class_body,
     bind_source_expression,
     bind_source_definition,
     loader_ports,
@@ -229,7 +230,10 @@ def _definition(graph, declarations=None):
             return result
         return {key: read(field) for key, field in value.items()}
 
-    return {**read(graph["signature"]), "body": read(graph["entry"])}
+    definition = {**read(graph["signature"]), "body": read(graph["entry"])}
+    if "source_class_body" in definition.get("python_scope", {}):
+        bind_source_class_body(definition)
+    return definition
 
 
 def _validate_numeric_evidence(unit, payload):

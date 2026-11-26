@@ -1271,6 +1271,155 @@ def bind_source_class(node, scope, declarations):
             raise ValueError("source class base disagrees with its live name operand")
 
 
+def _class_body_literal(row, expected, kind, *, opcodes=("LOAD_CONST",)):
+    if row.get("opcode") not in opcodes or row.get("type") != kind:
+        return False
+    index = row.get("oparg")
+    return (
+        type(index) is int
+        and index >= 0
+        and (
+            "index" not in row and index == expected
+            if row["opcode"] == "LOAD_SMALL_INT"
+            else type(row.get("index")) is int and row["index"] == index
+        )
+        and "value" in row
+        and type(row["value"]) is type(expected)
+        and row["value"] == expected
+    )
+
+
+def _class_body_name(row, opcode, name):
+    index = row.get("index")
+    return (
+        row.get("opcode") == opcode
+        and row.get("name") == name
+        and type(index) is int
+        and index >= 0
+        and index == row.get("oparg")
+    )
+
+
+def bind_source_class_body(definition):
+    """Validate the class namespace instruction sequence against its graph body."""
+    scope = definition["python_scope"]
+    code, child = scope["source_code"], scope["definition_code"]
+    proof = scope["source_class_body"]
+    position = _graph_position(definition, code)
+    rows = proof.get("instructions")
+    source = proof.get("statements")
+    compiler = code.get("compiler", "")
+    legacy = compiler.startswith("cpython 3.12.")
+    extended = compiler.startswith(("cpython 3.13.", "cpython 3.14."))
+    if not (
+        scope.get("kind") == code.get("kind") == "class"
+        and child["code_sha256"] == proof.get("code_sha256") == code["code_sha256"]
+        and position is not None
+        and type(proof.get("semantics_version")) is int
+        and proof["semantics_version"] == 1
+        and proof.get("position") == position
+        and (legacy or extended)
+        and isinstance(rows, list)
+        and len(rows) >= (6 if legacy else 10)
+        and all(
+            isinstance(row, dict)
+            and type(row.get("offset")) is int
+            and row["offset"] == offset * 2
+            and (
+                _inside_source(position, row.get("position"))
+                or row.get("position") == [position[0], position[0], 0, 0]
+            )
+            for offset, row in enumerate(rows)
+        )
+        and isinstance(source, list)
+        and len(source) == len(definition["body"])
+    ):
+        raise ValueError(
+            "source class body disagrees with its scope or instruction region"
+        )
+    doc = None
+    passes = set()
+    for index, (statement, node) in enumerate(zip(source, definition["body"])):
+        pos = _graph_position(node, code)
+        if not isinstance(statement, dict) or pos != statement.get("position"):
+            raise ValueError("source class body syntax disagrees with graph statements")
+        if statement.get("kind") == "pass" and node["op"] == "pass":
+            passes.add(tuple(pos))
+            continue
+        value = node.get("value", {})
+        if not (
+            index == 0
+            and statement.get("kind") == "docstring"
+            and node["op"] == "expr"
+            and value.get("op") == "literal"
+            and isinstance(value.get("value"), str)
+            and _graph_position(value, code) == statement.get("value_position")
+            and digest(json_bytes(value["value"]))
+            == statement.get("source_value_sha256")
+        ):
+            raise ValueError("source class body has an unbound statement")
+        doc = statement
+    if not (
+        rows[0].get("opcode") == "RESUME"
+        and rows[0].get("oparg") == 0
+        and _class_body_name(rows[1], "LOAD_NAME", "__name__")
+        and _class_body_name(rows[2], "STORE_NAME", "__module__")
+        and _class_body_literal(rows[3], child["qualname"], "str")
+        and _class_body_name(rows[4], "STORE_NAME", "__qualname__")
+        and (
+            legacy
+            or _class_body_literal(
+                rows[5],
+                child["first_line"],
+                "int",
+                opcodes=("LOAD_CONST", "LOAD_SMALL_INT"),
+            )
+            and _class_body_name(rows[6], "STORE_NAME", "__firstlineno__")
+        )
+    ):
+        raise ValueError("source class body has invalid implicit entry bindings")
+    cursor = 5 if legacy else 7
+    if doc:
+        load, store = rows[cursor : cursor + 2]
+        value = load.get("value")
+        if not (
+            type(value) is str
+            and _class_body_literal(load, value, "str")
+            and _class_body_name(store, "STORE_NAME", "__doc__")
+            and load.get("position") == store.get("position") == doc["value_position"]
+            and (not legacy or digest(json_bytes(value)) == doc["source_value_sha256"])
+        ):
+            raise ValueError("source class body has invalid docstring publication")
+        cursor += 2
+    while cursor < len(rows) and rows[cursor].get("opcode") == "NOP":
+        pos = tuple(rows[cursor]["position"])
+        if pos not in passes:
+            raise ValueError("source class body NOP has no source pass")
+        passes.remove(pos)
+        cursor += 1
+    if extended:
+        tail = rows[cursor:]
+        if not (
+            len(tail) >= 3
+            and _class_body_literal(tail[0], [], "tuple")
+            and _class_body_name(tail[1], "STORE_NAME", "__static_attributes__")
+        ):
+            raise ValueError(
+                "source class body has invalid static attribute publication"
+            )
+        cursor += 2
+    tail = rows[cursor:]
+    if not (
+        len(tail) == 1
+        and _class_body_literal(tail[0], None, "NoneType", opcodes=("RETURN_CONST",))
+        or len(tail) == 2
+        and _class_body_literal(tail[0], None, "NoneType")
+        and tail[1].get("opcode") == "RETURN_VALUE"
+        and "oparg" not in tail[1]
+    ):
+        raise ValueError("source class body lacks its original normal return")
+
+
 def _bind_import_request(proof, node, scope, *, named):
     request, loc = node["request"], node["location"]
     if not isinstance(proof, dict) or not all(

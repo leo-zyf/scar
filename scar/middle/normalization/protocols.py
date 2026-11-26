@@ -3521,11 +3521,21 @@ class _Frame:
                         "deletion in the open namespace requires each source mapping, name and ordered DELETE instruction",
                     )
             elif op == "python_define_class":
-                self.store(
-                    node["target"],
-                    self.project.objects.define(self, node, steps),
-                    steps,
-                )
+                if self.initializing and self.project.imports.open_namespace:
+                    if not namespace_operations.open_object_statement(
+                        self, node, steps
+                    ):
+                        self.fail(
+                            node,
+                            "source_class_evidence",
+                            "class creation in the open module needs the actual builder, namespace code, base operands, call and result store",
+                        )
+                else:
+                    self.store(
+                        node["target"],
+                        self.project.objects.define(self, node, steps),
+                        steps,
+                    )
             elif op == "python_define":
                 if self.initializing and self.project.imports.open_namespace:
                     if not namespace_operations.open_object_statement(
@@ -3776,6 +3786,18 @@ def _loader_handoff(trial, candidate, function, issue):
                 )
         elif kind == "source_object_make_function":
             child = op["symbol"]
+            if activation := op.get("body_activation"):
+                unresolved.append(
+                    dict(
+                        kind="class_body_activation",
+                        symbol=child,
+                        code_sha256=activation["code"]["code_sha256"],
+                        selection=activation["selection"],
+                        completion=activation["completion"],
+                        **site,
+                    )
+                )
+                continue
             definition = trial.functions.get(child) or trial.function_definitions[child]
             functions.append(
                 dict(
@@ -3997,7 +4019,13 @@ def _source_dispatch(module, project):
             and row["import_effects"]["source_identity"].get("status") == "project"
             and ports
             and len(ports["body"]["candidates"]) == 1
-            and producers
+            # The canonical path may omit an initializer on a nominal cache
+            # hit. This source occurrence still calls the live importer and
+            # publishes its actual result, with the same loader as a miss.
+            and (
+                producers
+                or ports["body"]["candidates"][0]["initializer"] in project.closed
+            )
             and all(
                 p["role"] == "module_body"
                 and p.get("callee") == ports["body"]["candidates"][0]["initializer"]
@@ -4027,6 +4055,20 @@ def _source_dispatch(module, project):
             entry, project.functions[entry], "sequence_element_type", str(error)
         ).issue
         trial.sequences.freeze(trial, partial=True)
+    # A newly modeled handler can reach an import that the nominal attempt
+    # never visited. Its published result still has its own loader candidate.
+    source_regions = [(name, region["body"]) for name, region in trial.closed.items()]
+    source_regions.extend(
+        (region["symbol"], region["body"]) for region in trial.prefixes
+    )
+    for owner, body in source_regions:
+        for op in walk_operations(body, exclude_fields=EXECUTION_ANNOTATIONS):
+            if op["op"] == "module_import_publish" and (
+                candidate := _published_loader_candidate(trial, owner, op)
+            ):
+                key = owner, op["site"]
+                trial.loader_activations.setdefault(key, candidate)
+                refinements.setdefault(key, candidate)
     loaders, callees = _conditional_activations(trial)
     reached = {(f["owner"], f["site"]) for f in loaders}
     for candidate in loaders:
