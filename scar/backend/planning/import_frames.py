@@ -167,54 +167,79 @@ def _constant_store(op, code, offset, slots):
     ]
 
 
-def _module_body(loader, slots):
-    from scar.contract import digest, json_bytes, source_function_publication
+def _function_store(op, code, offset):
+    from scar.contract import source_function_publication
+
+    publication = source_function_publication(op, code["code_sha256"])
+    if not publication or op.get("source_code") != code:
+        return []
+    make, store, child = publication
+    proof = op["source_definition"]
+    source = proof["instructions"]
+    if any(ins["offset"] != offset + i * 2 for i, ins in enumerate(source)):
+        return []
+    defaults = proof.get("positional_defaults")
+    begin = int(defaults is not None)
+    load, creation = source[begin : begin + 2]
+    if store["index"] != store["oparg"]:
+        return []
+    group = []
+    if defaults is not None:
+        compiler = code.get("compiler", "").split(".")
+        if (
+            compiler[:2]
+            not in (["cpython 3", "12"], ["cpython 3", "13"], ["cpython 3", "14"])
+            or (len(source) == 4) != (compiler[1] == "12")
+            or defaults["index"] == load["index"]
+        ):
+            return []
+        group.append(
+            ["LOAD_DEFAULT_TUPLE", offset, defaults["index"], defaults["count"]]
+        )
+    group.extend(
+        [
+            ["LOAD_CHILD_CODE", load["offset"], load["index"], child["code_sha256"]],
+            [
+                "MAKE_FUNCTION",
+                make["offset"],
+                creation.get("oparg", 0),
+                child["code_sha256"],
+            ],
+        ]
+    )
+    for attr in source[begin + 2 : -1]:
+        group.append([attr["opcode"], attr["offset"], attr["oparg"], "defaults"])
+    group.append([store["opcode"], store["offset"], store["index"], store["name"]])
+    return group
+
+
+def _module_intervals(loader, slots):
+    """Yield contiguous, independently enterable runs of whole source statements."""
+    from scar.contract import digest, json_bytes
 
     entry = loader["entry"]
     code = entry["code"]["code_sha256"]
     steps = []
-    for stmt in loader["function"]["body"]:
-        op = stmt.get("value", {})
-        if stmt["op"] == "expr" and "source_constant_store" in op:
-            stores = _constant_store(
-                op, entry["code"], steps[-1][1] + 2 if steps else 2, slots
-            )
-            if not stores:
-                return steps
-            steps.extend(stores)
-            continue
-        published = (
-            source_function_publication(op, code) if stmt["op"] == "expr" else None
-        )
-        if not published:
-            return steps
-        make, store, child = published
-        load, instruction, _ = op["source_definition"]["instructions"]
-        constant = op["evaluation"][0]
-        if (
-            op.get("source_code") != entry["code"]
-            or constant.get("source") != "current_frame_co_consts"
-            or constant.get("operand") != load["index"]
-            or load["index"] != load["oparg"]
-            or instruction.get("oparg", 0) != 0
-            or store["index"] != store["oparg"]
-            or load["offset"] != (steps[-1][1] + 2 if steps else 2)
-            or instruction["offset"] != load["offset"] + 2
-            or store["offset"] != instruction["offset"] + 2
-        ):
-            return steps
-        steps.extend(
-            [
-                [
-                    "LOAD_CHILD_CODE",
-                    load["offset"],
-                    load["index"],
-                    child["code_sha256"],
-                ],
-                ["MAKE_FUNCTION", make["offset"], 0, child["code_sha256"]],
-                [store["opcode"], store["offset"], store["index"], store["name"]],
-            ]
-        )
+    body = loader["function"]["body"]
+    for stmt in body:
+        op = stmt.get("value", {}) if stmt["op"] == "expr" else {}
+        constant = op.get("source_constant_store", {})
+        if constant:
+            first = constant["load"]["offset"]
+            group = _constant_store(op, entry["code"], first, slots)
+        elif proof := op.get("source_definition"):
+            first = proof["instructions"][0]["offset"]
+            group = _function_store(op, entry["code"], first)
+        else:
+            group = []
+        if steps and (not group or group[0][1] != steps[-1][1] + 2):
+            yield steps
+            steps = []
+        steps.extend(group)
+    # Only attach a return reached directly from the last admitted statement,
+    # or the entry of an empty module. A source gap needs its own continuation.
+    if body and not steps:
+        return
     frame_exit = entry.get("frame_exit", {})
     tail = frame_exit.get("instructions", [])
     if (
@@ -223,11 +248,15 @@ def _module_body(loader, slots):
         or tail[0]["offset"] != (steps[-1][1] + 2 if steps else 2)
         or tail[0].get("index") != tail[0].get("oparg")
     ):
-        return steps
+        if steps:
+            yield steps
+        return
     if tail[0].get("type") != "NoneType" or tail[0].get("value_sha256") != digest(
         json_bytes(None)
     ):
-        return steps
+        if steps:
+            yield steps
+        return
     slot = str(tail[0]["index"])
     if slot in slots and slots[slot]["value"] is not None:
         raise ValueError("module return slot conflicts with its published constant")
@@ -245,7 +274,8 @@ def _module_body(loader, slots):
                 ["RETURN_VALUE", tail[1]["offset"], 0, ""],
             ]
         )
-    return steps
+    if steps:
+        yield steps
 
 
 def _callee_return(fragment):
@@ -308,50 +338,55 @@ def activation_bodies(dispatch, checked):
                 site = checked.get((row["owner"], row["site"]), {})
                 if symbol not in site.get("loaders", ()):
                     continue
-                steps = _module_body(row, slots)
+                intervals = _module_intervals(row, slots)
             else:
                 if symbol not in callees:
                     continue
-                steps = _callee_return(row)
-            if not steps:
-                continue
-            code = row["entry"]["code"]
-            used = {}
-            for op, _, index, _ in steps:
-                if op in {"LOAD_CONST", "RETURN_CONST"}:
-                    literal = slots.get(str(index), {})
-                    kind = literal.get("kind")
-                    if type(literal.get("value")).__name__ != kind or kind not in {
-                        "NoneType",
-                        "bool",
-                        "int",
-                        "str",
-                        "float",
-                    }:
-                        break
-                    if kind == "str" and any(
-                        0xD800 <= ord(ch) <= 0xDFFF for ch in literal["value"]
-                    ):
-                        # The native constant-slot ABI represents text as UTF-8.
-                        break
-                    used[str(index)] = literal
-            else:
-                key = symbol, code["code_sha256"]
-                body = dict(
-                    symbol=symbol,
-                    kind=code["kind"],
-                    code_sha256=code["code_sha256"],
-                    instructions=steps,
-                    constants=used,
-                    resume_offset=(
-                        steps[-1][1] + 2
-                        if not steps[-1][0].startswith("RETURN_")
-                        else None
-                    ),
-                )
-                if key in bodies and bodies[key] != body:
-                    raise ValueError(
-                        "conflicting schedules for the same source activation"
+                intervals = [_callee_return(row)]
+            for steps in intervals:
+                if not steps:
+                    continue
+                code = row["entry"]["code"]
+                used = {}
+                for op, _, index, _ in steps:
+                    if op in {"LOAD_CONST", "RETURN_CONST"}:
+                        literal = slots.get(str(index), {})
+                        kind = literal.get("kind")
+                        if type(literal.get("value")).__name__ != kind or kind not in {
+                            "NoneType",
+                            "bool",
+                            "int",
+                            "str",
+                            "float",
+                        }:
+                            break
+                        if kind == "str" and any(
+                            0xD800 <= ord(ch) <= 0xDFFF for ch in literal["value"]
+                        ):
+                            # The native constant-slot ABI represents text as UTF-8.
+                            break
+                        used[str(index)] = literal
+                else:
+                    key = symbol, code["code_sha256"], steps[0][1]
+                    body = dict(
+                        symbol=symbol,
+                        kind=code["kind"],
+                        code_sha256=code["code_sha256"],
+                        instructions=steps,
+                        constants=used,
+                        resume_offset=(
+                            steps[-1][1] + 2
+                            if not steps[-1][0].startswith("RETURN_")
+                            else None
+                        ),
                     )
-                bodies[key] = body
+                    if steps[0][1] != 2:
+                        body["entry_offset"] = steps[0][1]
+                    if any(step[0] == "LOAD_DEFAULT_TUPLE" for step in steps):
+                        body["minor"] = int(code["compiler"].split(".")[1])
+                    if key in bodies and bodies[key] != body:
+                        raise ValueError(
+                            "conflicting schedules for the same source activation"
+                        )
+                    bodies[key] = body
     return list(bodies.values())

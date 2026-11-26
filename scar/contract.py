@@ -46,6 +46,7 @@ MODULE_REGISTRY_OPERATIONS = frozenset(
         "source_object_attribute",
         "source_object_constant",
         "source_object_make_function",
+        "source_object_set_function_defaults",
         "source_object_convert",
         "source_object_format",
         "source_object_build_string",
@@ -1741,29 +1742,79 @@ def source_function_publication(store, parent_code_sha256):
     proof = store.get("source_definition") or {}
     source = proof.get("instructions", ())
     steps = store.get("evaluation", ())
-    if (
-        not parent_code_sha256
-        or proof.get("code_sha256") != parent_code_sha256
-        or len(source) != 3
-        or len(steps) != 2
-    ):
+    if not parent_code_sha256 or proof.get("code_sha256") != parent_code_sha256:
         return None
-    load, make = steps
+    defaults = proof.get("positional_defaults")
+    if len(source) not in {3, 4, 5} or len(steps) != len(source) - 1:
+        return None
+    child_index = int(defaults is not None)
+    split_attributes = len(source) == 5
+    if len(source) != 3 + child_index + int(split_attributes):
+        return None
+    load, make = steps[child_index : child_index + 2]
+    load_ins, make_ins = source[child_index : child_index + 2]
     target = store["target"]["instruction"]
     child = proof["child"]
-    if (
-        source[0]["opcode"] == "LOAD_CONST"
-        and source[1]["opcode"] == "MAKE_FUNCTION"
-        and target == source[2]
+    if not (
+        target == source[-1]
         and target["opcode"] in {"STORE_NAME", "STORE_GLOBAL"}
+        and load_ins["opcode"] == "LOAD_CONST"
         and load["op"] == "source_object_constant"
         and load.get("expected_code") == child
-        and load["offset"] == source[0]["offset"]
-        and make["offset"] == source[1]["offset"]
+        and load.get("source") == "current_frame_co_consts"
+        and load.get("operand") == load_ins.get("index") == load_ins.get("oparg")
+        and load["offset"] == load_ins["offset"]
+        and make_ins["opcode"] == "MAKE_FUNCTION"
+        and make["offset"] == make_ins["offset"]
         and make["op"] == "source_object_make_function"
         and make["code"] == {"from_offset": load["offset"]}
-        and store["value"] == {"from_offset": make["offset"]}
     ):
+        return None
+    published = {"from_offset": make["offset"]}
+    if defaults is not None:
+        pool, load_tuple = source[0], steps[0]
+        if not (
+            isinstance(defaults, dict)
+            and type(defaults.get("index")) is int
+            and type(defaults.get("count")) is int
+            and 0
+            < defaults["count"]
+            <= sum(
+                kind in {"posonly", "positional"}
+                for kind, _ in child.get("parameters", ())
+            )
+            and 0 <= defaults["index"] == pool.get("index") == pool.get("oparg")
+            and pool.get("opcode") == "LOAD_CONST"
+            and pool.get("type") == "tuple"
+            and pool.get("item_count") == defaults["count"]
+            and load_tuple.get("op") == "source_object_constant"
+            and load_tuple.get("source") == "current_frame_co_consts"
+            and load_tuple.get("operand") == defaults["index"]
+            and load_tuple.get("expected_tuple") == {"count": defaults["count"]}
+            and load_tuple.get("offset") == pool["offset"]
+        ):
+            return None
+        tuple_ref = {"from_offset": pool["offset"]}
+        if split_attributes:
+            instruction, attach = source[-2], steps[-1]
+            if not (
+                "oparg" not in make_ins
+                and "defaults" not in make
+                and instruction["opcode"] == "SET_FUNCTION_ATTRIBUTE"
+                and instruction.get("oparg") == 1
+                and attach.get("op") == "source_object_set_function_defaults"
+                and attach.get("offset") == instruction["offset"]
+                and attach.get("function") == published
+                and attach.get("defaults") == tuple_ref
+                and attach.get("same_identity") is True
+            ):
+                return None
+            published = {"from_offset": attach["offset"]}
+        elif make_ins.get("oparg") != 1 or make.get("defaults") != tuple_ref:
+            return None
+    elif make_ins.get("oparg", 0) != 0 or "defaults" in make:
+        return None
+    if store["value"] == published:
         return make, target, child
     return None
 

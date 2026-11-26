@@ -3456,13 +3456,15 @@ def test_native_import_frame_uses_live_registry_and_dispatches_returned_objects(
     assert instructions[4][0] == "STORE_NAME" and instructions[4][3] == member_name
     assert any(value["kind"] == "NoneType" for value in module["constants"].values())
     assert function["constants"] == constants
-    from scar.backend.planning.import_frames import _module_body
+    from scar.backend.planning.import_frames import _module_intervals
 
     loader = dict(index["loaders"][0])
     loader["function"] = read_member(execution, loader["function"])
     published = loader["function"]["body"][0]["value"]
     published["constant_value"]["value"] += " altered"
-    assert _module_body(loader, {}) == []
+    assert all(
+        steps[0][1] > instructions[1][1] for steps in _module_intervals(loader, {})
+    )
     source_code = read_member(execution, index["functions"][0]["body"])
     code = source_code["body"][0]["value"]["source_code"]["code_sha256"]
     import shutil
@@ -3528,6 +3530,166 @@ def test_native_import_frame_uses_live_registry_and_dispatches_returned_objects(
         run = subprocess.run([native, mode, code, "replacement"], capture_output=True)
         assert (run.returncode, run.stdout) == reference[mode], (mode, run.stderr)
         assert run.stderr.decode().strip() == state
+
+
+def test_native_definition_uses_original_positional_defaults(tmp_path):
+    from copy import deepcopy
+
+    from scar.backend import compile_ir
+    from scar.backend.cpp20.imports import _body_tables
+    from scar.backend.planning.import_frames import _module_intervals
+    from scar.contract import read_member
+    from scar.frontend import build
+    from scar.middle import plan
+
+    entry, leaf = tmp_path / "run.py", tmp_path / "properties.py"
+    entry.write_text("import properties\nprint(properties.label())\n")
+    leaf.write_text("def label(x=5, y=None):\n    return 'value'\n")
+    code = compile(leaf.read_bytes(), str(leaf), "exec")
+    ns = {}
+    exec(code, ns)
+    graph, plan_dir, delivery = (tmp_path / n for n in ("graph", "ir", "delivery"))
+    build(entry, graph)
+    assert plan(graph, plan_dir)["status"] == "READY"
+    ir = json.loads((plan_dir / "exec-ir.json").read_bytes())
+    index = read_member(plan_dir, ir["module"]["source_dispatch"])
+    (loader,) = index["loaders"]
+    loader["function"] = read_member(plan_dir, loader["function"])
+    op = loader["function"]["body"][0]["value"]
+    proof = op["source_definition"]
+    slot = proof["positional_defaults"]["index"]
+    assert code.co_consts[slot] is ns["label"].__defaults__
+    assert code.co_consts[slot] == (5, None)
+    bad_loader = deepcopy(loader)
+    bad_loader["function"]["body"][0]["value"]["evaluation"][0]["operand"] += 1
+    assert not list(_module_intervals(bad_loader, {}))
+
+    entry.unlink()
+    leaf.unlink()
+    result = compile_ir(plan_dir, delivery, policy="serial")
+    assert result["status"] == "INCOMPLETE"
+    component = result["source_frame_components"]
+    schedule = read_member(delivery, component["schedule"])
+    (body,) = [
+        r for r in read_member(delivery, schedule["bodies"]) if r["kind"] == "module"
+    ]
+    steps = body["instructions"]
+    assert steps[0] == [
+        "LOAD_DEFAULT_TUPLE",
+        proof["instructions"][0]["offset"],
+        slot,
+        2,
+    ]
+    make = next(s for s in steps if s[0] == "MAKE_FUNCTION")
+    if sys.version_info.minor == 12:
+        assert make[2] == 1 and steps[3][0] == "STORE_NAME"
+        failure_pc = make[1]
+    else:
+        assert (
+            make[2] == 0
+            and steps[3][0] == "SET_FUNCTION_ATTRIBUTE"
+            and steps[3][2:] == [1, "defaults"]
+        )
+        failure_pc = steps[3][1]
+    bad = deepcopy(body)
+    bad["minor"] = 14 if body["minor"] == 12 else 12
+    with pytest.raises(ValueError, match="function publication"):
+        _body_tables([bad], [])
+    later = deepcopy(body)
+    shift = steps[-1][1] + 2
+    for ins in later["instructions"]:
+        ins[1] += shift
+    later["entry_offset"] = later["instructions"][0][1]
+    _body_tables([body, later], [])
+    with pytest.raises(ValueError, match="overlapping"):
+        _body_tables([body, later, later], [])
+    later["entry_offset"] += 2
+    with pytest.raises(ValueError, match="instruction interval"):
+        _body_tables([later], [])
+    bad = deepcopy(body)
+    bad["instructions"][0][2] = steps[1][2]
+    with pytest.raises(ValueError, match="constant slot"):
+        _body_tables([bad], [])
+
+    # The fixture supplies the active code and pool. The typed program supplies
+    # the operand index, attachment opcode, publication target and failure PC.
+    src = tmp_path / "defaults.cpp"
+    src.write_text(r"""
+#define main import_host_main
+#include "import_frame_host.cpp"
+#undef main
+#include <cassert>
+struct defaults_frame : activation {
+  handle tuple = object_value("tuple"), created{};
+  text mode{};
+  unsigned error = 0;
+  bool matches_defaults_tuple(const handle &v, unsigned arity) {
+    return mode != "wrong_tuple" && v == tuple && arity == 2;
+  }
+  handle make_function(const handle &code) {
+    if (mode == "fail_make") throw std::runtime_error("creation");
+    return created = activation::make_function(code);
+  }
+  void set_function_defaults(const handle &fn, const handle &v) {
+    assert(fn == created && v == tuple && module->attributes.empty());
+    if (mode == "fail") throw std::runtime_error("defaults");
+    fn->attributes["__defaults__"] = v;
+  }
+  handle make_function(const handle &code, const handle &v) {
+    auto fn = make_function(code);
+    set_function_defaults(fn, v);
+    return fn;
+  }
+  void unwind(unsigned pc, std::exception_ptr) { error = pc; }
+};
+int main(int argc, char **argv) {
+  assert(argc == 4);
+  const body_provider provider{generated::bodies};
+  const auto &body = provider.programs.front(), &child = provider.programs.back();
+  auto module = object_value("module"), none = object_value("None");
+  defaults_frame f{activation{body, provider, module, none}};
+  f.mode = argv[1];
+  f.constants[std::stoul(argv[2])] = f.tuple;
+  auto result = run_body(f, f.mode == "wrong_frame" ? child : body);
+  if (f.mode == "ok") {
+    assert(result == outcome::completed && module->attributes.at("label") == f.created);
+    assert(f.created->attributes.at("__defaults__") == f.tuple && f.returned == none);
+  } else {
+    assert(module->attributes.empty() && !f.returned);
+    assert(f.error == std::stoul(argv[3]));
+    assert(result == (f.mode == "wrong_frame" ? outcome::unmatched : outcome::continued_in_host));
+  }
+  activation legacy{body, provider, module, none};
+  assert(run_body(legacy, body) == outcome::unmatched && legacy.values.empty());
+}
+""")
+    built = tmp_path / "defaults"
+    subprocess.run(
+        [
+            "c++",
+            "-std=c++20",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-pedantic",
+            "-I",
+            str(Path(__file__).resolve().parents[1] / "fixtures"),
+            "-I",
+            str((delivery / component["regions"]["path"]).parent),
+            str(src),
+            "-o",
+            str(built),
+        ],
+        check=True,
+    )
+    for mode, error_offset in [
+        ("ok", 0),
+        ("fail", failure_pc),
+        ("fail_make", make[1]),
+        ("wrong_frame", 0),
+        ("wrong_tuple", 0),
+    ]:
+        subprocess.run([built, mode, str(slot), str(error_offset)], check=True)
 
 
 def test_ordered_mapping_views_and_fresh_construction_cross_native_layers(tmp_path):

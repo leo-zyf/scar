@@ -399,26 +399,32 @@ _STATEMENT_END = {
 }
 
 
+def _pool_literal_items(value, elements):
+    """Bind the ordered scalar operands to the objects in a compiler tuple."""
+    if type(value) is not tuple or len(value) != len(elements):
+        return None
+    if not all(
+        isinstance(node, ast.Constant)
+        and type(item) in (str, int, float, bool, type(None))
+        and type(node.value) is type(item)
+        and node.value == item
+        for node, item in zip(elements, value)
+    ):
+        return None
+    tokens = [
+        ["literal", type(item).__name__, numeric_wire_value(item)] for item in value
+    ]
+    return dict(
+        type="tuple", item_count=len(value), items_sha256=digest(json_bytes(tokens))
+    )
+
+
 def _pool_display_items(value, parts):
-    """Bind the entire compiler tuple to the display's ordered scalar literals."""
     for display in parts:
-        if not isinstance(display, (ast.List, ast.Tuple)) or len(display.elts) != len(
-            value
+        if isinstance(display, (ast.List, ast.Tuple)) and (
+            items := _pool_literal_items(value, display.elts)
         ):
-            continue
-        if not all(
-            isinstance(node, ast.Constant)
-            and type(node.value) is type(item)
-            and node.value == item
-            for node, item in zip(display.elts, value)
-        ):
-            continue
-        tokens = [
-            ["literal", type(item).__name__, numeric_wire_value(item)] for item in value
-        ]
-        return dict(
-            type="tuple", item_count=len(value), items_sha256=digest(json_bytes(tokens))
-        )
+            return items
     return None
 
 
@@ -1700,29 +1706,106 @@ def _function_expression_sites(program, node, following, inherited):
     return verified, loads
 
 
+def _default_tuple_items(value, defaults):
+    if flat := _pool_literal_items(value, defaults):
+        return flat
+
+    def token(actual, node):
+        if type(actual) is tuple and isinstance(node, ast.Tuple):
+            if len(actual) == len(node.elts):
+                items = [token(v, n) for v, n in zip(actual, node.elts)]
+                if all(item is not None for item in items):
+                    return ["tuple", items]
+            return None
+        if isinstance(node, ast.Constant):
+            original = node.value
+        elif (
+            isinstance(node, ast.UnaryOp)
+            and isinstance(node.op, (ast.UAdd, ast.USub))
+            and isinstance(node.operand, ast.Constant)
+            and type(node.operand.value) in (int, float)
+            and not isinstance(numeric_wire_value(node.operand.value), dict)
+        ):
+            original = ast.literal_eval(node)
+        else:
+            return None
+        if type(actual) in (str, int, float, bool, type(None)) and type(
+            original
+        ) is type(actual):
+            value = numeric_wire_value(actual)
+            if json_bytes(numeric_wire_value(original)) == json_bytes(value):
+                return ["literal", type(actual).__name__, value]
+        return None
+
+    if type(value) is tuple and len(value) == len(defaults):
+        items = [token(v, n) for v, n in zip(value, defaults)]
+        if all(item is not None for item in items):
+            return dict(
+                type="tuple",
+                item_count=len(items),
+                items_sha256=digest(json_bytes(items)),
+            )
+    return None
+
+
 def _definition_sites(program, instructions, definitions, handlers):
     """Plain module definitions whose code object is loaded, constructed and stored."""
-    found, repeated = {}, set()
+    found, seen, repeated = {}, set(), set()
     for i, make in enumerate(instructions):
+        node = definitions.get(make.positions)
         if (
-            make.opname != "MAKE_FUNCTION"
-            or make.arg not in (None, 0)
+            not node
+            or make.opname != "MAKE_FUNCTION"
             or not 0 < i < len(instructions) - 1
         ):
             continue
-        load, store = instructions[i - 1], instructions[i + 1]
-        node = definitions.get(make.positions)
+        load = instructions[i - 1]
         if not (
-            node
-            and load.opname == "LOAD_CONST"
+            load.opname == "LOAD_CONST"
             and type(load.argval) is CodeType
             and load.argval is program.co_consts[load.arg]
-            and load.positions == make.positions == store.positions
+            and load.argval.co_name == node.name
+        ):
+            continue
+        if make.positions in seen:
+            repeated.add(make.positions)
+        seen.add(make.positions)
+        start, end = i - 1, i + 1
+        defaults = node.args.defaults
+        items = None
+        if defaults:
+            if sys.version_info[:2] == (3, 12) and make.arg == 1:
+                pass
+            elif (
+                sys.version_info[:2] in ((3, 13), (3, 14))
+                and make.arg is None
+                and instructions[end].opname == "SET_FUNCTION_ATTRIBUTE"
+                and instructions[end].arg == 1
+            ):
+                end += 1
+            else:
+                continue
+            start -= 1
+            if not (0 <= start and end < len(instructions)):
+                continue
+            pool = instructions[start]
+            if (
+                pool.opname != "LOAD_CONST"
+                or (start and instructions[start - 1].opname == "EXTENDED_ARG")
+                or not (
+                    items := _default_tuple_items(program.co_consts[pool.arg], defaults)
+                )
+            ):
+                continue
+        elif make.arg not in (None, 0):
+            continue
+        window = instructions[start : end + 1]
+        store = window[-1]
+        if not (
+            all(op.positions == make.positions for op in window)
             and store.opname in {"STORE_NAME", "STORE_GLOBAL"}
             and program.co_names[store.arg] == store.argval == node.name
-            and not any(
-                op.is_jump_target or op.offset in handlers for op in (make, store)
-            )
+            and not any(op.is_jump_target or op.offset in handlers for op in window[1:])
         ):
             continue
         child = load.argval
@@ -1735,8 +1818,6 @@ def _definition_sites(program, instructions, definitions, handlers):
             & (inspect.CO_GENERATOR | inspect.CO_COROUTINE | inspect.CO_ASYNC_GENERATOR)
         ):
             continue
-        if make.positions in found:
-            repeated.add(make.positions)
         rows = [
             dict(
                 opcode=op.opname,
@@ -1744,14 +1825,21 @@ def _definition_sites(program, instructions, definitions, handlers):
                 position=list(op.positions),
                 **({"oparg": op.arg} if op.arg is not None else {}),
             )
-            for op in (load, make, store)
+            for op in window
         ]
-        rows[0]["index"] = load.arg
-        rows[2].update(index=store.arg, name=node.name)
+        rows[i - 1 - start]["index"] = load.arg
+        rows[-1].update(index=store.arg, name=node.name)
+        if items:
+            rows[0].update(index=pool.arg, **items)
         found[make.positions] = dict(
             semantics_version=1,
             position=list(make.positions),
             instructions=rows,
+            **(
+                {"positional_defaults": dict(index=pool.arg, count=len(defaults))}
+                if items
+                else {}
+            ),
             child=dict(
                 name=child.co_name,
                 qualname=child.co_qualname,
@@ -1845,7 +1933,6 @@ def _compiler_sites(tree, path, relative, source_hash):
         elif (
             isinstance(node, ast.FunctionDef)
             and not node.decorator_list
-            and not node.args.defaults
             and not any(node.args.kw_defaults)
             and node.returns is None
             and not getattr(node, "type_params", ())
@@ -2007,7 +2094,11 @@ def _compiler_sites(tree, path, relative, source_hash):
         definition_sites=definition_sites,
         function_expression_sites={
             span: _function_expression_sites(
-                program.co_consts[proof["instructions"][0]["index"]],
+                program.co_consts[
+                    proof["instructions"][1 if "positional_defaults" in proof else 0][
+                        "index"
+                    ]
+                ],
                 definitions[span],
                 following,
                 inherited,

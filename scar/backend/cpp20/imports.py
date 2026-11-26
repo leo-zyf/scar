@@ -40,7 +40,9 @@ def _array(symbol, element, items):
 
 
 _BODY_OPERATIONS = {
+    "LOAD_DEFAULT_TUPLE": "default_tuple",
     "LOAD_CHILD_CODE": "child_code",
+    "SET_FUNCTION_ATTRIBUTE": "set_function_defaults",
     "MAKE_FUNCTION": "make_function",
     "STORE_NAME": "store_name",
     "STORE_GLOBAL": "store_global",
@@ -51,11 +53,38 @@ _BODY_OPERATIONS = {
 }
 
 
+def _publication_end(row, pos):
+    program = row["instructions"]
+    defaults = program[pos][0] == "LOAD_DEFAULT_TUPLE"
+    minor = row.get("minor")
+    if defaults and minor not in (12, 13, 14):
+        raise ValueError("invalid source version for function defaults")
+    start = pos + int(defaults)
+    split = defaults and minor >= 13
+    stop = start + 3 + int(split)
+    group = program[start:stop]
+    if (
+        len(group) != stop - start
+        or group[0][0] != "LOAD_CHILD_CODE"
+        or group[1][0] != "MAKE_FUNCTION"
+        or group[1][2] != int(defaults and not split)
+        or group[0][3] != group[1][3]
+        or split
+        and (group[2][0], group[2][2], group[2][3])
+        != ("SET_FUNCTION_ATTRIBUTE", 1, "defaults")
+        or group[-1][0] not in {"STORE_NAME", "STORE_GLOBAL"}
+        or not group[-1][3]
+    ):
+        raise ValueError("invalid function publication in activation body")
+    return stop
+
+
 def _body_tables(rows, definitions):
     instruction, slot, body_type = (
         named(n) for n in ("body_instruction", "constant_slot", "body_program")
     )
     entries = []
+    intervals = {}
     for i, row in enumerate(rows):
         if not is_digest(row["code_sha256"]) or row["kind"] not in {
             "module",
@@ -64,12 +93,20 @@ def _body_tables(rows, definitions):
             raise ValueError("invalid activation body code identity")
         steps_name, slots_name = f"body_steps_{i}", f"constants_{i}"
         program = row["instructions"]
+        start = row.get("entry_offset", 2)
         if (
             not program
-            or program[0][1] != 2
+            or type(start) is not int
+            or start < 2
+            or start % 2
+            or (row["kind"] == "function" and start != 2)
+            or program[0][1] != start
             or any(next_[1] != prev[1] + 2 for prev, next_ in zip(program, program[1:]))
         ):
             raise ValueError("invalid activation body instruction interval")
+        intervals.setdefault((row["symbol"], row["code_sha256"]), []).append(
+            (start, program[-1][1])
+        )
         # Each declaration consumes one code object and publishes the function
         # before the next declaration. A prefix can stop only after its store.
         pos = 0
@@ -84,19 +121,9 @@ def _body_tables(rows, definitions):
                         raise ValueError("module constant publication lacks a name")
                     pos += 2
                     continue
-                if program[pos][0] != "LOAD_CHILD_CODE":
+                if program[pos][0] not in {"LOAD_CHILD_CODE", "LOAD_DEFAULT_TUPLE"}:
                     break
-                group = program[pos : pos + 3]
-                if (
-                    len(group) != 3
-                    or group[1][0] != "MAKE_FUNCTION"
-                    or group[1][2] != 0
-                    or group[0][3] != group[1][3]
-                    or group[2][0] not in {"STORE_NAME", "STORE_GLOBAL"}
-                    or not group[2][3]
-                ):
-                    raise ValueError("invalid function publication in activation body")
-                pos += 3
+                pos = _publication_end(row, pos)
         tail = [ins[0] for ins in program[pos:]]
         if tail not in (["RETURN_CONST"], ["LOAD_CONST", "RETURN_VALUE"]) and not (
             row["kind"] == "function"
@@ -106,7 +133,19 @@ def _body_tables(rows, definitions):
         ):
             raise ValueError("invalid source activation return sequence")
         steps = []
+        slot_types = {int(index): ("literal",) for index in row["constants"]}
         for opcode, offset, operand, spelling in program:
+            tuple_size = 0
+            if opcode == "LOAD_DEFAULT_TUPLE":
+                if type(spelling) is not int or not 0 < spelling < 2**32:
+                    raise ValueError("invalid exact tuple arity in activation body")
+                tuple_size, spelling = spelling, ""
+            if opcode in {"LOAD_DEFAULT_TUPLE", "LOAD_CHILD_CODE"}:
+                identity = (opcode, tuple_size or spelling)
+                if slot_types.setdefault(operand, identity) != identity:
+                    raise ValueError(
+                        "inconsistent identity for an activation constant slot"
+                    )
             if (
                 opcode not in _BODY_OPERATIONS
                 or any(
@@ -124,6 +163,7 @@ def _body_tables(rows, definitions):
                     integer(offset),
                     integer(operand),
                     Expr("string", value=spelling),
+                    *((integer(tuple_size),) if tuple_size else ()),
                     form="brace",
                 )
             )
@@ -182,6 +222,10 @@ def _body_tables(rows, definitions):
                 form="brace",
             )
         )
+    for spans in intervals.values():
+        spans.sort()
+        if any(start <= end for (_, end), (start, _) in zip(spans, spans[1:])):
+            raise ValueError("overlapping activation body instruction intervals")
     definitions.append(_array("bodies", body_type, entries))
 
 

@@ -7,11 +7,12 @@ from . import enumerations, products, values
 from .values import Value, literal
 
 
-def plain_definition(node):
-    return not any(
-        node.get(key)
-        for key in ("defaults", "decorators", "annotations", "type_params")
-    ) and not any(value is not None for value in node.get("keyword_defaults", ()))
+def plain_definition(node, *, positional_defaults=False):
+    return (
+        not any(node.get(key) for key in ("decorators", "annotations", "type_params"))
+        and (positional_defaults or not node.get("defaults"))
+        and not any(value is not None for value in node.get("keyword_defaults", ()))
+    )
 
 
 def bind_function_definition(frame, node, steps):

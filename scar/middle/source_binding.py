@@ -935,6 +935,93 @@ def bind_source_expression(node, scope, successor=None, loop=None):
         raise ValueError("source call region has no final result discard")
 
 
+def _default_items_sha256(defaults):
+    if flat := python_literal_sequence_sha256(defaults):
+        return flat
+
+    def token(node):
+        if not isinstance(node, dict):
+            return None
+        if node.get("op") == "aggregate" and node.get("kind") == "tuple":
+            items = [token(item) for item in node.get("items", ())]
+            return ["tuple", items] if all(item is not None for item in items) else None
+        if node.get("op") == "unary" and node.get("operator") in {"usub", "uadd"}:
+            inner = node.get("value")
+            if not isinstance(inner, dict) or inner.get("op") != "literal":
+                return None
+            value = inner.get("value")
+            if (
+                type(value) not in (int, float)
+                or inner.get("type", {}).get("class") != type(value).__name__
+            ):
+                return None
+            return [
+                "literal",
+                type(value).__name__,
+                -value if node["operator"] == "usub" else value,
+            ]
+        if python_literal_sequence_sha256([node]) is not None:
+            return ["literal", node["type"]["class"], node["value"]]
+        return None
+
+    tokens = [token(node) for node in defaults]
+    return digest(json_bytes(tokens)) if all(t is not None for t in tokens) else None
+
+
+def _bind_positional_defaults(node, rows, declared, parent):
+    defaults = node["defaults"]
+    port = node["source_definition"].get("positional_defaults")
+    compiler = parent["compiler"]
+    attached = compiler.startswith(("cpython 3.13.", "cpython 3.14."))
+    if not (
+        isinstance(defaults, list)
+        and isinstance(port, dict)
+        and type(port.get("count")) is int
+        and port["count"] == len(defaults)
+        and type(port.get("index")) is int
+        and (attached or compiler.startswith("cpython 3.12."))
+        and len(rows) == (5 if attached else 4)
+        and all(b["offset"] == a["offset"] + 2 for a, b in zip(rows, rows[1:]))
+    ):
+        raise ValueError("invalid source positional defaults window")
+    pool, child, make = rows[:3]
+    params = [
+        p for p in declared["params"] if p["binding"] in {"positional", "posonly"}
+    ]
+    cut = len(params) - len(defaults)
+    fingerprint = _default_items_sha256(defaults)
+    if not (
+        cut >= 0
+        and all(
+            p.get("default_from")
+            == (None if i < cut else {"field": "defaults", "index": i - cut})
+            for i, p in enumerate(params)
+        )
+        and "parameters" in node["source_definition"]["child"]
+        and pool.get("opcode") == "LOAD_CONST"
+        and type(pool.get("index")) is int
+        and type(pool.get("oparg")) is int
+        and 0 <= pool["index"] == pool["oparg"] == port["index"]
+        and pool["index"] != child.get("index")
+        and pool.get("type") == "tuple"
+        and type(pool.get("item_count")) is int
+        and pool["item_count"] == len(defaults)
+        and fingerprint is not None
+        and pool.get("items_sha256") == fingerprint
+        and (
+            "oparg" not in make
+            and rows[3].get("opcode") == "SET_FUNCTION_ATTRIBUTE"
+            and type(rows[3].get("oparg")) is int
+            and rows[3]["oparg"] == 1
+            if attached
+            else type(make.get("oparg")) is int and make["oparg"] == 1
+        )
+    ):
+        raise ValueError(
+            "source positional defaults disagree with their function and operands"
+        )
+
+
 def bind_source_definition(node, scope, declarations):
     """Tie the code constant and the published object to the declared function."""
     proof = node["source_definition"]
@@ -963,10 +1050,7 @@ def bind_source_definition(node, scope, declarations):
         and all(c in "0123456789abcdef" for c in child["code_sha256"])
         and child.get("first_line") == location["line"]
         and child.get("name") == child.get("qualname")
-        and not any(
-            node.get(k)
-            for k in ("decorators", "defaults", "annotations", "type_params")
-        )
+        and not any(node.get(k) for k in ("decorators", "annotations", "type_params"))
         and not any(v is not None for v in node.get("keyword_defaults", ()))
     ):
         raise ValueError(
@@ -998,7 +1082,6 @@ def bind_source_definition(node, scope, declarations):
     rows = proof.get("instructions")
     if not (
         isinstance(rows, list)
-        and len(rows) == 3
         and all(
             isinstance(row, dict)
             and row.get("position") == proof["position"]
@@ -1007,12 +1090,22 @@ def bind_source_definition(node, scope, declarations):
         )
     ):
         raise ValueError("source definition has invalid instruction positions")
-    load, make, store = rows
+    if node.get("defaults"):
+        _bind_positional_defaults(node, rows, declared, parent)
+        load, make = rows[1:3]
+        store = rows[-1]
+    elif len(rows) == 3 and "positional_defaults" not in proof:
+        load, make, store = rows
+        if "oparg" in make and (type(make["oparg"]) is not int or make["oparg"] != 0):
+            raise ValueError("source definition has unexpected MAKE_FUNCTION flags")
+    else:
+        raise ValueError(
+            "source definition disagrees with its defaults or instructions"
+        )
     if not (
         0 <= load["offset"] < make["offset"] < store["offset"]
         and load.get("opcode") == "LOAD_CONST"
         and make.get("opcode") == "MAKE_FUNCTION"
-        and ("oparg" not in make or type(make["oparg"]) is int and make["oparg"] == 0)
         and store.get("opcode") in {"STORE_NAME", "STORE_GLOBAL"}
         and all(
             type(r.get("index")) is int

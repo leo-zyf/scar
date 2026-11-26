@@ -176,6 +176,83 @@ def test_binding_checks_branch_successors_and_binary_dispatch(tmp_path):
         obj[key] = original
 
 
+def test_binding_checks_original_positional_defaults_tuple_and_creation_window(
+    tmp_path,
+):
+    import dis
+    import sys
+    from copy import deepcopy
+
+    from scar.contract import read_member
+    from scar.frontend import build
+    from scar.middle.binding import bind
+
+    src = tmp_path / "main.py"
+    src.write_text(
+        "def sample(a, /, b=(-7, (True, None)), c=-0.0):\n    return b\n"
+        "def evaluated(x=make()): pass\n"
+        "def kw(*, x=None): pass\n"
+        "def mutable(x=[]): pass\n"
+        "@decorator\ndef wrapped(x=None): pass\n"
+        "def annotated(x: int = 3): pass\n"
+        "def gen(x=None): yield x\n"
+    )
+    code = compile(src.read_bytes(), str(src), "exec")
+    rows = list(dis.get_instructions(code))
+    folder = tmp_path / "graph"
+    build(src, folder)
+    graph = json.loads((folder / "graph.json").read_bytes())
+    unit = graph["units"][0]
+    payload = read_member(folder, unit["graph"])
+    mod = next(
+        f
+        for f in payload["functions"]
+        if f["signature"].get("python_scope", {}).get("kind") == "module"
+    )
+    [creation] = [n for n in mod["nodes"] if "source_definition" in n]
+    proof = creation["source_definition"]
+    window = proof["instructions"]
+    assert [r["opcode"] for r in window] == [
+        "LOAD_CONST",
+        "LOAD_CONST",
+        "MAKE_FUNCTION",
+        *(["SET_FUNCTION_ATTRIBUTE"] if sys.version_info >= (3, 13) else []),
+        "STORE_NAME",
+    ]
+    assert [(r["offset"], r.get("oparg")) for r in window] == [
+        (r.offset, r.arg)
+        for r in rows
+        if window[0]["offset"] <= r.offset <= window[-1]["offset"]
+    ]
+    pool, child, make = window[:3]
+    assert proof["positional_defaults"] == {"index": pool["index"], "count": 2}
+    assert code.co_consts[child["index"]].co_name == "sample"
+    assert code.co_consts[pool["index"]][0] == (-7, (True, None))
+    assert code.co_consts[pool["index"]][1].hex() == "-0x0.0p+0"
+    src.unlink()
+    bind(graph, folder)
+    native = next(
+        f["signature"]
+        for f in payload["functions"]
+        if f["signature"]["name"] == creation["symbol"]
+    )
+    for obj, key, changed in (
+        (pool, "items_sha256", "0" * 64),
+        (pool, "index", child["index"]),
+        (proof["positional_defaults"], "count", 1),
+        (make, "offset", make["offset"] + 2),
+        (window[-2], "oparg", 2),
+        (creation, "defaults", list(reversed(creation["defaults"]))),
+        (native["params"][-1], "default_from", {"field": "defaults", "index": 0}),
+    ):
+        previous = deepcopy(obj[key])
+        obj[key] = changed
+        unit["graph"] = member(folder, "units", payload)
+        with pytest.raises(ValueError, match="positional defaults"):
+            bind(graph, folder)
+        obj[key] = previous
+
+
 def test_function_construction_uses_the_declared_child_code(tmp_path):
     from scar.contract import read_member
     from scar.frontend import build
@@ -10617,3 +10694,69 @@ def test_binding_reads_direct_unique_unit_once_and_resolves_late_and_conflicting
     (tmp_path / main["graph"]["path"]).write_bytes(b"{}")
     with pytest.raises(ValueError, match="checksum"):
         binding.bind(graph, tmp_path)
+
+
+def test_open_module_keeps_default_tuple_identity_through_function_publication(
+    tmp_path,
+):
+    from scar.contract import read_member, source_function_publication
+    from scar.frontend import build
+    from scar.middle import plan
+
+    pkg = tmp_path / "package"
+    pkg.mkdir()
+    module = pkg / "__init__.py"
+    module.write_text(
+        "from . import dep as hidden\ndel hidden\n"
+        "def chosen(a, b=None, /, c=3):\n    return c\n"
+        "def later(d=factory()):\n    return d\n"
+    )
+    (pkg / "dep.py").write_text("")
+    main = tmp_path / "main.py"
+    main.write_text("import package\n")
+    graph, output = tmp_path / "g", tmp_path / "p"
+    build(main, graph)
+    actual = compile(module.read_bytes(), str(module), "exec")
+    live = {}
+    # Retain the code object's actual tuple in a real execution, before the
+    # later definition whose default calls unknown user code.
+    import types
+
+    real_pkg = types.ModuleType("package")
+    real_pkg.dep = object()
+    original = __import__
+    scoped = {"__import__": lambda *a: real_pkg if a[4] else original(*a)}
+    live.update(__builtins__=scoped)
+    with pytest.raises(NameError):
+        exec(actual, live)
+    module.unlink()
+    plan(graph, output)
+    report = json.loads((output / "plan.json").read_bytes())
+    assert report["issues"][0]["location"]["line"] == 5
+    part = next(
+        p
+        for p in report["protocol_analysis"]["prefix_fragments"]
+        if p["symbol"] == "py:package:<init>"
+    )
+    store = next(
+        s["value"]
+        for s in read_member(output, part["fragment"])["body"]
+        if s.get("value", {}).get("name") == "chosen"
+    )
+    proof = store["source_definition"]
+    actual_tuple = actual.co_consts[proof["positional_defaults"]["index"]]
+    assert live["chosen"].__defaults__ is actual_tuple
+    assert live["chosen"](0) == 3
+    assert store["evaluation"][0]["expected_tuple"] == {"count": 2}
+    make, target, child = source_function_publication(store, proof["code_sha256"])
+    assert (
+        live["chosen"].__code__ is actual.co_consts[store["evaluation"][1]["operand"]]
+    )
+    assert target["name"] == child["name"] == "chosen"
+    consumer = make if "defaults" in make else store["evaluation"][-1]
+    assert consumer["defaults"] == {"from_offset": store["evaluation"][0]["offset"]}
+    broken = deepcopy(store)
+    broken["evaluation"][-1]["defaults"] = {
+        "from_offset": store["evaluation"][1]["offset"]
+    }
+    assert source_function_publication(broken, proof["code_sha256"]) is None

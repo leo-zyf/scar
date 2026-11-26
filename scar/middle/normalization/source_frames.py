@@ -1007,9 +1007,11 @@ class SourceExpressionRegion:
         symbol = node["symbol"]
         definition = self.definitions.get(symbol, {})
         scope = definition.get("python_scope", {})
-        child = node["source_definition"]["child"]
+        receipt = node["source_definition"]
+        child = receipt["child"]
+        defaults = receipt.get("positional_defaults")
         if (
-            not objects.plain_definition(node)
+            not objects.plain_definition(node, positional_defaults=defaults is not None)
             or definition.get("name") != symbol
             or definition.get("owner_class")
             or definition.get("call_protocol", {}).get("kind") != "regular"
@@ -1024,6 +1026,27 @@ class SourceExpressionRegion:
             raise ValueError(
                 "function creation requires the sealed ordinary definition in this module"
             )
+        default_ref = None
+        if defaults is not None:
+            pool = self.take("LOAD_CONST", source=node)
+            if (
+                pool.get("type") != "tuple"
+                or defaults
+                != {"index": pool.get("index"), "count": pool.get("item_count")}
+                or not node.get("defaults")
+                or defaults["count"] != len(node["defaults"])
+            ):
+                raise ValueError(
+                    "function defaults disagree with the defining frame's constant tuple"
+                )
+            default_ref = self.emit(
+                pool,
+                "source_object_constant",
+                node,
+                source="current_frame_co_consts",
+                operand=pool["index"],
+                expected_tuple={"count": defaults["count"]},
+            )
         load = self.take("LOAD_CONST", source=node)
         code = self.emit(
             load,
@@ -1036,14 +1059,12 @@ class SourceExpressionRegion:
         make = self.take("MAKE_FUNCTION", source=node)
         if (
             self.minor == 12
-            and make.get("oparg") != 0
+            and make.get("oparg") != int(default_ref is not None)
             or self.minor >= 13
             and "oparg" in make
         ):
-            raise ValueError(
-                "function creation requires the source MAKE_FUNCTION without optional attributes"
-            )
-        return self.emit(
+            raise ValueError("MAKE_FUNCTION flags disagree with the captured operands")
+        function = self.emit(
             make,
             "source_object_make_function",
             node,
@@ -1058,7 +1079,25 @@ class SourceExpressionRegion:
             ),
             allocation="source_MAKE_FUNCTION_creates_distinct_function_with_source_metadata_each_execution",
             may_raise=True,
+            **(
+                {"defaults": default_ref}
+                if self.minor == 12 and defaults is not None
+                else {}
+            ),
         )
+        if self.minor >= 13 and default_ref is not None:
+            attribute = self.take("SET_FUNCTION_ATTRIBUTE", source=node)
+            if attribute.get("oparg") != 1:
+                raise ValueError("function attribute must select positional defaults")
+            return self.emit(
+                attribute,
+                "source_object_set_function_defaults",
+                node,
+                function=function,
+                defaults=default_ref,
+                same_identity=True,
+            )
+        return function
 
     def statement(self, node):
         if node["op"] == "raise":

@@ -56,7 +56,9 @@ public:
 };
 
 enum class body_opcode {
+  default_tuple,
   child_code,
+  set_function_defaults,
   make_function,
   store_name,
   store_global,
@@ -70,6 +72,7 @@ struct body_instruction {
   unsigned offset;
   unsigned operand;
   std::string_view name;
+  unsigned tuple_size = 0;
 };
 struct constant_slot {
   unsigned index;
@@ -93,8 +96,14 @@ struct body_provider {
   template <class Frame>
   outcome enter(Frame &frame, std::string_view code_sha256,
                 std::string_view symbol) const {
+    return enter_at(frame, code_sha256, symbol, 2);
+  }
+  template <class Frame>
+  outcome enter_at(Frame &frame, std::string_view code_sha256,
+                   std::string_view symbol, unsigned pc) const {
     for (const auto &p : programs) {
-      if (p.code_sha256 == code_sha256 && p.symbol == symbol)
+      if (p.code_sha256 == code_sha256 && p.symbol == symbol &&
+          !p.instructions.empty() && p.instructions.front().offset == pc)
         return run_body(frame, p);
     }
     return outcome::unmatched;
@@ -299,12 +308,41 @@ outcome run_body(Frame &frame, const body_program &program) {
   if (program.instructions.empty() || !frame.enter_body(program))
     return outcome::unmatched;
   auto &stack = frame.stack();
+  // Admit a defaults-bearing body only when this frame supplies every
+  // corresponding operation. Earlier module publications cannot be repeated.
+  constexpr bool checks_tuple =
+      requires { frame.matches_defaults_tuple(*stack.back(), 0u); };
+  constexpr bool creates_with_defaults =
+      requires { frame.make_function(*stack.back(), *stack.back()); };
+  constexpr bool sets_defaults =
+      requires { frame.set_function_defaults(*stack.back(), *stack.back()); };
+  if constexpr (!checks_tuple || !creates_with_defaults || !sets_defaults) {
+    for (const auto &ins : program.instructions)
+      if ((!checks_tuple && ins.operation == body_opcode::default_tuple) ||
+          (!creates_with_defaults &&
+           ins.operation == body_opcode::make_function && ins.operand == 1) ||
+          (!sets_defaults &&
+           ins.operation == body_opcode::set_function_defaults))
+        return outcome::unmatched;
+  }
   const auto base = stack.size();
+  bool pending_defaults = false;
   for (const auto &ins : program.instructions) {
     try {
       if (!frame.before(ins.offset))
         return outcome::continued_in_host;
       switch (ins.operation) {
+      case body_opcode::default_tuple:
+        if constexpr (checks_tuple) {
+          if (stack.size() != base)
+            return outcome::continued_in_host;
+          auto tuple = frame.constant(ins.operand);
+          if (!frame.matches_defaults_tuple(tuple, ins.tuple_size))
+            return outcome::continued_in_host;
+          stack.emplace_back(std::move(tuple));
+          pending_defaults = true;
+        }
+        break;
       case body_opcode::child_code:
       case body_opcode::constant:
         stack.emplace_back(frame.constant(ins.operand));
@@ -313,13 +351,35 @@ outcome run_body(Frame &frame, const body_program &program) {
         stack.emplace_back(frame.small_int(ins.operand));
         break;
       case body_opcode::make_function: {
-        if (stack.size() != base + 1 || !stack.back() ||
+        if (stack.size() != base + 1 + pending_defaults || !stack.back() ||
             !frame.matches_code(*stack.back(), ins.name))
           return outcome::continued_in_host;
         // MAKE_FUNCTION takes its globals and effective builtins from this
         // activation, including an updated __builtins__ entry in its globals.
-        auto function = frame.make_function(*stack.back());
-        frame.replace(1, std::move(function));
+        if (ins.operand == 1) {
+          if constexpr (creates_with_defaults) {
+            if (!pending_defaults || !stack[base])
+              return outcome::continued_in_host;
+            auto function = frame.make_function(*stack.back(), *stack[base]);
+            frame.replace(2, std::move(function));
+            pending_defaults = false;
+          }
+        } else {
+          auto function = frame.make_function(*stack.back());
+          frame.replace(1, std::move(function));
+        }
+        break;
+      }
+      case body_opcode::set_function_defaults: {
+        if constexpr (sets_defaults) {
+          if (!pending_defaults || stack.size() != base + 2 || !stack[base] ||
+              !stack.back())
+            return outcome::continued_in_host;
+          frame.set_function_defaults(*stack.back(), *stack[base]);
+          auto function = std::move(stack.back());
+          frame.replace(2, std::move(function));
+          pending_defaults = false;
+        }
         break;
       }
       case body_opcode::store_name:
