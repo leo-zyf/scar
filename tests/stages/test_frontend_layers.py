@@ -54,6 +54,35 @@ def test_cpu_pool_affinity_does_not_remove_visible_hardware(tmp_path, monkeypatc
     assert not any(e.value == "CPU_POOL_MEMBER" for e in unknown_edges)
 
 
+def test_artifact_join_deduplicates_edges_and_keeps_distinct_source_captures(tmp_path):
+    from scar.contract import json_bytes
+    from scar.frontend.artifacts.graph import join_artifacts
+
+    facts = {"compiler": "cc", "files": {"shared.h": "0" * 64}}
+    units = [{"revision": tag * 64, "source_facts": facts} for tag in ("1", "2")]
+    empty = ([], [], [], [])
+    observed = {
+        "nodes": [],
+        "edges": [],
+        "trace_sha256": "3" * 64,
+        "process_observation": {"sha256": "4" * 64, "source_root": str(tmp_path)},
+    }
+    for build in (None, observed):
+        flow = join_artifacts(units, [empty, empty], build, [], tmp_path)
+        edges = flow["edges"]
+        reads = [edge for edge in edges if edge["kind"] == "READS_CAPTURED_VERSION"]
+        assert len(reads) == flow["coverage"]["parser_snapshot_reads"] == 2
+        assert len({edge["source"] for edge in reads}) == 2
+        assert len({edge["target"] for edge in reads}) == 2
+        assert sum(node["kind"] == "BYTE_VALUE" for node in flow["nodes"]) == 1
+        assert [json_bytes(edge) for edge in edges] == sorted(
+            {json_bytes(edge) for edge in edges}
+        )
+        repeated = ([], list(reversed(edges)) + reads, [], [])
+        replay = join_artifacts(units, [repeated, empty], build, [], tmp_path)
+        assert json_bytes(replay) == json_bytes(flow)
+
+
 def test_capture_mount_topology_distinguishes_backing_and_visibility(
     tmp_path, monkeypatch
 ):
