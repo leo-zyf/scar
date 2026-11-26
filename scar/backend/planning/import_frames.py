@@ -79,67 +79,53 @@ def _expression(node, code, minor):
     return program if not stack and used == steps.keys() else []
 
 
-def regions(dispatch, checked):
+def regions(candidates, checked):
     """A normal continuation starts immediately after the last included opcode."""
     result = []
-    for fn in dispatch["functions"]:
-        body = fn["body"]["body"]
-        for pos, stmt in enumerate(body):
-            op = stmt.get("value", {})
-            if stmt.get("op") != "expr" or op.get("op") != "module_import_publish":
-                continue
-            key = fn["symbol"], op["site"]
-            review = checked.get(key)
-            if not review or not review["import_binding_verified"]:
-                continue
-            proof = op.get("source_import_store")
-            name = op["request"]["module"]
-            code = op["source_code"]
-            compiler = code["compiler"].split(".")
-            if (
-                not proof
-                or not name.isidentifier()
-                or op["request"].get("level") != 0
-                or op["request"].get("fromlist") != []
-                or proof["code_sha256"] != code["code_sha256"]
-                or compiler[0] != "cpython 3"
-                or compiler[1] not in {"12", "14"}
-            ):
-                continue
-            minor = int(compiler[1])
-            instructions = [
-                proof[k] for k in ("level", "fromlist", "import_name", "store")
+    for key, (op, following) in candidates.items():
+        review = checked[key]
+        proof = op.get("source_import_store")
+        name = op["request"]["module"]
+        code = op["source_code"]
+        compiler = code["compiler"].split(".")
+        if (
+            not proof
+            or not name.isidentifier()
+            or op["request"].get("level") != 0
+            or op["request"].get("fromlist") != []
+            or proof["code_sha256"] != code["code_sha256"]
+            or compiler[0] != "cpython 3"
+            or compiler[1] not in {"12", "14"}
+        ):
+            continue
+        minor = int(compiler[1])
+        instructions = [proof[k] for k in ("level", "fromlist", "import_name", "store")]
+        program = [
+            [
+                i["opcode"],
+                i["offset"],
+                i.get("index", i.get("oparg", 0)),
+                i.get("name", ""),
             ]
-            program = [
-                [
-                    i["opcode"],
-                    i["offset"],
-                    i.get("index", i.get("oparg", 0)),
-                    i.get("name", ""),
-                ]
-                for i in instructions
-            ]
-            # A later unresolved callable ends this component at the source
-            # store. Its host resumes with the actual published object.
-            if (
-                not review["missing"]
-                and pos + 1 < len(body)
-                and body[pos + 1].get("op") == "expr"
-            ):
-                suffix = _expression(body[pos + 1]["value"], code, minor)
-                if suffix and suffix[0][1] == program[-1][1] + 2:
-                    program.extend(suffix)
-            result.append(
-                dict(
-                    owner=key[0],
-                    site=key[1],
-                    occurrence=op["occurrence"],
-                    code_sha256=code["code_sha256"],
-                    minor=minor,
-                    instructions=program,
-                    resume_offset=program[-1][1] + 2,
-                )
+            for i in instructions
+        ]
+        # A later unresolved callable ends this component at the source
+        # store. Its host resumes with the actual published object.
+        if not review["missing"] and following is not None:
+            suffix = _expression(following, code, minor)
+            if suffix and suffix[0][1] == program[-1][1] + 2:
+                program.extend(suffix)
+        result.append(
+            dict(
+                owner=key[0],
+                site=key[1],
+                occurrence=op["occurrence"],
+                code_sha256=code["code_sha256"],
+                minor=minor,
+                instructions=program,
+                resume_offset=program[-1][1] + 2,
             )
+        )
     return result
 
 

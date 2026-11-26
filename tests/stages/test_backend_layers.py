@@ -3265,6 +3265,54 @@ def test_source_dispatch_seals_import_result_and_conditional_callee_for_b1(tmp_p
         inspect()
 
 
+def test_nested_import_region_requires_a_matching_loader_frame(tmp_path):
+    from scar.backend.planning import _load_module
+    from scar.backend.planning.runtime import import_effects
+    from scar.frontend import build
+    from scar.middle import plan
+
+    entry = tmp_path / "entry.py"
+    entry.write_text("import outer\nprint(outer.answer())\n")
+    (tmp_path / "outer.py").write_text(
+        "import inner\ndef answer():\n    return inner.number()\n"
+    )
+    (tmp_path / "inner.py").write_text("def number():\n    return 42\n")
+    graph, execution = tmp_path / "graph", tmp_path / "execution"
+    build(entry, graph)
+    plan(graph, execution)
+    path = execution / "exec-ir.json"
+    module = _load_module(path, json.loads(path.read_bytes()))
+    dispatch = module["source_dispatch"]
+    parent = next(row for row in dispatch["loaders"] if row["owner"] == "__main__")
+    nested = next(
+        row
+        for row in module["source_imports"]["occurrences"]
+        if row["owner"] == parent["symbol"]
+    )
+
+    # A source-prefix graph can retain the child body while only the outer
+    # import is reached. The child's own ledger supplies no execution witness.
+    dispatch["required_imports"] = [
+        r for r in dispatch["required_imports"] if r["owner"] == "__main__"
+    ]
+    dispatch["completion"] = "source_prefix"
+    nested["activation"] = "unvisited"
+
+    def regions():
+        effects = import_effects(module, {})
+        occurrence = next(r for r in effects["occurrences"] if r["id"] == nested["id"])
+        assert occurrence["activation"] == "unvisited"
+        return occurrence.get("source_dispatch"), {
+            r["owner"] for r in effects.get("native_frame_regions", ())
+        }
+
+    review, owners = regions()
+    assert owners == {"__main__", parent["symbol"]}
+    assert review["activation_scope"] == "matching_loader_frame_at_site"
+    parent["entry"]["code"] = dict(parent["entry"]["code"], code_sha256="0" * 64)
+    assert regions() == (None, set())
+
+
 def test_conditional_frames_require_returns_on_both_arms_and_exhaustion(tmp_path):
     from scar.backend.planning.import_frames import _callee_return
     from scar.backend.planning.runtime import _body_returns_to_caller

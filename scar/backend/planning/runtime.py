@@ -1,6 +1,6 @@
 """B1 qualification of source-declared external execution interfaces."""
 
-from collections import Counter, defaultdict
+from collections import Counter, defaultdict, deque
 from contextlib import contextmanager
 from functools import cached_property
 import os
@@ -533,10 +533,29 @@ def _dispatch_sites(dispatch, ledger):
         symbol, fn = loader["symbol"], loader["function"]
         code = loader["entry"]["code"]["code_sha256"]
         bodies[symbol, id(fn)] = (symbol, fn, code)
+    conditional_sites = defaultdict(list)
+    statements = {}
     for owner, fn, code in bodies.values():
+        sequence = fn["body"]
+        for pos, stmt in enumerate(sequence):
+            op = stmt.get("value", {})
+            if stmt["op"] == "expr" and op.get("op") == "module_import_publish":
+                following = sequence[pos + 1] if pos + 1 < len(sequence) else {}
+                statements[owner, id(op)] = (
+                    following.get("value") if following.get("op") == "expr" else None
+                )
         for op in walk_operations(fn["body"], exclude_fields=EXECUTION_ANNOTATIONS):
             if op["op"] == "module_import_publish":
-                imports[owner, op["site"]].append(op)
+                key = owner, op["site"]
+                imports[key].append(op)
+                occurrence = occurrences.get(key, {})
+                if (
+                    code
+                    and op.get("source_code", {}).get("code_sha256") == code
+                    and occurrence.get("activation") == "unvisited"
+                    and occurrence.get("loader_ports")
+                ):
+                    conditional_sites[owner, code].append(key)
             if code and (published := source_function_publication(op, code)):
                 make, target, child = published
                 key = (
@@ -552,7 +571,11 @@ def _dispatch_sites(dispatch, ledger):
                 calls[owner, edge[3]["occurrence"]].append(edge)
     results = {}
     consumed = set()
-    for key in required:
+    candidates = {}
+    pending = deque(sorted(required))
+    queued = set(required)
+    while pending:
+        key = pending.popleft()
         owner, site = key
         row = occurrences[key]
         gaps, matched, consumers = [], {}, []
@@ -620,6 +643,17 @@ def _dispatch_sites(dispatch, ledger):
             else:
                 matched[symbol] = c["code_sha256"]
         import_binding_verified = not gaps
+        if import_binding_verified:
+            position = owner, id(imported)
+            if position in statements:
+                candidates[key] = imported, statements[position]
+            # Only an actual matching parent frame can reach these import sites.
+            # Their ledger activation remains unvisited.
+            for parent in matched.items():
+                for nested in conditional_sites[parent]:
+                    if nested not in queued:
+                        pending.append(nested)
+                        queued.add(nested)
         for call, load, attribute, previous in calls[owner, row["id"]]:
             binding = bindings.get((previous["site"], previous["slot"]), {})
             attribute = attribute or {}
@@ -695,6 +729,11 @@ def _dispatch_sites(dispatch, ledger):
         results[key] = dict(
             status="missing_source_dataflow" if gaps else completion,
             import_binding_verified=import_binding_verified,
+            **(
+                {"activation_scope": "matching_loader_frame_at_site"}
+                if key not in required
+                else {}
+            ),
             missing=sorted(set(gaps)),
             loaders=sorted(matched),
             calls=consumers,
@@ -712,7 +751,7 @@ def _dispatch_sites(dispatch, ledger):
             site["missing"] = sorted(
                 set(site["missing"]) | {"conditional_callable_body_or_continuation"}
             )
-    return results
+    return results, candidates
 
 
 def import_effects(module, bindings):
@@ -739,11 +778,11 @@ def import_effects(module, bindings):
         if "source_import_occurrence" in node
     }
     dispatch = module.get("source_dispatch")
-    sites = _dispatch_sites(dispatch, ledger) if dispatch else {}
+    sites, candidates = _dispatch_sites(dispatch, ledger) if dispatch else ({}, {})
     if dispatch:
         from .import_frames import activation_bodies, regions
 
-        frame_regions = regions(dispatch, sites)
+        frame_regions = regions(candidates, sites)
         frame_bodies = activation_bodies(dispatch, sites) if frame_regions else []
     rows, identities = [], set()
     counts = dict(visited=0, unvisited=0, proven_inactive=0)
