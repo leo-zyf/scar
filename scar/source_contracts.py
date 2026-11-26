@@ -28,6 +28,17 @@ def python_binary_operator(index):
     return None
 
 
+def python_unary_operator(opcode, argument):
+    """Identify an arithmetic unary slot in supported CPython instruction sets."""
+    if opcode == "CALL_INTRINSIC_1" and type(argument) is int and argument == 5:
+        return "uadd"
+    if argument is None and opcode == "UNARY_NEGATIVE":
+        return "usub"
+    if argument is None and opcode == "UNARY_INVERT":
+        return "invert"
+    return None
+
+
 # A capture boundary names a public interface candidate, never a purity proof.
 PYTHON_HOST_MODULES = frozenset(
     {

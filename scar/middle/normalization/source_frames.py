@@ -8,7 +8,7 @@ from scar.contract import (
     python_constant_rhs_sha256,
     python_literal_sequence_sha256,
 )
-from scar.source_contracts import python_binary_operator
+from scar.source_contracts import python_binary_operator, python_unary_operator
 from . import objects
 from .values import source_site
 
@@ -627,6 +627,33 @@ class SourceExpressionRegion:
             return self.constant(node), None
         if op == "aggregate":
             return self.sequence(node), None
+        if op == "unary":
+            value = self.value(node["value"])
+            ins = self.take(
+                "UNARY_NEGATIVE", "UNARY_INVERT", "CALL_INTRINSIC_1", source=node
+            )
+            operator = python_unary_operator(ins["opcode"], ins.get("oparg"))
+            if (
+                not operator
+                or operator != node["operator"]
+                or ins.get("operator") != operator
+            ):
+                raise ValueError(
+                    "source unary slot disagrees with its operand or opcode"
+                )
+            return (
+                self.emit(
+                    ins,
+                    "source_object_unary",
+                    node,
+                    operator=operator,
+                    value=value,
+                    may_raise=True,
+                    dispatch="source_unary_numeric_slot",
+                    ownership="consume_operand_and_transfer_actual_result",
+                ),
+                None,
+            )
         if op == "binary":
             left = self.value(node.get("left"))
             right = self.value(node.get("right"))

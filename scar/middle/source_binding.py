@@ -9,7 +9,7 @@ from scar.contract import (
 )
 
 
-from scar.source_contracts import python_binary_operator
+from scar.source_contracts import python_binary_operator, python_unary_operator
 
 
 def _source_position(location):
@@ -695,6 +695,28 @@ def bind_source_expression(node, scope, successor=None, loop=None):
                 for item in walk_operations(node, exclude_fields={"source_expression"})
             ):
                 raise ValueError("source subscription lacks its matching graph port")
+            continue
+        if opcode in {"UNARY_NEGATIVE", "UNARY_INVERT"} or (
+            opcode == "CALL_INTRINSIC_1"
+            and ("operator" in instruction or instruction.get("oparg") == 5)
+        ):
+            unary = python_unary_operator(opcode, instruction.get("oparg"))
+            ports = [
+                item
+                for item in walk_operations(node, exclude_fields={"source_expression"})
+                if item["op"] == "unary" and _graph_position(item, code) == span
+            ]
+            if (
+                unary is None
+                or instruction.get("operator") != unary
+                or len(ports) != 1
+                or ports[0].get("operator") != unary
+                or ports[0].get("protocol") != "python"
+                or not isinstance(ports[0].get("value"), dict)
+            ):
+                raise ValueError(
+                    "source unary instruction disagrees with its operator or operand"
+                )
             continue
         if opcode == "BINARY_OP":
             if binary_ports is None:

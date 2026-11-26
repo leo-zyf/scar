@@ -9056,6 +9056,64 @@ def test_open_condition_consumes_one_actual_truth_and_routes_its_result(tmp_path
             )
 
 
+def test_open_unary_operators_use_the_live_operand_in_source_order(tmp_path):
+    from scar.contract import read_member
+    from scar.frontend import build
+    from scar.middle import plan
+    from scar.middle.source_binding import bind_source_expression
+
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    (pkg / "child.py").write_text("pass\n")
+    source = pkg / "__init__.py"
+    source.write_text(
+        "from . import child as gone\ndel gone\nresult = ~-+produce()\nboundary = 0 or 1\n"
+    )
+    entry = tmp_path / "entry.py"
+    entry.write_text("import pkg\n")
+    graph, output = tmp_path / "graph", tmp_path / "plan"
+    build(entry, graph)
+    source.unlink()
+    plan(graph, output)
+    report = json.loads((output / "plan.json").read_bytes())
+    fragment = next(
+        r
+        for r in report["protocol_analysis"]["prefix_fragments"]
+        if r["symbol"] == "py:pkg:<init>"
+    )
+    store = read_member(output, fragment["fragment"])["body"][-1]["value"]
+    _, call, positive, negative, invert = store["evaluation"]
+    previous = call
+    for step, operator in zip(
+        (positive, negative, invert), ("uadd", "usub", "invert"), strict=True
+    ):
+        assert step["op"] == "source_object_unary" and step["operator"] == operator
+        assert step["may_raise"] and step["value"] == {
+            "from_offset": previous["offset"]
+        }
+        previous = step
+    assert store["value"] == {"from_offset": invert["offset"]}
+    package = json.loads((graph / "graph.json").read_bytes())
+    unit = next(u for u in package["units"] if u["path"].endswith("pkg/__init__.py"))
+    function = next(
+        f
+        for f in read_member(graph, unit["graph"])["functions"]
+        if f["signature"]["name"] == "py:pkg:<init>"
+    )
+    from scar.middle.binding import _definition
+
+    bound = _definition(function)
+    assignment = next(
+        node
+        for node in bound["body"]
+        if node.get("op") == "assign" and node["location"]["line"] == 3
+    )
+    witness = assignment["source_expression"]["instructions"]
+    next(row for row in witness if row.get("operator") == "invert")["operator"] = "usub"
+    with pytest.raises(ValueError, match="unary instruction"):
+        bind_source_expression(assignment, function["signature"]["python_scope"])
+
+
 def test_open_binary_uses_original_operands_and_transfers_the_slot_result(tmp_path):
     from types import SimpleNamespace
 

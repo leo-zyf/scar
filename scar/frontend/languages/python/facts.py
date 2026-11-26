@@ -16,7 +16,7 @@ from types import CodeType
 import unicodedata
 
 from scar.contract import digest, json_bytes
-from scar.source_contracts import python_binary_operator
+from scar.source_contracts import python_binary_operator, python_unary_operator
 from .environment import code_digest
 from .imports import (
     Imports,
@@ -577,6 +577,13 @@ def _expression_instruction(program, ins, parts, keywords):
             for n in parts
         ):
             return None
+    elif unary := python_unary_operator(opcode, arg):
+        if (unary == "uadd" and ins.argrepr != "INTRINSIC_UNARY_POSITIVE") or not any(
+            isinstance(n, ast.UnaryOp) and type(n.op).__name__.lower() == unary
+            for n in parts
+        ):
+            return None
+        row["operator"] = unary
     elif opcode == "COMPARE_OP":
         names = {
             "<": "lt",

@@ -54,6 +54,7 @@ MODULE_REGISTRY_OPERATIONS = frozenset(
         "source_object_getitem",
         "source_object_setitem",
         "source_object_binary",
+        "source_object_unary",
         "source_object_list_update",
         "source_object_call",
         "source_object_compare",
