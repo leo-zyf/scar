@@ -5244,3 +5244,131 @@ int main(){
         check=True,
     )
     subprocess.run([executable], check=True)
+
+
+def test_live_unpack_writes_are_ordered_and_keep_completed_effects(tmp_path):
+    from copy import deepcopy
+
+    from scar.backend import compile_ir
+    from scar.backend.cpp20.imports import _body_tables
+    from scar.backend.planning.import_frames import unpack_body
+    from scar.contract import read_member
+    from scar.frontend import build
+    from scar.middle import plan
+
+    entry = tmp_path / "main.py"
+    entry.write_text("import item\n")
+    (tmp_path / "provider.py").write_text("def work(arg): return [1, 2]\n")
+    (tmp_path / "item.py").write_text(
+        "import provider\nleft[0], right[1] = provider.work(arg)\n"
+    )
+    graph, ir, physical = (tmp_path / n for n in ("graph", "ir", "physical"))
+    build(entry, graph)
+    plan(graph, ir)
+    module = json.loads((ir / "exec-ir.json").read_bytes())["module"]
+    dispatch = read_member(ir, module["source_dispatch"])
+    loader = next(
+        row for row in dispatch["loaders"] if row["symbol"] == "py:item:<init>"
+    )
+    fn = read_member(ir, loader["function"])
+    expr = next(
+        s["value"]
+        for s in fn["body"]
+        if s.get("value", {}).get("op") == "module_unpack_store"
+    )
+    faulty = deepcopy(expr)
+    faulty["evaluation"][-1]["value"]["result_index"] = 0
+    assert unpack_body(loader["symbol"], loader["entry"]["code"], faulty) is None
+    for source in tmp_path.glob("*.py"):
+        source.unlink()
+    result = compile_ir(ir, physical, policy="serial")
+    component = result["source_frame_components"]
+    schedule = read_member(physical, component["schedule"])
+    bodies = read_member(physical, schedule["bodies"])
+    (row,) = (b for b in bodies if b.get("profile") == "live_unpack_store")
+    assert row["normal_successor"] == expr["source_expression"]["normal_successor"]
+    faulty = deepcopy(row)
+    next(i for i in faulty["instructions"] if i[0] == "UNPACK_SEQUENCE")[2] += 1
+    with pytest.raises(ValueError, match="invalid live unpack sequence"):
+        _body_tables([faulty], [])
+
+    src = tmp_path / "unpack.cpp"
+    src.write_text(r"""
+#define main example_imports
+#include "import_frame_host.cpp"
+#undef main
+#include <cassert>
+struct live : activation {
+  std::vector<text> stored{};
+  bool fail{};
+  unsigned pc{}, error{}, resume{};
+  bool enter_body(const body_program &p) {
+    return &active == &p && values.empty();
+  }
+  bool admit_unpack_store(const body_program &) { return true; }
+  bool before(unsigned i) {
+    pc = i;
+    return true;
+  }
+  handle load_name(unsigned i) { return object_value(std::to_string(i)); }
+  handle constant(unsigned i) { return object_value(std::to_string(i)); }
+  handle attribute(const handle &, unsigned) {
+    return object_value("callable");
+  }
+  handle invoke(const handle &f, std::span<slot> args) {
+    assert(f->text == "callable" && args.size() == 1);
+    return object_value("iterable");
+  }
+  std::vector<handle> unpack_sequence(handle v, unsigned n) {
+    assert(v->text == "iterable" && n == 2 && values.empty());
+    return {object_value("first"), object_value("second")};
+  }
+  void store_subscript(const handle &, const handle &, const handle &v) {
+    if (fail && !stored.empty())
+      throw std::runtime_error("write");
+    stored.push_back(v->text);
+  }
+  void unwind(unsigned i, std::exception_ptr) { error = i; }
+  void resume_at(unsigned i) { resume = i; }
+};
+int main(int argc, char **argv) {
+  assert(argc == 2);
+  body_provider provider{generated::bodies};
+  auto &p = provider.programs[std::stoul(argv[1])];
+  for (bool fail : {false, true}) {
+    live f{
+        activation{p, provider, object_value("module"), object_value("None")}};
+    f.fail = fail;
+    auto status = provider.enter_at(f, p.code_sha256, p.symbol,
+                                    p.instructions.front().offset);
+    assert(status == outcome::continued_in_host && !f.stored.empty() &&
+           f.stored.front() == "first");
+    if (fail)
+      assert(f.stored.size() == 1 && f.error == p.instructions.back().offset &&
+             !f.resume);
+    else
+      assert(f.stored.size() == 2 && f.stored[1] == "second" &&
+             f.resume == p.resume_offset && !f.error);
+  }
+}
+""")
+    binary = tmp_path / "unpack"
+    subprocess.run(
+        [
+            "c++",
+            "-std=c++20",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-pedantic",
+            "-I",
+            str(Path(__file__).resolve().parents[1] / "fixtures"),
+            "-I",
+            str((physical / component["regions"]["path"]).parent),
+            str(src),
+            "-o",
+            str(binary),
+        ],
+        check=True,
+    )
+    subprocess.run([binary, str(bodies.index(row))], check=True)
