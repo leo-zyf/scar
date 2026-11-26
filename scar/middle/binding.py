@@ -661,6 +661,76 @@ def _build_bindings(graph, build, captured):
     return bindings
 
 
+def _follow_direct_calls(pending, definitions, reachable, active_objects, constructors):
+    while pending:
+        name = pending.pop()
+        if name in reachable:
+            continue
+        reachable.add(name)
+        if name in constructors:
+            active_objects.add(constructors[name])
+        for _, fn in definitions.get(name, ()):
+            pending.extend(fn["calls"])
+            active_objects.update(fn.get("objects", ()))
+
+
+def _function_binding(fn, declarations, unit, environment_id):
+    signature = fn["signature"]
+    protocol = (
+        not fn["defined"]
+        and fn.get("source_defined")
+        and signature.get("calling_convention") == "python"
+    )
+    body = state = None
+    if fn["defined"] or protocol:
+        body = _definition(fn, declarations)
+        if protocol:
+            body["execution_kind"] = "python_protocol"
+            scope = body.get("python_scope", {})
+            if environment_id is not None:
+                scope["entry_environment_id"] = environment_id
+            if scope.get("kind") == "module" and (
+                providers := unit.get("source_facts", {}).get("providers")
+            ):
+                scope["provider_sources"] = _provider_sources(providers)
+        state = dict(
+            graph_id=fn["id"],
+            states=fn.get("states", {}),
+            accesses=fn.get("accesses", []),
+            state_flow=fn.get("state_flow"),
+        )
+    return signature, body, state
+
+
+def _selected_bindings(folder, covered, declarations, unit, environment_id, prepared):
+    graphs = read_member(folder, unit["graph"])["functions"]
+    publications = {
+        node["symbol"]: node["source_definition"]["child"]
+        for owner in graphs
+        if owner["signature"]["name"] in covered
+        for node in owner["nodes"]
+        if node["op"] == "python_define" and "source_definition" in node
+    }
+    for fn in graphs:
+        name = fn["signature"]["name"]
+        if name in publications:
+            descriptor = declarations[name]
+            child = fn["signature"]["python_scope"].get("definition_code")
+            if child != publications[name] or child != descriptor["python_scope"].get(
+                "definition_code"
+            ):
+                raise ValueError("published child code disagrees with its source body")
+            descriptor["source_body"] = dict(
+                graph_id=fn["id"], code_sha256=child["code_sha256"]
+            )
+            if name not in covered:
+                descriptor["body"] = _definition(fn, declarations)["body"]
+        if name in covered:
+            yield prepared.pop(name, None) or _function_binding(
+                fn, declarations, unit, environment_id
+            )
+
+
 def bind(graph, folder):
     from scar.contract import validate_artifact_flow
 
@@ -685,6 +755,14 @@ def bind(graph, folder):
         )
     definitions = defaultdict(list)
     roots = {graph["entry"]}
+    for index, unit in enumerate(graph["units"]):
+        roots.update(unit["initializer_calls"])
+        for fn in unit["functions"]:
+            definitions[fn["name"]].append((index, fn))
+    # Exact calls are a lower bound. Global initializers, class methods and
+    # constructor dependencies discovered below can still extend this set.
+    reachable, active_objects = set(), set()
+    _follow_direct_calls(list(roots), definitions, reachable, active_objects, {})
     all_issues, records = [], {}
     build_bindings = []
     artifact_flow = None
@@ -699,7 +777,6 @@ def bind(graph, folder):
         build_bindings = _build_bindings(graph, build, build_graph)
         all_issues.extend(build_graph["diagnostics"])
     layout_issues = []
-    active_objects = set()
     field_calls = defaultdict(set)
     constructor_initializers = {}
     text_profiles = {}
@@ -743,12 +820,9 @@ def bind(graph, folder):
             if identity in text_profiles and text_profiles[identity] != profile:
                 raise ValueError("conflicting source Unicode profiles")
             text_profiles[identity] = profile
-        roots.update(unit["initializer_calls"])
         active_objects.update(unit.get("initializer_objects", ()))
         for owner, calls in unit.get("record_initializers", {}).items():
             field_calls[owner].update(calls)
-        for fn in unit["functions"]:
-            definitions[fn["name"]].append((index, fn))
         all_issues += unit["diagnostics"]
         payload = read_member(folder, unit["graph"])
         _validate_numeric_evidence(unit, payload)
@@ -823,11 +897,34 @@ def bind(graph, folder):
                 constructor_initializers[signature["name"]] = signature.get(
                     "initializers", []
                 )
+        # Hold only final bindings for unique, directly required symbols of
+        # this unit. Cross-unit Python object identities need the full catalog.
+        # Repeated or unindexed graph declarations use the original ordered pass.
+        prepared = {}
+        if unit.get("language", "python") != "python" and len(
+            set(function_names)
+        ) == len(function_names):
+            for fn in payload["functions"]:
+                name = fn["signature"]["name"]
+                indexed = definitions.get(name, ())
+                if (
+                    name in reachable
+                    and len(indexed) == 1
+                    and indexed[0][0] == index
+                    and "python_scope" not in fn["signature"]
+                    and fn["signature"].get("calling_convention") != "python"
+                    and not any(
+                        "source_definition" in n or n.get("op") == "python_import"
+                        for n in fn["nodes"]
+                    )
+                ):
+                    prepared[name] = _function_binding(fn, {}, unit, environment_id)
         # Declarations remain relevant across translation units even when none
         # of this unit's function bodies are selected.
         unit_declarations.append(
             (
                 function_names,
+                prepared,
                 payload["externs"],
                 _definition(payload["global_graph"])["body"],
             )
@@ -856,27 +953,24 @@ def bind(graph, folder):
                             detail=str(error),
                         )
                     )
-    reachable = set()
-    pending = list(roots)
+    # Let the final discovery unit go before binding late targets.
+    payload = fn = None
+    pending = list(roots - reachable)
     constructor_owners = {
         m["symbol"]: name
         for name, record in records.items()
         for m in record.get("methods", ())
         if m["kind"] == "constructor"
     }
+    active_objects.update(
+        constructor_owners[name] for name in reachable if name in constructor_owners
+    )
     default_objects = set()
     while True:
         previous = len(reachable), len(active_objects), len(default_objects)
-        while pending:
-            name = pending.pop()
-            if name in reachable:
-                continue
-            reachable.add(name)
-            if name in constructor_owners:
-                active_objects.add(constructor_owners[name])
-            for _, fn in definitions.get(name, ()):
-                pending.extend(fn["calls"])
-                active_objects.update(fn.get("objects", ()))
+        _follow_direct_calls(
+            pending, definitions, reachable, active_objects, constructor_owners
+        )
         for owner in sorted(active_objects):
             record = records.get(owner, {})
             active_objects.update(b["name"] for b in record.get("bases", ()))
@@ -963,7 +1057,7 @@ def bind(graph, folder):
 
     signatures = defaultdict(list)
     functions, globals_, externs, state_evidence = {}, {}, {}, {}
-    for unit, (function_names, external_decls, global_decls) in zip(
+    for unit, (function_names, prepared, external_decls, global_decls) in zip(
         graph["units"], unit_declarations
     ):
         for decl in external_decls:
@@ -982,52 +1076,25 @@ def bind(graph, folder):
                 )
             except ValueError as error:
                 issue("conflicting_global", name, str(error))
-        if covered.isdisjoint(function_names):
+        required = covered.intersection(function_names)
+        if not required:
             continue
-        payload = read_member(folder, unit["graph"])
-        publications = {
-            node["symbol"]: node["source_definition"]["child"]
-            for owner in payload["functions"]
-            if owner["signature"]["name"] in covered
-            for node in owner["nodes"]
-            if node["op"] == "python_define" and "source_definition" in node
-        }
-        for fn in payload["functions"]:
-            name = fn["signature"]["name"]
-            if name in publications:
-                descriptor = python_definitions[name]
-                child = fn["signature"]["python_scope"].get("definition_code")
-                if child != publications[name] or child != descriptor[
-                    "python_scope"
-                ].get("definition_code"):
-                    raise ValueError(
-                        "published child code disagrees with its source body"
-                    )
-                descriptor["source_body"] = dict(
-                    graph_id=fn["id"], code_sha256=child["code_sha256"]
-                )
-                if name not in covered:
-                    descriptor["body"] = _definition(fn, python_definitions)["body"]
-            if name not in covered:
-                continue
-            if "result" in fn["signature"] and "params" in fn["signature"]:
-                signatures[name].append(fn["signature"])
-            protocol = (
-                not fn["defined"]
-                and fn.get("source_defined")
-                and fn["signature"].get("calling_convention") == "python"
+        if required <= prepared.keys():
+            selected = prepared.values()
+        else:
+            selected = _selected_bindings(
+                folder,
+                covered,
+                python_definitions,
+                unit,
+                environment_id,
+                prepared,
             )
-            if fn["defined"] or protocol:
-                body = _definition(fn, python_definitions)
-                if protocol:
-                    body["execution_kind"] = "python_protocol"
-                    scope = body.get("python_scope", {})
-                    if environment_id is not None:
-                        scope["entry_environment_id"] = environment_id
-                    if scope.get("kind") == "module" and (
-                        providers := unit.get("source_facts", {}).get("providers")
-                    ):
-                        scope["provider_sources"] = _provider_sources(providers)
+        for signature, body, state in selected:
+            name = signature["name"]
+            if "result" in signature and "params" in signature:
+                signatures[name].append(signature)
+            if body is not None:
                 if name in functions and semantics(functions[name]) != semantics(body):
                     issue(
                         "conflicting_definition",
@@ -1036,12 +1103,8 @@ def bind(graph, folder):
                     )
                 else:
                     functions[name] = body
-                    state_evidence[name] = dict(
-                        graph_id=fn["id"],
-                        states=fn.get("states", {}),
-                        accesses=fn.get("accesses", []),
-                        state_flow=fn.get("state_flow"),
-                    )
+                    state_evidence[name] = state
+        prepared.clear()
     # Use the selected definitions once to index dependencies for this image.
     defined_symbols, referenced_globals = set(), set()
     used_records = set(active_objects)

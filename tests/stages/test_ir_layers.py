@@ -10400,3 +10400,79 @@ def test_frame_exits_and_folded_operands_follow_their_own_graph_ports(tmp_path):
     receipt["rhs_sha256"] = "0" * 64
     with pytest.raises(ValueError, match="folded constant"):
         _definition(changed)
+
+
+def test_binding_reads_direct_unique_unit_once_and_resolves_late_and_conflicting_symbols(
+    tmp_path, monkeypatch
+):
+    from scar.contract import member, read_member
+    from scar.frontend.graph import unit_graph
+    from scar.middle import binding
+
+    def function(name, value):
+        return dict(
+            name=name, result="i32", params=[], body=[dict(op="return", value=value)]
+        )
+
+    def literal(value):
+        return dict(op="literal", type="i32", value=value)
+
+    def unit(path, functions, globals_=()):
+        payload = unit_graph(dict(functions=functions, globals=list(globals_)), path)
+        return dict(
+            path=path,
+            language="c",
+            graph=member(tmp_path, "units", payload),
+            initializer_calls=payload["global_graph"]["calls"],
+            diagnostics=[],
+            functions=[
+                dict(name=f["signature"]["name"], calls=f["calls"])
+                for f in payload["functions"]
+            ],
+        )
+
+    main = unit(
+        "main.c", [function("main", dict(op="call", callee="conflict", args=[]))]
+    )
+    callback = unit("callback.c", [function("late", literal(7))])
+    left = unit("left.c", [function("conflict", literal(11))])
+    right = unit(
+        "right.c",
+        [function("conflict", literal(22))],
+        [
+            dict(
+                name="callback",
+                type=dict(
+                    kind="ptr", to=dict(kind="function", result="i32", params=[])
+                ),
+                init=dict(op="function_ref", name="late"),
+            )
+        ],
+    )
+    # Only the sealed initializer names this target. A compact index may
+    # understate reachability and must never suppress its body.
+    right["initializer_calls"] = []
+    graph = dict(entry="main", units=[main, callback, left, right])
+    reads = []
+
+    def observed(folder, receipt):
+        reads.append(receipt["path"])
+        return read_member(folder, receipt)
+
+    monkeypatch.setattr(binding, "read_member", observed)
+    module, issues, count = binding.bind(graph, tmp_path)
+    assert count == 3
+    assert [(i["code"], i["symbol"]) for i in issues] == [
+        ("conflicting_definition", "conflict")
+    ]
+    assert {f["name"] for f in module["functions"]} == {"main", "late", "conflict"}
+    assert (
+        next(f for f in module["functions"] if f["name"] == "conflict")["body"][0][
+            "value"
+        ]["value"]
+        == 11
+    )
+    assert [reads.count(u["graph"]["path"]) for u in graph["units"]] == [1, 2, 2, 2]
+    (tmp_path / main["graph"]["path"]).write_bytes(b"{}")
+    with pytest.raises(ValueError, match="checksum"):
+        binding.bind(graph, tmp_path)
