@@ -632,6 +632,32 @@ class SourceExpressionRegion:
             )
         ):
             return self.compiled_key(node), None
+        if op == "mapping":
+            pairs = []
+            for entry in node["entries"]:
+                if entry["kind"] != "pair":
+                    raise ValueError(
+                        "source map build requires ordinary key/value entries"
+                    )
+                pairs.append(
+                    dict(key=self.value(entry["key"]), value=self.value(entry["value"]))
+                )
+            ins = self.take("BUILD_MAP", source=node)
+            if ins.get("oparg") != len(pairs):
+                raise ValueError("source map build arity disagrees with its entries")
+            return (
+                self.emit(
+                    ins,
+                    "source_object_build_map",
+                    node,
+                    opcode=ins["opcode"],
+                    entries=pairs,
+                    may_raise=True,
+                    allocation="fresh_mapping_at_source_BUILD_MAP_after_key_value_evaluation",
+                    insertion="actual_key_hash_and_equality_in_source_order_preserving_completed_effects",
+                ),
+                None,
+            )
         if op == "slice":
             return (
                 self.build_slice(node, self.slice_bounds(node)),

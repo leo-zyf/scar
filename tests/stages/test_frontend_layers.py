@@ -1218,6 +1218,64 @@ def test_module_if_call_receipt_binds_truth_and_both_successors(tmp_path):
             assert code.co_consts[edges["else"]["constant_index"]] is None
 
 
+def test_nested_module_truth_jump_inherits_parent_continuation(tmp_path):
+    import dis
+
+    from scar.contract import read_member
+    from scar.frontend import build
+
+    path = tmp_path / "nested.py"
+    text = (
+        "if not gate:\n"
+        "    if not hasattr(receiver, 'real'):\n"
+        "        entered()\n"
+        "done()\n"
+    )
+    path.write_text(text)
+    code = compile(text, str(path), "exec", dont_inherit=True)
+    out = tmp_path / "graph"
+    build(path, out)
+    [unit] = json.loads((out / "graph.json").read_bytes())["units"]
+    [fn] = read_member(out, unit["graph"])["functions"]
+    [inner] = [n for n in fn["nodes"] if n["op"] == "if" and n["location"]["line"] == 2]
+    receipt = inner["source_expression"]
+    branch = receipt["branch"]
+    jumps = [i for i in dis.get_instructions(code) if i.opname == "POP_JUMP_IF_TRUE"]
+    assert len(jumps) == 2
+    assert jumps[0].argval == jumps[1].argval == branch["else"]["offset"]
+    assert branch["else"]["kind"] == "continuation"
+    assert branch["else"]["statement_position"] == [4, 4, 0, 6]
+    assert branch["then"]["statement_position"] == [3, 3, 8, 17]
+    assert [r["name"] for r in receipt["instructions"] if r["opcode"] == "LOAD_NAME"] == [
+        "hasattr",
+        "receiver",
+    ]
+
+    class Receiver:
+        real = True
+
+    events = []
+    frame = {
+        "gate": False,
+        "receiver": Receiver(),
+        "entered": lambda: events.append("entered"),
+        "done": lambda: events.append("done"),
+    }
+    exec(code, frame)
+    assert events == ["done"]
+    events.clear()
+
+    class Gate:
+        def __bool__(self):
+            events.append("truth")
+            frame["hasattr"] = lambda obj, name: False
+            return False
+
+    frame["gate"] = Gate()
+    exec(code, frame)
+    assert events == ["truth", "entered", "done"]
+
+
 def test_module_iteration_joins_iterable_store_backedge_and_exhaustion(tmp_path):
     from copy import deepcopy
     import dis
@@ -4488,3 +4546,121 @@ def test_class_namespace_writes_and_exit_belong_to_the_child_code(tmp_path):
             assert doc_store["position"] == position(doc.value)
         else:
             assert [s["kind"] for s in proof["statements"]] == ["pass"]
+
+
+def test_named_handler_witnesses_definition_and_post_cleanup_continuation(tmp_path):
+    import dis
+    from scar.contract import read_member
+    from scar.frontend import build
+    from scar.frontend.languages.python.environment import code_digest
+
+    source = tmp_path / "handler.py"
+    source.write_text(
+        "try:\n"
+        "    raise LookupError()\n"
+        "except LookupError as problem:\n"
+        "    state = {}\n"
+        "    def remember(value=problem): return value\n"
+        "    observed = {key: remember}\n"
+        "    signal()\n"
+        "after = remember()\n"
+        "try:\n    missing()\n"
+        "except OSError:\n"
+        "    @decorate\n    def supplied(): pass\n"
+        "done()\n"
+        "try:\n    other()\n"
+        "except ValueError:\n"
+        "    def nested(): pass\n"
+        "    if flag: finish()\n"
+        "tail()\n"
+        "unpacked = {**state}\n"
+    )
+    code = compile(source.read_bytes(), str(source), "exec", dont_inherit=True)
+    ops = {i.offset: i for i in dis.get_instructions(code)}
+    folder = tmp_path / "graph"
+    build(source, folder)
+    [unit] = json.loads((folder / "graph.json").read_bytes())["units"]
+    functions = read_member(folder, unit["graph"])["functions"]
+    root = next(
+        f for f in functions if f["signature"]["python_scope"]["kind"] == "module"
+    )
+    nodes = root["nodes"]
+    arms = [n for n in nodes if n["op"] == "exception_handler"]
+    witnessed = next(h for h in arms if h["location"]["line"] == 3)
+    assert len(arms) == 3 and all(
+        "source_exception_handler" not in h for h in arms if h is not witnessed
+    )
+    receipt = witnessed["source_exception_handler"]
+    creation = next(
+        n
+        for n in nodes
+        if n["op"] == "python_define" and n["symbol"].endswith(":remember")
+    )
+    definition = creation["source_definition"]
+    assert receipt["body_definitions"] == [
+        dict(
+            position=definition["position"],
+            code_sha256=definition["child"]["code_sha256"],
+            first_offset=definition["instructions"][0]["offset"],
+            last_offset=definition["instructions"][-1]["offset"],
+        )
+    ]
+    native_table = list(dis.Bytecode(code).exception_entries)
+    assert receipt["exception_table"] and all(
+        dict(e._asdict()) in receipt["exception_table"]
+        for e in native_table
+        if any(e.start <= r["offset"] < e.end for r in definition["instructions"])
+    )
+    assert all(
+        e in [dict(row._asdict()) for row in native_table]
+        for e in receipt["exception_table"]
+    )
+    assert [i["opcode"] for i in receipt["normal_exit"]] == [
+        "POP_EXCEPT",
+        "LOAD_CONST",
+        "STORE_NAME",
+        "DELETE_NAME",
+    ]
+    jump = receipt["normal_continuation"]["jump"]
+    dest = receipt["normal_continuation"]["destination"]
+    assert receipt["normal_exit"][-1]["offset"] < jump["offset"]
+    assert (jump["opcode"], jump["target"]) == (
+        ops[jump["offset"]].opname,
+        ops[jump["offset"]].argval,
+    )
+    assert (
+        dest["kind"] == "continuation"
+        and dest["offset"] == jump["target"]
+        and dest["opcode"] == ops[jump["target"]].opname
+    )
+    next_stmt = ast.parse(source.read_bytes()).body[1]
+    assert dest["statement_position"] == [
+        next_stmt.lineno,
+        next_stmt.end_lineno,
+        next_stmt.col_offset,
+        next_stmt.end_col_offset,
+    ]
+    assert receipt["code_sha256"] == code_digest(code)
+    body = {n["location"]["line"]: n for n in nodes if n["op"] == "assign"}
+    for line, n_items in [(4, 0), (6, 1)]:
+        assign = body[line]
+        mapping = nodes[assign["value"]["port"]]
+        assert mapping["op"] == "mapping" and len(mapping["entries"]) == n_items
+        assert mapping["construction"] == dict(
+            status="captured",
+            steps=[
+                dict(kind="build_pairs", first=0, count=n_items, constant_keys=False)
+            ],
+        )
+        rows = assign["source_expression"]["instructions"]
+        assert (rows[-2]["opcode"], rows[-2]["oparg"], rows[-1]["opcode"]) == (
+            "BUILD_MAP",
+            n_items,
+            "STORE_NAME",
+        )
+        assert all(
+            r["opcode"] == ops[r["offset"]].opname
+            and r["position"] == list(ops[r["offset"]].positions)
+            for r in rows
+        )
+    assert "source_expression" not in body[max(body)]

@@ -289,6 +289,7 @@ class _Project:
         source_index=None,
         conditional_owner=None,
     ):
+        self.isolated_modules = False
         self.functions = functions
         self.function_definitions = function_definitions or {}
         self.initializers = {
@@ -2007,6 +2008,15 @@ class _Frame:
                 # entering its body. Reusing it does not prove completion.
                 self.project.read_registry(name, previous, node)
                 return
+            if (
+                previous
+                and previous.get("state") == "managed"
+                and previous.get("initializer") == symbol
+            ):
+                if namespace_operations.managed_project_import(
+                    self, node, occurrence, symbol, steps
+                ):
+                    return True
             if previous is not None and previous.get("state") != "ready":
                 self.fail(
                     node,
@@ -2034,6 +2044,17 @@ class _Frame:
                 analyzed_body = symbol not in self.project.closed
                 fn = self.project.compile(symbol, (), source=node)
                 if fn.get("noreturn"):
+                    if (
+                        self.project.imports.registry_entry(name) is publication
+                        and not self.project.imports.open_namespace
+                        and namespace_operations.managed_project_import(
+                            self, node, occurrence, symbol, steps
+                        )
+                    ):
+                        self.project.imports.bind_registry(
+                            name, dict(state="managed", initializer=symbol)
+                        )
+                        return True
                     self.fail(
                         node,
                         "import_initializer_completion",
@@ -2107,7 +2128,11 @@ class _Frame:
                 self.project.imports.binding_written(slot)
 
         for symbol in node["initializers"]:
-            initialize(symbol)
+            if initialize(symbol):
+                # Only the normal continuation owns this source-level module binding.
+                # The runtime registry may be absent again after an exception.
+                self.store(node["binding"], _Value("module", mod), steps)
+                return
         target_state = self.project.imports.registry_entry(mod)
         if target_state.get("state") != "ready" and not (
             target_state.get("state") == "initializing"
@@ -2817,6 +2842,24 @@ class _Frame:
     def exceptional_snapshot(self, start, after, body):
         result = self.copy_state(start)
         after = self.snapshot() if after is None else after
+        # A single admitted isolated import may fail before or during its loader.
+        # Its source STORE has no exceptional binding. Preserve the unknown cache
+        # outcome without discarding unrelated names in the caller's own frame.
+        if (
+            self.project.isolated_modules
+            and not start[2].get("open_namespace")
+            and len(body) == 1
+        ):
+            op = body[0].get("value", {})
+            if body[0]["op"] == "expr" and op.get("op") == "project_module_import":
+                callee = self.project.closed.get(op["callee"], {})
+                if callee.get("noreturn") and not self.project.import_may_write(
+                    callee["body"]
+                ):
+                    result[2]["registry"][op["module"]] = dict(
+                        state="managed", initializer=op["callee"]
+                    )
+                    return result
         may_write = self.project.import_may_write(body)
         imports = self.project.imports.exceptional_prefix(
             start[2], after[2], may_write=may_write
@@ -3853,6 +3896,7 @@ def _conditional_module(project, candidate):
         source_index=project.source_index,
         conditional_owner=symbol,
     )
+    trial.isolated_modules = project.isolated_modules
     trial.loader_refinements = project.loader_refinements
     trial.execution_images = project.execution_images
     trial.text_profiles = project.text_profiles
@@ -3929,6 +3973,14 @@ def _attempt_protocol_entry(
         function_definitions=module.get("python_definitions"),
         source_index=source_index,
     )
+    environment = module.get("python_entry_environment") or {}
+    entries = environment.get("entries", ())
+    if len(entries) == 1 and entries[0].get("image") == module.get("current_image"):
+        decl = entries[0]["declaration"]
+        project.isolated_modules = (decl.get("kind"), decl.get("deployment")) == (
+            "standalone_script",
+            "isolated_project_modules_v1",
+        ) and decl.get("flags", []) in ([], ["-E", "-S", "-B"])
     project.loader_refinements = refinements
     project.execution_images = module.get("execution_images", [])
     project.text_profiles = module.get("text_profiles", {})

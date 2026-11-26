@@ -569,34 +569,53 @@ def activation_bodies(dispatch, checked):
     return list(bodies.values())
 
 
+def _isolated_declaration(module, ledger, dispatch):
+    """Resolve the declared deployment separately from the analysis process."""
+    env = module.get("python_entry_environment") or {}
+    entries = env.get("entries", ())
+    if (
+        len(entries) != 1
+        or entries[0].get("image") != module.get("current_image")
+        or ledger.get("entry_environment") != env
+        or module.get("layer_contract", {}).get("completion") != "complete"
+        or module.get("entry_abi") is not None
+        or not dispatch
+        or dispatch.get("completion") != "modeled_source_entry"
+    ):
+        return None
+    declaration = entries[0]["declaration"]
+    if (declaration.get("kind"), declaration.get("deployment")) != (
+        "standalone_script",
+        "isolated_project_modules_v1",
+    ) or declaration.get("flags", []) not in ([], ["-E", "-S", "-B"]):
+        return None
+    return declaration
+
+
+def _project_name(key):
+    import _imp
+    import sys
+
+    return (
+        isinstance(key, str)
+        and key.isidentifier()
+        and key not in sys.stdlib_module_names
+        and not _imp.is_builtin(key)
+        and not _imp.is_frozen(key)
+    )
+
+
 def isolated_project_entry(module, ledger, dispatch, rows, regions, bodies):
     """Prove total coverage of a closed, single-threaded local import program."""
-    import _imp
     import platform
     import sys
 
     from scar.contract import digest, json_bytes
 
-    env = module.get("python_entry_environment")
-    if (
-        not env
-        or ledger.get("entry_environment") != env
-        or not dispatch
-        or module.get("layer_contract", {}).get("completion") != "complete"
-        or module.get("entry_abi") is not None
-    ):
+    decl = _isolated_declaration(module, ledger, dispatch)
+    if decl is None or "entry_frame" not in dispatch:
         return None
-    entries = env.get("entries", ())
-    if len(entries) != 1 or entries[0].get("image") != module.get("current_image"):
-        return None
-    decl = entries[0]["declaration"]
-    if decl.get("flags", []) not in ([], ["-E", "-S", "-B"]):
-        return None
-    if (decl.get("kind"), decl.get("deployment")) != (
-        "standalone_script",
-        "isolated_project_modules_v1",
-    ):
-        return None
+    env = module["python_entry_environment"]
     by_code = {row["code_sha256"]: row for row in bodies}
     if not bodies or len(by_code) != len(bodies):
         return None
@@ -679,10 +698,7 @@ def isolated_project_entry(module, ledger, dispatch, rows, regions, bodies):
         if (
             (occurrence["owner"], occurrence["site"])
             != (region["owner"], region["site"])
-            or not key.isidentifier()
-            or key in sys.stdlib_module_names
-            or _imp.is_builtin(key)
-            or _imp.is_frozen(key)
+            or not _project_name(key)
             or identity["status"] != "project"
             or code.get("source_key") != key + ".py"
             or body.get("kind") != "module"
@@ -782,3 +798,235 @@ def _isolated_expression(region, names, exports):
         else:
             return False
     return not stack
+
+
+def compiled_project_entry(module, ledger, dispatch, reviews):
+    """Bind typed import sites to actual local loader bodies in a closed entry."""
+    import builtins
+    import platform
+    import sys
+
+    from scar.contract import EXECUTION_ANNOTATIONS, digest, json_bytes, walk_operations
+
+    declaration = _isolated_declaration(module, ledger, dispatch)
+    if (
+        declaration is None
+        or sys.implementation.name != "cpython"
+        or sys.version_info.minor not in {12, 14}
+        or module.get("globals")
+        or module.get("externs")
+        or module.get("records")
+    ):
+        return None
+    env = module["python_entry_environment"]
+
+    def operations(body):
+        return walk_operations(body, exclude_fields=EXECUTION_ANNOTATIONS)
+
+    functions = {fn["name"]: fn for fn in module["functions"]}
+    root = module["entry"]
+    occurrences = {r["id"]: r for r in ledger["occurrences"]}
+    loaders = {(r["owner"], r["site"], r["symbol"]): r for r in dispatch["loaders"]}
+    originals = {
+        (scope["symbol"], op["occurrence"]): op
+        for scope in dispatch["functions"]
+        for op in operations(scope["body"]["body"])
+        if op["op"] == "module_import_publish"
+    }
+    bindings, modules, sites = set(), {}, {}
+    for name, fn in functions.items():
+        if fn["params"] or fn["result"] != "void" or fn.get("initializers"):
+            return None
+        for op in operations(fn["body"]):
+            if op["op"] != "project_module_import":
+                continue
+            key, site, symbol = op["module"], op["site"], op["callee"]
+            identity = op["occurrence"]
+            src = originals.get((name, identity), {})
+            row = occurrences.get(identity, {})
+            loader = loaders.get((name, site, symbol), {})
+            code = loader.get("entry", {}).get("code", {})
+            reviewed = reviews.get((name, site), {})
+            source_identity = row.get("import_effects", {}).get("source_identity", {})
+            if (
+                name != root
+                or identity in sites
+                or symbol not in functions
+                or row.get("owner") != name
+                or row.get("site") != site
+                or row.get("request")
+                != dict(form="import", module=key, fromlist=[], level=0)
+                or (source_identity.get("status"), source_identity.get("module"))
+                != ("project", key)
+                or not _project_name(key)
+                or not src
+                or op.get("source_import_occurrence") != identity
+                or op.get("loader_ports") != row.get("loader_ports")
+                or op.get("on_hit") != "use_actual_cached_module"
+                or op.get("on_miss")
+                != "publish_initializing_module_then_execute_initializer"
+                or op.get("normal") != "publish_actual_import_result_at_source_store"
+                or op.get("exceptional_exit_semantics")
+                != "on_initializer_error_remove_its_cache_entry_skip_caller_store_and_propagate"
+                or not op.get("source_code")
+                or op["source_code"].get("compiler")
+                != "cpython " + platform.python_version()
+                or any(
+                    op.get(k) != src.get(k)
+                    for k in ("source_code", "site", "source_import_store", "binding")
+                )
+                or op.get("source_import_store") is None
+                or not reviewed.get("import_binding_verified")
+                or reviewed.get("missing")
+                or reviewed.get("loaders") != [symbol]
+                or code.get("source_key") != key + ".py"
+                or code.get("compiler") != op["source_code"]["compiler"]
+            ):
+                return None
+            provider = (symbol, code["code_sha256"])
+            if modules.setdefault(key, provider) != provider:
+                return None
+            store = src["source_import_store"]["store"]
+            binding = store["name"]
+            bindings.add(binding)
+            sites[identity] = dict(
+                owner=name,
+                module=key,
+                binding=binding,
+                callee=symbol,
+                code_sha256=code["code_sha256"],
+                operation_sha256=digest(json_bytes(op)),
+            )
+    if (
+        not sites
+        or sites.keys() != occurrences.keys()
+        or set(functions) != {root, *(s for s, _ in modules.values())}
+    ):
+        return None
+    # Narrow primitive contract. All reachable module writes come from named
+    # imports; these cannot replace any built-in used by printing or handlers.
+    if any(
+        hasattr(builtins, binding) or binding.startswith("__") for binding in bindings
+    ):
+        return None
+    failures = {}
+    for symbol, _ in modules.values():
+        effects = _local_exits(functions[symbol]["body"], {})
+        if effects is None:
+            return None
+        failures[symbol] = effects
+    if _local_exits(functions[root]["body"], failures) != set():
+        return None
+    return dict(
+        deployment=declaration["deployment"],
+        strategy="compiled_initializers",
+        minor=sys.version_info.minor,
+        initializer_errors={name: sorted(kinds) for name, kinds in failures.items()},
+        entry=root,
+        sites=sites,
+        ledger_sha256=digest(json_bytes(ledger)),
+        entry_environment_sha256=digest(json_bytes(env)),
+        functions_sha256={
+            name: digest(json_bytes(fn)) for name, fn in functions.items()
+        },
+    )
+
+
+def _local_exits(body, callees):
+    """Compute escaping language errors for the closed scalar/IO import profile."""
+
+    locals_ = {}
+
+    def abstract(expr):
+        if not isinstance(expr, dict):
+            return None
+        op, ty = expr.get("op"), expr.get("type")
+        if (
+            op == "literal"
+            and ty in ("text", "bool", "i64", "unit")
+            and (not isinstance(expr.get("value"), str) or expr["value"].isascii())
+        ):
+            return ("scalar", ty)
+        if op == "var":
+            value = locals_.get(expr.get("name"))
+            return value[1] if value and value[0] == ty else None
+        if (
+            op == "format_value"
+            and expr.get("conversion") == "str"
+            and expr.get("spec", {}).get("empty") is True
+            and abstract(expr.get("value")) == ("scalar", "text")
+        ):
+            return ("scalar", "text")
+        if (
+            op == "error_make"
+            and expr.get("category") in {"value_error", "type_error", "runtime_error"}
+            and abstract(expr.get("message")) == ("scalar", "text")
+        ):
+            return ("error", expr["category"])
+        return None
+
+    failures = set()
+    for stmt in body:
+        op = stmt["op"]
+        value = stmt.get("value", {})
+        if op == "decl":
+            initial = abstract(stmt.get("init"))
+            if initial is None or stmt["name"] in locals_:
+                return None
+            locals_[stmt["name"]] = (stmt["type"], initial)
+            continue
+        if (
+            op == "expr"
+            and value.get("op") == "project_module_import"
+            and value.get("callee") in callees
+        ):
+            failures.update(callees[value["callee"]])
+        elif (
+            op == "expr"
+            and value.get("op") == "text_print"
+            and "stream" not in value
+            and all(
+                (item := abstract(arg)) and item[0] == "scalar"
+                for arg in [*value["args"], value["sep"], value["end"], value["flush"]]
+            )
+        ):
+            continue
+        elif op == "throw" and "cause" not in stmt:
+            error = abstract(value)
+            if not error or error[0] != "error":
+                return None
+            failures.add(error[1])
+        elif op == "try" and not stmt.get("finally") and not stmt.get("else"):
+            pending = _local_exits(stmt["body"], callees)
+            if pending is None:
+                return None
+            for handler in stmt["handlers"]:
+                if handler.get("binding") is not None or any(
+                    k in handler for k in ("match", "on_match", "cleanup")
+                ):
+                    return None
+                categories = handler.get("categories")
+                if (
+                    not isinstance(categories, list)
+                    or not categories
+                    or not all(isinstance(k, str) for k in categories)
+                ):
+                    return None
+                effects = _local_exits(handler["body"], callees)
+                if effects is None:
+                    return None
+                caught = {
+                    kind
+                    for kind in pending
+                    if kind in categories
+                    or {"exception", "base_exception"}.intersection(categories)
+                }
+                if caught:
+                    pending -= caught
+                    failures.update(effects)
+            failures.update(pending)
+        elif op == "return" and stmt.get("value") is None:
+            continue
+        else:
+            return None
+    return failures

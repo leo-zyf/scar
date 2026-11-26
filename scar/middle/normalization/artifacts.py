@@ -1816,6 +1816,22 @@ def analyze(module):
                 site = operation(node)
                 visible = sorted(set(file_versions.values()))
                 conditional_inputs = file_candidates.rows()
+                argv = node.get("argv") if op == "process_spawn" else None
+                argument_vector = (
+                    dict(
+                        count=len(argv),
+                        known=[
+                            dict(port=["argv", i], value=arg["value"])
+                            for i, arg in enumerate(argv)
+                            if arg.get("op") == "literal"
+                            and arg.get("type") == "text"
+                            and isinstance(arg.get("value"), str)
+                            and "\0" not in arg["value"]
+                        ],
+                    )
+                    if argv is not None
+                    else None
+                )
                 launch_environment = dict(
                     id="launch-environment:"
                     + digest(
@@ -1826,6 +1842,11 @@ def analyze(module):
                                 filesystem_epoch,
                                 visible,
                                 conditional_inputs,
+                                *(
+                                    [argument_vector]
+                                    if argument_vector is not None
+                                    else []
+                                ),
                             ]
                         )
                     ),
@@ -1840,9 +1861,14 @@ def analyze(module):
                         "declared_image" if op == "process_spawn" else "unbound"
                     ),
                     argument_ports=(
-                        [["argv", i] for i in range(len(node.get("argv", ())))]
-                        if op == "process_spawn"
+                        [["argv", i] for i in range(len(argv))]
+                        if argv is not None
                         else [["command"]]
+                    ),
+                    **(
+                        {"argument_vector": argument_vector}
+                        if argument_vector is not None
+                        else {}
                     ),
                     launcher=node.get("launcher"),
                     cwd_policy=node.get("cwd"),

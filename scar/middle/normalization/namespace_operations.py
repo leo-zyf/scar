@@ -341,15 +341,15 @@ def _project_import_members(port, result):
     )
 
 
-def publish_plain_import(frame, node, occurrence, steps, *, source_code=None):
-    """Consume the actual importer result through its verified projection and store."""
+def _plain_import_ports(frame, node, occurrence, source_code):
+    """Resolve the original request, result projection and successful source store."""
     request = occurrence["request"]
     name = request["module"]
     target = node.get("binding", {})
     slot = target.get("name")
     alias = node.get("alias")
     if not isinstance(name, str) or not all(p.isidentifier() for p in name.split(".")):
-        return False
+        return None
     bound_name = alias or name.partition(".")[0]
     projected = alias is not None and "." in name
     field = "source_import_projection" if projected else "source_import_store"
@@ -369,7 +369,7 @@ def publish_plain_import(frame, node, occurrence, steps, *, source_code=None):
         or not isinstance(port, dict)
         or port.get("code_sha256") != code["code_sha256"]
     ):
-        return False
+        return None
     # M1 verifies the source instructions, their order, names and stack contract.
     store = port["store"]
     imported = {"result": "import_result"}
@@ -382,6 +382,15 @@ def publish_plain_import(frame, node, occurrence, steps, *, source_code=None):
         **_store_import_value(store, value),
         **source_site(node),
     )
+    return code, field, port, binding, projection
+
+
+def publish_plain_import(frame, node, occurrence, steps, *, source_code=None):
+    """Consume the actual importer result through its verified projection and store."""
+    ports = _plain_import_ports(frame, node, occurrence, source_code)
+    if ports is None:
+        return False
+    code, field, port, binding, projection = ports
     namespace_effect(
         frame,
         node,
@@ -389,19 +398,73 @@ def publish_plain_import(frame, node, occurrence, steps, *, source_code=None):
         "module_import_publish",
         source_protocol="python.import",
         occurrence=occurrence["id"],
-        request=request,
+        request=occurrence["request"],
         **_import_operands(node, port, code),
         **{field: port},
-        **({"projection": projection} if projected else {}),
+        **({"projection": projection} if projection is not None else {}),
         writes=(binding["namespace"],),
         binding=binding,
         unwind="on_import_failure_skip_store_on_store_failure_preserve_completed_effects_and_unwind_source_stack",
         release="preserve_source_stack_ownership_replaced_binding_release_reentry_and_unraisable_finalizer_errors",
         callbacks="preserve_source_opcode_tracing_and_exception_state",
     )
-    frame.project.imports.publications[slot] = dict(
-        occurrence=occurrence["id"], slot=slot, name=bound_name, **source_site(node)
+    frame.project.imports.publications[binding["slot"]] = dict(
+        occurrence=occurrence["id"],
+        slot=binding["slot"],
+        name=binding["name"],
+        **source_site(node),
     )
+    return True
+
+
+def managed_project_import(frame, node, occurrence, symbol, steps):
+    """Publish the real import result, with the process managing cache, body and unwind."""
+    if not frame.project.isolated_modules or frame.project.imports.open_namespace:
+        return False
+    operands = _plain_import_ports(
+        frame, node, occurrence, frame.scope.get("source_code")
+    )
+    ports = node.get("loader_ports")
+    module = node["module"]
+    if not (
+        operands
+        and module.isidentifier()
+        and module == occurrence["request"]["module"]
+        and node["initializers"] == [symbol]
+        and occurrence["import_effects"]["source_identity"].get("status") == "project"
+        and ports
+        and ports["site"] == node["site"]
+        and [c["initializer"] for c in ports["body"]["candidates"]] == [symbol]
+    ):
+        return False
+    code, field, port, binding, projection = operands
+    previous = frame.project.names.get(binding["slot"])
+    if (
+        field != "source_import_store"
+        or projection is not None
+        or previous is not None
+        and previous.kind != "module"
+    ):
+        return False
+    action = _namespace_operation(
+        frame,
+        node,
+        "project_module_import",
+        callee=symbol,
+        module=module,
+        occurrence=occurrence["id"],
+        source_import_store=port,
+        loader_ports=ports,
+        binding=binding,
+        **_import_operands(node, port, code),
+        writes=[binding["namespace"]],
+        on_hit="use_actual_cached_module",
+        on_miss="publish_initializing_module_then_execute_initializer",
+        exceptional_exit_semantics="on_initializer_error_remove_its_cache_entry_skip_caller_store_and_propagate",
+        normal="publish_actual_import_result_at_source_store",
+    )
+    frame.project.source_imports.producer(occurrence, action, "module_body")
+    steps.append(dict(op="expr", value=action))
     return True
 
 
@@ -492,6 +555,7 @@ def _source_region(frame, receipt):
         definitions=ChainMap(
             frame.project.functions, frame.project.function_definitions
         ),
+        constants={} if frame.project.isolated_modules else None,
     )
 
 
@@ -524,6 +588,7 @@ def open_object_statement(frame, node, steps):
         opcode,
         source_code=code,
         **{field: receipt},
+        **({"constants": region.constants} if region.constants else {}),
         **({} if "expression" in ports else {"evaluation": region.steps}),
         **ports,
         reads=("frame.code", "frame.locals", "python.exception_state"),
@@ -715,6 +780,11 @@ def open_object_expression(frame, node, steps, *, truth_context, discard):
         source_code=code,
         expression=expression,
         **({"source_expression": receipt} if receipt is not None else {}),
+        **(
+            {"constants": region.constants}
+            if receipt is not None and region.constants
+            else {}
+        ),
         code_match="qualify_current_frame_code_and_expression_instruction_order_stack_operands_spans_and_jumps_before_first_operand",
         on_code_mismatch="resume_source_equivalent_execution_before_first_operand",
         lifetime="transfer_actual_result_to_parent_and_release_consumed_stack_references_at_each_source_opcode",
@@ -843,6 +913,8 @@ def open_exception_handler(frame, node, index, count):
         on_error="unwind_match_failure_follow_source_exception_table_and_preserve_original_exception_context",
     )
     header = dict(match=match, binding=None, on_match=[], cleanup=[])
+    if edge := receipt.get("normal_continuation"):
+        header["normal_continuation"] = edge
     alias = node.get("binding")
     if alias is None:
         return header

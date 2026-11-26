@@ -129,6 +129,11 @@ def link_images(folder, images, root_image):
                         source_ports=(
                             environment["argument_ports"] if state == "argv" else []
                         ),
+                        **(
+                            {"argument_vector": environment["argument_vector"]}
+                            if state == "argv" and "argument_vector" in environment
+                            else {}
+                        ),
                         parent_directory=(
                             environment.get("directory") if state == "cwd" else None
                         ),

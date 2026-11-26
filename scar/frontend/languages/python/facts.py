@@ -691,6 +691,14 @@ def _expression_instruction(program, ins, parts, keywords):
             ):
                 return None
             row["intrinsic"] = ins.argrepr
+    elif opcode == "BUILD_MAP":
+        if not any(
+            isinstance(node, ast.Dict)
+            and arg == len(node.keys)
+            and None not in node.keys
+            for node in parts
+        ):
+            return None
     elif opcode in {"POP_JUMP_IF_TRUE", "POP_JUMP_IF_FALSE", "TO_BOOL"}:
         if not any(isinstance(n, ast.If) for n in parts):
             return None
@@ -1166,6 +1174,7 @@ def _expression_parts(expr, *, allow_indexed):
                 ast.Return,
                 ast.List,
                 ast.Tuple,
+                ast.Dict,
                 ast.Assign,
                 ast.Delete,
                 ast.Name,
@@ -1175,6 +1184,8 @@ def _expression_parts(expr, *, allow_indexed):
                 ast.FormattedValue,
             ),
         ):
+            return None
+        if isinstance(node, ast.Dict) and None in node.keys:
             return None
         if isinstance(node, (ast.List, ast.Tuple)) and any(
             isinstance(elt, (ast.List, ast.Tuple, ast.Starred)) for elt in node.elts
@@ -1197,7 +1208,8 @@ def _expression_parts(expr, *, allow_indexed):
             keywords[pos].append(keys)
             keywords[tuple_position(node.func)].append(keys)
         object_ports |= isinstance(
-            node, (ast.Attribute, ast.Constant, ast.JoinedStr, ast.List, ast.Tuple)
+            node,
+            (ast.Attribute, ast.Constant, ast.JoinedStr, ast.List, ast.Tuple, ast.Dict),
         )
     return parts, keywords, object_ports
 
@@ -1438,7 +1450,9 @@ def _positioned_instruction(ins):
     return row
 
 
-def _exception_handler_sites(instructions, entries, tries, loads):
+def _exception_handler_sites(
+    instructions, entries, tries, loads, definitions, following
+):
     """Join a module try's source clauses to its actual match, cleanup and unwind edges."""
     by_offset = {ins.offset: i for i, ins in enumerate(instructions)}
     starts = [e.start for e in entries]
@@ -1466,7 +1480,7 @@ def _exception_handler_sites(instructions, entries, tries, loads):
             and sequence[2].arg == binding.arg
         )
 
-    def arm(handler, index, first, mismatch, entry_op, primary, unwind):
+    def arm(handler, index, first, mismatch, entry_op, primary, unwind, successor):
         # A break or continue can restore the handled exception before its actual
         # jump. Such an exit is not an ordinary fallthrough, even if the clearing
         # sequence is byte-for-byte identical.
@@ -1485,6 +1499,8 @@ def _exception_handler_sites(instructions, entries, tries, loads):
                     ast.ImportFrom,
                 ),
             )
+            or isinstance(stmt, ast.FunctionDef)
+            and tuple_position(stmt) in definitions
             for stmt in handler.body
         ):
             return None
@@ -1552,6 +1568,26 @@ def _exception_handler_sites(instructions, entries, tries, loads):
             for row in body
         ):
             return None
+        body_definitions = []
+        for stmt in handler.body:
+            if not isinstance(stmt, ast.FunctionDef):
+                continue
+            proof, _ = definitions[tuple_position(stmt)]
+            rows = proof["instructions"]
+            # This is the parent-frame definition operation, including defaults
+            # and publication. The child's executable instructions are separate.
+            if [i.offset for i in body if within(i.positions, stmt)] != [
+                r["offset"] for r in rows
+            ]:
+                return None
+            body_definitions.append(
+                dict(
+                    position=proof["position"],
+                    code_sha256=proof["child"]["code_sha256"],
+                    first_offset=rows[0]["offset"],
+                    last_offset=rows[-1]["offset"],
+                )
+            )
         normal = [] if raises else remaining[end : end + (4 if handler.name else 1)]
         if handler.name and normal and not alias_cleanup(normal[1:], binding):
             return None
@@ -1564,6 +1600,35 @@ def _exception_handler_sites(instructions, entries, tries, loads):
                 or exceptional[-1].arg != 1
             ):
                 return None
+        continuation = {}
+        if body_definitions and normal:
+            transfer = remaining[end + len(normal) : len(remaining) - len(exceptional)]
+            if (
+                len(transfer) != 1
+                or successor is None
+                or any(row.is_jump_target for row in normal)
+            ):
+                return None
+            jump = transfer[0]
+            if (
+                jump.opname
+                not in {"JUMP_FORWARD", "JUMP_BACKWARD", "JUMP_BACKWARD_NO_INTERRUPT"}
+                or jump.is_jump_target
+                or jump.argval not in by_offset
+            ):
+                return None
+            pos = by_offset[jump.argval]
+            destination = _suite_entry(
+                instructions[pos], successor, "continuation", instructions[:pos]
+            )
+            if destination is None:
+                return None
+            if covering(jump.offset):
+                table.add(covering(jump.offset))
+            continuation["normal_continuation"] = dict(
+                jump=dict(_positioned_instruction(jump), target=jump.argval),
+                destination=destination,
+            )
         body_target = exceptional[0].offset if exceptional else target
         if not all(targets(row, body_target) for row in body):
             return None
@@ -1582,6 +1647,8 @@ def _exception_handler_sites(instructions, entries, tries, loads):
             check=_positioned_instruction(check),
             branch=_positioned_instruction(branch),
             matched=list(map(_positioned_instruction, matched)),
+            **({"body_definitions": body_definitions} if body_definitions else {}),
+            **continuation,
             body_offset=remaining[0].offset,
             body_raise=_positioned_instruction(finish) if raises else None,
             mismatch=_positioned_instruction(instructions[mismatch]),
@@ -1641,7 +1708,20 @@ def _exception_handler_sites(instructions, entries, tries, loads):
             continue
         table = [*primary, header_entry, mismatch_entry]
         arms = [
-            arm(h, i, a, b, entry_op, table, unwind) if a + 3 < b else None
+            (
+                arm(
+                    h,
+                    i,
+                    a,
+                    b,
+                    entry_op,
+                    table,
+                    unwind,
+                    following.get(node) if not node.finalbody else None,
+                )
+                if a + 3 < b
+                else None
+            )
             for i, (h, a, b) in enumerate(
                 zip(node.handlers, indexes, [*indexes[1:], last], strict=True)
             )
@@ -2289,7 +2369,7 @@ def _compiler_sites(tree, path, relative, source_hash):
                 following.update(
                     (a, b)
                     for a, b in pairwise(suite)
-                    if isinstance(a, (ast.If, ast.For))
+                    if isinstance(a, (ast.If, ast.For, ast.Try))
                 )
                 if (
                     suite
@@ -2410,13 +2490,16 @@ def _compiler_sites(tree, path, relative, source_hash):
     )
     statement_expressions = (
         _statement_expression_sites(
-            program, instructions, expressions, handlers, stores, following
+            program, instructions, expressions, handlers, stores, following,
+            inherited=inherited,
         )
         if expressions
         else {}
     )
     exception_handlers = (
-        _exception_handler_sites(instructions, entries, tries, loads)
+        _exception_handler_sites(
+            instructions, entries, tries, loads, definition_sites, following
+        )
         if tries and loads
         else {}
     )

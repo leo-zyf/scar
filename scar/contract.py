@@ -38,6 +38,7 @@ MODULE_REGISTRY_OPERATIONS = frozenset(
         "module_namespace_initialize",
         "module_object_expression",
         "module_object_for",
+        "project_module_import",
         "source_exception_match",
         "source_exception_bind",
         "source_exception_clear",
@@ -55,6 +56,7 @@ MODULE_REGISTRY_OPERATIONS = frozenset(
         "source_object_build_string",
         "source_object_build_sequence",
         "source_object_build_keyword_defaults",
+        "source_object_build_map",
         "source_object_build_slice",
         "source_object_getitem",
         "source_object_setitem",
@@ -1372,6 +1374,10 @@ def validate_artifact_flow(flow):
     for environment in flow.get("launch_environments", ()):
         if "conditional_candidates" in environment:
             conditional_candidates(environment["conditional_candidates"])
+        if "argument_vector" in environment:
+            _validate_argument_vector(
+                environment["argument_vector"], environment.get("argument_ports")
+            )
         if (
             records.get(environment.get("operation"), {}).get("kind")
             not in {"SOURCE_OPERATION", "CANONICAL_OPERATION"}
@@ -1545,6 +1551,44 @@ def validate_artifact_flow(flow):
     return flow
 
 
+def _validate_argument_vector(vector, ports):
+    if not (
+        isinstance(vector, dict)
+        and set(vector) == {"count", "known"}
+        and type(vector["count"]) is int
+        and isinstance(ports, list)
+        and vector["count"] == len(ports)
+        and all(
+            isinstance(port, list)
+            and len(port) == 2
+            and port[0] == "argv"
+            and type(port[1]) is int
+            and port[1] == i
+            for i, port in enumerate(ports)
+        )
+        and isinstance(vector["known"], list)
+    ):
+        raise ValueError("launch argument vector requires its ordered argv ports")
+    previous = -1
+    for arg in vector["known"]:
+        if not isinstance(arg, dict) or set(arg) != {"port", "value"}:
+            raise ValueError("known launch argument requires a source port and text")
+        port, value = arg["port"], arg["value"]
+        if not (
+            isinstance(port, list)
+            and len(port) == 2
+            and port[0] == "argv"
+            and type(port[1]) is int
+            and previous < port[1] < vector["count"]
+            and isinstance(value, str)
+            and "\0" not in value
+        ):
+            raise ValueError(
+                "known launch argument disagrees with its ordered argv port"
+            )
+        previous = port[1]
+
+
 def validate_workflow(flow):
     """Check cross-image entry bindings without assuming file-version equality."""
     if (flow.get("schema"), flow.get("schema_version")) != (WORKFLOW, VERSION):
@@ -1584,6 +1628,10 @@ def validate_workflow(flow):
             not in {"argv", "cwd", "environment", "filesystem_namespace"}
         ):
             raise ValueError("entry binding requires its launch-time conditions")
+        if "argument_vector" in edge:
+            if edge["kind"] != "BINDS_ENTRY_STATE" or target.get("state") != "argv":
+                raise ValueError("argument vector must belong to a process entry argv")
+            _validate_argument_vector(edge["argument_vector"], edge.get("source_ports"))
         if edge["kind"] == "WAITS_FOR" and (
             edge.get("conditional") is not True
             or edge.get("descendants_completed") is not False

@@ -196,22 +196,31 @@ def _definition(graph, declarations=None):
                 )
             if "source_constant_store" in result:
                 bind_constant_store(result, graph["signature"].get("python_scope", {}))
+            following = None
+            has_continuation = (
+                result["op"] in {"if", "for"} and "source_expression" in result
+            ) or (
+                result["op"] == "try"
+                and any(
+                    "normal_continuation" in arm.get("source_exception_handler", {})
+                    for arm in result.get("handlers", ())
+                )
+            )
+            if successor is not None and has_continuation:
+                next_port = (
+                    successor.get("port") if isinstance(successor, dict) else None
+                )
+                if type(next_port) is not int or not 0 <= next_port < len(nodes):
+                    raise ValueError("source region has no graph continuation port")
+                following = nodes[next_port]
             if "source_expression" in result:
-                following = None
-                if result["op"] in {"if", "for"} and successor is not None:
-                    next_port = (
-                        successor.get("port") if isinstance(successor, dict) else None
-                    )
-                    if type(next_port) is not int or not 0 <= next_port < len(nodes):
-                        raise ValueError(
-                            "source condition has no graph continuation port"
-                        )
-                    following = nodes[next_port]
                 bind_source_expression(
                     result, graph["signature"].get("python_scope", {}), following, loop
                 )
             if result["op"] == "try":
-                bind_exception_arms(result, graph["signature"].get("python_scope", {}))
+                bind_exception_arms(
+                    result, graph["signature"].get("python_scope", {}), following
+                )
             if result["op"] in _SITE_OPERATIONS or "source_name_load" in result:
                 result["site"] = f"{graph['id']}/{port}"
             active.remove(port)

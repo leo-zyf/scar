@@ -642,6 +642,8 @@ def test_source_dispatch_preserves_repeated_import_sites(tmp_path, failing):
     )
     graph, out = tmp_path / "graph", tmp_path / "plan"
     build(request, graph)
+    if failing:
+        build(source, tmp_path / "unspecified-graph")
     source.unlink()
     module.unlink()
     plan(graph, out)
@@ -659,6 +661,111 @@ def test_source_dispatch_preserves_repeated_import_sites(tmp_path, failing):
     assert len(sites) == len(loaders) == 2
     assert sites == {loader["site"] for loader in loaders}
     assert len({loader["entry"]["code"]["code_sha256"] for loader in loaders}) == 1
+
+    if failing:
+        sealed = json.loads((out / "exec-ir.json").read_bytes())
+        assert sealed["status"] == "READY"
+        functions = {
+            f["name"]: f for ref in sealed["functions"] if (f := read_member(out, ref))
+        }
+        [original] = source_dispatch["functions"]
+        actual = read_member(out, original["body"])["body"]
+        main = functions[ir["entry"]]["body"]
+        assert len(main) == len(actual) == 2
+        for branch, source_try in zip(main, actual):
+            op = branch["body"][0]["value"]
+            published = source_try["body"][0]["value"]
+            assert op["op"] == "project_module_import" and op["site"] in sites
+            assert op["binding"] == published["binding"]
+            assert op["occurrence"] == published["occurrence"]
+            assert branch["handlers"][0]["categories"] == ["value_error"]
+            assert (
+                source_try["handlers"][0]["match"]["matcher"]["instruction"]["name"]
+                == "ValueError"
+            )
+            initializer = functions[op["callee"]]
+            assert initializer["noreturn"] and initializer["body"][-1]["op"] == "throw"
+        ordinary = tmp_path / "unspecified-plan"
+        assert plan(tmp_path / "unspecified-graph", ordinary)["status"] == "INCOMPLETE"
+        assert (
+            json.loads((ordinary / "plan.json").read_bytes())["issues"][0]["code"]
+            == "python.import_initializer_completion"
+        )
+
+
+def test_open_handler_definitions_keep_cleanup_continuation_and_mapping_order(tmp_path):
+    from scar.contract import read_member
+    from scar.frontend import build
+    from scar.middle import plan
+    from scar.middle.binding import bind
+
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    source = pkg / "__init__.py"
+    source.write_text(
+        "from . import child as unused\ndel unused\n"
+        "try:\n    action()\nexcept Failure as err:\n"
+        "    table = {key(): value()}\n    def fallback(): pass\n    note()\n"
+        "follow()\nboundary = 0 or 37\n"
+    )
+    (pkg / "child.py").write_text("pass\n")
+    entry = tmp_path / "entry.py"
+    entry.write_text("import pkg\n")
+    folder, out = tmp_path / "graph", tmp_path / "plan"
+    build(entry, folder)
+    source.unlink()
+    plan(folder, out)
+    report = json.loads((out / "plan.json").read_bytes())
+    [issue] = report["issues"]
+    assert (issue["code"], issue["location"]["line"]) == (
+        "python.global_store_after_callback",
+        10,
+    )
+    row = next(
+        r
+        for r in report["protocol_analysis"]["prefix_fragments"]
+        if r["symbol"] == "py:pkg:<init>"
+    )
+    body = read_member(out, row["fragment"])["body"]
+    handler = next(s for s in body if s["op"] == "try")["handlers"][0]
+    match = handler["match"]
+    assert match["matcher"]["instruction"]["name"] == "Failure"
+    assert handler["cleanup"][0]["value"]["normal_exit"][-1]["opcode"] == "DELETE_NAME"
+    edge = handler["normal_continuation"]
+    assert (
+        edge["jump"]["target"] == edge["destination"]["offset"]
+        and edge["destination"]["statement_position"][0] == 9
+    )
+    statements = [row["value"] for row in handler["body"]]
+    assert [row["name"] for row in statements[:2]] == ["table", "fallback"]
+    assert statements[2]["op"] == "module_object_expression"
+    steps = statements[0]["evaluation"]
+    calls = [row for row in steps if row["op"] == "source_object_call"]
+    assert steps[-1]["op"] == "source_object_build_map"
+    assert steps[-1]["entries"] == [
+        dict(
+            key={"from_offset": calls[0]["offset"]},
+            value={"from_offset": calls[1]["offset"]},
+        )
+    ]
+    [child] = match["source_exception_handler"]["body_definitions"]
+    assert (
+        child["code_sha256"]
+        == statements[1]["source_definition"]["child"]["code_sha256"]
+    )
+    graph = json.loads((folder / "graph.json").read_bytes())
+    unit = next(u for u in graph["units"] if u["path"] == "pkg/__init__.py")
+    fragment = read_member(folder, unit["graph"])
+    proof = next(
+        n["source_exception_handler"]
+        for f in fragment["functions"]
+        for n in f["nodes"]
+        if n.get("source_exception_handler")
+    )
+    proof["normal_continuation"]["jump"]["oparg"] += 1
+    unit["graph"] = member(folder, "units", fragment)
+    with pytest.raises(ValueError, match="normal continuation"):
+        bind(graph, folder)
 
 
 def test_loader_owns_result_separately_from_conditional_source_body(tmp_path):
@@ -1501,6 +1608,12 @@ print(json.dumps(link_images(relocated,images,'driver')))
     bindings = [e for e in workflow["edges"] if e["kind"] == "BINDS_ENTRY_STATE"]
     assert len(bindings) == 8
     assert all(e["binding_time"] == "process_entry" for e in bindings)
+    argv = [e for e in bindings if nodes[e["target"]]["state"] == "argv"]
+    assert len(argv) == 2 and all(
+        e["argument_vector"]
+        == {"count": 1, "known": [{"port": ["argv", 0], "value": "./worker"}]}
+        for e in argv
+    )
     waits = [e for e in workflow["edges"] if e["kind"] == "WAITS_FOR"]
     assert len(waits) == 2 and all(e["descendants_completed"] is False for e in waits)
     reads = {

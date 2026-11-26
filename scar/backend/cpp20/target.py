@@ -506,9 +506,23 @@ def _lower_image(path, revision, scheduled, destination):
         physical.get("source_import_effects", {}).get("isolated_entry")
         or "isolated_entry_binding_sha256" in module
     ):
-        from .imports import isolated_units
+        from .imports import isolated_certificate, isolated_units
 
-        units = isolated_units(path.parent, physical, module)
+        certificate = isolated_certificate(path.parent, physical, module)
+        if certificate.get("strategy") == "compiled_initializers":
+            if certificate.get("entry") != module["entry"] or certificate.get(
+                "functions_sha256"
+            ) != {fn["name"]: digest(json_bytes(fn)) for fn in module["functions"]}:
+                raise ValueError(
+                    "compiled initializers differ from their certified function bodies"
+                )
+            lowerer.compiled_imports = dict(certificate["sites"])
+            lowerer.import_minor = certificate["minor"]
+            units = lowerer.units()
+            if lowerer.compiled_imports:
+                raise ValueError("unconsumed compiled local import site")
+        else:
+            units = isolated_units(path.parent, physical, certificate)
         lowerer.used_sdk_headers.update({"import.hpp", "project_import.hpp"})
     else:
         units = lowerer.units()

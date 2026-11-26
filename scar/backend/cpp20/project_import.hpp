@@ -9,6 +9,7 @@
 namespace scar::imports {
 struct project_module {
   std::string_view name, symbol, code;
+  void (*initialize)() = nullptr;
 };
 
 namespace isolated {
@@ -186,6 +187,10 @@ struct process : operands, ordered_registry<object> {
   }
   std::string_view spec_name(spec s) { return s.definition->name; }
   void exec_module(spec s, const object &m, body_provider provider) {
+    if (s.definition->initialize) {
+      s.definition->initialize();
+      return;
+    }
     for (auto &b : provider.programs)
       if (b.symbol == s.definition->symbol &&
           b.code_sha256 == s.definition->code) {
@@ -211,6 +216,22 @@ struct process : operands, ordered_registry<object> {
   void audit_import(std::string_view) {}
 };
 } // namespace isolated
+// A standalone compiled entry owns one registry across all of its imports.
+// An exception leaves the caller's binding untouched; load_selected removes
+// the newly inserted module and rethrows the same exception object.
+inline void import_compiled(std::string_view name, std::string_view binding,
+                            unsigned minor, void (*initialize)()) {
+  static isolated::process domain({});
+  const project_module request{name, {}, {}, initialize};
+  struct restore_catalog {
+    isolated::process &domain;
+    std::span<const project_module> previous;
+    ~restore_catalog() { domain.catalog = previous; }
+  } restore{domain, domain.catalog};
+  domain.catalog = std::span(&request, 1);
+  auto result = default_absolute(domain, name, minor);
+  domain.globals[std::string(binding)] = std::move(result);
+}
 inline int run_project(std::span<const region> regions,
                        std::span<const project_module> modules) {
   isolated::process entry(modules);

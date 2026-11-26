@@ -840,6 +840,22 @@ def _qualify(module, image_context=None, *, linkage=None):
                     )
                 else:
                     if family == "module_registry":
+                        if (
+                            operators == {"project_module_import"}
+                            and isinstance(requirement, dict)
+                            and set(requirement.get("operations", ())) == operators
+                            and requirement.get(
+                                "profile", "cpython-importlib-registry-v1"
+                            )
+                            == "cpython-importlib-registry-v1"
+                            and module.get("source_imports", {}).get("occurrences")
+                        ):
+                            # The provider supplies the registry API only. The
+                            # separate occurrence proof below owns full equivalence.
+                            bindings[family] = dict(
+                                provider="isolated_project_modules_v1"
+                            )
+                            continue
                         checks = runtime.registry_checks(module)
                         if checks["guard_count"] or checks["open_effect_count"]:
                             raise QualificationFailure(
@@ -986,6 +1002,18 @@ def _schedule_image(
     module.pop("isolated_entry_binding_sha256", None)
     if import_effects and (entry := import_effects.get("isolated_entry")):
         module["isolated_entry_binding_sha256"] = digest(json_bytes(entry))
+    if (
+        "module_registry" in bindings
+        and (import_effects or {}).get("isolated_entry", {}).get("strategy")
+        != "compiled_initializers"
+    ):
+        issues.append(
+            dict(
+                code="unqualified_source_import",
+                reported_by="B1",
+                detail="compiled module initialization requires a closed isolated source entry",
+            )
+        )
     module.pop("source_dispatch", None)
     if not issues and (missing := runtime.import_effect_issue(import_effects)):
         issues.append(missing)

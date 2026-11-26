@@ -560,7 +560,7 @@ def _bind_operand_instructions(node, scope, position, instructions):
     first = position[0], position[2]
     last = position[1], position[3]
     previous = -1
-    sequences = None
+    sequences = mappings = None
     binary_ports = fast_reads = None
     folded_ports = None
     for instruction in instructions:
@@ -611,6 +611,44 @@ def _bind_operand_instructions(node, scope, position, instructions):
             ):
                 raise ValueError(
                     "compiler-folded constant disagrees with its graph operands"
+                )
+        if opcode == "BUILD_MAP":
+            if mappings is None:
+                mappings = {}
+                for item in walk_operations(node, exclude_fields={"source_expression"}):
+                    if item["op"] == "mapping":
+                        pos = _graph_position(item, code)
+                        if pos is not None:
+                            key = tuple(pos)
+                            mappings[key] = None if key in mappings else item
+            mapping = mappings.get(tuple(span))
+            entries = mapping.get("entries") if mapping else None
+            count = instruction.get("oparg")
+            if not (
+                type(count) is int
+                and isinstance(entries, list)
+                and len(entries) == count
+                and all(
+                    e.get("kind") == "pair"
+                    and isinstance(e.get("key"), dict)
+                    and isinstance(e.get("value"), dict)
+                    for e in entries
+                )
+                and mapping.get("construction")
+                == {
+                    "status": "captured",
+                    "steps": [
+                        dict(
+                            kind="build_pairs",
+                            first=0,
+                            count=count,
+                            constant_keys=False,
+                        )
+                    ],
+                }
+            ):
+                raise ValueError(
+                    "source map build disagrees with its ordered mapping entries"
                 )
         aggregate_opcode = opcode in {
             "BUILD_LIST",
@@ -1887,7 +1925,74 @@ def _exception_edges(proof, following):
         raise ValueError("source exception cleanup must resume unwinding")
 
 
-def bind_exception_arms(region, scope):
+def _bind_handler_suite(arm, proof, scope, successor):
+    definitions = []
+    unwind = proof["exceptional_cleanup"] or proof["unwind"]
+    for node in arm["body"]:
+        if node["op"] != "python_define":
+            continue
+        child = node.get("source_definition")
+        if not child:
+            raise ValueError("missing source definition in exception handler")
+        rows = child["instructions"]
+        definitions.append(
+            dict(
+                position=child["position"],
+                code_sha256=child["child"]["code_sha256"],
+                first_offset=rows[0]["offset"],
+                last_offset=rows[-1]["offset"],
+            )
+        )
+        if not all(
+            any(
+                e["start"] <= r["offset"] < e["end"]
+                and e["target"] == unwind[0]["offset"]
+                and e["depth"] == 1
+                and e["lasti"] is True
+                for e in proof["exception_table"]
+            )
+            for r in rows
+        ):
+            raise ValueError("source handler definition escapes its exception region")
+    if definitions != proof.get("body_definitions", []):
+        raise ValueError("source handler definitions disagree with sealed child code")
+    edge = proof.get("normal_continuation")
+    if edge is None:
+        if definitions and proof["normal_exit"]:
+            raise ValueError("source handler definition lacks its normal continuation")
+        return
+    jump, dest = edge["jump"], edge["destination"]
+    direction = {
+        "JUMP_FORWARD": 1,
+        "JUMP_BACKWARD": -1,
+        "JUMP_BACKWARD_NO_INTERRUPT": -1,
+    }.get(jump.get("opcode"))
+    tail = proof["normal_exit"]
+    # CPython measures jump arguments in code units from the end of the
+    # instruction, including its adaptive cache in the newer backward opcode.
+    cached = jump["opcode"] == "JUMP_BACKWARD" and scope["source_code"][
+        "compiler"
+    ].startswith(("cpython 3.13.", "cpython 3.14."))
+    if not (
+        tail
+        and direction
+        and type(jump.get("oparg")) is int
+        and jump["oparg"] >= 0
+        and _inside_source(proof["position"], jump.get("position"))
+        and jump["offset"] == tail[-1]["offset"] + 2
+        and jump["target"] == dest["offset"]
+        and dest["offset"]
+        == jump["offset"] + 2 * (1 + int(cached) + direction * jump["oparg"])
+        and _edge_enters(dest, successor, "continuation", scope["source_code"])
+        and isinstance(dest.get("opcode"), str)
+        and dest["opcode"] != "CACHE"
+    ):
+        raise ValueError(
+            "source handler normal continuation disagrees with its next statement"
+        )
+
+
+def bind_exception_arms(region, scope, successor=None):
     """Bind each source handler to its own ordered clause and lexical destinations."""
     arms = region.get("handlers", ())
     for index, arm in enumerate(arms):
@@ -1957,5 +2062,6 @@ def bind_exception_arms(region, scope):
                 else None
             )
             _exception_edges(proof, following)
+            _bind_handler_suite(arm, proof, scope, successor)
         except (KeyError, TypeError, IndexError) as error:
             raise ValueError("incomplete source exception dispatch evidence") from error

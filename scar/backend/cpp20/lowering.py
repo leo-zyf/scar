@@ -308,6 +308,8 @@ class Lowerer:
     def __init__(self, module, physical, *, pending_math=None, numeric_options=None):
         self.module = module
         self.pending_math = pending_math
+        self.compiled_imports = {}
+        self.import_minor = None
         self.numeric_options = numeric_options or {}
         self.attributed_definitions = {}
         self.qualified_parameters = _qualified_parameters(module, physical)
@@ -1704,6 +1706,26 @@ class Lowerer:
             if target is None:
                 raise ValueError(f"unsupported cast {mode!r}")
             return cast(ty, v, target)
+        if op == "project_module_import":
+            site = self.compiled_imports.pop(expr["occurrence"], {})
+            if (
+                site.get("operation_sha256") != digest(json_bytes(expr))
+                or site.get("callee") != expr["callee"]
+                or site.get("module") != expr["module"]
+                or site.get("binding") != expr["binding"]["name"]
+                or self.import_minor not in (12, 14)
+            ):
+                raise ValueError(
+                    "compiled local import differs from its qualified site"
+                )
+            self.use_sdk("project_import.hpp")
+            return call(
+                "scar::imports::import_compiled",
+                utf8_literal(site["module"], "std::string_view"),
+                utf8_literal(site["binding"], "std::string_view"),
+                integer(self.import_minor),
+                name(self.callee(site["callee"])),
+            )
         if op == "call":
             symbol = expr["callee"]
             target = self.callee(symbol)

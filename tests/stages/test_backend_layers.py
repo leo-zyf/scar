@@ -4790,3 +4790,76 @@ int main() {
         write_json(package, sealed)
         with pytest.raises(ValueError, match="sealed execution domain"):
             lower_scheduled(package, tmp_path / change)
+
+
+def test_isolated_import_retries_through_typed_exception_handlers(tmp_path):
+    from scar.backend.build import build as build_binary
+    from scar.backend.cpp20 import lower_scheduled, print_target
+    from scar.backend.planning import schedule_ir
+    from scar.contract import read_member
+    from scar.frontend import build
+    from scar.middle import plan
+
+    source = tmp_path / "src"
+    source.mkdir()
+    (source / "leaf.py").write_text("print('starting')\nraise ValueError('original')\n")
+    (source / "entry.py").write_text(
+        "try:\n    import leaf\nexcept ValueError:\n    print('caught')\n"
+        "try:\n    import leaf as next_leaf\nexcept Exception:\n    print('retried')\n"
+    )
+    request = tmp_path / "request.json"
+    request.write_text(
+        json.dumps(
+            dict(
+                source_root="src",
+                source="entry.py",
+                entry_environment=dict(
+                    kind="standalone_script", deployment="isolated_project_modules_v1"
+                ),
+            )
+        )
+    )
+    reference = subprocess.run(
+        [sys.executable, "-E", "-S", "-B", "entry.py"],
+        cwd=source,
+        capture_output=True,
+        check=True,
+    )
+    build(request, tmp_path / "graph")
+    source.rename(tmp_path / "original")
+    assert plan(tmp_path / "graph", tmp_path / "ir")["status"] == "READY"
+    schedule = tmp_path / "schedule"
+    package = schedule_ir(tmp_path / "ir", schedule, policy="serial")
+    sealed = json.loads(package.read_bytes())
+    assert sealed["status"] == "READY"
+    physical = read_member(schedule, sealed["physical"])
+    effects = physical["source_import_effects"]
+    cert = effects["isolated_entry"]
+    assert cert["strategy"] == "compiled_initializers"
+    assert len(cert["sites"]) == 2
+    assert {s["binding"] for s in cert["sites"].values()} == {"leaf", "next_leaf"}
+    target = lower_scheduled(package, tmp_path / "target")
+    manifest = print_target(target, tmp_path / "delivery")
+    build_binary(tmp_path / "delivery/cpp20.json")
+    result = subprocess.run(
+        [Path(manifest["project"]) / "bin/scar_entry"],
+        cwd=tmp_path,
+        env={"PATH": "/no-interpreter"},
+        capture_output=True,
+        check=True,
+    )
+    assert (
+        (result.stdout, result.stderr)
+        == (reference.stdout, reference.stderr)
+        == (b"starting\ncaught\nstarting\nretried\n", b"")
+    )
+    corrupted = dict(sealed)
+    functions = list(sealed["functions"])
+    owner = read_member(schedule, functions[0])
+    owner["body"][0]["handlers"][0]["categories"] = ["type_error"]
+    functions[0] = member(schedule, "scheduled-units", owner)
+    corrupted["functions"] = functions
+    other = tmp_path / "schedule" / "altered.json"
+    write_json(other, corrupted)
+    with pytest.raises(ValueError, match="certified function bodies"):
+        lower_scheduled(other, tmp_path / "rejected")

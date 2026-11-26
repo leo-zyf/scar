@@ -442,7 +442,7 @@ def _frame_tree(rows, bodies, modules=None):
     )
 
 
-def isolated_units(folder, physical, module):
+def isolated_certificate(folder, physical, module):
     from scar.contract import digest, json_bytes
 
     effects = physical.get("source_import_effects", {})
@@ -461,6 +461,14 @@ def isolated_units(folder, physical, module):
         raise ValueError(
             "local module entry does not match its sealed execution domain"
         )
+    if certificate.get("deployment") != "isolated_project_modules_v1":
+        raise ValueError("unsupported local module deployment")
+    return certificate
+
+
+def isolated_units(folder, physical, certificate):
+    from scar.contract import digest, json_bytes
+
     schedule = read_member(folder, physical["source_frame_schedule"])
     if (
         schedule["kind"] != "source_frame_library"

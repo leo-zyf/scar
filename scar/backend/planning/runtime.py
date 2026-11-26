@@ -865,6 +865,10 @@ def import_effects(module, bindings):
         entry = isolated_project_entry(
             module, ledger, dispatch, rows, frame_regions, frame_bodies
         )
+    if entry is None and dispatch and "module_registry" in bindings:
+        from .import_frames import compiled_project_entry
+
+        entry = compiled_project_entry(module, ledger, dispatch, sites)
     if entry is not None:
         for row in rows:
             row["complete_effect_equivalence"] = "proven"
