@@ -3678,6 +3678,49 @@ class _Frame:
         )
 
 
+def _published_loader_candidate(project, owner, op):
+    """Match a finalized IMPORT_NAME to its visited source occurrence and module code."""
+    row = project.source_imports.rows.get(op["occurrence"], {})
+    ports = row.get("loader_ports")
+    body = op["import_call"].get("body", {})
+    candidates = body.get("candidates", ())
+    proof = op.get("source_import_projection") or op.get("source_import_store")
+    if not (
+        ports
+        and proof
+        and len(candidates) == 1
+        and row["owner"] == owner
+        and row["site"] == ports["site"] == op["site"]
+        and row["activation"] == "visited"
+        and proof["code_sha256"]
+        == project.functions[owner]["python_scope"]["source_code"]["code_sha256"]
+        and proof["import_name"]["offset"] == ports["dispatch"]["instruction"]
+        and body == ports["body"]
+    ):
+        return None
+    candidate = candidates[0]
+    symbol = candidate["initializer"]
+    scope = project.functions.get(symbol, {}).get("python_scope", {})
+    code = scope.get("source_code", {})
+    if not (
+        scope.get("initializer") == symbol
+        and scope.get("kind") == code.get("kind") == "module"
+        and scope.get("module") == candidate["module"]
+        and code.get("source_key") == candidate["source_key"]
+        and code.get("code_sha256") == candidate["code_sha256"]
+    ):
+        return None
+    # publish_plain_import already matched the owner's active-code receipt to
+    # this instruction. Matching the ledger excludes unvisited imports and
+    # preserves the dispatcher's original identity-failure evidence if any.
+    return project.loader_activations.get((owner, op["site"])) or dict(
+        owner=owner,
+        symbol=symbol,
+        loader_ports=ports,
+        **values.source_site(op),
+    )
+
+
 def _loader_handoff(trial, candidate, function, issue):
     """Record source dependencies at their producing operation, without calling them."""
     symbol = candidate["symbol"]
@@ -3691,10 +3734,9 @@ def _loader_handoff(trial, candidate, function, issue):
         site = values.source_site(op)
         kind = op["op"]
         if kind == "module_import_publish":
-            key = symbol, op.get("site")
-            selected = trial.loader_activations.get(key)
+            selected = _published_loader_candidate(trial, symbol, op)
             if selected:
-                nested.append(dict(owner=symbol, site=key[1]))
+                nested.append(selected)
             candidates = op["import_call"].get("body", {}).get("candidates", ())
             remaining = [
                 c
@@ -3812,36 +3854,44 @@ def _conditional_module(project, candidate):
         function = trial.closed[symbol]
     nested, handoff = _loader_handoff(trial, candidate, function, issue)
     rows = trial.source_imports.product(trial.skipped_sites, set())["occurrences"]
-    return dict(
-        **candidate,
-        nested_imports=nested,
-        completion="conditional_source_prefix" if issue else "conditional_source_body",
-        qualification="matching_live_module_code_and_source_equivalent_continuation",
-        function=function,
-        source_imports=dict(
-            semantics_version=1,
-            scope="conditional_source_import_occurrences",
-            occurrences=[row for row in rows if row["owner"] == symbol],
+    return (
+        dict(
+            nested_imports=[
+                dict(owner=edge["owner"], site=edge["site"]) for edge in nested
+            ],
+            completion=(
+                "conditional_source_prefix" if issue else "conditional_source_body"
+            ),
+            qualification="matching_live_module_code_and_source_equivalent_continuation",
+            function=function,
+            source_imports=dict(
+                semantics_version=1,
+                scope="conditional_source_import_occurrences",
+                occurrences=[row for row in rows if row["owner"] == symbol],
+            ),
+            operator_requirements=trial.operator_requirements(),
+            activation_handoff=handoff,
         ),
-        operator_requirements=trial.operator_requirements(),
-        activation_handoff=handoff,
+        nested,
     )
 
 
 def _conditional_loader_fragments(project):
     """Rebuild only candidates reached by finalized source imports, in their own scopes."""
-    pending = list(reversed(project.loader_activations))
-    result = {}
+    pending = list(reversed(project.loader_activations.values()))
+    result, templates = {}, {}
     while pending:
-        key = pending.pop()
-        if key in result:
+        candidate = pending.pop()
+        site = candidate["owner"], candidate["site"]
+        if site in result:
             continue
-        fragment = _conditional_module(project, project.loader_refinements[key])
-        result[key] = fragment
-        pending.extend(
-            (edge["owner"], edge["site"])
-            for edge in reversed(fragment["nested_imports"])
-        )
+        [source] = candidate["loader_ports"]["body"]["candidates"]
+        identity = candidate["symbol"], source["code_sha256"]
+        if identity not in templates:
+            template, nested = _conditional_module(project, candidate)
+            templates[identity] = template
+            pending.extend(reversed(nested))
+        result[site] = {**candidate, **templates[identity]}
     return list(result.values())
 
 
@@ -3914,7 +3964,10 @@ def _compile_protocol_entry(module, functions):
 
 def _conditional_activations(project):
     loaders = _conditional_loader_fragments(project)
-    symbols = namespace_operations.link_conditional_function_calls(project, loaders)
+    templates = {fragment["symbol"]: fragment for fragment in loaders}
+    symbols = namespace_operations.link_conditional_function_calls(
+        project, templates.values()
+    )
     callees = []
     for symbol in sorted(symbols):
         descriptor = project.function_definitions.get(symbol, {})

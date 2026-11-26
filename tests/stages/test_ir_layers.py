@@ -9449,6 +9449,89 @@ def test_nested_loader_evidence_keeps_conditional_children_out_of_the_active_led
         assert bool(row["producer_sites"]) is active
 
 
+def test_conditional_loaders_share_module_code_across_sites_and_cycles(
+    tmp_path, monkeypatch
+):
+    from collections import Counter
+
+    from scar.frontend import build
+    from scar.middle.binding import bind
+    from scar.middle.normalization import protocols
+
+    entry = tmp_path / "main.py"
+    entry.write_text("import alpha\n")
+    (tmp_path / "alpha.py").write_text("import beta\nimport beta as again\n")
+    (tmp_path / "beta.py").write_text(
+        "import alpha\nunresolved = {x: x for x in source()}\nimport dormant\n"
+    )
+    (tmp_path / "dormant.py").write_text("pass\n")
+    graph = tmp_path / "graph"
+    build(entry, graph)
+    bound, issues, _ = bind(json.loads((graph / "graph.json").read_bytes()), graph)
+    assert not issues
+    functions = {
+        f["name"]: f
+        for f in bound["functions"]
+        if f.get("execution_kind") == "python_protocol"
+    }
+    owner = bound["entry"]
+    [root] = functions[owner]["body"]
+    ports = root["loader_ports"]
+    [source] = ports["body"]["candidates"]
+    candidate = dict(
+        owner=owner,
+        site=root["site"],
+        symbol=source["initializer"],
+        loader_ports=ports,
+        location=root["location"],
+    )
+    project, issue = protocols._attempt_protocol_entry(
+        bound, functions, {(owner, root["site"]): candidate}, None, open_entry=True
+    )
+    assert issue is None
+    counts = Counter()
+    compile_module = protocols._conditional_module
+
+    def count(project, candidate):
+        counts[candidate["symbol"]] += 1
+        return compile_module(project, candidate)
+
+    monkeypatch.setattr(protocols, "_conditional_module", count)
+    fragments = protocols._conditional_loader_fragments(project)
+    alpha, beta = "py:alpha:<init>", "py:beta:<init>"
+    assert counts == {alpha: 1, beta: 1}
+    assert {(f["owner"], f["location"]["line"], f["symbol"]) for f in fragments} == {
+        (owner, 1, alpha),
+        (alpha, 1, beta),
+        (alpha, 2, beta),
+        (beta, 1, alpha),
+    }
+    first, second = [f for f in fragments if f["symbol"] == beta]
+    assert first["function"] is second["function"]
+    assert first["completion"] == "conditional_source_prefix"
+    assert first["activation_handoff"]["source_issue"]["location"]["line"] == 2
+    assert [
+        (r["location"]["line"], r["activation"])
+        for r in first["source_imports"]["occurrences"]
+    ] == [(1, "visited"), (3, "unvisited")]
+    assert [
+        r["owner"]
+        for r in project.source_imports.rows.values()
+        if r["activation"] == "visited"
+    ] == [owner]
+    monkeypatch.setitem(
+        functions[beta]["python_scope"]["source_code"], "code_sha256", "0" * 64
+    )
+    [remaining] = protocols._conditional_loader_fragments(project)
+    assert not remaining["nested_imports"]
+    unresolved = [
+        r
+        for r in remaining["activation_handoff"]["unresolved"]
+        if r["kind"] == "importer_selected_code_activation"
+    ]
+    assert {r["location"]["line"] for r in unresolved} == {1, 2}
+
+
 def test_plain_and_projected_alias_store_actual_objects_in_source_order(
     tmp_path, monkeypatch
 ):
