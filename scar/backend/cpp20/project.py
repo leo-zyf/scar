@@ -199,6 +199,16 @@ def _package(
                 "endif()",
             )
         )
+    if options.get("floating_environment") == "observable":
+        lines.extend(
+            (
+                'if(NOT CMAKE_CXX_COMPILER_ID MATCHES "^(GNU|Clang)$")',
+                '    message(FATAL_ERROR "Observable floating environment requires a supported C++ compiler")',
+                "endif()",
+                f"target_compile_options({objects} PRIVATE -O0 -fno-lto)",
+                f"target_link_options({target} PRIVATE -fno-lto -fno-fast-math)",
+            )
+        )
     interprocedural = options["interprocedural"]
     if interprocedural["mode"] == "gnu_lto":
         lines.extend(

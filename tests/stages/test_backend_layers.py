@@ -942,6 +942,55 @@ def test_cpu_schedules_nested_control_regions_without_emitting_both_choices():
     )
 
 
+def test_logical_byte_savings_do_not_price_a_new_multioutput_traversal(monkeypatch):
+    from scar.backend.planning import cpu
+
+    def copy_map(site, destination, source):
+        def item(name):
+            return dict(
+                op="index",
+                base=dict(op="var", name=name),
+                indices=[dict(op="var", name="i")],
+            )
+
+        return dict(
+            op="map",
+            site=site,
+            independent=True,
+            index="i",
+            extent=dict(op="literal", type="i64", value=262144),
+            body=[dict(op="assign", target=item(destination), value=item(source))],
+        )
+
+    def samples(limit, metrics):
+        row = dict.fromkeys(metrics, 1.0)
+        return {1: [row, row, row]}, "controlled"
+
+    monkeypatch.setattr(cpu, "_probe", samples)
+    first, second = copy_map("first", "a", "x"), copy_map("second", "b", "a")
+    fused = copy_map("fused", "a", "x")
+    fused["body"] += copy_map("second_in_fused", "b", "x")["body"]
+    choice = dict(
+        op="schedule_choice",
+        site="copies",
+        reference=[first, second],
+        fused=fused,
+        guard="masked_floating_exceptions",
+    )
+    params = [dict(name=k, type={"kind": "ptr", "to": "f64"}) for k in ("a", "b", "x")]
+    fn = dict(name="copy", result="void", params=params, body=[choice])
+    selected, report = cpu.schedule(dict(functions=[fn]), "serial")
+    [decision] = report["choices"]
+    assert decision["fused_work"]["bytes_per_element"] == 24
+    assert [r["bytes_per_element"] for r in decision["reference_work"]] == [16, 16]
+    assert decision["fused_work"]["write_streams"] == 2
+    assert decision["chosen"] == "reference" and decision["cost_evidence"] == "unpriced"
+    assert decision["unpriced_traffic"] == "concurrent_output_streams"
+    assert selected["functions"][0]["body"] == [first, second]
+    variable = dict(op="var", name="i")
+    assert cpu._access_key(variable) == cpu._access_key(dict(variable, site="source/2"))
+
+
 def test_cpu_costs_price_the_traversal_actually_emitted():
     from math import isclose
     from statistics import median
@@ -2136,6 +2185,52 @@ def test_link_image_compilation_survives_target_relocation(tmp_path):
         assert ("-flto=1" in line) == (output == "first")
         assert ("-flto-partition=one" in line) == (output == "first")
         assert subprocess.run([build / "images" / image["id"] / output]).returncode == 7
+
+
+def test_observable_rounding_survives_target_compilation(tmp_path):
+    from scar.backend import compile_ir
+    from scar.frontend import build
+    from scar.middle import plan
+
+    (tmp_path / "main.c").write_text("""#include <fenv.h>
+#include <math.h>
+#include <stdio.h>
+
+int main(void) {
+  unsigned x = (unsigned)getchar(), y = (unsigned)getchar();
+  double a = (double)x, b = (double)y, result = 0;
+  feclearexcept(FE_ALL_EXCEPT);
+  for (unsigned i = 0; i < 4; ++i) {
+    if (i & 1) fesetround(FE_DOWNWARD);
+    else fesetround(FE_UPWARD);
+    result += a * 2.0;
+    result += copysign(1.0, a - b);
+  }
+  printf("%a %d %d\\n", result, fegetround() == FE_DOWNWARD, fetestexcept(FE_ALL_EXCEPT));
+  return 0;
+}
+""")
+    request = tmp_path / "request.json"
+    write_json(
+        request,
+        dict(
+            entry="main",
+            source_root=".",
+            units=[
+                dict(path="main.c", language="c", flags=["-std=c99", "-frounding-math"])
+            ],
+        ),
+    )
+    build(request, tmp_path / "graph")
+    middle = tmp_path / "plan"
+    plan(tmp_path / "graph/graph.json", middle)
+    product = compile_ir(middle / "exec-ir.json", tmp_path / "delivery")
+    assert product["build_options"]["floating_environment"] == "observable"
+    assert product["build_options"]["interprocedural"]["mode"] == "none"
+    result = subprocess.run(
+        [product["executable"]], input=b"mm", capture_output=True, check=True
+    )
+    assert result.stdout == b"0x1.b4p+9 1 0\n"
 
 
 def test_function_numeric_permissions_preserve_strict_neighbors_across_lto(

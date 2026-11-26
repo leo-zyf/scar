@@ -9,11 +9,142 @@ import ctypes
 from ctypes.util import find_library
 from dataclasses import dataclass
 from functools import lru_cache
-from hashlib import sha256
+from hashlib import file_digest, sha256
 import math
 import os
 from pathlib import Path
+import re
+import shutil
+import subprocess
 from types import MappingProxyType
+
+from ..gnu_numeric import numeric_option_rows
+
+_FP_PRAGMA = re.compile(
+    rb"^[ \t]*\#[ \t]*pragma[ \t]+STDC[ \t]+(FENV_ACCESS|FP_CONTRACT)[ \t]+(ON|OFF|DEFAULT)\b",
+    re.MULTILINE,
+)
+
+
+def directive_spellings(buffer, path):
+    """Positive lexical evidence only: inactive source and comments may contain these bytes."""
+    return [
+        {
+            "file": path,
+            "byte_offset": match.start(1),
+            "directive": match[1].decode("ascii"),
+            "value": match[2].decode("ascii"),
+        }
+        for match in _FP_PRAGMA.finditer(buffer)
+    ]
+
+
+_SELECTION = re.compile(
+    r"-O(?:[0-3sgz]|fast)?|-std=[a-zA-Z0-9+:-]+|-pthread|-fopenmp"
+    r"|-f(?:no-)?(?:fast-math|math-errno|rounding-math|trapping-math|signaling-nans"
+    r"|finite-math-only|unsafe-math-optimizations|associative-math|reciprocal-math"
+    r"|signed-zeros)|-ffp-contract=(?:off|on|fast)"
+)
+
+
+def _selection(flags):
+    """Only query understood flags; never replay an arbitrary driver invocation."""
+    if any(word.startswith("@") for word in flags):
+        return None
+    selected = []
+    it = iter(flags)
+    for flag in it:
+        if _SELECTION.fullmatch(flag):
+            selected.append(flag)
+        elif flag in {"-I", "-D", "-U", "-isystem", "-iquote"}:
+            if next(it, None) is None:
+                return None
+        elif not (
+            flag.startswith(("-I", "-D", "-U"))
+            or re.fullmatch(r"-W(?:no-)?[a-zA-Z0-9-]+", flag)
+        ):
+            return None
+    return tuple(selected)
+
+
+def driver_options(profile, cache):
+    """Qualify an installed GNU driver against F0 and query each selection once per build."""
+    language = profile["language"].lower()
+    if language not in {"c", "cpp", "cxx", "c++"}:
+        return None
+    dialect = "c" if language == "c" else "c++"
+    candidates = profile.get("source_compiler", {}).get("candidates", ())
+    if len(candidates) != 1 or not isinstance(candidates[0].get("path"), str):
+        return None
+    source = candidates[0]
+    driver = Path(source["path"])
+    tool = shutil.which("gcc" if dialect == "c" else "g++", path=os.defpath)
+    flags = _selection(profile.get("source_flags", profile.get("flags", ())))
+    if (
+        not tool
+        or not driver.is_absolute()
+        or driver != Path(tool).resolve()
+        or flags is None
+    ):
+        return None
+    expected = source.get("receipt", {}).get("sha256")
+    key = driver, expected, dialect, flags
+    if not expected:
+        return None
+    if key in cache:
+        return cache[key]
+    cache[key] = None
+    # Neither project compiler wrappers nor flags loading plugins/spec files are executed.
+    # The synthetic empty input deliberately does not select local pragma/attribute state.
+    command = [
+        str(driver),
+        *flags,
+        "-x",
+        dialect,
+        "-Q",
+        "--help=optimizers",
+        "-fsyntax-only",
+        os.devnull,
+    ]
+    try:
+        with driver.open("rb") as stream:
+            if file_digest(stream, "sha256").hexdigest() != expected:
+                return None
+        proc = subprocess.run(
+            command,
+            cwd="/",
+            env={"PATH": os.defpath, "LC_ALL": "C"},
+            capture_output=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode:
+        return None
+    rows, policy, unresolved = numeric_option_rows(proc)
+    if not rows:
+        return None
+    cache[key] = {
+        "semantics_version": 1,
+        "scope": "compilation_unit",
+        "provider": "gnu_" + dialect,
+        "compiler": {"driver": {"path": str(driver), "sha256": expected}},
+        "option_query": {
+            "command": command,
+            "cwd": "/",
+            "returncode": proc.returncode,
+            "stdout_sha256": sha256(proc.stdout).hexdigest(),
+            "stderr_sha256": sha256(proc.stderr).hexdigest(),
+            "selected_rows": rows,
+            "evidence": "driver_defaults_for_selected_options_on_empty_input_at_capture",
+        },
+        "policy": policy,
+        "unresolved": unresolved,
+        "source_local_fp_overrides": "unproven",
+        "caller_observations": {"errno": "unproven", "fenv": "unproven"},
+        "runtime_fp_environment": "unobserved",
+    }
+    return cache[key]
 
 
 @lru_cache(maxsize=1)
@@ -149,6 +280,7 @@ class ParsedUnit:
         source_hashes,
         working_directory,
         source_operand,
+        driver_options=None,
     ):
         self._translation_unit = translation_unit
         self._api = api
@@ -165,6 +297,7 @@ class ParsedUnit:
         self._macros = {}
         self._files = {}
         digests, external_headers = {}, {}
+        fp_directives = []
 
         def register(filename):
             if filename not in self._files:
@@ -214,10 +347,22 @@ class ParsedUnit:
                     f"compiler source snapshot differs from input lock: {relative}"
                 )
             digests[relative] = actual
+            if driver_options is not None:
+                fp_directives.extend(directive_spellings(buffer, relative))
 
         capture(translation_unit.get_file(source_operand))
         for inclusion in translation_unit.get_includes():
             capture(inclusion.include)
+        self.source_numeric_contract = (
+            {
+                **driver_options,
+                "source": {"path": source_name, "sha256": digests[source_name]},
+                "project_fp_directive_spellings": fp_directives,
+                "directive_coverage": "literal_project_buffer_matches_only_activity_and_function_scope_unverified",
+            }
+            if driver_options is not None
+            else None
+        )
         self.source_digests = MappingProxyType(digests)
         self.external_headers = MappingProxyType(external_headers)
         roots = []
@@ -361,6 +506,7 @@ def parse_unit(
     source_hashes=None,
     working_directory=None,
     source_operand=None,
+    driver_options=None,
 ) -> ParsedUnit:
     """Parse exactly one locked compilation profile without executing the input."""
     path, root = Path(path).resolve(), Path(root).resolve()
@@ -373,6 +519,8 @@ def parse_unit(
         raise ValueError(
             "compiler source operand does not resolve to the locked input in its working directory"
         )
+    if driver_options is not None:
+        driver_options = dict(driver_options, source_flags=list(flags))
     if language is not None and not any(s.startswith("-x") for s in flags):
         dialect = {"c": "c", "c++": "c++", "cpp": "c++", "cxx": "c++"}[language.lower()]
         flags = ["-x", dialect, *flags]
@@ -382,4 +530,14 @@ def parse_unit(
         args=["-working-directory", str(cwd), *flags],
         options=api.TranslationUnit.PARSE_DETAILED_PROCESSING_RECORD,
     )
-    return ParsedUnit(ast_unit, api, root, relative, flags, source_hashes, cwd, operand)
+    return ParsedUnit(
+        ast_unit,
+        api,
+        root,
+        relative,
+        flags,
+        source_hashes,
+        cwd,
+        operand,
+        driver_options,
+    )

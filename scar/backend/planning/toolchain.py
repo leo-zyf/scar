@@ -11,6 +11,7 @@ from tempfile import TemporaryDirectory
 from scar.contract import (
     digest,
     external_math_declaration,
+    floating_environment_declaration,
     json_bytes,
     validate_access_contract,
     validate_numeric_contract,
@@ -230,7 +231,7 @@ def numeric_permissions(
             contract_sha256=digest(json_bytes(fn["numeric_contract"])),
             options=[],
         )
-        if not any(
+        if not compilation.get("floating_environment") and not any(
             fn.get("method", {}).get(k) for k in ("defaulted", "deleted", "implicit")
         ):
             row["options"] = [
@@ -641,6 +642,21 @@ def compilation(module, *, cache=None, linkage=None):
         ),
         reason="no cross-function compilation scope required",
     )
+    interfaces = sorted(
+        d["name"]
+        for d in module.get("externs", ())
+        if floating_environment_declaration(d)
+    )
+    if interfaces:
+        # GNU's general rounding option alone does not keep FP operations
+        # on the correct side of an explicit change in rounding mode.
+        reason = (
+            "observable floating environment requires preserving operation placement"
+        )
+        decision.update(floating_environment="observable", reason=reason)
+        decision["evidence"]["floating_environment_interfaces"] = interfaces
+        decision["qualification"]["reason"] = reason
+        return decision
     if len(functions) < 2 or not calls:
         return decision
     arguments = " ".join(

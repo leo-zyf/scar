@@ -3966,9 +3966,14 @@ def _conditional_module(project, candidate):
     )
 
 
-def _conditional_loader_fragments(project):
+def _conditional_loader_fragments(project, additional=None):
     """Rebuild only candidates reached by finalized source imports, in their own scopes."""
-    pending = [(c, False) for c in reversed(project.loader_activations.values())]
+    roots = list(project.loader_activations.values())
+    if additional:
+        roots.extend(
+            c for key, c in additional.items() if key not in project.loader_activations
+        )
+    pending = [(c, False) for c in reversed(roots)]
     result, templates, expanded = {}, {}, set()
     while pending:
         candidate, fromlist_context = pending.pop()
@@ -4071,11 +4076,13 @@ def _compile_protocol_entry(module, functions):
         source_index = project.source_index
 
 
-def _conditional_activations(project):
-    loaders = _conditional_loader_fragments(project)
+def _conditional_activations(project, source=None):
+    loaders = _conditional_loader_fragments(
+        project, source.loader_activations if source else None
+    )
     templates = {fragment["symbol"]: fragment for fragment in loaders}
     symbols = namespace_operations.link_conditional_function_calls(
-        project, templates.values()
+        source or project, templates.values()
     )
     callees = []
     for symbol in sorted(symbols):
@@ -4085,6 +4092,65 @@ def _conditional_activations(project):
             function_regions.conditional_function_body(definition, descriptor)
         )
     return loaders, callees
+
+
+def _open_source_entry(module, project, refinements, required, *, entry_imports=None):
+    """Read the actual root frame once, leaving the import callable and its result open."""
+    entry = module["entry"]
+    trial, issue = _attempt_protocol_entry(
+        module, project.functions, refinements, project.source_index, open_entry=True
+    )
+    trial.finish_imports()
+    try:
+        trial.sequences.freeze(trial, partial=issue is not None)
+    except ValueError as error:
+        issue = _Unclosed(
+            entry, project.functions[entry], "sequence_element_type", str(error)
+        ).issue
+        trial.sequences.freeze(trial, partial=True)
+    source_regions = [(name, region["body"]) for name, region in trial.closed.items()]
+    source_regions.extend(
+        (region["symbol"], region["body"]) for region in trial.prefixes
+    )
+    for owner, body in source_regions:
+        for op in walk_operations(body, exclude_fields=EXECUTION_ANNOTATIONS):
+            if op["op"] not in {"module_import_publish", "module_fromlist_publish"}:
+                continue
+            if entry_imports is not None and owner == entry:
+                port = (
+                    op.get("source_import_store")
+                    or op.get("source_import_projection")
+                    or op.get("source_fromlist", {})
+                )
+                entry_imports.append(
+                    dict(
+                        occurrence=op["occurrence"],
+                        request=op["request"],
+                        instruction_offset=port.get("import_name", {}).get("offset"),
+                        **values.source_site(op),
+                    )
+                )
+            if op["op"] != "module_import_publish":
+                continue
+            # A source handler can visit a different subset of the nominal
+            # occurrences. Keep its activation conditional on the actual import.
+            row = project.source_imports.rows.get(op["occurrence"], {})
+            if row.get("activation") not in {"visited", "unvisited"}:
+                continue
+            selected = _published_loaders(trial, owner, op)
+            if selected:
+                [candidate] = selected
+                key = owner, op["site"]
+                trial.loader_activations.setdefault(key, candidate)
+                required.setdefault(
+                    key,
+                    (
+                        dict(candidate, activation="conditional_source_path")
+                        if row["activation"] == "unvisited"
+                        else candidate
+                    ),
+                )
+    return trial, issue
 
 
 def _source_dispatch(module, project):
@@ -4131,46 +4197,7 @@ def _source_dispatch(module, project):
         )
     if not refinements:
         return None
-    trial, issue = _attempt_protocol_entry(
-        module, project.functions, refinements, project.source_index, open_entry=True
-    )
-    trial.finish_imports()
-    try:
-        trial.sequences.freeze(trial, partial=issue is not None)
-    except ValueError as error:
-        issue = _Unclosed(
-            entry, project.functions[entry], "sequence_element_type", str(error)
-        ).issue
-        trial.sequences.freeze(trial, partial=True)
-    # A newly modeled handler can reach an import that the nominal attempt
-    # never visited. Its published result still has its own loader candidate.
-    nominal = {
-        (row["owner"], row["site"]): row
-        for row in module["source_imports"]["occurrences"]
-    }
-    source_regions = [(name, region["body"]) for name, region in trial.closed.items()]
-    source_regions.extend(
-        (region["symbol"], region["body"]) for region in trial.prefixes
-    )
-    for owner, body in source_regions:
-        for op in walk_operations(body, exclude_fields=EXECUTION_ANNOTATIONS):
-            if op["op"] == "module_import_publish" and (
-                selected := _published_loaders(trial, owner, op)
-            ):
-                [candidate] = selected
-                key = owner, op["site"]
-                row = nominal.get(key)
-                if row is None:
-                    continue
-                trial.loader_activations.setdefault(key, candidate)
-                refinements.setdefault(
-                    key,
-                    (
-                        dict(candidate, activation="conditional_source_path")
-                        if row["activation"] == "unvisited"
-                        else candidate
-                    ),
-                )
+    trial, issue = _open_source_entry(module, project, refinements, refinements)
     loaders, callees = _conditional_activations(trial)
     reached = {(f["owner"], f["site"]) for f in loaders}
     for candidate in loaders:
@@ -4255,47 +4282,22 @@ def _dispatch_product(entry, project, loaders, callees, required_sites, issue):
     )
 
 
-def _actual_entry_prefix(module, project):
-    """Analyze from process entry with the import callable and cache left open."""
+def _actual_entry_prefix(module, project, required):
     env = module.get("python_entry_environment") or {}
     if env.get("analysis", {}).get("application_initial_cache") != "unproven":
-        return None
+        return None, None
     entry = module["entry"]
-    trial, issue = _attempt_protocol_entry(
-        module, project.functions, {}, project.source_index, open_entry=True
+    imports = []
+    trial, issue = _open_source_entry(
+        module, project, {}, required, entry_imports=imports
     )
-    trial.finish_imports()
-    try:
-        trial.sequences.freeze(trial, partial=issue is not None)
-    except ValueError as error:
-        issue = _Unclosed(
-            entry, project.functions[entry], "sequence_element_type", str(error)
-        ).issue
-        trial.sequences.freeze(trial, partial=True)
     body = trial.closed.get(entry) or next(
         (fn for fn in trial.prefixes if fn["symbol"] == entry), None
     )
     if body is None:
-        return None
-    imports = []
-    for op in walk_operations(body["body"], exclude_fields=EXECUTION_ANNOTATIONS):
-        if op["op"] not in {"module_import_publish", "module_fromlist_publish"}:
-            continue
-        port = (
-            op.get("source_import_store")
-            or op.get("source_import_projection")
-            or op.get("source_fromlist", {})
-        )
-        imports.append(
-            dict(
-                occurrence=op["occurrence"],
-                request=op["request"],
-                instruction_offset=port.get("import_name", {}).get("offset"),
-                **values.source_site(op),
-            )
-        )
+        return None, None
     imports.sort(key=lambda row: (row["location"]["line"], row["location"]["column"]))
-    return dict(
+    return trial, dict(
         entry=entry,
         state="actual_entry_frame_and_module_registry",
         completion="source_prefix" if issue else "modeled_source_entry",
@@ -4319,7 +4321,14 @@ def normalize_protocols(module):
     omitted = set()
     obligation_analysis = None
     resolved_symbols = None
-    conditional, callee_fragments = _conditional_activations(project)
+    required = dict(project.loader_activations)
+    actual, entry_prefix, nominal_imports = None, None, None
+    if required:
+        # Seal the nominal reachability of each occurrence before registering
+        # imports discovered under the open entry frame.
+        nominal_imports = project.source_imports.product(project.skipped_sites, omitted)
+        actual, entry_prefix = _actual_entry_prefix(module, project, required)
+    conditional, callee_fragments = _conditional_activations(project, actual)
     if issue is None:
         issue = next(
             (
@@ -4416,7 +4425,7 @@ def normalize_protocols(module):
             live_sites=project.live_sites,
         )
     module["source_obligations"] = obligation_analysis
-    module["source_imports"] = project.source_imports.product(
+    module["source_imports"] = nominal_imports or project.source_imports.product(
         project.skipped_sites, omitted
     )
     if conditional:
@@ -4424,11 +4433,11 @@ def normalize_protocols(module):
         # Late native qualification must see the same scopes and the same first gap.
         module["source_dispatch"] = _dispatch_product(
             entry,
-            project,
+            actual or project,
             conditional,
             callee_fragments,
-            project.loader_activations,
-            issue,
+            required,
+            (entry_prefix or {}).get("first_gap") or issue,
         )
     else:
         # A later specialization failure does not erase an earlier import.
@@ -4510,7 +4519,7 @@ def normalize_protocols(module):
             ],
             prefix_fragments=list(reversed(project.prefixes)),
         )
-        if conditional and (entry_prefix := _actual_entry_prefix(module, project)):
+        if entry_prefix:
             module["protocol_analysis"]["actual_entry"] = entry_prefix
         return module, project.decisions, [issue]
     changes = project.decisions + [

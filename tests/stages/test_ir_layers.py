@@ -8015,7 +8015,8 @@ def test_loop_invariants_move_to_the_outermost_proven_preheader():
             ],
         )
     )
-    changes = [r for r in optimize(function) if r["rule"] == "loop_invariant_motion"]
+    rewrites = optimize(function)
+    changes = [r for r in rewrites if r["rule"] == "loop_invariant_motion"]
     assert [(r["site"], r["loop"], r["dependencies"]) for r in changes] == [
         ("invariant", "i-loop", ["x"]),
         ("composed", "i-loop", [changes[0]["slot"]]),
@@ -8025,8 +8026,75 @@ def test_loop_invariants_move_to_the_outermost_proven_preheader():
     assert [step["name"] for step in [*outer["init"][1:], *inner["init"][1:]]] == [
         r["slot"] for r in changes
     ]
-    assert inner["body"][1]["value"] == inner["body"][2]["value"]
-    assert inner["body"][5]["then"][0]["value"]["operator"] == "div"
+    assert inner["body"][0]["value"] == inner["body"][1]["value"]
+    assert inner["body"][4]["then"][0]["value"]["operator"] == "div"
+    assert {
+        r["slot"] for r in rewrites if r["rule"] == "discard_unused_scalar_snapshot"
+    } == {"scale"}
+    assert "scale" not in function["state_contract"]["private_scalars"]
+
+
+def test_loop_motion_requires_rounding_independent_floating_values():
+    from scar.middle.rewrites import optimize
+
+    def literal(kind, value):
+        return dict(op="literal", type=kind, value=value)
+
+    def var(name):
+        return dict(op="var", name=name)
+
+    def expression(site, operator, left, right):
+        return dict(
+            op="expr",
+            value=dict(
+                op="binary", site=site, operator=operator, left=left, right=right
+            ),
+        )
+
+    fn = _canonical_function(
+        dict(
+            name="calculate",
+            params=[dict(name="x", type="u32"), dict(name="unbounded", type="f64")],
+            result="void",
+            body=[
+                dict(
+                    op="decl",
+                    name="exact",
+                    type="f64",
+                    init=dict(op="cast", type="f64", value=var("x")),
+                ),
+                dict(
+                    op="while",
+                    site="loop",
+                    condition=literal("bool", False),
+                    body=[
+                        expression(
+                            "exact-product", "mul", var("exact"), literal("f64", 2.0)
+                        ),
+                        expression("signed-zero", "sub", var("exact"), var("exact")),
+                        expression(
+                            "rounding", "div", var("exact"), literal("f64", 3.0)
+                        ),
+                        expression(
+                            "not-finite", "mul", var("unbounded"), literal("f64", 2.0)
+                        ),
+                    ],
+                ),
+            ],
+        )
+    )
+    [change] = optimize(fn)
+    assert (change["rule"], change["site"], change["dependencies"]) == (
+        "loop_invariant_motion",
+        "exact-product",
+        ["exact"],
+    )
+    assert fn["body"][1]["init"]["site"] == "exact-product"
+    assert [e["value"]["site"] for e in fn["body"][2]["body"][1:]] == [
+        "signed-zero",
+        "rounding",
+        "not-finite",
+    ]
 
 
 def test_math_operand_sharing_preserves_effectful_calls_and_control():
@@ -11271,9 +11339,15 @@ def test_conditional_callee_reads_bound_slots_and_returns_through_original_call(
         "callback()\n"
     )
     entry = tmp_path / "run.py"
-    entry.write_text("import lib\nlib.transform(get_item())\nlib.label()\n")
+    early = tmp_path / "early.py"
+    early.write_text("def first():\n    return 'early'\n")
+    entry.write_text(
+        "import early as local\nlocal.first()\n"
+        "import lib\nlib.transform(get_item())\nlib.label()\n"
+    )
     graph, output = tmp_path / "graph", tmp_path / "plan"
     build(entry, graph)
+    early.unlink()
     source.unlink()
     entry.unlink()
     plan(graph / "graph.json", output)
@@ -11326,6 +11400,31 @@ def test_conditional_callee_reads_bound_slots_and_returns_through_original_call(
     index = read_member(output, report["source_dispatch"])
     assert index["completion"] == "source_prefix"
     assert index["first_gap"] == report["issues"][0]
+    actual = report["protocol_analysis"]["actual_entry"]
+    [root] = [r for r in index["functions"] if r["symbol"] == index["entry"]]
+    assert root["body"] == actual["function"]
+    published, expression = [
+        s["value"] for s in read_member(output, root["body"])["body"][:2]
+    ]
+    assert published["op"] == "module_import_publish"
+    assert published["binding"]["value"] == {"result": "import_result"}
+    load, member, call, discard = expression["expression"]["steps"]
+    assert member["base"] == {"from_offset": load["offset"]}
+    assert call["target"] == {"from_offset": member["offset"]}
+    assert discard["value"] == {"from_offset": call["offset"]}
+    activation = call["conditional_activation"]
+    assert activation["origin"]["occurrence"] == published["occurrence"]
+    assert activation["origin"]["attribute_site"] == member["site"]
+    [created] = activation["candidates"]
+    assert created["symbol"] == "py:early:first"
+    assert (
+        created["code"]["code_sha256"]
+        == fragments[created["symbol"]]["entry"]["code"]["code_sha256"]
+    )
+    assert {
+        r["symbol"] for r in index["loaders"] if r["site"] == published["site"]
+    } == {created["initializer"]}
+    assert "without_repeating_lookup_arguments_or_dispatch" in activation["on_other"]
     assert {r["symbol"]: r["function"] for r in index["callees"]} == {
         name: row["function"] for name, row in fragments.items()
     }

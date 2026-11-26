@@ -3274,6 +3274,92 @@ void nested(double * Q * p) {}
     )
 
 
+def test_gnu_cxx_driver_baseline_does_not_grant_function_fp_permissions(tmp_path):
+    import os
+    import shutil
+    import pytest
+    from hashlib import sha256
+
+    from scar.contract import read_member
+    from scar.frontend import build
+    from scar.frontend.languages.c_family.facts import driver_options
+
+    compiler = shutil.which("g++", path=os.defpath)
+    if not compiler:
+        pytest.skip("GNU C++ driver unavailable")
+    target = Path(compiler).resolve()
+    source_compiler = {
+        "driver": compiler,
+        "candidates": [
+            {
+                "path": str(target),
+                "receipt": {
+                    "sha256": sha256(target.read_bytes()).hexdigest(),
+                    "size": target.stat().st_size,
+                },
+            }
+        ],
+        "observed_at": "capture_not_historical",
+    }
+    flags = [
+        "-O3",
+        "-fno-math-errno",
+        "-fmath-errno",
+        "-ftrapping-math",
+        "-frounding-math",
+    ]
+    profile = {
+        "path": "unit.cpp",
+        "language": "c++",
+        "source_compiler": source_compiler,
+        "flags": flags,
+    }
+    raw = b"#if 0\n#pragma STDC FENV_ACCESS OFF\n#endif\n#pragma STDC FENV_ACCESS ON\ndouble twice(double x) { return x+x; }\n"
+    (tmp_path / "unit.cpp").write_bytes(raw)
+    manifest = tmp_path / "source.json"
+    manifest.write_text(json.dumps({"entry": "_Z5twiced", "units": [profile]}))
+    out = tmp_path / "graph"
+    build(manifest, out)
+    [unit] = json.loads((out / "graph.json").read_bytes())["units"]
+    contract = unit["source_facts"]["source_numeric_contract"]
+    assert contract["source"]["sha256"] == sha256(raw).hexdigest()
+    assert (
+        contract["source_flags"] == flags
+        and contract["compiler"]["driver"]["sha256"]
+        == source_compiler["candidates"][0]["receipt"]["sha256"]
+    )
+    assert all(
+        contract["policy"][option] is True
+        for option in ("math_errno", "trapping_math", "rounding_math")
+    )
+    assert (
+        contract["source_local_fp_overrides"] == "unproven"
+        and contract["runtime_fp_environment"] == "unobserved"
+    )
+    assert [
+        (f["directive"], f["value"]) for f in contract["project_fp_directive_spellings"]
+    ] == [("FENV_ACCESS", "OFF"), ("FENV_ACCESS", "ON")]
+    for spelling in contract["project_fp_directive_spellings"]:
+        assert raw[spelling["byte_offset"] :].startswith(b"FENV_ACCESS")
+    [fn] = read_member(out, unit["graph"])["functions"]
+    assert fn["signature"]["source_numeric_contract"] == contract
+    assert "numeric_contract" not in fn["signature"]
+    relaxed = driver_options(
+        dict(profile, flags=["-O3", "-fmath-errno", "-fno-math-errno"]), {}
+    )
+    assert relaxed["policy"]["math_errno"] is False
+    assert (
+        driver_options(dict(profile, flags=["-O3", "-specs=unwitnessed.specs"]), {})
+        is None
+    )
+    assert driver_options(dict(profile, flags=["@unexpanded"]), {}) is None
+    bad = dict(
+        source_compiler,
+        candidates=[{"path": str(target), "receipt": {"sha256": "0" * 64}}],
+    )
+    assert driver_options(dict(profile, source_compiler=bad), {}) is None
+
+
 def test_clang_localizes_unmodeled_declarations_attributes_and_numeric_kinds(
     tmp_path, monkeypatch
 ):

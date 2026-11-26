@@ -10,6 +10,7 @@ from scar.contract import (
     document,
     external_math_declaration,
     file_receipt,
+    floating_environment_declaration,
     json_bytes,
     member,
     open_product,
@@ -179,7 +180,16 @@ def _compilation_options(module, physical):
     from .model import build_options
 
     seal = "compilation_binding_sha256"
+    interfaces = sorted(
+        d["name"]
+        for d in module.get("externs", ())
+        if floating_environment_declaration(d)
+    )
     if seal not in module and "compilation" not in physical:
+        if interfaces:
+            raise ValueError(
+                "observable floating environment requires a sealed build policy"
+            )
         return build_options()
     decision = physical.get("compilation")
     if not isinstance(decision, dict) or module.get(seal) != digest(
@@ -199,7 +209,17 @@ def _compilation_options(module, physical):
         or not isinstance(evidence, dict)
     ):
         raise ValueError("invalid physical compilation binding")
-    options = build_options(decision.get("mode"), decision.get("workers"))
+    environment = decision.get("floating_environment")
+    if (
+        environment != ("observable" if interfaces else None)
+        or evidence.get("floating_environment_interfaces", []) != interfaces
+    ):
+        raise ValueError(
+            "floating environment build policy differs from its sealed interfaces"
+        )
+    options = build_options(
+        decision.get("mode"), decision.get("workers"), floating_environment=environment
+    )
     if decision["mode"] == "gnu_lto":
         if not qualification["supported"] or qualification.get("compiler_id") != "GNU":
             raise ValueError("GNU LTO requires a qualified GNU toolchain")

@@ -6,10 +6,12 @@ from scar.contract import (
     EXECUTION_ANNOTATIONS,
     LOOP_OPERATIONS,
     control_regions,
+    json_bytes,
+    semantic_form,
     walk_operations,
 )
+from .loop_invariants import exact_scalar_value, integer_domain, scalar_write
 
-_INTEGER = {f"{s}{n}" for s in "iu" for n in (8, 16, 32, 64)}
 # Expressions evaluated by these statements. Nested statement lists are handled
 # separately, so definitions inside an unentered control arm cannot dominate a use.
 _OPERANDS = (
@@ -33,68 +35,6 @@ _OPERANDS = (
 
 def _nodes(value):
     return walk_operations(value, exclude_fields=EXECUTION_ANNOTATIONS)
-
-
-def _exact(node, private):
-    """Return a typed, bit-exact value number for a closed integer expression."""
-    if any(
-        node.get(field)
-        for field in (
-            "volatile",
-            "atomic",
-            "writes",
-            "state_writes",
-            "may_raise",
-            "ordering_effect",
-            "external_effect",
-        )
-    ):
-        return None
-    op = node.get("op")
-    if op == "var" and node.get("scope") in (None, "local"):
-        name = node["name"]
-        dtype = private.get(name)
-        if dtype in _INTEGER and node.get("type", dtype) == dtype:
-            return dtype, ("var", name)
-    if op == "literal":
-        dtype, value = node.get("type"), node.get("value")
-        if isinstance(dtype, str) and dtype in _INTEGER and type(value) is int:
-            width = int(dtype[1:])
-            bound = 1 << (width - (dtype[0] == "i"))
-            if (-bound if dtype[0] == "i" else 0) <= value < bound:
-                return dtype, ("literal", value)
-    if op == "binary" and node.get("operator") in {
-        "add",
-        "sub",
-        "mul",
-        "band",
-        "bor",
-        "bxor",
-    }:
-        left, right = _exact(node["left"], private), _exact(node["right"], private)
-        if (
-            left
-            and right
-            and left[0] == right[0]
-            and left[0] in {"u32", "u64"}
-            and node.get("type", left[0]) == left[0]
-        ):
-            return left[0], (node["operator"], left, right)
-    if op == "cast" and node.get("mode") == "static":
-        arg = _exact(node["value"], private)
-        dtype = node.get("type")
-        if (
-            arg
-            and isinstance(dtype, str)
-            and dtype in {"f32", "f64"}
-            and arg[0] in _INTEGER
-            and node.get("source_type", arg[0]) == arg[0]
-            and node.get("target_type", dtype) == dtype
-        ):
-            bits = int(arg[0][1:]) - (arg[0][0] == "i")
-            if bits <= (24 if dtype == "f32" else 53):
-                return dtype, ("exact_integer_conversion", arg)
-    return None
 
 
 def _expression_nodes(statement):
@@ -121,28 +61,13 @@ def _inputs(arg, private):
 
 
 def _written(node):
-    op = node["op"]
-    if op == "decl" and node.get("init") is not None:
+    if node["op"] == "decl" and node.get("init") is not None:
         return node["name"]
-    if op in {"map", "each"}:
-        return node.get("index") if op == "map" else node.get("name")
-    target = None
-    if op in {"update", "assign"}:
-        target = node["target"]
-    elif op == "unary" and node.get("operator") in {
-        "postinc",
-        "postdec",
-        "preinc",
-        "predec",
-    }:
-        target = node["value"]
-    if (
-        isinstance(target, dict)
-        and target.get("op") == "var"
-        and target.get("scope") in (None, "local")
-    ):
-        return target["name"]
-    return None
+    if node["op"] == "map":
+        return node["index"]
+    if node["op"] == "each":
+        return node["name"]
+    return scalar_write(node)
 
 
 def analyze(fn, declarations, introduce):
@@ -154,8 +79,6 @@ def analyze(fn, declarations, introduce):
     def external(node):
         return node.get("op") == "call" and node.get("callee") in declarations
 
-    if not any(external(n) for n in _nodes(fn["body"])):
-        return []
     state = fn.get("state_contract", {})
     private = {
         name: dtype
@@ -163,10 +86,17 @@ def analyze(fn, declarations, introduce):
         if isinstance(dtype := state.get("scalars", {}).get(name, {}).get("type"), str)
         and name not in state.get("escaped", ())
     }
+    bounds = {
+        name: value
+        for name, dtype in private.items()
+        if (value := integer_domain(dtype))
+    }
     reserved = {p["name"] for p in fn["params"]}
     explicit_jumps = False
+    has_math = False
     writes = Counter()
     for node in _nodes(fn["body"]):
+        has_math |= external(node)
         if isinstance(node.get("name"), str):
             reserved.add(node["name"])
         if isinstance(name := _written(node), str):
@@ -175,6 +105,8 @@ def analyze(fn, declarations, introduce):
         # targets a label after both calls.
         if node["op"] in {"label", "goto", "switch"}:
             explicit_jumps = True
+    if not has_math:
+        return []
     # Record single assignments in the straight-line entry prefix. Their
     # operands describe the stored value at definition, not a recomputation.
     definitions = {}
@@ -204,8 +136,8 @@ def analyze(fn, declarations, introduce):
                     private_reads=sorted(reads),
                     all_inputs_named_private_scalars_or_literals=scalar_expression,
                     evaluation=(
-                        "bit_exact_integer_expression"
-                        if _exact(arg, private)
+                        "bit_exact_scalar_expression"
+                        if exact_scalar_value(arg, bounds)
                         else "unproven"
                     ),
                     loops=[
@@ -248,14 +180,14 @@ def analyze(fn, declarations, introduce):
         ):
             return None
         arg = call["args"][0]
-        key = _exact(arg, private)
+        scalar = exact_scalar_value(arg, bounds)
         abi = declarations[call["callee"]]
         if (
-            not key
+            not scalar
             or arg["op"] in {"literal", "var"}
             or abi["variadic"]
-            or abi["parameter_types"] != [key[0]]
-            or call.get("parameter_types", [key[0]]) != [key[0]]
+            or abi["parameter_types"] != [scalar[0]]
+            or call.get("parameter_types", [scalar[0]]) != [scalar[0]]
         ):
             return None
         used = {n["name"] for n in _nodes(arg) if n["op"] == "var"}
@@ -264,7 +196,7 @@ def analyze(fn, declarations, introduce):
             if op == "assign"
             else statement.get("name") if op == "decl" else None
         )
-        return call, key, written in used
+        return call, (scalar[0], json_bytes(semantic_form(arg))), written in used
 
     def visit(body, loops=()):
         group = []
@@ -291,7 +223,7 @@ def analyze(fn, declarations, introduce):
                         uses=[info[0].get("site") for _, info in group],
                         preserved_calls=len(group),
                         type=key[0],
-                        proof="exact integer operations and lossless conversion; frame-private inputs; adjacent unary calls in the same control arm",
+                        proof="exact scalar evaluation; frame-private inputs; adjacent unary calls in the same control arm",
                     )
                 )
             output.extend(stmt for stmt, _ in group)

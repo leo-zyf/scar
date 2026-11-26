@@ -160,6 +160,7 @@ def _provider(cursor, facts=None):
         "mathcalls-helper-functions.h",
         "math-finite.h",
         "cmath",
+        "fenv.h",
     }:
         return "libm"
     return None
@@ -171,7 +172,12 @@ def _public_header(cursor):
         return _SDK_FORWARD_HEADERS[name.name]
     if name.parent.name == "sys":
         return "sys/" + name.name
-    if name.name in _LIBC_HEADERS or name.name in {"math.h", "mpi.h", "mpio.h"}:
+    if name.name in _LIBC_HEADERS or name.name in {
+        "math.h",
+        "fenv.h",
+        "mpi.h",
+        "mpio.h",
+    }:
         return name.name
     return None
 
@@ -1968,6 +1974,9 @@ def normalize_unit(facts: ParsedUnit) -> dict:
     for declaration in facts.declarations:
         unit.declaration(declaration)
     unit.expand()
+    if facts.source_numeric_contract is not None:
+        for function in unit.functions.values():
+            function["source_numeric_contract"] = facts.source_numeric_contract
     return {
         "functions": list(unit.functions.values()),
         "externs": [

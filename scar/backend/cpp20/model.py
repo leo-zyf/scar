@@ -790,29 +790,41 @@ def validate_unit(unit):
     return validate_node(unit, Unit)
 
 
-def build_options(mode="none", workers=1):
+def build_options(mode="none", workers=1, *, floating_environment=None):
     """Construct the compile and link settings for one C++ executable."""
     if (
         mode not in ("none", "gnu_lto")
         or type(workers) is not int
         or workers < 1
         or (mode == "none" and workers != 1)
+        or floating_environment not in (None, "observable")
+        or floating_environment is not None
+        and mode != "none"
     ):
         raise ValueError("invalid C++ interprocedural build options")
-    return dict(semantics_version=1, interprocedural=dict(mode=mode, workers=workers))
+    options = dict(
+        semantics_version=1, interprocedural=dict(mode=mode, workers=workers)
+    )
+    if floating_environment is not None:
+        options["floating_environment"] = floating_environment
+    return options
 
 
 def validate_build_options(options):
     if (
         not isinstance(options, dict)
-        or set(options) != {"semantics_version", "interprocedural"}
+        or set(options) - {"floating_environment"}
+        != {"semantics_version", "interprocedural"}
         or type(options["semantics_version"]) is not int
         or options["semantics_version"] != 1
         or not isinstance(options["interprocedural"], dict)
         or set(options["interprocedural"]) != {"mode", "workers"}
     ):
         raise ValueError("invalid C++ target build options")
-    return build_options(**options["interprocedural"])
+    return build_options(
+        **options["interprocedural"],
+        floating_environment=options.get("floating_environment"),
+    )
 
 
 def to_data(value):

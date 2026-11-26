@@ -17,6 +17,7 @@ from threading import Lock
 from time import time_ns
 
 from scar.contract import digest, json_bytes
+from ..gnu_numeric import numeric_option_rows
 
 
 class Gap(ValueError):
@@ -973,19 +974,6 @@ def _logical_flags(flags):
     return result
 
 
-_NUMERIC_OPTIONS = {
-    "math_errno": "-fmath-errno",
-    "rounding_math": "-frounding-math",
-    "trapping_math": "-ftrapping-math",
-    "signed_zeros": "-fsigned-zeros",
-    "finite_only": "-ffinite-math-only",
-    "fp_contract": "-ffp-contract",
-    "unsafe_math": "-funsafe-math-optimizations",
-    "associative_math": "-fassociative-math",
-    "reciprocal_math": "-freciprocal-math",
-    "signaling_nans": "-fsignaling-nans",
-    "protect_parens": "-fprotect-parens",
-}
 _TARGET_MODE_OPTIONS = ("-m16", "-m32", "-m64", "-mx32")
 
 
@@ -1460,28 +1448,14 @@ def _numeric_contract(path, root, flags, capture, source_sha256):
     result = subprocess.run(command, cwd=cwd, capture_output=True, timeout=30)
     if result.returncode:
         raise Gap("numeric_policy", "GNU source-context option query failed")
-    rows = {}
-    for line in (result.stdout + result.stderr).decode(errors="replace").splitlines():
-        match = re.match(r"^\s*(-[fm][\w-]+)(?:=\[[^]]+\])?\s+(.*?)\s*$", line)
-        if match and match[1] in {*_NUMERIC_OPTIONS.values(), *_TARGET_MODE_OPTIONS}:
-            rows[match[1]] = match[2]
+    rows, policy, unresolved = numeric_option_rows(
+        result, fortran=True, extra_rows=_TARGET_MODE_OPTIONS
+    )
     target_mode = _source_target_mode(rows, identity, sha256(result.stdout).hexdigest())
     for interface in inputs["source_math_interfaces"]:
         if condition := interface["target_condition"]:
             interface["target_condition"] = _target_condition(
                 condition["selector"], target_mode
-            )
-    policy, unresolved = {}, []
-    for name, option in _NUMERIC_OPTIONS.items():
-        chosen = rows.get(option)
-        if chosen in {"[enabled]", "[disabled]"}:
-            policy[name] = chosen == "[enabled]"
-        elif name == "fp_contract" and chosen in {"off", "on", "fast"}:
-            policy[name] = chosen
-        else:
-            policy[name] = None
-            unresolved.append(
-                {"field": name, "reason": "option_query_has_no_explicit_value"}
             )
     contract = {
         "semantics_version": 1,

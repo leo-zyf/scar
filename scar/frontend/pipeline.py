@@ -23,7 +23,17 @@ def _unit(job):
     from .graph import unit_graph
     from .state_flow import state_flow
 
-    index, root, profile, revision, out, source_hashes, parsed, source_bytes = job
+    (
+        index,
+        root,
+        profile,
+        revision,
+        out,
+        source_hashes,
+        parsed,
+        source_bytes,
+        driver_options,
+    ) = job
     path = root / profile["path"]
     language = profile["language"].lower()
     flags = profile.get("source_flags", profile.get("flags", []))
@@ -54,6 +64,7 @@ def _unit(job):
                 source_hashes=source_hashes,
                 working_directory=profile.get("working_directory"),
                 source_operand=profile.get("source_operand"),
+                driver_options=driver_options,
             )
         elif parsed is None:
             parsed = parse_unit(
@@ -188,6 +199,9 @@ def build(manifest, out, *, jobs=1):
     if images is None and entry_abi:
         profiles = tuple(with_entry_abi(p, entry_abi) for p in profiles)
     out.mkdir(parents=True, exist_ok=True)
+    from .languages.c_family.facts import driver_options
+
+    option_queries = {}
     work = [
         (
             index,
@@ -198,6 +212,7 @@ def build(manifest, out, *, jobs=1):
             sources,
             parsed,
             request.python_buffers.get(p["path"]) if parsed is None else None,
+            driver_options(p, option_queries),
         )
         for index, (p, parsed) in enumerate(zip(profiles, parsed_units, strict=True))
     ]

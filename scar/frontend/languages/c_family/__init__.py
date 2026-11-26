@@ -10,6 +10,7 @@ def parse_unit(
     source_hashes=None,
     working_directory=None,
     source_operand=None,
+    driver_options=None,
 ):
     from .facts import parse_unit as capture
 
@@ -21,6 +22,7 @@ def parse_unit(
         source_hashes=source_hashes,
         working_directory=working_directory,
         source_operand=source_operand,
+        driver_options=driver_options,
     )
 
 

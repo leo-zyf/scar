@@ -197,6 +197,14 @@ def _access_key(value):
     if isinstance(value, list):
         return tuple(map(_access_key, value))
     if isinstance(value, dict):
+        if (
+            len(value) == 2
+            and value.get("op") == "var"
+            and isinstance(value.get("name"), str)
+        ):
+            # The common index leaf has exactly these sorted members. Keep
+            # the same key as a source-annotated occurrence of this variable.
+            return (("name", value["name"]), ("op", "var"))
         return tuple(
             (key, _access_key(child))
             for key, child in sorted(value.items())
@@ -394,6 +402,7 @@ def _work(stmt, types, coordinates=()):
             counts[f"{group}_{dtype}"] += 1
     return dict(
         streams=len(streams),
+        write_streams=sum(write for write, _, _ in streams),
         bytes_per_element=sum(streams.values()),
         operations=dict(sorted(counts.items())),
         priced=not missing,
@@ -774,7 +783,20 @@ def schedule(module, mode, worker_limit=None, *, consume_functions=False):
                     if samples and "fp_guard" in samples[1][0]
                     else None
                 )
-                selected_fusion = _fusion_profitable(contenders, guard, fused["extent"])
+                fused_work = maps[id(fused)]["linear"]
+                reference_work = [maps[id(s)]["linear"] for s in reference]
+                # The byte probe copies one input stream to one output. Fewer
+                # logical bytes alone do not price concurrently writing more
+                # streams than any one of the reference traversals.
+                widest = max((r["write_streams"] for r in reference_work), default=0)
+                unpriced_traffic = fused_work["write_streams"] > max(
+                    1, widest
+                ) and fused_work["bytes_per_element"] < sum(
+                    r["bytes_per_element"] for r in reference_work
+                )
+                selected_fusion = not unpriced_traffic and _fusion_profitable(
+                    contenders, guard, fused["extent"]
+                )
                 report["choices"].append(
                     dict(
                         site=stmt["site"],
@@ -782,11 +804,18 @@ def schedule(module, mode, worker_limit=None, *, consume_functions=False):
                         guard_ns=guard,
                         cost_evidence=(
                             "inferred"
-                            if guard is not None and all(contenders)
+                            if guard is not None
+                            and all(contenders)
+                            and not unpriced_traffic
                             else "unpriced"
                         ),
-                        reference_work=[maps[id(s)]["linear"] for s in reference],
-                        fused_work=maps[id(fused)]["linear"],
+                        **(
+                            {"unpriced_traffic": "concurrent_output_streams"}
+                            if unpriced_traffic
+                            else {}
+                        ),
+                        reference_work=reference_work,
+                        fused_work=fused_work,
                         guard=stmt["guard"],
                     )
                 )

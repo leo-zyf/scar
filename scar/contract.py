@@ -73,9 +73,19 @@ MODULE_REGISTRY_OPERATIONS = frozenset(
 )
 
 
+def floating_environment_declaration(declaration):
+    """Recognize a bound C floating-environment interface, rather than a math kernel."""
+    return (
+        declaration.get("provider") in {"libc", "libm"}
+        and declaration.get("header") == "fenv.h"
+    )
+
+
 def external_math_declaration(declaration):
     """Identify the resolved source interface independently of target math permissions."""
     provider = declaration.get("provider")
+    if floating_environment_declaration(declaration):
+        return None
     if provider != "libm" and (provider, declaration.get("header")) != (
         "libc",
         "math.h",
