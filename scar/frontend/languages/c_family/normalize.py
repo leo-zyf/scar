@@ -1974,9 +1974,6 @@ def normalize_unit(facts: ParsedUnit) -> dict:
     for declaration in facts.declarations:
         unit.declaration(declaration)
     unit.expand()
-    if facts.source_numeric_contract is not None:
-        for function in unit.functions.values():
-            function["source_numeric_contract"] = facts.source_numeric_contract
     return {
         "functions": list(unit.functions.values()),
         "externs": [

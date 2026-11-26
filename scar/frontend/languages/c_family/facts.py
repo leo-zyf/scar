@@ -128,6 +128,7 @@ def driver_options(profile, cache):
         "semantics_version": 1,
         "scope": "compilation_unit",
         "provider": "gnu_" + dialect,
+        "definition_binding": "unit_only",
         "compiler": {"driver": {"path": str(driver), "sha256": expected}},
         "option_query": {
             "command": command,

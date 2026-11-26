@@ -269,10 +269,19 @@ def _validate_numeric_evidence(unit, payload):
             or evidence["line"] < 1
         ):
             raise ValueError("mathematical interface lacks its captured header")
+    unit_only = contract.get("definition_binding") == "unit_only"
+    if unit_only and contract.get("provider") not in {"gnu_c", "gnu_c++"}:
+        raise ValueError("unexpected unit-only numeric driver baseline")
     for function in payload["functions"]:
         signature = function["signature"]
         validate_numeric_contract(signature)
         captured = signature.get("source_numeric_contract")
+        if unit_only:
+            if captured is not None:
+                raise ValueError(
+                    "numeric driver baseline must stay on its compilation unit"
+                )
+            continue
         if captured is not None and captured != contract:
             raise ValueError("function numerical evidence disagrees with its unit")
         if function.get("source_defined") and captured is None:

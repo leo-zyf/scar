@@ -3314,13 +3314,31 @@ def test_gnu_cxx_driver_baseline_does_not_grant_function_fp_permissions(tmp_path
         "source_compiler": source_compiler,
         "flags": flags,
     }
-    raw = b"#if 0\n#pragma STDC FENV_ACCESS OFF\n#endif\n#pragma STDC FENV_ACCESS ON\ndouble twice(double x) { return x+x; }\n"
+    raw = b"""#if 0
+#pragma STDC FENV_ACCESS OFF
+#endif
+#pragma STDC FENV_ACCESS ON
+#include "shared.hpp"
+double helper(double);
+double twice(double x) { return normalized(x) + helper(x); }
+"""
     (tmp_path / "unit.cpp").write_bytes(raw)
+    (tmp_path / "shared.hpp").write_text(
+        "inline double normalized(double x) { return x; }\n"
+    )
+    (tmp_path / "other.cpp").write_text(
+        '#include "shared.hpp"\ndouble helper(double x) { return normalized(x); }\n'
+    )
     manifest = tmp_path / "source.json"
-    manifest.write_text(json.dumps({"entry": "_Z5twiced", "units": [profile]}))
+    manifest.write_text(
+        json.dumps(
+            {"entry": "_Z5twiced", "units": [profile, dict(profile, path="other.cpp")]}
+        )
+    )
     out = tmp_path / "graph"
     build(manifest, out)
-    [unit] = json.loads((out / "graph.json").read_bytes())["units"]
+    graph = json.loads((out / "graph.json").read_bytes())
+    unit = next(u for u in graph["units"] if u["path"] == "unit.cpp")
     contract = unit["source_facts"]["source_numeric_contract"]
     assert contract["source"]["sha256"] == sha256(raw).hexdigest()
     assert (
@@ -3341,9 +3359,16 @@ def test_gnu_cxx_driver_baseline_does_not_grant_function_fp_permissions(tmp_path
     ] == [("FENV_ACCESS", "OFF"), ("FENV_ACCESS", "ON")]
     for spelling in contract["project_fp_directive_spellings"]:
         assert raw[spelling["byte_offset"] :].startswith(b"FENV_ACCESS")
-    [fn] = read_member(out, unit["graph"])["functions"]
-    assert fn["signature"]["source_numeric_contract"] == contract
-    assert "numeric_contract" not in fn["signature"]
+    assert contract["definition_binding"] == "unit_only"
+    for fn in read_member(out, unit["graph"])["functions"]:
+        assert (
+            not {"source_numeric_contract", "numeric_contract"} & fn["signature"].keys()
+        )
+    from scar.middle.binding import bind
+
+    bound, issues, _ = bind(graph, out)
+    assert not issues
+    assert sum(fn["name"] == "_Z10normalizedd" for fn in bound["functions"]) == 1
     relaxed = driver_options(
         dict(profile, flags=["-O3", "-fmath-errno", "-fno-math-errno"]), {}
     )
